@@ -1,0 +1,132 @@
+"""
+Persistent storage for predictions, using SQLite (a single local file - no
+server needed). This is what lets the agent build up a track record over
+time instead of every prediction disappearing once printed.
+"""
+
+import json
+import sqlite3
+from datetime import datetime
+
+import config
+
+
+def _connect():
+    return sqlite3.connect(config.DB_PATH)
+
+
+def init_db():
+    conn = _connect()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fixture_id INTEGER UNIQUE,
+            match_date TEXT,
+            home_team TEXT,
+            away_team TEXT,
+            league TEXT,
+            markets_json TEXT,
+            confidence_label TEXT,
+            top_pick TEXT,
+            top_probability REAL,
+            odds_comparison_json TEXT,
+            actual_home_goals INTEGER,
+            actual_away_goals INTEGER,
+            top_pick_correct INTEGER,
+            created_at TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def save_prediction(fixture_id, match_date, home_team, away_team, league,
+                     markets, confidence, odds_comparison=None):
+    conn = _connect()
+    conn.execute("""
+        INSERT OR REPLACE INTO predictions
+        (fixture_id, match_date, home_team, away_team, league, markets_json,
+         confidence_label, top_pick, top_probability, odds_comparison_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        fixture_id, match_date, home_team, away_team, league,
+        json.dumps(markets), confidence["label"], confidence["top_pick"],
+        confidence["top_probability"],
+        json.dumps(odds_comparison) if odds_comparison else None,
+        datetime.utcnow().isoformat(),
+    ))
+    conn.commit()
+    conn.close()
+
+
+def record_result(fixture_id, home_goals, away_goals):
+    """
+    Call this once a match has finished, to grade the earlier prediction.
+    """
+    conn = _connect()
+    row = conn.execute(
+        "SELECT top_pick FROM predictions WHERE fixture_id = ?", (fixture_id,)
+    ).fetchone()
+
+    if row is None:
+        conn.close()
+        return False
+
+    top_pick = row[0]
+    if home_goals > away_goals:
+        actual = "home_win"
+    elif home_goals < away_goals:
+        actual = "away_win"
+    else:
+        actual = "draw"
+
+    correct = 1 if top_pick == actual else 0
+
+    conn.execute("""
+        UPDATE predictions
+        SET actual_home_goals = ?, actual_away_goals = ?, top_pick_correct = ?
+        WHERE fixture_id = ?
+    """, (home_goals, away_goals, correct, fixture_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def accuracy_summary():
+    """Overall track record: how often the top pick has been right so far."""
+    conn = _connect()
+    rows = conn.execute("""
+        SELECT confidence_label, top_pick_correct
+        FROM predictions
+        WHERE top_pick_correct IS NOT NULL
+    """).fetchall()
+    conn.close()
+
+    if not rows:
+        return {"total_graded": 0}
+
+    summary = {"total_graded": len(rows), "overall_accuracy": 0.0, "by_confidence": {}}
+    correct_total = sum(r[1] for r in rows)
+    summary["overall_accuracy"] = correct_total / len(rows)
+
+    for label in ("High", "Moderate", "Toss-up"):
+        subset = [r[1] for r in rows if r[0] == label]
+        if subset:
+            summary["by_confidence"][label] = {
+                "count": len(subset),
+                "accuracy": sum(subset) / len(subset),
+            }
+
+    return summary
+
+
+def get_pending_fixtures():
+    """Fixtures that have a saved prediction but no recorded result yet."""
+    conn = _connect()
+    rows = conn.execute("""
+        SELECT fixture_id, match_date, home_team, away_team
+        FROM predictions
+        WHERE actual_home_goals IS NULL
+    """).fetchall()
+    conn.close()
+    return rows
