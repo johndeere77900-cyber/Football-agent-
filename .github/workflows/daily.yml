@@ -1,0 +1,58 @@
+name: Daily Football Predictions
+
+on:
+  schedule:
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Date to predict (YYYY-MM-DD). Leave blank for today.'
+        required: false
+        default: ''
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Grade yesterday's predictions
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python3 main.py --grade
+
+      - name: Run predictions
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          DATE_INPUT="${{ github.event.inputs.date }}"
+          if [ -z "$DATE_INPUT" ]; then
+            DATE_INPUT=$(date -u +%Y-%m-%d)
+          fi
+          echo "Predicting matches for: $DATE_INPUT"
+          python3 main.py --date "$DATE_INPUT"
+
+      - name: Show accuracy report
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python3 main.py --accuracy
+
+      - name: Save results back to the repo
+        run: |
+          git config user.name "football-agent-bot"
+          git config user.email "actions@github.com"
+          git add predictions.db
+          git diff --staged --quiet || git commit -m "Prediction update $(date -u +%Y-%m-%d)"
+          git push
