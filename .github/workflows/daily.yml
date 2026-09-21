@@ -1,0 +1,80 @@
+name: Daily Football Predictions
+
+on:
+  schedule:
+    # Runs Wednesdays and Saturdays at 11:00 UTC (12:00 PM Lagos time)
+    - cron: '0 11 * * 3,6'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Date to predict (YYYY-MM-DD). Leave blank for today.'
+        required: false
+        default: ''
+      league_name:
+        description: 'League name (e.g. "Premier League"). Leave blank for all top leagues.'
+        required: false
+        default: ''
+      limit:
+        description: 'Max number of matches (e.g. 15). Leave blank for no limit.'
+        required: false
+        default: ''
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Grade yesterday's predictions
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python3 main.py --grade
+
+      - name: Run predictions
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          ARGS=""
+
+          DATE_INPUT="${{ github.event.inputs.date }}"
+          if [ -n "$DATE_INPUT" ]; then
+            ARGS="$ARGS --date $DATE_INPUT"
+          fi
+
+          LEAGUE_INPUT="${{ github.event.inputs.league_name }}"
+          if [ -n "$LEAGUE_INPUT" ]; then
+            ARGS="$ARGS --league-name \"$LEAGUE_INPUT\""
+          fi
+
+          LIMIT_INPUT="${{ github.event.inputs.limit }}"
+          if [ -n "$LIMIT_INPUT" ]; then
+            ARGS="$ARGS --limit $LIMIT_INPUT"
+          fi
+
+          echo "Running: python3 main.py $ARGS"
+          eval python3 main.py $ARGS
+
+      - name: Show accuracy report
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python3 main.py --accuracy
+
+      - name: Save results back to the repo
+        run: |
+          git config user.name "football-agent-bot"
+          git config user.email "actions@github.com"
+          git add predictions.db
+          git diff --staged --quiet || git commit -m "Prediction update $(date -u +%Y-%m-%d)"
+          git push
