@@ -68,6 +68,7 @@ jobs:
           fi
 
           echo "Running: python3 main.py $ARGS"
+          python3 main.py --cleanup
           eval python3 main.py $ARGS
 
       - name: Show accuracy report
