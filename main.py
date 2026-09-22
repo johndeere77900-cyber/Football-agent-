@@ -8,6 +8,7 @@ Usage:
     python3 main.py --date 2026-09-28                (tomorrow, all allowed leagues)
     python3 main.py --grade                          (check results of past predictions)
     python3 main.py --accuracy                       (see the track record so far)
+    python3 main.py --cleanup                        (remove old non-target-league predictions)
 """
 
 import argparse
@@ -199,6 +200,19 @@ def run_grading():
     print(f"\nGraded {graded_count} of {len(pending)} pending fixture(s).")
 
 
+def run_cleanup():
+    """Remove old predictions from leagues outside your current tracked list."""
+    storage.init_db()
+    keep_keywords = [
+        "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1",
+        "Champions League", "Europa League", "Nations League",
+        "World Cup", "Euro",
+    ]
+    deleted, total = storage.cleanup_non_target_leagues(keep_keywords)
+    print(f"Removed {deleted} of {total} predictions from leagues outside your current tracked list.")
+    print(f"Kept {total - deleted} prediction(s) from your tracked leagues.")
+
+
 def run_accuracy_report():
     storage.init_db()
     summary = storage.accuracy_summary()
@@ -222,12 +236,15 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, help="Max number of matches to predict, e.g. 15")
     parser.add_argument("--grade", action="store_true", help="Grade past predictions against results")
     parser.add_argument("--accuracy", action="store_true", help="Show accuracy track record")
+    parser.add_argument("--cleanup", action="store_true", help="Remove old predictions from non-target leagues")
     args = parser.parse_args()
 
     if args.grade:
         run_grading()
     elif args.accuracy:
         run_accuracy_report()
+    elif args.cleanup:
+        run_cleanup()
     else:
         date_str = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         league_id = resolve_league_id(args.league, args.league_name)
