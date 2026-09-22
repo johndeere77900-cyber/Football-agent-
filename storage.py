@@ -130,3 +130,25 @@ def get_pending_fixtures():
     """).fetchall()
     conn.close()
     return rows
+def cleanup_non_target_leagues(keep_keywords):
+    """
+    One-time cleanup: removes predictions for leagues that don't match any
+    of the given keywords (e.g. leftover test data from before the league
+    restriction was added), while keeping everything that's actually in
+    your current tracked leagues.
+    """
+    conn = _connect()
+    rows = conn.execute("SELECT id, league FROM predictions").fetchall()
+
+    to_delete = []
+    for row_id, league in rows:
+        league_lower = (league or "").lower()
+        if not any(keyword.lower() in league_lower for keyword in keep_keywords):
+            to_delete.append(row_id)
+
+    if to_delete:
+        conn.executemany("DELETE FROM predictions WHERE id = ?", [(i,) for i in to_delete])
+        conn.commit()
+
+    conn.close()
+    return len(to_delete), len(rows)
