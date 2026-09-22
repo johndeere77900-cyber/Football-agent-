@@ -31,10 +31,30 @@ def get_league_avg_goals(league_id, season):
 
 
 def resolve_league_id(league_arg, league_name_arg):
+    """
+    Matches a typed league name to a known league, forgiving common typing
+    variations: extra spaces, trailing 's', different capitalization, or
+    typing just part of the name (e.g. 'nations' matches 'nations league').
+    """
     if league_name_arg:
-        key = league_name_arg.strip().lower()
+        key = " ".join(league_name_arg.strip().lower().split())  # collapse extra spaces
+        key_no_trailing_s = key.rstrip("s") if key.endswith("s") and not key.endswith("ss") else key
+
+        # Exact match first
         if key in config.LEAGUE_NAME_TO_ID:
             return config.LEAGUE_NAME_TO_ID[key]
+        if key_no_trailing_s in config.LEAGUE_NAME_TO_ID:
+            return config.LEAGUE_NAME_TO_ID[key_no_trailing_s]
+
+        # Partial match: typed text is contained in a known name, or vice versa
+        matches = [
+            (name, league_id) for name, league_id in config.LEAGUE_NAME_TO_ID.items()
+            if key in name or name in key
+        ]
+        if len(matches) == 1:
+            print(f"Matched '{league_name_arg}' to '{matches[0][0]}'.")
+            return matches[0][1]
+
         print(f"Unrecognized league name '{league_name_arg}'. "
               f"Known names: {', '.join(config.LEAGUE_NAME_TO_ID.keys())}")
         sys.exit(1)
