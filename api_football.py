@@ -1,7 +1,8 @@
 """
 Thin wrapper around the API-Football v3 API, with simple file-based caching
 so repeated calls for the same team on the same day don't burn through the
-free-tier daily request limit.
+free-tier daily request limit. Includes automatic retry with backoff for
+rate-limit (429) errors, so a single busy moment doesn't crash a whole run.
 """
 
 import json
@@ -10,6 +11,9 @@ import time
 import requests
 
 import config
+
+MAX_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 5  # doubles each retry: 5s, 10s, 20s
 
 
 def _headers():
@@ -42,21 +46,41 @@ def _cache_set(key, data):
 
 
 def _get(endpoint, params):
-    """Make a GET request to API-Football, using the on-disk cache first."""
+    """
+    Make a GET request to API-Football, using the on-disk cache first.
+    Retries automatically on a 429 (rate limit) with increasing backoff -
+    a transient rate-limit hit no longer crashes the whole run. If the
+    quota is genuinely exhausted for the day, it still raises after the
+    retries so the caller can handle it gracefully (see main.py).
+    """
     cache_key = endpoint + "_" + json.dumps(params, sort_keys=True)
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
     url = f"{config.API_FOOTBALL_BASE_URL}/{endpoint}"
-    resp = requests.get(url, headers=_headers(), params=params, timeout=15)
+    backoff = RETRY_BACKOFF_SECONDS
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        resp = requests.get(url, headers=_headers(), params=params, timeout=15)
+
+        if resp.status_code == 429 and attempt < MAX_RETRIES:
+            print(f"  Rate limited (429), retrying in {backoff}s "
+                  f"(attempt {attempt}/{MAX_RETRIES})...")
+            time.sleep(backoff)
+            backoff *= 2
+            continue
+
+        resp.raise_for_status()
+        data = resp.json()
+
+        if data.get("response"):
+            _cache_set(cache_key, data)
+
+        return data
+
+    # Should not normally reach here, but just in case
     resp.raise_for_status()
-    data = resp.json()
-
-    if data.get("response"):
-        _cache_set(cache_key, data)
-
-    return data
 
 
 def get_fixtures_by_date(date_str, league_id=None):
@@ -72,10 +96,8 @@ def get_fixtures_by_date(date_str, league_id=None):
 def get_team_statistics(team_id, league_id, season):
     """
     Season-aggregate stats for a team in a given league/season - one call.
-    API-Football sometimes returns an empty list [] instead of a stats
-    object when data isn't available (common for smaller leagues on the
-    free tier) - this safely returns an empty dict in that case so the
-    caller can fall back to league-average numbers instead of crashing.
+    Falls back to an empty dict if the response isn't the expected shape
+    (happens for some smaller leagues on the free tier).
     """
     params = {"team": team_id, "league": league_id, "season": season}
     data = _get("teams/statistics", params)
