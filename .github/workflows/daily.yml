@@ -35,12 +35,14 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Grade yesterday's predictions
+        continue-on-error: true
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: python3 main.py --grade
 
       - name: Run predictions
+        continue-on-error: true
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
@@ -59,8 +61,6 @@ jobs:
 
           LIMIT_INPUT="${{ github.event.inputs.limit }}"
           if [ -z "$LIMIT_INPUT" ] && [ "${{ github.event_name }}" = "schedule" ]; then
-            # Safety cap for automatic runs only, so a heavy match day
-            # can't burn through the whole daily API quota in one go.
             LIMIT_INPUT="25"
           fi
           if [ -n "$LIMIT_INPUT" ]; then
@@ -71,12 +71,15 @@ jobs:
           eval python3 main.py $ARGS
 
       - name: Show accuracy report
+        continue-on-error: true
+        if: always()
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: python3 main.py --accuracy
 
       - name: Save results back to the repo
+        if: always()
         run: |
           git config user.name "football-agent-bot"
           git config user.email "actions@github.com"
