@@ -14,6 +14,8 @@ import argparse
 import sys
 from datetime import datetime, timezone
 
+import requests
+
 import api_football
 import backtest
 import confidence
@@ -25,19 +27,10 @@ LEAGUE_AVG_GOALS_FALLBACK = 1.4  # used if we can't compute a league average
 
 
 def get_league_avg_goals(league_id, season):
-    """
-    Rough league-average goals per team per game. A more precise version
-    would average this across all teams in the league standings; this
-    fallback keeps the API call count down for the free tier.
-    """
     return LEAGUE_AVG_GOALS_FALLBACK
 
 
 def resolve_league_id(league_arg, league_name_arg):
-    """
-    Turns --league (numeric ID) or --league-name (e.g. 'Premier League')
-    into a single league ID, or None if neither was given.
-    """
     if league_name_arg:
         key = league_name_arg.strip().lower()
         if key in config.LEAGUE_NAME_TO_ID:
@@ -95,8 +88,6 @@ def run_daily(date_str, league_id=None, limit=None):
     storage.init_db()
     fixtures = api_football.get_fixtures_by_date(date_str, league_id)
 
-    # If a specific league was requested, that's already handled by the API
-    # call above. Otherwise, restrict to your followed leagues list.
     if league_id is None:
         fixtures = [f for f in fixtures if f["league"]["id"] in config.ALLOWED_LEAGUE_IDS]
 
@@ -109,7 +100,13 @@ def run_daily(date_str, league_id=None, limit=None):
 
     print(f"Found {len(fixtures)} fixture(s) for {date_str} (showing up to {limit or 'all'}).")
 
+    quota_hit = False
+    predicted_count = 0
+
     for fixture in fixtures:
+        if quota_hit:
+            print("  Skipping remaining matches - daily API quota appears exhausted.")
+            break
         try:
             league_avg_goals = get_league_avg_goals(
                 fixture["league"]["id"], fixture["league"]["season"])
@@ -125,12 +122,26 @@ def run_daily(date_str, league_id=None, limit=None):
                 markets=pred["markets"],
                 confidence=pred["confidence"],
             )
+            predicted_count += 1
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429:
+                print(f"  Skipped a fixture: daily API quota exhausted (429).")
+                quota_hit = True
+            else:
+                print(f"  Skipped a fixture due to an API error: {e}")
         except Exception as e:
             print(f"  Skipped a fixture due to an error: {e}")
 
+    print(f"\nSuccessfully predicted {predicted_count} of {len(fixtures)} fixture(s).")
+
 
 def run_grading():
-    """Check pending predictions against real results, and update the log."""
+    """
+    Check pending predictions against real results, and update the log.
+    Each match is graded independently - if one fails (e.g. a rate limit
+    or a transient API error), the rest still get processed instead of the
+    whole grading step crashing.
+    """
     storage.init_db()
     pending = storage.get_pending_fixtures()
 
@@ -138,15 +149,34 @@ def run_grading():
         print("No pending predictions to grade.")
         return
 
-    for fixture_id, match_date, home_team, away_team in pending:
-        result = api_football.get_fixture_result(fixture_id)
-        if not result or result["fixture"]["status"]["short"] != "FT":
-            continue
+    graded_count = 0
+    quota_hit = False
 
-        home_goals = result["goals"]["home"]
-        away_goals = result["goals"]["away"]
-        storage.record_result(fixture_id, home_goals, away_goals)
-        print(f"Graded: {home_team} {home_goals}-{away_goals} {away_team}")
+    for fixture_id, match_date, home_team, away_team in pending:
+        if quota_hit:
+            print(f"  Skipping remaining grading - daily API quota appears exhausted.")
+            break
+        try:
+            result = api_football.get_fixture_result(fixture_id)
+            if not result or result["fixture"]["status"]["short"] != "FT":
+                continue
+
+            home_goals = result["goals"]["home"]
+            away_goals = result["goals"]["away"]
+            storage.record_result(fixture_id, home_goals, away_goals)
+            print(f"Graded: {home_team} {home_goals}-{away_goals} {away_team}")
+            graded_count += 1
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429:
+                print(f"  Could not grade {home_team} vs {away_team}: "
+                      f"daily API quota exhausted (429).")
+                quota_hit = True
+            else:
+                print(f"  Could not grade {home_team} vs {away_team}: {e}")
+        except Exception as e:
+            print(f"  Could not grade {home_team} vs {away_team}: {e}")
+
+    print(f"\nGraded {graded_count} of {len(pending)} pending fixture(s).")
 
 
 def run_accuracy_report():
