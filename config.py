@@ -1,5 +1,5 @@
 """
-Configuration for the football prediction agent.
+Configuration for the football and basketball prediction agent.
 
 Fill in your own API keys below (or set them as environment variables
 with the same names, which is safer if you ever share this code).
@@ -8,20 +8,25 @@ with the same names, which is safer if you ever share this code).
 import os
 
 # --- API Keys -------------------------------------------------------------
+# API-Football / API-Basketball: same account, same key, at
+# https://dashboard.api-football.com - one key works for both sports.
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "PUT_YOUR_API_FOOTBALL_KEY_HERE")
+
+# The Odds API: get a free key at https://the-odds-api.com
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY", "PUT_YOUR_ODDS_API_KEY_HERE")
 
 # --- API endpoints ----------------------------------------------------------
 API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io"
+API_BASKETBALL_BASE_URL = "https://v1.basketball.api-sports.io"
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 
-# --- Model settings ---------------------------------------------------------
+# --- Model settings (football) ----------------------------------------------
 RECENT_FORM_MATCHES = 8
 HEAD_TO_HEAD_SEASONS_BACK = 3
 RECENT_FORM_WEIGHT = 0.55
 MAX_GOALS_GRID = 10
 
-# --- Confidence flag thresholds ----------------------------------------------
+# --- Confidence flag thresholds (shared by football and basketball) --------
 CONFIDENCE_HIGH_GAP = 0.20
 CONFIDENCE_MODERATE_GAP = 0.08
 
@@ -32,7 +37,7 @@ DB_PATH = os.environ.get("FOOTBALL_AGENT_DB", "predictions.db")
 CACHE_TTL_HOURS = 20
 CACHE_DIR = ".api_cache"
 
-# --- League restriction ---------------------------------------------------
+# --- League restriction (football) -----------------------------------------
 ALLOWED_LEAGUE_IDS = [
     39,   # Premier League (England)
     140,  # La Liga (Spain)
@@ -46,8 +51,6 @@ ALLOWED_LEAGUE_IDS = [
     4,    # Euro Championship
 ]
 
-# Lets you type a league by name instead of its numeric ID. Includes common
-# full/short names so typing the official name works too.
 LEAGUE_NAME_TO_ID = {
     "premier league": 39,
     "english premier league": 39,
@@ -75,3 +78,13 @@ LEAGUE_NAME_TO_ID = {
     "european championship": 4,
     "euros": 4,
 }
+
+# --- League restriction (basketball) ----------------------------------------
+# NBA only, to start.
+ALLOWED_BASKETBALL_LEAGUE_IDS = [
+    12,   # NBA
+]
+
+# Home-court advantage, expressed in points added to the home team's
+# expected score before comparing to the away team's.
+BASKETBALL_HOME_ADVANTAGE_POINTS = 3.0
