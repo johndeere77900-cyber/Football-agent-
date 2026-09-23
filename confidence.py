@@ -1,10 +1,7 @@
 """
-Turns raw match-result probabilities into a simple, honest confidence flag.
-
-The point: a bare percentage (e.g. "52%") doesn't tell you whether that's a
-strong lean or a coin flip. This looks at the *gap* between the top outcome
-and the next most likely one to decide how much weight the prediction
-actually deserves.
+Turns raw match-result probabilities into a simple, honest confidence flag,
+and identifies the single safest pick across ALL computed markets for a
+given match/game.
 """
 
 import config
@@ -24,13 +21,13 @@ def confidence_flag(outcome_probabilities):
 
     if gap >= config.CONFIDENCE_HIGH_GAP:
         label = "High"
-        emoji = "\U0001F7E2"  # green circle
+        emoji = "\U0001F7E2"
     elif gap <= config.CONFIDENCE_MODERATE_GAP:
         label = "Toss-up"
-        emoji = "\U0001F534"  # red circle
+        emoji = "\U0001F534"
     else:
         label = "Moderate"
-        emoji = "\U0001F7E1"  # yellow circle
+        emoji = "\U0001F7E1"
 
     return {
         "label": label,
@@ -39,3 +36,16 @@ def confidence_flag(outcome_probabilities):
         "top_probability": top_prob,
         "gap": gap,
     }
+
+
+def safest_pick(candidates):
+    """
+    candidates: list of (label, probability) tuples covering every market
+    computed for this match (e.g. "Home Win", "Over 2.5 Goals", "BTTS No").
+    Returns the single most one-sided outcome across all of them - the
+    closest thing to a "safest" pick this model can offer.
+    """
+    if not candidates:
+        return None
+    best_label, best_prob = max(candidates, key=lambda x: x[1])
+    return {"label": best_label, "probability": best_prob}
