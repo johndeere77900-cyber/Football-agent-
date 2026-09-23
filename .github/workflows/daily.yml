@@ -1,4 +1,4 @@
-name: Daily Football Predictions
+name: Sports Predictions
 
 on:
   schedule:
@@ -6,16 +6,12 @@ on:
     - cron: '0 11 * * 3,6'
   workflow_dispatch:
     inputs:
-      date:
-        description: 'Date to predict (YYYY-MM-DD). Leave blank for today.'
+      football_games:
+        description: 'Number of football matches to predict (blank = skip football)'
         required: false
         default: ''
-      league_name:
-        description: 'League name (e.g. "Premier League"). Leave blank for all top leagues.'
-        required: false
-        default: ''
-      limit:
-        description: 'Max number of matches (e.g. 15). Leave blank for no limit.'
+      basketball_games:
+        description: 'Number of basketball games to predict (blank = skip basketball)'
         required: false
         default: ''
 
@@ -34,44 +30,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Grade yesterday's predictions
+      - name: Grade yesterday's football predictions
         continue-on-error: true
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: python3 main.py --grade
 
-      - name: Run predictions
+      - name: Run football predictions
+        if: github.event_name == 'schedule' || github.event.inputs.football_games != ''
         continue-on-error: true
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
-          ARGS=""
-
-          DATE_INPUT="${{ github.event.inputs.date }}"
-          if [ -n "$DATE_INPUT" ]; then
-            ARGS="$ARGS --date $DATE_INPUT"
+          LIMIT="${{ github.event.inputs.football_games }}"
+          if [ -z "$LIMIT" ]; then
+            LIMIT="25"
           fi
+          python3 main.py --limit "$LIMIT"
 
-          LEAGUE_INPUT="${{ github.event.inputs.league_name }}"
-          if [ -n "$LEAGUE_INPUT" ]; then
-            ARGS="$ARGS --league-name \"$LEAGUE_INPUT\""
-          fi
-
-          LIMIT_INPUT="${{ github.event.inputs.limit }}"
-          if [ -z "$LIMIT_INPUT" ] && [ "${{ github.event_name }}" = "schedule" ]; then
-            LIMIT_INPUT="25"
-          fi
-          if [ -n "$LIMIT_INPUT" ]; then
-            ARGS="$ARGS --limit $LIMIT_INPUT"
-          fi
-
-          echo "Running: python3 main.py $ARGS"
-          python3 main.py --cleanup
-          eval python3 main.py $ARGS
-
-      - name: Show accuracy report
+      - name: Show football accuracy report
         continue-on-error: true
         if: always()
         env:
@@ -79,10 +58,36 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: python3 main.py --accuracy
 
+      - name: Grade yesterday's basketball predictions
+        continue-on-error: true
+        if: always()
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: python3 main.py --sport basketball --grade
+
+      - name: Run basketball predictions
+        if: github.event_name == 'schedule' || github.event.inputs.basketball_games != ''
+        continue-on-error: true
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          LIMIT="${{ github.event.inputs.basketball_games }}"
+          if [ -z "$LIMIT" ]; then
+            LIMIT="10"
+          fi
+          python3 main.py --sport basketball --limit "$LIMIT"
+
+      - name: Show basketball accuracy report
+        continue-on-error: true
+        if: always()
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: python3 main.py --sport basketball --accuracy
+
       - name: Save results back to the repo
         if: always()
         run: |
-          git config user.name "football-agent-bot"
+          git config user.name "sports-agent-bot"
           git config user.email "actions@github.com"
           git add predictions.db
           git diff --staged --quiet || git commit -m "Prediction update $(date -u +%Y-%m-%d)"
