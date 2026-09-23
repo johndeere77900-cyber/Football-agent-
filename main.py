@@ -2,14 +2,14 @@
 Main entry point: run this daily (manually, or on a schedule via GitHub
 Actions) to get predictions for a given day's matches.
 
-Usage (football - default, unchanged from before):
+Usage (football - default):
     python3 main.py --date 2026-09-27 --league-name "Premier League" --limit 15
     python3 main.py --limit 10
     python3 main.py --grade
     python3 main.py --accuracy
     python3 main.py --cleanup
 
-Usage (basketball - new):
+Usage (basketball):
     python3 main.py --sport basketball --date 2026-09-27 --limit 5
     python3 main.py --sport basketball --grade
     python3 main.py --sport basketball --accuracy
@@ -30,7 +30,7 @@ import config
 import storage
 import poisson_model
 
-LEAGUE_AVG_GOALS_FALLBACK = 1.4  # used if we can't compute a league average
+LEAGUE_AVG_GOALS_FALLBACK = 1.4
 
 
 def get_league_avg_goals(league_id, season):
@@ -38,11 +38,6 @@ def get_league_avg_goals(league_id, season):
 
 
 def resolve_league_id(league_arg, league_name_arg):
-    """
-    Matches a typed league name to a known FOOTBALL league, forgiving common
-    typing variations: extra spaces, trailing 's', different capitalization,
-    or typing just part of the name (e.g. 'nations' matches 'nations league').
-    """
     if league_name_arg:
         key = " ".join(league_name_arg.strip().lower().split())
         key_no_trailing_s = key.rstrip("s") if key.endswith("s") and not key.endswith("ss") else key
@@ -66,6 +61,26 @@ def resolve_league_id(league_arg, league_name_arg):
     return league_arg
 
 
+def build_football_safest_candidates(m):
+    """Every market's outcomes, flattened into (label, probability) pairs."""
+    return [
+        ("Home Win", m["match_result"]["home_win"]),
+        ("Draw", m["match_result"]["draw"]),
+        ("Away Win", m["match_result"]["away_win"]),
+        ("Home or Draw", m["double_chance"]["home_or_draw"]),
+        ("Away or Draw", m["double_chance"]["away_or_draw"]),
+        ("Home or Away (no draw)", m["double_chance"]["home_or_away"]),
+        ("Over 1.5 Goals", m["over_under"]["over_1_5"]),
+        ("Under 1.5 Goals", m["over_under"]["under_1_5"]),
+        ("Over 2.5 Goals", m["over_under"]["over_2_5"]),
+        ("Under 2.5 Goals", m["over_under"]["under_2_5"]),
+        ("Over 3.5 Goals", m["over_under"]["over_3_5"]),
+        ("Under 3.5 Goals", m["over_under"]["under_3_5"]),
+        ("BTTS Yes", m["btts"]["yes"]),
+        ("BTTS No", m["btts"]["no"]),
+    ]
+
+
 def predict_fixture(fixture, league_avg_goals):
     home_team = fixture["teams"]["home"]
     away_team = fixture["teams"]["away"]
@@ -82,6 +97,8 @@ def predict_fixture(fixture, league_avg_goals):
     markets, conf = backtest.predict_match(
         home_attack, home_defense, away_attack, away_defense, league_avg_goals)
 
+    safest = confidence.safest_pick(build_football_safest_candidates(markets))
+
     return {
         "fixture_id": fixture["fixture"]["id"],
         "date": fixture["fixture"]["date"],
@@ -90,12 +107,14 @@ def predict_fixture(fixture, league_avg_goals):
         "league": league["name"],
         "markets": markets,
         "confidence": conf,
+        "safest": safest,
     }
 
 
 def print_prediction(pred):
     m = pred["markets"]
     c = pred["confidence"]
+    s = pred["safest"]
     print(f"\n{pred['home_team']} vs {pred['away_team']}  ({pred['league']})")
     print(f"  Expected goals: {m['expected_goals']['home']} - {m['expected_goals']['away']}")
     print(f"  Win/Draw/Loss:  Home {m['match_result']['home_win']:.0%} | "
@@ -107,10 +126,11 @@ def print_prediction(pred):
           f"({m['top_scorelines'][0]['probability']:.0%})")
     print(f"  Confidence:     {c['emoji']} {c['label']}  "
           f"(pick: {c['top_pick']}, {c['top_probability']:.0%})")
+    if s:
+        print(f"  >>> SAFEST PICK: {s['label']} ({s['probability']:.0%}) <<<")
 
 
 def run_daily(date_str, league_id=None, limit=None):
-    """Football predictions - unchanged from before."""
     storage.init_db()
     fixtures = api_football.get_fixtures_by_date(date_str, league_id)
 
@@ -162,7 +182,6 @@ def run_daily(date_str, league_id=None, limit=None):
 
 
 def run_grading():
-    """Football grading - unchanged from before."""
     storage.init_db()
     pending = storage.get_pending_fixtures()
 
@@ -201,7 +220,6 @@ def run_grading():
 
 
 def run_cleanup():
-    """Remove old football predictions from leagues outside your current tracked list."""
     storage.init_db()
     keep_keywords = [
         "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1",
@@ -214,7 +232,6 @@ def run_cleanup():
 
 
 def run_accuracy_report():
-    """Football accuracy report - unchanged from before."""
     storage.init_db()
     summary = storage.accuracy_summary()
 
@@ -229,7 +246,7 @@ def run_accuracy_report():
         print(f"  {label}: {stats['accuracy']:.1%} ({stats['count']} predictions)")
 
 
-# --- Basketball (new) -------------------------------------------------------
+# --- Basketball --------------------------------------------------------
 
 def run_daily_basketball(date_str, limit=None):
     storage.init_basketball_db()
@@ -267,6 +284,100 @@ def run_daily_basketball(date_str, limit=None):
             predicted_count += 1
         except requests.exceptions.HTTPError as e:
             if e.response is not None and e.response.status_code == 429:
+                print(f"  Skipped a game: daily API quota exhausted (429).")
+                quota_hit = True
+            else:
+                print(f"  Skipped a game due to an API error: {e}")
+        except Exception as e:
+            print(f"  Skipped a game due to an error: {e}")
+
+    print(f"\nSuccessfully predicted {predicted_count} of {len(games)} game(s).")
+
+
+def run_grading_basketball():
+    storage.init_basketball_db()
+    pending = storage.get_pending_basketball_games()
+
+    if not pending:
+        print("No pending basketball predictions to grade.")
+        return
+
+    graded_count = 0
+    quota_hit = False
+
+    for game_id, game_date, home_team, away_team in pending:
+        if quota_hit:
+            print("  Skipping remaining grading - daily API quota appears exhausted.")
+            break
+        try:
+            result = basketball_api.get_game_result(game_id)
+            if not result or result.get("status", {}).get("short") != "FT":
+                continue
+
+            home_points = result["scores"]["home"]["total"]
+            away_points = result["scores"]["away"]["total"]
+            storage.record_basketball_result(game_id, home_points, away_points)
+            print(f"Graded: {home_team} {home_points}-{away_points} {away_team}")
+            graded_count += 1
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429:
+                print(f"  Could not grade {home_team} vs {away_team}: "
+                      f"daily API quota exhausted (429).")
+                quota_hit = True
+            else:
+                print(f"  Could not grade {home_team} vs {away_team}: {e}")
+        except Exception as e:
+            print(f"  Could not grade {home_team} vs {away_team}: {e}")
+
+    print(f"\nGraded {graded_count} of {len(pending)} pending game(s).")
+
+
+def run_accuracy_report_basketball():
+    storage.init_basketball_db()
+    summary = storage.basketball_accuracy_summary()
+
+    if summary["total_graded"] == 0:
+        print("No graded basketball predictions yet - run --sport basketball --grade after some games finish.")
+        return
+
+    print(f"Total graded basketball predictions: {summary['total_graded']}")
+    print(f"Overall accuracy (top pick correct): {summary['overall_accuracy']:.1%}")
+    print("\nAccuracy by confidence level:")
+    for label, stats in summary.get("by_confidence", {}).items():
+        print(f"  {label}: {stats['accuracy']:.1%} ({stats['count']} predictions)")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Sports prediction agent")
+    parser.add_argument("--sport", choices=["football", "basketball"], default="football")
+    parser.add_argument("--date", help="Date to fetch fixtures/games for, YYYY-MM-DD (defaults to today)")
+    parser.add_argument("--league", type=int, help="League ID to filter by (numeric, football only)")
+    parser.add_argument("--league-name", help="League name to filter by (football only)")
+    parser.add_argument("--limit", type=int, help="Max number of matches/games to predict")
+    parser.add_argument("--grade", action="store_true")
+    parser.add_argument("--accuracy", action="store_true")
+    parser.add_argument("--cleanup", action="store_true")
+    args = parser.parse_args()
+
+    if args.sport == "basketball":
+        if args.grade:
+            run_grading_basketball()
+        elif args.accuracy:
+            run_accuracy_report_basketball()
+        else:
+            date_str = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            run_daily_basketball(date_str, args.limit)
+    else:
+        if args.grade:
+            run_grading()
+        elif args.accuracy:
+            run_accuracy_report()
+        elif args.cleanup:
+            run_cleanup()
+        else:
+            date_str = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            league_id = resolve_league_id(args.league, args.league_name)
+            run_daily(date_str, league_id, args.limit)status_code == 429:
                 print(f"  Skipped a game: daily API quota exhausted (429).")
                 quota_hit = True
             else:
