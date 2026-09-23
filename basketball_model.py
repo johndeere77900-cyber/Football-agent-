@@ -15,29 +15,13 @@ import basketball_api
 import config
 import confidence
 
-# Fallback used when a team's stats aren't available yet (e.g. very early
-# season) - roughly a typical modern NBA team's points per game.
 LEAGUE_AVG_POINTS = 113.0
-
-# Standard deviation of NBA game margins, used to convert a point
-# differential into a win probability. ~12 points is a commonly cited
-# figure for NBA scoring margin variability.
 MARGIN_STD_DEV = 12.0
-
-# Standard deviation used for the combined total-points estimate.
 TOTAL_STD_DEV = 15.0
-
-# Default over/under line for total points, when nothing more specific
-# is available.
 TOTAL_LINE = 224.5
 
 
 def _extract_scoring(stats):
-    """
-    Pulls average points-for and points-against out of an API-Basketball
-    team statistics response. Falls back to the league average if the
-    data isn't available (common early in a season).
-    """
     try:
         points_for = float(stats.get("points", {}).get("for", {}).get("average", {}).get("all"))
     except (TypeError, ValueError, AttributeError):
@@ -52,24 +36,25 @@ def _extract_scoring(stats):
 
 
 def _win_probability(point_diff):
-    """
-    Converts an expected point differential into a win probability using
-    the normal cumulative distribution function (via math.erf).
-    """
     return 0.5 * (1 + math.erf(point_diff / (MARGIN_STD_DEV * math.sqrt(2))))
 
 
 def _over_probability(expected_total, line):
-    """Probability the combined score goes over a given line."""
     diff = expected_total - line
     return 0.5 * (1 + math.erf(diff / (TOTAL_STD_DEV * math.sqrt(2))))
 
 
+def build_basketball_safest_candidates(m):
+    """Every market's outcomes, flattened into (label, probability) pairs."""
+    return [
+        ("Home Win", m["moneyline"]["home_win"]),
+        ("Away Win", m["moneyline"]["away_win"]),
+        (f"Over {m['total_points']['line']} Points", m["total_points"]["over"]),
+        (f"Under {m['total_points']['line']} Points", m["total_points"]["under"]),
+    ]
+
+
 def predict_game(game):
-    """
-    Takes a single game dict (as returned by basketball_api.get_games_by_date)
-    and returns predicted markets + confidence flag.
-    """
     home_team = game["teams"]["home"]
     away_team = game["teams"]["away"]
     league = game["league"]
@@ -110,6 +95,7 @@ def predict_game(game):
     }
 
     conf = confidence.confidence_flag(markets["moneyline"])
+    safest = confidence.safest_pick(build_basketball_safest_candidates(markets))
 
     return {
         "game_id": game["id"],
@@ -119,12 +105,14 @@ def predict_game(game):
         "league": league.get("name", "NBA"),
         "markets": markets,
         "confidence": conf,
+        "safest": safest,
     }
 
 
 def print_prediction(pred):
     m = pred["markets"]
     c = pred["confidence"]
+    s = pred["safest"]
     print(f"\n{pred['home_team']} vs {pred['away_team']}  ({pred['league']})")
     print(f"  Expected points: {m['expected_points']['home']} - {m['expected_points']['away']}")
     print(f"  Moneyline:       Home {m['moneyline']['home_win']:.0%} | "
@@ -134,3 +122,5 @@ def print_prediction(pred):
           f"Over {m['total_points']['over']:.0%} | Under {m['total_points']['under']:.0%}")
     print(f"  Confidence:      {c['emoji']} {c['label']}  "
           f"(pick: {c['top_pick']}, {c['top_probability']:.0%})")
+    if s:
+        print(f"  >>> SAFEST PICK: {s['label']} ({s['probability']:.0%}) <<<")
