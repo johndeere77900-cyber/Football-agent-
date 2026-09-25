@@ -27,14 +27,14 @@ import basketball_api
 import basketball_model
 import confidence
 import config
+import live_model
 import storage
 import poisson_model
 
 LEAGUE_AVG_GOALS_FALLBACK = 1.4
 
-# Matches with these statuses have already concluded - skip them.
-# Everything else (not started, live, half-time, etc.) is still fair game.
 FOOTBALL_FINISHED_STATUSES = {"FT", "AET", "PEN", "PST", "CANC", "ABD", "AWD", "WO"}
+FOOTBALL_LIVE_STATUSES = {"1H", "2H", "HT", "ET", "BT", "P", "SUSP", "INT"}
 BASKETBALL_FINISHED_STATUSES = {"FT", "AOT", "CANC", "ABD"}
 
 
@@ -89,18 +89,32 @@ def predict_fixture(fixture, league_avg_goals):
     home_team = fixture["teams"]["home"]
     away_team = fixture["teams"]["away"]
     league = fixture["league"]
+    status_short = fixture["fixture"]["status"]["short"]
+    elapsed = fixture["fixture"]["status"].get("elapsed")
+    is_live = status_short in FOOTBALL_LIVE_STATUSES
 
     home_stats = api_football.get_team_statistics(home_team["id"], league["id"], league["season"])
     away_stats = api_football.get_team_statistics(away_team["id"], league["id"], league["season"])
+    insufficient_data = not home_stats and not away_stats
 
     home_attack, home_defense = backtest.estimate_expected_goals_from_stats(
         home_stats, home_stats, league_avg_goals)
     away_attack, away_defense = backtest.estimate_expected_goals_from_stats(
         away_stats, away_stats, league_avg_goals)
 
-    markets, conf = backtest.predict_match(
-        home_attack, home_defense, away_attack, away_defense, league_avg_goals)
+    home_xg = poisson_model.expected_goals(home_attack, away_defense, league_avg_goals)
+    away_xg = poisson_model.expected_goals(away_attack, home_defense, league_avg_goals)
 
+    if is_live:
+        current_home_goals = fixture["goals"]["home"] or 0
+        current_away_goals = fixture["goals"]["away"] or 0
+        markets = live_model.live_market_probabilities(
+            home_xg, away_xg, elapsed, status_short, current_home_goals, current_away_goals)
+    else:
+        markets = poisson_model.market_probabilities(home_xg, away_xg)
+        markets["is_live"] = False
+
+    conf = confidence.confidence_flag(markets["match_result"])
     safest = confidence.safest_pick(build_football_safest_candidates(markets))
 
     return {
@@ -112,6 +126,8 @@ def predict_fixture(fixture, league_avg_goals):
         "markets": markets,
         "confidence": conf,
         "safest": safest,
+        "is_live": is_live,
+        "insufficient_data": insufficient_data,
     }
 
 
@@ -120,7 +136,17 @@ def print_prediction(pred):
     c = pred["confidence"]
     s = pred["safest"]
     print(f"\n{pred['home_team']} vs {pred['away_team']}  ({pred['league']})")
-    print(f"  Expected goals: {m['expected_goals']['home']} - {m['expected_goals']['away']}")
+
+    if pred["is_live"]:
+        print(f"  \U0001F534 LIVE - {m['minutes_elapsed']}' "
+              f"(est. {m['minutes_remaining_estimate']} min remaining)")
+        cs = m["current_score"]
+        print(f"  Current score: {cs['home']} - {cs['away']}")
+        eg = m["expected_additional_goals"]
+        print(f"  Expected additional goals: {eg['home']} - {eg['away']}")
+    else:
+        print(f"  Expected goals: {m['expected_goals']['home']} - {m['expected_goals']['away']}")
+
     print(f"  Win/Draw/Loss:  Home {m['match_result']['home_win']:.0%} | "
           f"Draw {m['match_result']['draw']:.0%} | Away {m['match_result']['away_win']:.0%}")
     print(f"  Over/Under 2.5: Over {m['over_under']['over_2_5']:.0%} | "
@@ -141,8 +167,6 @@ def run_daily(date_str, league_id=None, limit=None):
     if league_id is None:
         fixtures = [f for f in fixtures if f["league"]["id"] in config.ALLOWED_LEAGUE_IDS]
 
-    # Skip only matches that have already finished - keep upcoming AND
-    # live in-progress matches
     fixtures = [f for f in fixtures if f["fixture"]["status"]["short"] not in FOOTBALL_FINISHED_STATUSES]
 
     if not fixtures:
@@ -167,11 +191,7 @@ def run_daily(date_str, league_id=None, limit=None):
                 fixture["league"]["id"], fixture["league"]["season"])
             pred = predict_fixture(fixture, league_avg_goals)
 
-            # If both teams came back with zero real stats, don't present
-            # a fake-confident prediction built entirely on fallback numbers
-            m = pred["markets"]
-            if m["expected_goals"]["home"] == round(league_avg_goals, 2) and \
-               m["expected_goals"]["away"] == round(league_avg_goals, 2):
+            if pred["insufficient_data"]:
                 print(f"\n{pred['home_team']} vs {pred['away_team']}  ({pred['league']})")
                 print("  Skipped: not enough team data available for a real prediction.")
                 skipped_no_data += 1
