@@ -32,6 +32,11 @@ import poisson_model
 
 LEAGUE_AVG_GOALS_FALLBACK = 1.4
 
+# Matches with these statuses have already concluded - skip them.
+# Everything else (not started, live, half-time, etc.) is still fair game.
+FOOTBALL_FINISHED_STATUSES = {"FT", "AET", "PEN", "PST", "CANC", "ABD", "AWD", "WO"}
+BASKETBALL_FINISHED_STATUSES = {"FT", "AOT", "CANC", "ABD"}
+
 
 def get_league_avg_goals(league_id, season):
     return LEAGUE_AVG_GOALS_FALLBACK
@@ -62,7 +67,6 @@ def resolve_league_id(league_arg, league_name_arg):
 
 
 def build_football_safest_candidates(m):
-    """Every market's outcomes, flattened into (label, probability) pairs."""
     return [
         ("Home Win", m["match_result"]["home_win"]),
         ("Draw", m["match_result"]["draw"]),
@@ -137,6 +141,10 @@ def run_daily(date_str, league_id=None, limit=None):
     if league_id is None:
         fixtures = [f for f in fixtures if f["league"]["id"] in config.ALLOWED_LEAGUE_IDS]
 
+    # Skip only matches that have already finished - keep upcoming AND
+    # live in-progress matches
+    fixtures = [f for f in fixtures if f["fixture"]["status"]["short"] not in FOOTBALL_FINISHED_STATUSES]
+
     if not fixtures:
         print(f"No fixtures found for {date_str} matching your criteria.")
         return
@@ -148,6 +156,7 @@ def run_daily(date_str, league_id=None, limit=None):
 
     quota_hit = False
     predicted_count = 0
+    skipped_no_data = 0
 
     for fixture in fixtures:
         if quota_hit:
@@ -157,6 +166,17 @@ def run_daily(date_str, league_id=None, limit=None):
             league_avg_goals = get_league_avg_goals(
                 fixture["league"]["id"], fixture["league"]["season"])
             pred = predict_fixture(fixture, league_avg_goals)
+
+            # If both teams came back with zero real stats, don't present
+            # a fake-confident prediction built entirely on fallback numbers
+            m = pred["markets"]
+            if m["expected_goals"]["home"] == round(league_avg_goals, 2) and \
+               m["expected_goals"]["away"] == round(league_avg_goals, 2):
+                print(f"\n{pred['home_team']} vs {pred['away_team']}  ({pred['league']})")
+                print("  Skipped: not enough team data available for a real prediction.")
+                skipped_no_data += 1
+                continue
+
             print_prediction(pred)
 
             storage.save_prediction(
@@ -178,7 +198,8 @@ def run_daily(date_str, league_id=None, limit=None):
         except Exception as e:
             print(f"  Skipped a fixture due to an error: {e}")
 
-    print(f"\nSuccessfully predicted {predicted_count} of {len(fixtures)} fixture(s).")
+    print(f"\nSuccessfully predicted {predicted_count} of {len(fixtures)} fixture(s) "
+          f"({skipped_no_data} skipped due to insufficient data).")
 
 
 def run_grading():
@@ -251,6 +272,8 @@ def run_accuracy_report():
 def run_daily_basketball(date_str, limit=None):
     storage.init_basketball_db()
     games = basketball_api.get_games_by_date(date_str, config.ALLOWED_BASKETBALL_LEAGUE_IDS[0])
+
+    games = [g for g in games if g.get("status", {}).get("short") not in BASKETBALL_FINISHED_STATUSES]
 
     if not games:
         print(f"No basketball games found for {date_str}.")
