@@ -5,6 +5,7 @@ Actions) to get predictions for a given day's matches.
 Usage (football - default):
     python3 main.py --date 2026-09-27 --league-name "Premier League" --limit 15
     python3 main.py --limit 10
+    python3 main.py --limit 10 --with-odds
     python3 main.py --grade
     python3 main.py --accuracy
     python3 main.py --cleanup
@@ -28,6 +29,7 @@ import basketball_model
 import confidence
 import config
 import live_model
+import odds_api
 import storage
 import poisson_model
 
@@ -85,7 +87,7 @@ def build_football_safest_candidates(m):
     ]
 
 
-def predict_fixture(fixture, league_avg_goals):
+def predict_fixture(fixture, league_avg_goals, fetch_odds=False):
     home_team = fixture["teams"]["home"]
     away_team = fixture["teams"]["away"]
     league = fixture["league"]
@@ -117,6 +119,15 @@ def predict_fixture(fixture, league_avg_goals):
     conf = confidence.confidence_flag(markets["match_result"])
     safest = confidence.safest_pick(build_football_safest_candidates(markets))
 
+    odds_comparison = None
+    if fetch_odds:
+        sport_key = config.LEAGUE_ID_TO_ODDS_SPORT_KEY.get(league["id"])
+        if sport_key:
+            try:
+                odds_comparison = odds_api.get_odds_for_match(sport_key, home_team["name"], away_team["name"])
+            except Exception as e:
+                print(f"  (Odds lookup failed: {e})")
+
     return {
         "fixture_id": fixture["fixture"]["id"],
         "date": fixture["fixture"]["date"],
@@ -128,6 +139,7 @@ def predict_fixture(fixture, league_avg_goals):
         "safest": safest,
         "is_live": is_live,
         "insufficient_data": insufficient_data,
+        "odds_comparison": odds_comparison,
     }
 
 
@@ -156,11 +168,18 @@ def print_prediction(pred):
           f"({m['top_scorelines'][0]['probability']:.0%})")
     print(f"  Confidence:     {c['emoji']} {c['label']}  "
           f"(pick: {c['top_pick']}, {c['top_probability']:.0%})")
+
+    if pred.get("odds_comparison"):
+        oc = pred["odds_comparison"]
+        print(f"  Market odds:    Home {oc.get('implied_home_win', 0):.0%} | "
+              f"Draw {oc.get('implied_draw', 0):.0%} | Away {oc.get('implied_away_win', 0):.0%} "
+              f"({oc.get('bookmakers_counted', 0)} bookmakers)")
+
     if s:
         print(f"  >>> SAFEST PICK: {s['label']} ({s['probability']:.0%}) <<<")
 
 
-def run_daily(date_str, league_id=None, limit=None):
+def run_daily(date_str, league_id=None, limit=None, fetch_odds=False):
     storage.init_db()
     fixtures = api_football.get_fixtures_by_date(date_str, league_id)
 
@@ -189,7 +208,7 @@ def run_daily(date_str, league_id=None, limit=None):
         try:
             league_avg_goals = get_league_avg_goals(
                 fixture["league"]["id"], fixture["league"]["season"])
-            pred = predict_fixture(fixture, league_avg_goals)
+            pred = predict_fixture(fixture, league_avg_goals, fetch_odds)
 
             if pred["insufficient_data"]:
                 print(f"\n{pred['home_team']} vs {pred['away_team']}  ({pred['league']})")
@@ -400,6 +419,7 @@ if __name__ == "__main__":
     parser.add_argument("--grade", action="store_true")
     parser.add_argument("--accuracy", action="store_true")
     parser.add_argument("--cleanup", action="store_true")
+    parser.add_argument("--with-odds", action="store_true", help="Also fetch bookmaker odds for comparison")
     args = parser.parse_args()
 
     if args.sport == "basketball":
@@ -420,4 +440,4 @@ if __name__ == "__main__":
         else:
             date_str = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             league_id = resolve_league_id(args.league, args.league_name)
-            run_daily(date_str, league_id, args.limit)
+            run_daily(date_str, league_id, args.limit, args.with_odds)
