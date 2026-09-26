@@ -1,9 +1,6 @@
 """
 Telegram bot brain - checks for new messages, understands what you're
 asking for, and either answers instantly or runs a real prediction.
-
-Runs on a GitHub Actions schedule (every ~10 minutes) rather than
-instantly, since we're not using an always-on server.
 """
 
 import json
@@ -27,7 +24,8 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 OFFSET_FILE = "telegram_offset.txt"
 MEMORY_FILE = "telegram_memory.json"
 
-CONF_EMOJI = {"High": "🟢", "Moderate": "🟡", "Toss-up": "🔴"}
+GREETINGS = {"hi", "hello", "hey", "yo", "sup", "what's up", "whats up", "morning", "evening"}
+STRONG_PICK_WORDS = {"strong", "safe", "sure", "best", "good", "solid", "reliable", "confident"}
 
 
 def send_message(text):
@@ -73,42 +71,52 @@ def top_preference(memory):
     return "basketball" if counts.get("basketball", 0) > counts.get("football", 0) else "football"
 
 
-def handle_count_question(text, memory):
+def mentions_league(text):
     for name, league_id in config.LEAGUE_NAME_TO_ID.items():
         if name in text:
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            fixtures = api_football.get_fixtures_by_date(today, league_id)
-            send_message(f"📊 *{len(fixtures)}* {name.title()} match(es) today.")
-            return True
-    return False
+            return name, league_id
+    return None, None
 
 
-def handle_strong_picks(text, memory):
-    match = re.search(r"(\d+)\s*(strong\s*)?(football|soccer|basketball)?", text)
-    if not match:
+def handle_count_question(text, memory):
+    name, league_id = mentions_league(text)
+    if not league_id:
         return False
-
-    n = int(match.group(1))
-    sport = match.group(3)
-    if not sport:
-        sport = top_preference(memory)
-        memory["recent"].append(f"assumed sport: {sport}")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    fixtures = api_football.get_fixtures_by_date(today, league_id)
+    if fixtures:
+        send_message(f"📊 There {'is' if len(fixtures)==1 else 'are'} *{len(fixtures)}* {name.title()} "
+                     f"match{'es' if len(fixtures)!=1 else ''} today.")
     else:
-        key = "football" if sport == "soccer" else sport
-        memory["preference_counts"][key] = memory["preference_counts"].get(key, 0) + 1
+        send_message(f"📊 No {name.title()} matches scheduled today.")
+    return True
+
+
+def handle_strong_picks(text, memory, n_default=5):
+    number_match = re.search(r"\d+", text)
+    n = int(number_match.group()) if number_match else n_default
+
+    if "basketball" in text or "nba" in text:
+        sport = "basketball"
+    elif "football" in text or "soccer" in text:
+        sport = "football"
+    else:
+        sport = top_preference(memory)
+
+    memory["preference_counts"][sport] = memory["preference_counts"].get(sport, 0) + 1
 
     sport_emoji = "🏀" if sport == "basketball" else "⚽"
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    send_message(f"{sport_emoji} Working on {n} {sport} pick(s) - give me a moment...")
+    send_message(f"{sport_emoji} On it - looking for {n} good {sport} pick(s), one moment...")
 
     results = []
-    if sport in ("football", "soccer"):
+    if sport == "football":
         fixtures = api_football.get_fixtures_by_date(today)
         fixtures = [f for f in fixtures if f["league"]["id"] in config.ALLOWED_LEAGUE_IDS]
         fixtures = [f for f in fixtures if f["fixture"]["status"]["short"] not in agent.FOOTBALL_FINISHED_STATUSES]
         for fixture in fixtures[:25]:
             try:
-                pred = agent.predict_fixture(fixture, agent.LEAGUE_AVG_GOALS_FALLBACK)
+                pred = agent.predict_fixture(fixture, agent.get_league_avg_goals(fixture["league"]["id"], fixture["league"]["season"]))
                 if not pred["insufficient_data"] and pred["safest"]:
                     results.append((pred["home_team"], pred["away_team"], pred["league"], pred["safest"]))
             except Exception:
@@ -129,58 +137,59 @@ def handle_strong_picks(text, memory):
 
     if not top_n:
         send_message(
-            f"{sport_emoji} No strong picks found right now - either no matches today, "
-            "or not enough team data available yet (common during international breaks "
-            "or early in a season)."
+            f"{sport_emoji} Nothing solid to show you right now - either there's nothing on today, "
+            "or the teams playing don't have enough data yet (happens a lot during international "
+            "breaks or right before a new season starts). Try again closer to matchday!"
         )
-        return True
+        return
 
-    lines = [f"{sport_emoji} *Top {len(top_n)} strongest pick(s):*\n"]
+    lines = [f"{sport_emoji} *Here's what looks good today:*\n"]
     for home, away, league, safest in top_n:
         emoji = "🟢" if safest["probability"] >= 0.75 else "🟡" if safest["probability"] >= 0.6 else "🔴"
         lines.append(f"*{home} vs {away}* ({league})\n  {emoji} {safest['label']} ({safest['probability']:.0%})")
     send_message("\n\n".join(lines))
-    return True
 
 
 def handle_start(memory):
     send_message(
-        "👋 *Hey! I'm your football & basketball prediction bot.*\n\n"
-        "Try asking me things like:\n"
-        "• \"find me 5 strong football games\"\n"
-        "• \"predict 3 basketball games\"\n"
+        "👋 Hey, good to see you! I'm your football & basketball buddy.\n\n"
+        "Ask me stuff like:\n"
+        "• \"what's good today\" or \"find me some strong picks\"\n"
+        "• \"any solid basketball games tonight\"\n"
         "• \"how many premier league games today\"\n\n"
-        "I check for your messages every ~10 minutes, so replies aren't instant, "
+        "I check in on our chat every few minutes, so I might take a moment to reply - "
         "but I'll always get back to you."
     )
 
 
 def handle_message(text, memory):
-    original = text
     text = text.lower().strip()
     memory["recent"].append(text)
     memory["recent"] = memory["recent"][-10:]
 
-    if text in ("/start", "start", "hi", "hello", "help", "/help"):
+    if text in ("/start", "/help", "help") or text in GREETINGS:
         handle_start(memory)
         return
 
-    if "how many" in text:
+    if "how many" in text or ("how much" in text and "game" in text):
         if handle_count_question(text, memory):
             return
 
-    if re.search(r"\d+", text) and ("game" in text or "match" in text or "pick" in text):
-        if handle_strong_picks(text, memory):
-            return
+    has_number = bool(re.search(r"\d+", text))
+    mentions_games = any(w in text for w in ["game", "match", "pick", "fixture"])
+    mentions_strong = any(w in text for w in STRONG_PICK_WORDS)
 
-    if "accuracy" in text:
-        send_message("📈 Check the *Actions* tab log for your full accuracy report for now.")
+    if mentions_games or (mentions_strong and (has_number or "today" in text or "tonight" in text)):
+        handle_strong_picks(text, memory)
+        return
+
+    if "accuracy" in text or "track record" in text or "how good" in text:
+        send_message("📈 I'm still building up my track record - check the *Actions* tab log for the full breakdown for now.")
         return
 
     send_message(
-        "🤔 I didn't quite catch that. Try:\n"
-        "• \"find me 5 strong football games\"\n"
-        "• \"how many premier league games today\""
+        "Hmm, not sure I caught that one 🤔 Try something like \"what's good today\" "
+        "or \"find me some strong football picks\" and I'll take a look!"
     )
 
 
