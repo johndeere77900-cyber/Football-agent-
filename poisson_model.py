@@ -1,11 +1,5 @@
 """
 Poisson-distribution goal model.
-
-Core idea: if we know how many goals a team is expected to score against an
-average opponent, and how many an average team is expected to score against
-this opponent's defense, we can model the number of goals in a match as a
-Poisson-distributed random variable. From there, nearly every football
-betting market falls out of the same probability grid.
 """
 
 import math
@@ -14,26 +8,26 @@ import config
 
 
 def poisson_pmf(k, lam):
-    """Probability of exactly k goals, given an expected-goals rate of lam."""
     return (lam ** k) * math.exp(-lam) / math.factorial(k)
 
 
-def expected_goals(team_attack, opponent_defense, league_avg_goals):
+def expected_goals(team_attack, opponent_defense, league_avg_goals, is_home=None):
     """
-    team_attack: this team's average goals scored, relative to league average
-                 (e.g. 1.3 means they score 30% more than a typical team)
-    opponent_defense: opponent's average goals conceded, relative to league
-                       average (e.g. 1.2 means they concede 20% more than typical)
-    league_avg_goals: league-wide average goals scored per team per game
+    team_attack / opponent_defense: ratios relative to league average.
+    is_home: True applies the home-advantage boost, False applies the
+    away-disadvantage reduction, None (default) applies neither - used by
+    the synthetic self-test where home/away is already baked into the
+    attack/defense numbers directly.
     """
-    return team_attack * opponent_defense * league_avg_goals
+    base = team_attack * opponent_defense * league_avg_goals
+    if is_home is True:
+        return base * config.HOME_ADVANTAGE_MULTIPLIER
+    if is_home is False:
+        return base * config.AWAY_DISADVANTAGE_MULTIPLIER
+    return base
 
 
 def build_scoreline_grid(home_xg, away_xg, max_goals=None):
-    """
-    Returns a 2D grid where grid[h][a] = probability of a final score of
-    h goals (home) to a goals (away).
-    """
     max_goals = max_goals or config.MAX_GOALS_GRID
     grid = []
     for h in range(max_goals + 1):
@@ -45,10 +39,6 @@ def build_scoreline_grid(home_xg, away_xg, max_goals=None):
 
 
 def market_probabilities(home_xg, away_xg):
-    """
-    Takes expected goals for each team and returns probabilities for every
-    market the agent supports.
-    """
     grid = build_scoreline_grid(home_xg, away_xg)
     max_goals = len(grid) - 1
 
@@ -85,11 +75,7 @@ def market_probabilities(home_xg, away_xg):
 
     return {
         "expected_goals": {"home": round(home_xg, 2), "away": round(away_xg, 2)},
-        "match_result": {
-            "home_win": home_win,
-            "draw": draw,
-            "away_win": away_win,
-        },
+        "match_result": {"home_win": home_win, "draw": draw, "away_win": away_win},
         "double_chance": {
             "home_or_draw": home_win + draw,
             "away_or_draw": away_win + draw,
@@ -108,10 +94,6 @@ def market_probabilities(home_xg, away_xg):
 
 
 def cards_market(home_avg_cards, away_avg_cards, line=3.5):
-    """
-    Simple Poisson model for total match cards (yellow + red), using each
-    team's average cards-per-game.
-    """
     combined_lambda = home_avg_cards + away_avg_cards
     max_cards = 12
     over_prob = 0.0
