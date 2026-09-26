@@ -41,7 +41,7 @@ BASKETBALL_FINISHED_STATUSES = {"FT", "AOT", "CANC", "ABD"}
 
 
 def get_league_avg_goals(league_id, season):
-    return LEAGUE_AVG_GOALS_FALLBACK
+    return config.LEAGUE_AVG_GOALS.get(league_id, config.LEAGUE_AVG_GOALS_FALLBACK)
 
 
 def resolve_league_id(league_arg, league_name_arg):
