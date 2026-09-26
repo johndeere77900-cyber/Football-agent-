@@ -1,6 +1,8 @@
 """
-Telegram bot brain - checks for new messages, understands what you're
-asking for, and either answers instantly or runs a real prediction.
+Telegram bot brain - understands what you're asking for and either answers
+instantly or runs a real prediction. Can run two ways: process a single
+message passed directly (via the Val Town webhook path), or poll for new
+messages (the older, now-disabled scheduled approach).
 """
 
 import json
@@ -32,11 +34,13 @@ WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", 
 
 
 def send_message(text):
-    requests.post(
+    resp = requests.post(
         f"{TELEGRAM_API}/sendMessage",
         json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
         timeout=15,
     )
+    if not resp.ok:
+        print(f"Telegram send failed: {resp.status_code} {resp.text}")
 
 
 def get_updates():
@@ -82,11 +86,6 @@ def mentions_league(text):
 
 
 def resolve_date(text):
-    """
-    Figures out which date the person actually means. Supports:
-    'today' (default), 'tomorrow', weekday names ('saturday', 'this
-    monday'), and explicit YYYY-MM-DD dates. Returns (date_str, label).
-    """
     today = datetime.now(timezone.utc).date()
 
     iso_match = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text)
@@ -100,7 +99,7 @@ def resolve_date(text):
     for i, day_name in enumerate(WEEKDAYS):
         if day_name in text:
             days_ahead = (i - today.weekday()) % 7
-            days_ahead = days_ahead or 7  # "saturday" always means the NEXT one, not today
+            days_ahead = days_ahead or 7
             d = today + timedelta(days=days_ahead)
             return d.strftime("%Y-%m-%d"), day_name.title()
 
@@ -298,8 +297,15 @@ if __name__ == "__main__":
         sys.exit(0)
 
     memory = load_memory()
-    updates = get_updates()
 
+    single_message = os.environ.get("TELEGRAM_MESSAGE")
+    if single_message:
+        print(f"Processing single message: {single_message}")
+        handle_message(single_message, memory)
+        save_memory(memory)
+        sys.exit(0)
+
+    updates = get_updates()
     for update in updates:
         message = update.get("message")
         if not message or not message.get("text"):
