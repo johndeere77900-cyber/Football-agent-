@@ -1,10 +1,5 @@
 """
 Backtesting and prediction-building helpers.
-
-The synthetic self-test checks the math is sound. run_real_backtest()
-checks real accuracy against real historical results - using ONLY match
-data that happened BEFORE each backtested match, so there's no leakage
-of future results into past predictions.
 """
 
 import api_football
@@ -33,6 +28,44 @@ def estimate_expected_goals_from_stats(team_stats_for, team_stats_against, leagu
         goals_against_avg = league_avg_goals
 
     return goals_for_avg / league_avg_goals, goals_against_avg / league_avg_goals
+
+
+def estimate_recent_form_goals(team_id, league_avg_goals, last=None):
+    """
+    Average goals for/against from the team's last N matches (any
+    competition) - captures actual current form (injuries, momentum,
+    a new manager) that a full-season average misses. Falls back to
+    neutral (1.0 ratio) if no recent match data is available.
+    """
+    last = last or config.RECENT_FORM_MATCHES
+    matches = api_football.get_recent_form(team_id, last=last)
+
+    goals_for, goals_against = [], []
+    for m in matches:
+        home_id = m["teams"]["home"]["id"]
+        away_id = m["teams"]["away"]["id"]
+        hg, ag = m["goals"]["home"], m["goals"]["away"]
+        if hg is None or ag is None:
+            continue
+        if home_id == team_id:
+            goals_for.append(hg)
+            goals_against.append(ag)
+        elif away_id == team_id:
+            goals_for.append(ag)
+            goals_against.append(hg)
+
+    if not goals_for:
+        return 1.0, 1.0
+
+    avg_for = sum(goals_for) / len(goals_for)
+    avg_against = sum(goals_against) / len(goals_for)
+    return avg_for / league_avg_goals, avg_against / league_avg_goals
+
+
+def blend_season_and_recent(season_ratio, recent_ratio, recent_weight=None):
+    """Weighted blend of full-season form and recent form."""
+    weight = recent_weight if recent_weight is not None else config.RECENT_FORM_WEIGHT
+    return season_ratio * (1 - weight) + recent_ratio * weight
 
 
 def estimate_avg_cards(team_stats, league_avg_cards=3.8):
@@ -67,19 +100,14 @@ def run_synthetic_selftest():
     print("=== Synthetic self-test: strong home side vs weak away side ===")
     print(f"Expected goals -> Home: {markets['expected_goals']['home']}, "
           f"Away: {markets['expected_goals']['away']}")
-    print(f"Match result -> Home {markets['match_result']['home_win']:.1%}, "
-          f"Draw {markets['match_result']['draw']:.1%}, "
-          f"Away {markets['match_result']['away_win']:.1%}")
-
     total_prob = sum(markets["match_result"].values())
     assert 0.99 <= total_prob <= 1.01, f"Probabilities don't sum to 1: {total_prob}"
     assert markets["match_result"]["home_win"] > markets["match_result"]["away_win"]
-    print("\nSelf-test passed: math checks out.")
+    print("Self-test passed: math checks out.")
     return markets, conf
 
 
 def _compute_stats_as_of(all_fixtures, team_id, cutoff_date_str):
-    """Average goals for/against for team_id, using only matches strictly before cutoff_date_str."""
     goals_for, goals_against = [], []
     for f in all_fixtures:
         if f["fixture"]["date"][:10] >= cutoff_date_str:
@@ -104,19 +132,12 @@ def _compute_stats_as_of(all_fixtures, team_id, cutoff_date_str):
 
 
 def run_real_backtest(league_id, season, sample_size=20, min_prior_matches=5):
-    """
-    Genuine backtest: fetches the full season's real results once, then
-    tests the model against a spread of already-finished matches - each
-    one predicted using ONLY the form data that existed before it was
-    played. No future information leaks into any prediction.
-    """
     all_fixtures = api_football.get_league_fixtures(league_id, season)
     finished = sorted(
         [f for f in all_fixtures if f["fixture"]["status"]["short"] == "FT"],
         key=lambda f: f["fixture"]["date"]
     )
 
-    # Skip the very start of the season - not enough prior matches yet
     candidates = finished[min_prior_matches * 2:]
     if len(candidates) > sample_size:
         step = max(len(candidates) // sample_size, 1)
