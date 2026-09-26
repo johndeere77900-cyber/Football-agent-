@@ -19,6 +19,30 @@ HEAD_TO_HEAD_SEASONS_BACK = 3
 RECENT_FORM_WEIGHT = 0.55
 MAX_GOALS_GRID = 10
 
+# Home advantage: home teams historically score meaningfully more than a
+# neutral-venue average, away teams somewhat less. These are standard
+# rough multipliers used in public football models.
+HOME_ADVANTAGE_MULTIPLIER = 1.30
+AWAY_DISADVANTAGE_MULTIPLIER = 0.88
+
+# Per-league average goals per team per game - used as the baseline before
+# home/away and team-strength adjustments. Bundesliga is historically the
+# highest-scoring of the major leagues; La Liga tends lower. International
+# competitions use a moderate blended estimate since squads vary widely.
+LEAGUE_AVG_GOALS = {
+    39: 1.40,   # Premier League
+    140: 1.30,  # La Liga
+    135: 1.35,  # Serie A
+    78: 1.55,   # Bundesliga
+    61: 1.35,   # Ligue 1
+    2: 1.40,    # UEFA Champions League
+    3: 1.35,    # UEFA Europa League
+    5: 1.30,    # UEFA Nations League
+    1: 1.30,    # World Cup
+    4: 1.30,    # Euro Championship
+}
+LEAGUE_AVG_GOALS_FALLBACK = 1.35  # used for any league not listed above
+
 # --- Confidence flag thresholds ----------------------------------------------
 CONFIDENCE_HIGH_GAP = 0.20
 CONFIDENCE_MODERATE_GAP = 0.08
@@ -31,9 +55,7 @@ CACHE_TTL_HOURS = 20
 CACHE_DIR = ".api_cache"
 
 # --- League restriction (football) -----------------------------------------
-ALLOWED_LEAGUE_IDS = [
-    39, 140, 135, 78, 61, 2, 3, 5, 1, 4,
-]
+ALLOWED_LEAGUE_IDS = [39, 140, 135, 78, 61, 2, 3, 5, 1, 4]
 
 LEAGUE_NAME_TO_ID = {
     "premier league": 39, "english premier league": 39, "epl": 39,
@@ -49,9 +71,6 @@ LEAGUE_NAME_TO_ID = {
     "european championship": 4, "euros": 4,
 }
 
-# Maps our internal league IDs to The Odds API's own naming for each
-# competition. Leagues not listed here simply won't have odds available
-# (e.g. Nations League isn't covered by The Odds API).
 LEAGUE_ID_TO_ODDS_SPORT_KEY = {
     39: "soccer_epl",
     140: "soccer_spain_la_liga",
