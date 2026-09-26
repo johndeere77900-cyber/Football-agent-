@@ -103,10 +103,20 @@ def predict_fixture(fixture, league_avg_goals, fetch_odds=False):
     away_stats = api_football.get_team_statistics(away_team["id"], league["id"], league["season"])
     insufficient_data = not home_stats and not away_stats
 
-    home_attack, home_defense = backtest.estimate_expected_goals_from_stats(
+    home_season_attack, home_season_defense = backtest.estimate_expected_goals_from_stats(
         home_stats, home_stats, league_avg_goals)
-    away_attack, away_defense = backtest.estimate_expected_goals_from_stats(
+    away_season_attack, away_season_defense = backtest.estimate_expected_goals_from_stats(
         away_stats, away_stats, league_avg_goals)
+
+    home_recent_attack, home_recent_defense = backtest.estimate_recent_form_goals(
+        home_team["id"], league_avg_goals)
+    away_recent_attack, away_recent_defense = backtest.estimate_recent_form_goals(
+        away_team["id"], league_avg_goals)
+
+    home_attack = backtest.blend_season_and_recent(home_season_attack, home_recent_attack)
+    home_defense = backtest.blend_season_and_recent(home_season_defense, home_recent_defense)
+    away_attack = backtest.blend_season_and_recent(away_season_attack, away_recent_attack)
+    away_defense = backtest.blend_season_and_recent(away_season_defense, away_recent_defense)
 
     home_xg = poisson_model.expected_goals(home_attack, away_defense, league_avg_goals, is_home=True)
     away_xg = poisson_model.expected_goals(away_attack, home_defense, league_avg_goals, is_home=False)
