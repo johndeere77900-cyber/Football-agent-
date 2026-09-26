@@ -7,7 +7,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -28,6 +28,7 @@ MEMORY_FILE = "telegram_memory.json"
 
 GREETINGS = {"hi", "hello", "hey", "yo", "sup", "what's up", "whats up", "morning", "evening"}
 STRONG_PICK_WORDS = {"strong", "safe", "sure", "best", "good", "solid", "reliable", "confident"}
+WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 
 def send_message(text):
@@ -80,17 +81,43 @@ def mentions_league(text):
     return None, None
 
 
+def resolve_date(text):
+    """
+    Figures out which date the person actually means. Supports:
+    'today' (default), 'tomorrow', weekday names ('saturday', 'this
+    monday'), and explicit YYYY-MM-DD dates. Returns (date_str, label).
+    """
+    today = datetime.now(timezone.utc).date()
+
+    iso_match = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text)
+    if iso_match:
+        return iso_match.group(0), iso_match.group(0)
+
+    if "tomorrow" in text:
+        d = today + timedelta(days=1)
+        return d.strftime("%Y-%m-%d"), "tomorrow"
+
+    for i, day_name in enumerate(WEEKDAYS):
+        if day_name in text:
+            days_ahead = (i - today.weekday()) % 7
+            days_ahead = days_ahead or 7  # "saturday" always means the NEXT one, not today
+            d = today + timedelta(days=days_ahead)
+            return d.strftime("%Y-%m-%d"), day_name.title()
+
+    return today.strftime("%Y-%m-%d"), "today"
+
+
 def handle_count_question(text, memory):
     name, league_id = mentions_league(text)
     if not league_id:
         return False
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    fixtures = api_football.get_fixtures_by_date(today, league_id)
+    date_str, date_label = resolve_date(text)
+    fixtures = api_football.get_fixtures_by_date(date_str, league_id)
     if fixtures:
         send_message(f"📊 There {'is' if len(fixtures)==1 else 'are'} *{len(fixtures)}* {name.title()} "
-                     f"match{'es' if len(fixtures)!=1 else ''} today.")
+                     f"match{'es' if len(fixtures)!=1 else ''} {date_label}.")
     else:
-        send_message(f"📊 No {name.title()} matches scheduled today.")
+        send_message(f"📊 No {name.title()} matches scheduled {date_label}.")
     return True
 
 
@@ -136,6 +163,7 @@ def handle_strong_picks(text, memory, n_default=5):
     number_match = re.search(r"\d+", text)
     n = int(number_match.group()) if number_match else n_default
     fetch_odds = "odds" in text or "bookmaker" in text or "market" in text
+    date_str, date_label = resolve_date(text)
 
     if "basketball" in text or "nba" in text:
         sport = "basketball"
@@ -147,12 +175,11 @@ def handle_strong_picks(text, memory, n_default=5):
     memory["preference_counts"][sport] = memory["preference_counts"].get(sport, 0) + 1
 
     sport_emoji = "🏀" if sport == "basketball" else "⚽"
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    send_message(f"{sport_emoji} On it - looking for {n} good {sport} pick(s), one moment...")
+    send_message(f"{sport_emoji} On it - looking for {n} good {sport} pick(s) for {date_label}, one moment...")
 
     results = []
     if sport == "football":
-        fixtures = api_football.get_fixtures_by_date(today)
+        fixtures = api_football.get_fixtures_by_date(date_str)
         fixtures = [f for f in fixtures if f["league"]["id"] in config.ALLOWED_LEAGUE_IDS]
         fixtures = [f for f in fixtures if f["fixture"]["status"]["short"] not in agent.FOOTBALL_FINISHED_STATUSES]
         for fixture in fixtures[:12]:
@@ -164,7 +191,7 @@ def handle_strong_picks(text, memory, n_default=5):
             except Exception:
                 continue
     else:
-        games = basketball_api.get_games_by_date(today, config.ALLOWED_BASKETBALL_LEAGUE_IDS[0])
+        games = basketball_api.get_games_by_date(date_str, config.ALLOWED_BASKETBALL_LEAGUE_IDS[0])
         games = [g for g in games if g.get("status", {}).get("short") not in agent.BASKETBALL_FINISHED_STATUSES]
         for game in games[:12]:
             try:
@@ -179,12 +206,12 @@ def handle_strong_picks(text, memory, n_default=5):
 
     if not top_n:
         send_message(
-            f"{sport_emoji} Nothing solid to show you right now - either there's nothing on today, "
-            "or the teams playing don't have enough data yet. Try again closer to matchday!"
+            f"{sport_emoji} Nothing solid for {date_label} - either there's nothing scheduled, "
+            "or the teams playing don't have enough data yet. Try a different day!"
         )
         return
 
-    lines = [f"{sport_emoji} *Here's what looks good today:*\n"]
+    lines = [f"{sport_emoji} *Here's what looks good for {date_label}:*\n"]
     for pred in top_n:
         safest = pred["safest"]
         emoji = "🟢" if safest["probability"] >= 0.75 else "🟡" if safest["probability"] >= 0.6 else "🔴"
@@ -223,8 +250,8 @@ def handle_start(memory):
         "👋 Hey, good to see you! I'm your football & basketball buddy.\n\n"
         "Ask me stuff like:\n"
         "• \"what's good today\" or \"find me some strong picks\"\n"
-        "• \"any solid basketball games tonight with odds\"\n"
-        "• \"how many premier league games today\"\n"
+        "• \"any solid basketball games tomorrow\"\n"
+        "• \"how many premier league games this saturday\"\n"
         "• \"any live football games\"\n"
         "• \"what's my accuracy so far\"\n\n"
         "I check in every few minutes, so I might take a moment to reply."
@@ -254,12 +281,13 @@ def handle_message(text, memory):
     mentions_games = any(w in text for w in ["game", "match", "pick", "fixture"])
     mentions_strong = any(w in text for w in STRONG_PICK_WORDS)
 
-    if mentions_games or (mentions_strong and (has_number or "today" in text or "tonight" in text)):
+    if mentions_games or (mentions_strong and (has_number or "today" in text or "tonight" in text
+                                                or "tomorrow" in text or any(d in text for d in WEEKDAYS))):
         handle_strong_picks(text, memory)
         return
 
     send_message(
-        "Hmm, not sure I caught that one 🤔 Try something like \"what's good today\" "
+        "Hmm, not sure I caught that one 🤔 Try something like \"what's good tomorrow\" "
         "or \"any live games right now\"!"
     )
 
