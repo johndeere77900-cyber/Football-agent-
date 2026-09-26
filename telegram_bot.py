@@ -19,7 +19,7 @@ import main as agent
 import odds_api
 import storage
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
@@ -95,7 +95,6 @@ def handle_count_question(text, memory):
 
 
 def handle_live_question(text, memory):
-    """'any live football games' -> instant check of in-progress matches."""
     if "live" not in text:
         return False
 
@@ -156,7 +155,7 @@ def handle_strong_picks(text, memory, n_default=5):
         fixtures = api_football.get_fixtures_by_date(today)
         fixtures = [f for f in fixtures if f["league"]["id"] in config.ALLOWED_LEAGUE_IDS]
         fixtures = [f for f in fixtures if f["fixture"]["status"]["short"] not in agent.FOOTBALL_FINISHED_STATUSES]
-        for fixture in fixtures[:25]:
+        for fixture in fixtures[:12]:
             try:
                 league_avg = agent.get_league_avg_goals(fixture["league"]["id"], fixture["league"]["season"])
                 pred = agent.predict_fixture(fixture, league_avg, fetch_odds)
@@ -167,7 +166,7 @@ def handle_strong_picks(text, memory, n_default=5):
     else:
         games = basketball_api.get_games_by_date(today, config.ALLOWED_BASKETBALL_LEAGUE_IDS[0])
         games = [g for g in games if g.get("status", {}).get("short") not in agent.BASKETBALL_FINISHED_STATUSES]
-        for game in games[:25]:
+        for game in games[:12]:
             try:
                 pred = basketball_model.predict_game(game)
                 if pred["safest"]:
@@ -228,7 +227,7 @@ def handle_start(memory):
         "• \"how many premier league games today\"\n"
         "• \"any live football games\"\n"
         "• \"what's my accuracy so far\"\n\n"
-        "I reply straight away now - just say the word."
+        "I check in every few minutes, so I might take a moment to reply."
     )
 
 
@@ -271,20 +270,14 @@ if __name__ == "__main__":
         sys.exit(0)
 
     memory = load_memory()
+    updates = get_updates()
 
-    # Webhook mode: the val passes the message text in through the environment,
-    # so there is nothing to poll for. Falls back to polling when it is unset.
-    one_shot = os.environ.get("TELEGRAM_MESSAGE")
-    if one_shot is not None:
-        if one_shot.strip():
-            handle_message(one_shot, memory)
-    else:
-        for update in get_updates():
-            message = update.get("message")
-            if not message or not message.get("text"):
-                continue
-            if str(message["chat"]["id"]) != CHAT_ID:
-                continue
-            handle_message(message["text"], memory)
+    for update in updates:
+        message = update.get("message")
+        if not message or not message.get("text"):
+            continue
+        if str(message["chat"]["id"]) != CHAT_ID:
+            continue
+        handle_message(message["text"], memory)
 
     save_memory(memory)
