@@ -13,16 +13,8 @@ on:
         description: 'Number of basketball games to predict (blank = skip basketball)'
         required: false
         default: ''
-      backtest_league:
-        description: 'League name to backtest (leave blank to skip backtest)'
-        required: false
-        default: ''
-      backtest_season:
-        description: 'Season year for backtest, e.g. 2025'
-        required: false
-        default: '2025'  
 
-
+    
 jobs:
   predict:
     runs-on: ubuntu-latest
@@ -104,10 +96,4 @@ jobs:
           git add predictions.db DASHBOARD.md
           git diff --staged --quiet || git commit -m "Prediction update $(date -u +%Y-%m-%d)"
           git push
-       
-       - name: Run backtest (manual only)
-        if: github.event.inputs.backtest_league != ''
-        env:
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-        run: |
-          python3 main.py --backtest --league-name "${{ github.event.inputs.backtest_league }}" --season ${{ github.event.inputs.backtest_season }}
+      
