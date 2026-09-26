@@ -1,7 +1,7 @@
 """
 Persistent storage for predictions, using SQLite (a single local file - no
-server needed). Football and basketball each have their own table, so
-their track records stay separate.
+server needed). Football and basketball each have their own table, plus a
+shared Elo ratings table that updates after every graded football match.
 """
 
 import json
@@ -9,10 +9,18 @@ import sqlite3
 from datetime import datetime
 
 import config
+import elo
 
 
 def _connect():
     return sqlite3.connect(config.DB_PATH)
+
+
+def _ensure_column(conn, table, column, coltype):
+    """Adds a column to an existing table if it doesn't already exist."""
+    existing = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
 def init_db():
@@ -36,23 +44,37 @@ def init_db():
             created_at TEXT
         )
     """)
+    _ensure_column(conn, "predictions", "home_team_id", "INTEGER")
+    _ensure_column(conn, "predictions", "away_team_id", "INTEGER")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS elo_ratings (
+            team_id INTEGER PRIMARY KEY,
+            team_name TEXT,
+            rating REAL,
+            updated_at TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
 
 def save_prediction(fixture_id, match_date, home_team, away_team, league,
-                     markets, confidence, odds_comparison=None):
+                     markets, confidence, home_team_id=None, away_team_id=None,
+                     odds_comparison=None):
     conn = _connect()
     conn.execute("""
         INSERT OR REPLACE INTO predictions
         (fixture_id, match_date, home_team, away_team, league, markets_json,
-         confidence_label, top_pick, top_probability, odds_comparison_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         confidence_label, top_pick, top_probability, odds_comparison_json,
+         home_team_id, away_team_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         fixture_id, match_date, home_team, away_team, league,
         json.dumps(markets), confidence["label"], confidence["top_pick"],
         confidence["top_probability"],
         json.dumps(odds_comparison) if odds_comparison else None,
+        home_team_id, away_team_id,
         datetime.utcnow().isoformat(),
     ))
     conn.commit()
@@ -62,14 +84,16 @@ def save_prediction(fixture_id, match_date, home_team, away_team, league,
 def record_result(fixture_id, home_goals, away_goals):
     conn = _connect()
     row = conn.execute(
-        "SELECT top_pick FROM predictions WHERE fixture_id = ?", (fixture_id,)
+        "SELECT top_pick, home_team_id, away_team_id, home_team, away_team "
+        "FROM predictions WHERE fixture_id = ?", (fixture_id,)
     ).fetchone()
 
     if row is None:
         conn.close()
         return False
 
-    top_pick = row[0]
+    top_pick, home_id, away_id, home_name, away_name = row
+
     if home_goals > away_goals:
         actual = "home_win"
     elif home_goals < away_goals:
@@ -86,7 +110,48 @@ def record_result(fixture_id, home_goals, away_goals):
     """, (home_goals, away_goals, correct, fixture_id))
     conn.commit()
     conn.close()
+
+    if home_id and away_id:
+        update_elo_ratings(home_id, home_name, away_id, away_name, home_goals, away_goals)
+
     return True
+
+
+def get_team_rating(team_id):
+    if not team_id:
+        return elo.DEFAULT_RATING
+    conn = _connect()
+    row = conn.execute("SELECT rating FROM elo_ratings WHERE team_id = ?", (team_id,)).fetchone()
+    conn.close()
+    return row[0] if row else elo.DEFAULT_RATING
+
+
+def update_elo_ratings(home_id, home_name, away_id, away_name, home_goals, away_goals):
+    conn = _connect()
+
+    def get_rating(team_id):
+        row = conn.execute("SELECT rating FROM elo_ratings WHERE team_id = ?", (team_id,)).fetchone()
+        return row[0] if row else elo.DEFAULT_RATING
+
+    home_rating = get_rating(home_id)
+    away_rating = get_rating(away_id)
+
+    new_home, new_away = elo.update_ratings(home_rating, away_rating, home_goals, away_goals)
+    now = datetime.utcnow().isoformat()
+
+    conn.execute("""
+        INSERT INTO elo_ratings (team_id, team_name, rating, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(team_id) DO UPDATE SET rating = excluded.rating, updated_at = excluded.updated_at
+    """, (home_id, home_name, new_home, now))
+    conn.execute("""
+        INSERT INTO elo_ratings (team_id, team_name, rating, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(team_id) DO UPDATE SET rating = excluded.rating, updated_at = excluded.updated_at
+    """, (away_id, away_name, new_away, now))
+
+    conn.commit()
+    conn.close()
 
 
 def accuracy_summary():
@@ -128,12 +193,6 @@ def get_pending_fixtures():
 
 
 def cleanup_non_target_leagues(keep_keywords):
-    """
-    One-time cleanup: removes predictions for leagues that don't match any
-    of the given keywords (e.g. leftover test data from before the league
-    restriction was added), while keeping everything that's actually in
-    your current tracked leagues.
-    """
     conn = _connect()
     rows = conn.execute("SELECT id, league FROM predictions").fetchall()
 
@@ -151,7 +210,7 @@ def cleanup_non_target_leagues(keep_keywords):
     return len(to_delete), len(rows)
 
 
-# --- Basketball (new) -------------------------------------------------------
+# --- Basketball --------------------------------------------------------
 
 def init_basketball_db():
     conn = _connect()
