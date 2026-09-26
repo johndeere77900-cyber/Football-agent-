@@ -106,6 +106,10 @@ def predict_fixture(fixture, league_avg_goals, fetch_odds=False):
 
     home_xg = poisson_model.expected_goals(home_attack, away_defense, league_avg_goals, is_home=True)
     away_xg = poisson_model.expected_goals(away_attack, home_defense, league_avg_goals, is_home=False)
+
+    home_cards_avg = backtest.estimate_avg_cards(home_stats)
+    away_cards_avg = backtest.estimate_avg_cards(away_stats)
+
     
     if is_live:
         current_home_goals = fixture["goals"]["home"] or 0
@@ -115,8 +119,9 @@ def predict_fixture(fixture, league_avg_goals, fetch_odds=False):
     else:
         markets = poisson_model.market_probabilities(home_xg, away_xg)
         markets["is_live"] = False
-
-    conf = confidence.confidence_flag(markets["match_result"])
+        markets["cards"] = poisson_model.cards_market(home_cards_avg, away_cards_avg)
+                                                      
+   no conf = confidence.confidence_flag(markets["match_result"])
     safest = confidence.safest_pick(build_football_safest_candidates(markets))
 
     odds_comparison = None
@@ -169,6 +174,9 @@ def print_prediction(pred):
     print(f"  Confidence:     {c['emoji']} {c['label']}  "
           f"(pick: {c['top_pick']}, {c['top_probability']:.0%})")
 
+print(f"  Cards:          Over {m['cards']['over_line']}: {m['cards']['over']:.0%} | "
+          f"Under: {m['cards']['under']:.0%}")
+    
     if pred.get("odds_comparison"):
         oc = pred["odds_comparison"]
         print(f"  Market odds:    Home {oc.get('implied_home_win', 0):.0%} | "
