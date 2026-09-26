@@ -13,6 +13,16 @@ on:
         description: 'Number of basketball games to predict (blank = skip basketball)'
         required: false
         default: ''
+        
+      backtest_league:
+        description: 'League name to backtest (leave blank to skip backtest)'
+        required: false
+        default: ''
+      backtest_season:
+        description: 'Season year for backtest, e.g. 2025'
+        required: false
+        default: '2025'  
+
 
 jobs:
   predict:
