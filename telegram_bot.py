@@ -2,9 +2,8 @@
 Telegram bot brain - checks for new messages, understands what you're
 asking for, and either answers instantly or runs a real prediction.
 
-This runs on a GitHub Actions schedule (every few minutes) rather than
-instantly, since we're not using an always-on server. A short delay is
-the honest trade-off for staying fully free.
+Runs on a GitHub Actions schedule (every ~10 minutes) rather than
+instantly, since we're not using an always-on server.
 """
 
 import json
@@ -28,9 +27,15 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 OFFSET_FILE = "telegram_offset.txt"
 MEMORY_FILE = "telegram_memory.json"
 
+CONF_EMOJI = {"High": "🟢", "Moderate": "🟡", "Toss-up": "🔴"}
+
 
 def send_message(text):
-    requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": CHAT_ID, "text": text}, timeout=15)
+    requests.post(
+        f"{TELEGRAM_API}/sendMessage",
+        json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
+        timeout=15,
+    )
 
 
 def get_updates():
@@ -69,18 +74,16 @@ def top_preference(memory):
 
 
 def handle_count_question(text, memory):
-    """'how many premier league games today' -> instant count, no prediction."""
     for name, league_id in config.LEAGUE_NAME_TO_ID.items():
         if name in text:
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             fixtures = api_football.get_fixtures_by_date(today, league_id)
-            send_message(f"{len(fixtures)} {name.title()} match(es) today.")
+            send_message(f"📊 *{len(fixtures)}* {name.title()} match(es) today.")
             return True
     return False
 
 
 def handle_strong_picks(text, memory):
-    """'find me 9 strong football games' -> real predictions, sorted by safest pick."""
     match = re.search(r"(\d+)\s*(strong\s*)?(football|soccer|basketball)?", text)
     if not match:
         return False
@@ -91,11 +94,12 @@ def handle_strong_picks(text, memory):
         sport = top_preference(memory)
         memory["recent"].append(f"assumed sport: {sport}")
     else:
-        memory["preference_counts"][sport if sport != "soccer" else "football"] = \
-            memory["preference_counts"].get(sport if sport != "soccer" else "football", 0) + 1
+        key = "football" if sport == "soccer" else sport
+        memory["preference_counts"][key] = memory["preference_counts"].get(key, 0) + 1
 
+    sport_emoji = "🏀" if sport == "basketball" else "⚽"
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    send_message(f"Working on {n} {sport} pick(s) - give me a moment...")
+    send_message(f"{sport_emoji} Working on {n} {sport} pick(s) - give me a moment...")
 
     results = []
     if sport in ("football", "soccer"):
@@ -106,7 +110,7 @@ def handle_strong_picks(text, memory):
             try:
                 pred = agent.predict_fixture(fixture, agent.LEAGUE_AVG_GOALS_FALLBACK)
                 if not pred["insufficient_data"] and pred["safest"]:
-                    results.append((f"{pred['home_team']} vs {pred['away_team']}", pred["safest"]))
+                    results.append((pred["home_team"], pred["away_team"], pred["league"], pred["safest"]))
             except Exception:
                 continue
     else:
@@ -116,28 +120,50 @@ def handle_strong_picks(text, memory):
             try:
                 pred = basketball_model.predict_game(game)
                 if pred["safest"]:
-                    results.append((f"{pred['home_team']} vs {pred['away_team']}", pred["safest"]))
+                    results.append((pred["home_team"], pred["away_team"], pred["league"], pred["safest"]))
             except Exception:
                 continue
 
-    results.sort(key=lambda r: r[1]["probability"], reverse=True)
+    results.sort(key=lambda r: r[3]["probability"], reverse=True)
     top_n = results[:n]
 
     if not top_n:
-        send_message("No strong picks found - not enough matches with reliable data right now.")
+        send_message(
+            f"{sport_emoji} No strong picks found right now - either no matches today, "
+            "or not enough team data available yet (common during international breaks "
+            "or early in a season)."
+        )
         return True
 
-    lines = [f"Top {len(top_n)} strongest pick(s):\n"]
-    for matchup, safest in top_n:
-        lines.append(f"{matchup}\n  {safest['label']} ({safest['probability']:.0%})")
+    lines = [f"{sport_emoji} *Top {len(top_n)} strongest pick(s):*\n"]
+    for home, away, league, safest in top_n:
+        emoji = "🟢" if safest["probability"] >= 0.75 else "🟡" if safest["probability"] >= 0.6 else "🔴"
+        lines.append(f"*{home} vs {away}* ({league})\n  {emoji} {safest['label']} ({safest['probability']:.0%})")
     send_message("\n\n".join(lines))
     return True
 
 
+def handle_start(memory):
+    send_message(
+        "👋 *Hey! I'm your football & basketball prediction bot.*\n\n"
+        "Try asking me things like:\n"
+        "• \"find me 5 strong football games\"\n"
+        "• \"predict 3 basketball games\"\n"
+        "• \"how many premier league games today\"\n\n"
+        "I check for your messages every ~10 minutes, so replies aren't instant, "
+        "but I'll always get back to you."
+    )
+
+
 def handle_message(text, memory):
+    original = text
     text = text.lower().strip()
     memory["recent"].append(text)
     memory["recent"] = memory["recent"][-10:]
+
+    if text in ("/start", "start", "hi", "hello", "help", "/help"):
+        handle_start(memory)
+        return
 
     if "how many" in text:
         if handle_count_question(text, memory):
@@ -148,13 +174,13 @@ def handle_message(text, memory):
             return
 
     if "accuracy" in text:
-        agent.run_accuracy_report()
-        send_message("Check the Actions log for your full accuracy report (Telegram summary coming soon).")
+        send_message("📈 Check the *Actions* tab log for your full accuracy report for now.")
         return
 
     send_message(
-        "I can find football or basketball picks - try \"find me 5 strong football games\" "
-        "or \"how many premier league games today\"."
+        "🤔 I didn't quite catch that. Try:\n"
+        "• \"find me 5 strong football games\"\n"
+        "• \"how many premier league games today\""
     )
 
 
