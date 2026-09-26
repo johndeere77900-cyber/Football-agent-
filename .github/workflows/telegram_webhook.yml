@@ -1,0 +1,79 @@
+# Canonical copy. Push it into the repo with push-workflow.ts, which writes it to
+#   johndeere77900-cyber/Football-agent-
+#   .github/workflows/telegram_webhook.yml
+#
+# This val dispatches it via workflow_dispatch, passing the user's message as the
+# `message` input. The repo's telegram_bot.py already supports a one-shot mode:
+# when TELEGRAM_MESSAGE is set it handles exactly that message and replies on
+# Telegram itself, instead of polling getUpdates.
+#
+# Edit this file, then re-run push-workflow.ts to redeploy.
+
+name: Telegram webhook
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: Message the user sent the bot
+        required: true
+        type: string
+
+# One run at a time, so two quick messages don't race on telegram_memory.json.
+concurrency:
+  group: telegram-webhook
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the football agent for this one message
+        env:
+          # Set, so telegram_bot.py takes the one-shot branch instead of polling.
+          TELEGRAM_MESSAGE: ${{ inputs.message }}
+          # The repo's existing secret is TELEGRAM_BOT_TOKEN; fall back to
+          # TELEGRAM_TOKEN so either name works.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python3 telegram_bot.py
+
+      - name: Save bot memory
+        if: always()
+        run: |
+          git config user.name "football-agent-bot"
+          git config user.email "actions@github.com"
+          git add telegram_memory.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "Telegram memory update"
+          git push
+
+      # The agent replies in chat itself. This only fires if the run broke, so a
+      # crash doesn't go silent.
+      - name: Report a crash in chat
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -sS -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg c "$TELEGRAM_CHAT_ID" \
+                  --arg t "⚠️ The worker crashed. Log: $RUN_URL" \
+                  '{chat_id: $c, text: $t}')"
