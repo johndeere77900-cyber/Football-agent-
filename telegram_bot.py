@@ -228,7 +228,7 @@ def handle_start(memory):
         "• \"how many premier league games today\"\n"
         "• \"any live football games\"\n"
         "• \"what's my accuracy so far\"\n\n"
-        "I check in every few minutes, so I might take a moment to reply."
+        "I reply straight away now - just say the word."
     )
 
 
@@ -271,14 +271,20 @@ if __name__ == "__main__":
         sys.exit(0)
 
     memory = load_memory()
-    updates = get_updates()
 
-    for update in updates:
-        message = update.get("message")
-        if not message or not message.get("text"):
-            continue
-        if str(message["chat"]["id"]) != CHAT_ID:
-            continue
-        handle_message(message["text"], memory)
+    # Webhook mode: the val passes the message text in through the environment,
+    # so there is nothing to poll for. Falls back to polling when it is unset.
+    one_shot = os.environ.get("TELEGRAM_MESSAGE")
+    if one_shot is not None:
+        if one_shot.strip():
+            handle_message(one_shot, memory)
+    else:
+        for update in get_updates():
+            message = update.get("message")
+            if not message or not message.get("text"):
+                continue
+            if str(message["chat"]["id"]) != CHAT_ID:
+                continue
+            handle_message(message["text"], memory)
 
     save_memory(memory)
