@@ -15,6 +15,17 @@ import config
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 5  # doubles each retry: 5s, 10s, 20s
 
+def get_league_fixtures(league_id, season):
+    """
+    Returns every fixture for an entire league season in one call - the
+    full match history, used for building a genuine backtest without
+    leaking future results into past predictions.
+    """
+    params = {"league": league_id, "season": season}
+    data = _get("fixtures", params)
+    response = data.get("response", [])
+    return response if isinstance(response, list) else []
+
 
 def _headers():
     return {
