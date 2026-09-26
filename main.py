@@ -428,8 +428,10 @@ if __name__ == "__main__":
     parser.add_argument("--accuracy", action="store_true")
     parser.add_argument("--cleanup", action="store_true")
     parser.add_argument("--with-odds", action="store_true", help="Also fetch bookmaker odds for comparison")
+    parser.add_argument("--backtest", action="store_true", help="Run a real historical backtest")
+    parser.add_argument("--season", type=int, help="Season year for backtest, e.g. 2025")
     args = parser.parse_args()
-
+    
     if args.sport == "basketball":
         if args.grade:
             run_grading_basketball()
@@ -440,6 +442,7 @@ if __name__ == "__main__":
             run_daily_basketball(date_str, args.limit)
     else:
         if args.grade:
+
             run_grading()
         elif args.accuracy:
             run_accuracy_report()
@@ -449,3 +452,22 @@ if __name__ == "__main__":
             date_str = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             league_id = resolve_league_id(args.league, args.league_name)
             run_daily(date_str, league_id, args.limit, args.with_odds)
+
+  def run_backtest_command(league_id, season, sample_size=20):
+    if not league_id:
+        league_id = config.ALLOWED_LEAGUE_IDS[0]
+    if not season:
+        season = datetime.now(timezone.utc).year - 1  # last completed season, safest default
+
+    print(f"Running backtest: league {league_id}, season {season}, sample size {sample_size}...")
+    result = backtest.run_real_backtest(league_id, season, sample_size)
+
+    if result["graded"] == 0:
+        print("No matches could be backtested - try a different league or season.")
+        return
+
+    print(f"\nBacktest accuracy: {result['accuracy']:.1%} ({result['correct']}/{result['graded']})")
+    print("\nSample results:")
+    for entry in result["log"][:10]:
+        mark = "✓" if entry["correct"] else "✗"
+        print(f"  {mark} {entry['match']} | predicted: {entry['predicted']}")
