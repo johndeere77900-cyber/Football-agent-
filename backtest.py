@@ -1,10 +1,6 @@
 """
-Backtesting: run the model against matches that have ALREADY finished,
-using only the data that would have been available beforehand, then check
-the prediction against what actually happened.
-
-This is how we find out whether the model is any good BEFORE relying on it
-for upcoming matches.
+Backtesting and prediction-building helpers shared between live predictions
+and the synthetic self-test.
 """
 
 import elo
@@ -14,29 +10,16 @@ import api_football
 
 
 def estimate_expected_goals_from_stats(team_stats_for, team_stats_against, league_avg_goals):
-    """
-    Pulls goals-for/against averages out of an API-Football team statistics
-    response and converts them into the attack/defense ratios the Poisson
-    model needs. Falls back to league average (ratio of 1.0) if the stats
-    object is empty or missing fields - this happens for some smaller
-    leagues on the free tier.
-    """
     if not isinstance(team_stats_for, dict):
         team_stats_for = {}
     if not isinstance(team_stats_against, dict):
         team_stats_against = {}
 
     goals_for_avg = (
-        team_stats_for.get("goals", {})
-        .get("for", {})
-        .get("average", {})
-        .get("total")
+        team_stats_for.get("goals", {}).get("for", {}).get("average", {}).get("total")
     )
     goals_against_avg = (
-        team_stats_against.get("goals", {})
-        .get("against", {})
-        .get("average", {})
-        .get("total")
+        team_stats_against.get("goals", {}).get("against", {}).get("average", {}).get("total")
     )
 
     try:
@@ -55,11 +38,28 @@ def estimate_expected_goals_from_stats(team_stats_for, team_stats_against, leagu
     return attack_ratio, defense_ratio
 
 
+def estimate_avg_cards(team_stats, league_avg_cards=3.8):
+    """
+    Pulls a team's average cards-per-game from their statistics response.
+    Falls back to a typical league-average if unavailable. 3.8 is a
+    reasonable rough baseline across major European leagues.
+    """
+    if not isinstance(team_stats, dict):
+        return league_avg_cards
+    try:
+        yellow = team_stats.get("cards", {}).get("yellow", {})
+        total_yellow = sum(
+            v.get("total") or 0 for v in yellow.values() if isinstance(v, dict)
+        )
+        fixtures_played = team_stats.get("fixtures", {}).get("played", {}).get("total")
+        if fixtures_played and fixtures_played > 0:
+            return total_yellow / fixtures_played
+    except (TypeError, AttributeError):
+        pass
+    return league_avg_cards
+
+
 def predict_match(home_attack, home_defense, away_attack, away_defense, league_avg_goals):
-    """
-    Core prediction step shared by both live predictions and backtesting.
-    *_attack / *_defense are ratios relative to league average (1.0 = average).
-    """
     home_xg = poisson_model.expected_goals(home_attack, away_defense, league_avg_goals)
     away_xg = poisson_model.expected_goals(away_attack, home_defense, league_avg_goals)
 
@@ -70,16 +70,7 @@ def predict_match(home_attack, home_defense, away_attack, away_defense, league_a
 
 
 def run_synthetic_selftest():
-    """
-    Quick sanity check using made-up but realistic numbers - no API calls,
-    no API key required. Confirms the math pipeline behaves as expected
-    before we ever touch real data.
-
-    Scenario: a strong home team (scores more, concedes less than average)
-    vs a weak away team (scores less, concedes more than average).
-    """
-    league_avg_goals = 1.4  # a fairly typical league-wide average
-
+    league_avg_goals = 1.4
     home_attack, home_defense = 1.6, 0.7
     away_attack, away_defense = 0.7, 1.4
 
@@ -107,32 +98,6 @@ def run_synthetic_selftest():
 
     print("\nSelf-test passed: math checks out.")
     return markets, conf
-
-
-def backtest_finished_fixture(fixture_id, home_team_id, away_team_id, league_id, season, league_avg_goals):
-    """
-    Real backtest against one already-finished match. Uses the team's
-    SEASON stats (an approximation - a true point-in-time backtest needs
-    the paid historical endpoint).
-    """
-    home_stats = api_football.get_team_statistics(home_team_id, league_id, season)
-    away_stats = api_football.get_team_statistics(away_team_id, league_id, season)
-
-    home_attack, home_defense = estimate_expected_goals_from_stats(home_stats, home_stats, league_avg_goals)
-    away_attack, away_defense = estimate_expected_goals_from_stats(away_stats, away_stats, league_avg_goals)
-
-    markets, conf = predict_match(home_attack, home_defense, away_attack, away_defense, league_avg_goals)
-
-    result = api_football.get_fixture_result(fixture_id)
-    actual_home_goals = result["goals"]["home"] if result else None
-    actual_away_goals = result["goals"]["away"] if result else None
-
-    return {
-        "predicted_markets": markets,
-        "confidence": conf,
-        "actual_home_goals": actual_home_goals,
-        "actual_away_goals": actual_away_goals,
-    }
 
 
 if __name__ == "__main__":
