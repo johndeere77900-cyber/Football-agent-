@@ -1,8 +1,7 @@
-name: Sports Predictions
+name: Daily Football Predictions
 
 on:
   schedule:
-    # Runs Wednesdays and Saturdays at 11:00 UTC (12:00 PM Lagos time)
     - cron: '0 11 * * 3,6'
   workflow_dispatch:
     inputs:
@@ -46,7 +45,7 @@ jobs:
         run: |
           LIMIT="${{ github.event.inputs.football_games }}"
           if [ -z "$LIMIT" ]; then
-            LIMIT="25"
+            LIMIT="12"
           fi
           python3 main.py --limit "$LIMIT"
 
@@ -84,14 +83,15 @@ jobs:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: python3 main.py --sport basketball --accuracy
 
+      - name: Generate dashboard
+        if: always()
+        run: python3 generate_dashboard.py
+
       - name: Save results back to the repo
         if: always()
         run: |
           git config user.name "sports-agent-bot"
           git config user.email "actions@github.com"
-          git add predictions.db
+          git add predictions.db DASHBOARD.md
           git diff --staged --quiet || git commit -m "Prediction update $(date -u +%Y-%m-%d)"
           git push
-      - name: Generate dashboard
-        if: always()
-        run: python3 generate_dashboard.py
