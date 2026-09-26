@@ -92,3 +92,6 @@ jobs:
           git add predictions.db
           git diff --staged --quiet || git commit -m "Prediction update $(date -u +%Y-%m-%d)"
           git push
+      - name: Generate dashboard
+        if: always()
+        run: python3 generate_dashboard.py
