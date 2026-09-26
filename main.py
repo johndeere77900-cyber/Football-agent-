@@ -104,9 +104,9 @@ def predict_fixture(fixture, league_avg_goals, fetch_odds=False):
     away_attack, away_defense = backtest.estimate_expected_goals_from_stats(
         away_stats, away_stats, league_avg_goals)
 
-    home_xg = poisson_model.expected_goals(home_attack, away_defense, league_avg_goals)
-    away_xg = poisson_model.expected_goals(away_attack, home_defense, league_avg_goals)
-
+    home_xg = poisson_model.expected_goals(home_attack, away_defense, league_avg_goals, is_home=True)
+    away_xg = poisson_model.expected_goals(away_attack, home_defense, league_avg_goals, is_home=False)
+    
     if is_live:
         current_home_goals = fixture["goals"]["home"] or 0
         current_away_goals = fixture["goals"]["away"] or 0
