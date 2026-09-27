@@ -419,6 +419,16 @@ def run_check_coverage(league_id):
               f"standings={coverage.get('standings')}")
 
 
+def run_raw_debug(league_id, season):
+    data = api_football.raw_debug_call("fixtures", {"league": league_id, "season": season})
+    print("Full raw response:")
+    print(f"  results: {data.get('results')}")
+    print(f"  errors: {data.get('errors')}")
+    print(f"  paging: {data.get('paging')}")
+    print(f"  parameters sent back: {data.get('parameters')}")
+    print(f"  response length: {len(data.get('response', []))}")
+
+
 # --- Basketball --------------------------------------------------------
 
 def run_daily_basketball(date_str, limit=None):
@@ -538,6 +548,7 @@ if __name__ == "__main__":
     parser.add_argument("--sample", type=int, default=20, help="Number of matches to sample for backtest")
     parser.add_argument("--find-league", help="Search API-Football for a league's correct ID by name")
     parser.add_argument("--check-coverage", type=int, help="Check what seasons/data are available for a league ID")
+    parser.add_argument("--raw-debug", action="store_true", help="Dump the full raw API response for diagnosis")
     args = parser.parse_args()
 
     if args.find_league:
@@ -546,6 +557,10 @@ if __name__ == "__main__":
 
     if args.check_coverage:
         run_check_coverage(args.check_coverage)
+        sys.exit(0)
+
+    if args.raw_debug:
+        run_raw_debug(args.league or 39, args.season or 2025)
         sys.exit(0)
 
     if args.sport == "basketball":
