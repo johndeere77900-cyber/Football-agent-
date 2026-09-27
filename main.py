@@ -29,12 +29,6 @@ _league_avg_cache = {}
 
 
 def get_league_avg_goals(league_id, season):
-    """
-    Calculates a real, live league-average-goals figure from current
-    standings, caching it per run so we don't re-fetch for every match in
-    the same league. Falls back to a fixed estimate if standings aren't
-    available (early season, or a competition without a standings endpoint).
-    """
     cache_key = (league_id, season)
     if cache_key in _league_avg_cache:
         return _league_avg_cache[cache_key]
@@ -163,7 +157,6 @@ def predict_fixture(fixture, league_avg_goals, fetch_odds=False):
         markets["is_live"] = False
         markets["cards"] = poisson_model.cards_market(home_cards_avg, away_cards_avg)
 
-        # Blend Elo's independent view into the main match-result probabilities
         markets["match_result"] = _blend_elo_into_match_result(
             markets["match_result"], elo_cross_check, config.ELO_BLEND_WEIGHT)
         markets["double_chance"] = {
@@ -397,6 +390,18 @@ def run_backtest_command(league_id, season, sample_size=20):
         print(f"  {mark} {entry['match']} | predicted: {entry['predicted']}")
 
 
+def run_find_league(name):
+    results = api_football.search_leagues(name)
+    if not results:
+        print(f"No leagues found matching '{name}'.")
+        return
+    print(f"Matches for '{name}':")
+    for r in results:
+        league = r["league"]
+        country = r.get("country", {}).get("name", "")
+        print(f"  ID {league['id']}: {league['name']} ({country})")
+
+
 # --- Basketball --------------------------------------------------------
 
 def run_daily_basketball(date_str, limit=None):
@@ -514,7 +519,12 @@ if __name__ == "__main__":
     parser.add_argument("--backtest", action="store_true", help="Run a real historical backtest")
     parser.add_argument("--season", type=int, help="Season year for backtest, e.g. 2025")
     parser.add_argument("--sample", type=int, default=20, help="Number of matches to sample for backtest")
+    parser.add_argument("--find-league", help="Search API-Football for a league's correct ID by name")
     args = parser.parse_args()
+
+    if args.find_league:
+        run_find_league(args.find_league)
+        sys.exit(0)
 
     if args.sport == "basketball":
         if args.grade:
