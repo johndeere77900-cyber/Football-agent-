@@ -1,5 +1,7 @@
 """
-Poisson-distribution goal model.
+Poisson-distribution goal model, with a Dixon-Coles low-score correction
+applied to sharpen 0-0/1-0/0-1/1-1 predictions specifically - plain
+Poisson is known to slightly misjudge these particular outcomes.
 """
 
 import math
@@ -12,13 +14,6 @@ def poisson_pmf(k, lam):
 
 
 def expected_goals(team_attack, opponent_defense, league_avg_goals, is_home=None):
-    """
-    team_attack / opponent_defense: ratios relative to league average.
-    is_home: True applies the home-advantage boost, False applies the
-    away-disadvantage reduction, None (default) applies neither - used by
-    the synthetic self-test where home/away is already baked into the
-    attack/defense numbers directly.
-    """
     base = team_attack * opponent_defense * league_avg_goals
     if is_home is True:
         return base * config.HOME_ADVANTAGE_MULTIPLIER
@@ -27,14 +22,35 @@ def expected_goals(team_attack, opponent_defense, league_avg_goals, is_home=None
     return base
 
 
-def build_scoreline_grid(home_xg, away_xg, max_goals=None):
+def _dixon_coles_tau(x, y, home_xg, away_xg, rho):
+    if x == 0 and y == 0:
+        return 1 - (home_xg * away_xg * rho)
+    elif x == 0 and y == 1:
+        return 1 + (home_xg * rho)
+    elif x == 1 and y == 0:
+        return 1 + (away_xg * rho)
+    elif x == 1 and y == 1:
+        return 1 - rho
+    return 1.0
+
+
+def build_scoreline_grid(home_xg, away_xg, max_goals=None, apply_dixon_coles=True):
     max_goals = max_goals or config.MAX_GOALS_GRID
     grid = []
     for h in range(max_goals + 1):
         row = []
         for a in range(max_goals + 1):
-            row.append(poisson_pmf(h, home_xg) * poisson_pmf(a, away_xg))
+            p = poisson_pmf(h, home_xg) * poisson_pmf(a, away_xg)
+            if apply_dixon_coles and h <= 1 and a <= 1:
+                p *= _dixon_coles_tau(h, a, home_xg, away_xg, config.DIXON_COLES_RHO)
+            row.append(p)
         grid.append(row)
+
+    # Renormalize so probabilities still sum to 1 after the correction
+    total = sum(sum(row) for row in grid)
+    if total > 0:
+        grid = [[p / total for p in row] for row in grid]
+
     return grid
 
 
@@ -106,4 +122,4 @@ def cards_market(home_avg_cards, away_avg_cards, line=3.5):
         "over_line": line,
         "over": over_prob,
         "under": 1 - over_prob,
-    }
+        }
