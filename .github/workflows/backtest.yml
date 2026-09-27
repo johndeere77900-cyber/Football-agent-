@@ -3,21 +3,34 @@ name: Run Backtest
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: 'What to run'
+        required: true
+        default: 'backtest'
+        type: choice
+        options:
+          - backtest
+          - check-coverage
+          - find-league
       league_name:
-        description: 'League name to backtest'
-        required: true
+        description: 'League name (for backtest or find-league)'
+        required: false
         default: 'Premier League'
+      league_id:
+        description: 'League ID (for check-coverage)'
+        required: false
+        default: '39'
       season:
-        description: 'Season year, e.g. 2025'
-        required: true
+        description: 'Season year, e.g. 2025 (for backtest)'
+        required: false
         default: '2025'
       sample:
-        description: 'Number of matches to sample'
+        description: 'Number of matches to sample (for backtest)'
         required: false
         default: '20'
 
 jobs:
-  backtest:
+  run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,8 +38,24 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
+
       - name: Run backtest
+        if: github.event.inputs.mode == 'backtest'
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
           python3 main.py --backtest --league-name "${{ github.event.inputs.league_name }}" --season ${{ github.event.inputs.season }} --sample ${{ github.event.inputs.sample }}
+
+      - name: Check coverage
+        if: github.event.inputs.mode == 'check-coverage'
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          python3 main.py --check-coverage ${{ github.event.inputs.league_id }}
+
+      - name: Find league
+        if: github.event.inputs.mode == 'find-league'
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          python3 main.py --find-league "${{ github.event.inputs.league_name }}"
