@@ -12,16 +12,17 @@ on:
           - backtest
           - check-coverage
           - find-league
+          - raw-debug
       league_name:
         description: 'League name (for backtest or find-league)'
         required: false
         default: 'Premier League'
       league_id:
-        description: 'League ID (for check-coverage)'
+        description: 'League ID (for check-coverage or raw-debug)'
         required: false
         default: '39'
       season:
-        description: 'Season year, e.g. 2025 (for backtest)'
+        description: 'Season year, e.g. 2025 (for backtest or raw-debug)'
         required: false
         default: '2025'
       sample:
@@ -59,3 +60,10 @@ jobs:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
           python3 main.py --find-league "${{ github.event.inputs.league_name }}"
+
+      - name: Raw debug
+        if: github.event.inputs.mode == 'raw-debug'
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          python3 main.py --raw-debug --league ${{ github.event.inputs.league_id }} --season ${{ github.event.inputs.season }}
