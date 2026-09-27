@@ -153,8 +153,7 @@ def search_leagues(name):
 def get_league_coverage(league_id):
     """
     Asks API-Football what seasons exist for this league and what data is
-    actually covered for each on the current plan - the definitive way to
-    find out why a season might return nothing, rather than guessing.
+    actually covered for each on the current plan.
     """
     params = {"id": league_id}
     data = _get("leagues", params)
@@ -162,3 +161,16 @@ def get_league_coverage(league_id):
     if not response:
         return []
     return response[0].get("seasons", [])
+
+
+def raw_debug_call(endpoint, params):
+    """
+    Bypasses the normal response parsing and returns the ENTIRE raw reply,
+    including any 'errors' or metadata fields the API sends back - used
+    only for diagnosing why a call returns fewer results than expected.
+    Deliberately does NOT use the cache, so it always hits the live API.
+    """
+    url = f"{config.API_FOOTBALL_BASE_URL}/{endpoint}"
+    resp = requests.get(url, headers=_headers(), params=params, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
