@@ -15,33 +15,37 @@ ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 
 # --- Model settings (football) ----------------------------------------------
 RECENT_FORM_MATCHES = 8
-HEAD_TO_HEAD_SEASONS_BACK = 3
-RECENT_FORM_WEIGHT = 0.55
+HEAD_TO_HEAD_MATCHES = 6
+
+# How much each signal counts toward a team's attack/defense estimate.
+# Must sum to 1.0.
+SEASON_WEIGHT = 0.40
+RECENT_FORM_WEIGHT = 0.45
+HEAD_TO_HEAD_WEIGHT = 0.15
+
+# How much Elo's independent rating-based view gets blended into the
+# final match-result probabilities, on top of the above.
+ELO_BLEND_WEIGHT = 0.15
+
+# Dixon-Coles low-score correction factor - a standard adjustment used in
+# public football models to fix plain Poisson's known tendency to slightly
+# misjudge 0-0, 1-0, 0-1, and 1-1 outcomes. -0.13 is a commonly cited value.
+DIXON_COLES_RHO = -0.13
+
 MAX_GOALS_GRID = 10
 
-# Home advantage: home teams historically score meaningfully more than a
-# neutral-venue average, away teams somewhat less. These are standard
-# rough multipliers used in public football models.
+# Home advantage multipliers
 HOME_ADVANTAGE_MULTIPLIER = 1.30
 AWAY_DISADVANTAGE_MULTIPLIER = 0.88
 
-# Per-league average goals per team per game - used as the baseline before
-# home/away and team-strength adjustments. Bundesliga is historically the
-# highest-scoring of the major leagues; La Liga tends lower. International
-# competitions use a moderate blended estimate since squads vary widely.
+# Fallback per-league averages, used only when live standings data isn't
+# available yet (e.g. very early season, or a competition with no
+# standings endpoint like some international tournaments).
 LEAGUE_AVG_GOALS = {
-    39: 1.40,   # Premier League
-    140: 1.30,  # La Liga
-    135: 1.35,  # Serie A
-    78: 1.55,   # Bundesliga
-    61: 1.35,   # Ligue 1
-    2: 1.40,    # UEFA Champions League
-    3: 1.35,    # UEFA Europa League
-    5: 1.30,    # UEFA Nations League
-    1: 1.30,    # World Cup
-    4: 1.30,    # Euro Championship
+    39: 1.40, 140: 1.30, 135: 1.35, 78: 1.55, 61: 1.35,
+    2: 1.40, 3: 1.35, 5: 1.30, 1: 1.30, 4: 1.30,
 }
-LEAGUE_AVG_GOALS_FALLBACK = 1.35  # used for any league not listed above
+LEAGUE_AVG_GOALS_FALLBACK = 1.35
 
 # --- Confidence flag thresholds ----------------------------------------------
 CONFIDENCE_HIGH_GAP = 0.20
@@ -72,13 +76,9 @@ LEAGUE_NAME_TO_ID = {
 }
 
 LEAGUE_ID_TO_ODDS_SPORT_KEY = {
-    39: "soccer_epl",
-    140: "soccer_spain_la_liga",
-    135: "soccer_italy_serie_a",
-    78: "soccer_germany_bundesliga",
-    61: "soccer_france_ligue_one",
-    2: "soccer_uefa_champs_league",
-    3: "soccer_uefa_europa_league",
+    39: "soccer_epl", 140: "soccer_spain_la_liga", 135: "soccer_italy_serie_a",
+    78: "soccer_germany_bundesliga", 61: "soccer_france_ligue_one",
+    2: "soccer_uefa_champs_league", 3: "soccer_uefa_europa_league",
     1: "soccer_fifa_world_cup",
 }
 
