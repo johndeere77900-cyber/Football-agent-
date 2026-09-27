@@ -1,5 +1,10 @@
 """
 Backtesting and prediction-building helpers.
+
+The synthetic self-test checks the math is sound. run_real_backtest()
+checks real accuracy against real historical results - using ONLY match
+data that happened BEFORE each backtested match, so there's no leakage
+of future results into past predictions.
 """
 
 import api_football
@@ -31,12 +36,6 @@ def estimate_expected_goals_from_stats(team_stats_for, team_stats_against, leagu
 
 
 def estimate_recent_form_goals(team_id, league_avg_goals, last=None):
-    """
-    Average goals for/against from the team's last N matches (any
-    competition) - captures actual current form (injuries, momentum,
-    a new manager) that a full-season average misses. Falls back to
-    neutral (1.0 ratio) if no recent match data is available.
-    """
     last = last or config.RECENT_FORM_MATCHES
     matches = api_football.get_recent_form(team_id, last=last)
 
@@ -63,7 +62,6 @@ def estimate_recent_form_goals(team_id, league_avg_goals, last=None):
 
 
 def blend_season_and_recent(season_ratio, recent_ratio, recent_weight=None):
-    """Weighted blend of full-season form and recent form."""
     weight = recent_weight if recent_weight is not None else config.RECENT_FORM_WEIGHT
     return season_ratio * (1 - weight) + recent_ratio * weight
 
@@ -133,15 +131,21 @@ def _compute_stats_as_of(all_fixtures, team_id, cutoff_date_str):
 
 def run_real_backtest(league_id, season, sample_size=20, min_prior_matches=5):
     all_fixtures = api_football.get_league_fixtures(league_id, season)
+    print(f"DEBUG: fetched {len(all_fixtures)} total fixtures for league {league_id}, season {season}")
+
     finished = sorted(
         [f for f in all_fixtures if f["fixture"]["status"]["short"] == "FT"],
         key=lambda f: f["fixture"]["date"]
     )
+    print(f"DEBUG: {len(finished)} of those are finished (FT)")
 
     candidates = finished[min_prior_matches * 2:]
+    print(f"DEBUG: {len(candidates)} candidates after skipping early-season matches")
+
     if len(candidates) > sample_size:
         step = max(len(candidates) // sample_size, 1)
         candidates = candidates[::step][:sample_size]
+    print(f"DEBUG: {len(candidates)} candidates selected for backtest")
 
     league_avg_goals = config.LEAGUE_AVG_GOALS.get(league_id, config.LEAGUE_AVG_GOALS_FALLBACK)
 
