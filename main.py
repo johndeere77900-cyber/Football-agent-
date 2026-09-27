@@ -384,6 +384,20 @@ def run_backtest_command(league_id, season, sample_size=20):
         return
 
     print(f"\nBacktest accuracy: {result['accuracy']:.1%} ({result['correct']}/{result['graded']})")
+
+    predicted_counts = {"home_win": 0, "draw": 0, "away_win": 0}
+    actual_counts = {"home_win": 0, "draw": 0, "away_win": 0}
+    for entry in result["log"]:
+        predicted_counts[entry["predicted"]] += 1
+        actual_counts[entry["actual"]] += 1
+
+    total = len(result["log"])
+    print("\nWhat the model predicted vs what actually happened:")
+    print(f"  {'Outcome':<12} {'Predicted':<20} {'Actual':<20}")
+    for outcome in ("home_win", "draw", "away_win"):
+        print(f"  {outcome:<12} {predicted_counts[outcome]}/{total} ({predicted_counts[outcome]/total:.0%})"
+              f"{'':<8}{actual_counts[outcome]}/{total} ({actual_counts[outcome]/total:.0%})")
+
     print("\nSample results:")
     for entry in result["log"][:10]:
         mark = "✓" if entry["correct"] else "✗"
