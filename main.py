@@ -402,6 +402,23 @@ def run_find_league(name):
         print(f"  ID {league['id']}: {league['name']} ({country})")
 
 
+def run_check_coverage(league_id):
+    seasons = api_football.get_league_coverage(league_id)
+    if not seasons:
+        print(f"No season data found for league {league_id} at all.")
+        return
+    print(f"Seasons available for league {league_id}:")
+    for s in seasons:
+        year = s.get("year")
+        current = s.get("current")
+        coverage = s.get("coverage", {})
+        fixtures_covered = coverage.get("fixtures", {})
+        print(f"  Year {year} {'(current)' if current else ''}: "
+              f"fixtures events={fixtures_covered.get('events')}, "
+              f"stats={fixtures_covered.get('statistics_fixtures')}, "
+              f"standings={coverage.get('standings')}")
+
+
 # --- Basketball --------------------------------------------------------
 
 def run_daily_basketball(date_str, limit=None):
@@ -520,10 +537,15 @@ if __name__ == "__main__":
     parser.add_argument("--season", type=int, help="Season year for backtest, e.g. 2025")
     parser.add_argument("--sample", type=int, default=20, help="Number of matches to sample for backtest")
     parser.add_argument("--find-league", help="Search API-Football for a league's correct ID by name")
+    parser.add_argument("--check-coverage", type=int, help="Check what seasons/data are available for a league ID")
     args = parser.parse_args()
 
     if args.find_league:
         run_find_league(args.find_league)
+        sys.exit(0)
+
+    if args.check_coverage:
+        run_check_coverage(args.check_coverage)
         sys.exit(0)
 
     if args.sport == "basketball":
