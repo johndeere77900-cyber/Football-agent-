@@ -1,0 +1,32 @@
+name: Run Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      league_name:
+        description: 'League name to backtest'
+        required: true
+        default: 'Premier League'
+      season:
+        description: 'Season year, e.g. 2025'
+        required: true
+        default: '2025'
+      sample:
+        description: 'Number of matches to sample'
+        required: false
+        default: '20'
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Run backtest
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          python3 main.py --backtest --league-name "${{ github.event.inputs.league_name }}" --season ${{ github.event.inputs.season }} --sample ${{ github.event.inputs.sample }}
