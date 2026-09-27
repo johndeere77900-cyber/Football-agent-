@@ -148,3 +148,17 @@ def search_leagues(name):
     data = _get("leagues", params)
     response = data.get("response", [])
     return response if isinstance(response, list) else []
+
+
+def get_league_coverage(league_id):
+    """
+    Asks API-Football what seasons exist for this league and what data is
+    actually covered for each on the current plan - the definitive way to
+    find out why a season might return nothing, rather than guessing.
+    """
+    params = {"id": league_id}
+    data = _get("leagues", params)
+    response = data.get("response", [])
+    if not response:
+        return []
+    return response[0].get("seasons", [])
