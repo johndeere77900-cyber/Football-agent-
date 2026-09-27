@@ -537,4 +537,4 @@ if __name__ == "__main__":
         else:
             date_str = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             league_id = resolve_league_id(args.league, args.league_name)
-            run_daily(date_str, league_id, args.limit, args.with_odds) accuracy (top pick correct)
+            run_daily(date_str, league_id, args.limit, args.with_odds)
