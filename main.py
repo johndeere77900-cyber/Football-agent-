@@ -1,20 +1,6 @@
 """
 Main entry point: run this daily (manually, or on a schedule via GitHub
 Actions) to get predictions for a given day's matches.
-
-Usage (football - default):
-    python3 main.py --date 2026-09-27 --league-name "Premier League" --limit 15
-    python3 main.py --limit 10
-    python3 main.py --limit 10 --with-odds
-    python3 main.py --grade
-    python3 main.py --accuracy
-    python3 main.py --cleanup
-    python3 main.py --backtest --league-name "Premier League" --season 2025
-
-Usage (basketball):
-    python3 main.py --sport basketball --date 2026-09-27 --limit 5
-    python3 main.py --sport basketball --grade
-    python3 main.py --sport basketball --accuracy
 """
 
 import argparse
@@ -39,9 +25,39 @@ FOOTBALL_FINISHED_STATUSES = {"FT", "AET", "PEN", "PST", "CANC", "ABD", "AWD", "
 FOOTBALL_LIVE_STATUSES = {"1H", "2H", "HT", "ET", "BT", "P", "SUSP", "INT"}
 BASKETBALL_FINISHED_STATUSES = {"FT", "AOT", "CANC", "ABD"}
 
+_league_avg_cache = {}
+
 
 def get_league_avg_goals(league_id, season):
-    return config.LEAGUE_AVG_GOALS.get(league_id, config.LEAGUE_AVG_GOALS_FALLBACK)
+    """
+    Calculates a real, live league-average-goals figure from current
+    standings, caching it per run so we don't re-fetch for every match in
+    the same league. Falls back to a fixed estimate if standings aren't
+    available (early season, or a competition without a standings endpoint).
+    """
+    cache_key = (league_id, season)
+    if cache_key in _league_avg_cache:
+        return _league_avg_cache[cache_key]
+
+    avg = None
+    try:
+        standings = api_football.get_league_standings(league_id, season)
+        ratios = []
+        for team in standings:
+            played = team.get("all", {}).get("played")
+            goals_for = team.get("all", {}).get("goals", {}).get("for")
+            if played and goals_for is not None and played > 0:
+                ratios.append(goals_for / played)
+        if ratios:
+            avg = sum(ratios) / len(ratios)
+    except Exception:
+        avg = None
+
+    if avg is None:
+        avg = config.LEAGUE_AVG_GOALS.get(league_id, config.LEAGUE_AVG_GOALS_FALLBACK)
+
+    _league_avg_cache[cache_key] = avg
+    return avg
 
 
 def resolve_league_id(league_arg, league_name_arg):
@@ -91,6 +107,16 @@ def build_football_safest_candidates(m):
     return candidates
 
 
+def _blend_elo_into_match_result(match_result, elo_probs, weight):
+    blended = {
+        "home_win": match_result["home_win"] * (1 - weight) + elo_probs["home"] * weight,
+        "draw": match_result["draw"] * (1 - weight) + elo_probs["draw"] * weight,
+        "away_win": match_result["away_win"] * (1 - weight) + elo_probs["away"] * weight,
+    }
+    total = sum(blended.values())
+    return {k: v / total for k, v in blended.items()}
+
+
 def predict_fixture(fixture, league_avg_goals, fetch_odds=False):
     home_team = fixture["teams"]["home"]
     away_team = fixture["teams"]["away"]
@@ -103,20 +129,19 @@ def predict_fixture(fixture, league_avg_goals, fetch_odds=False):
     away_stats = api_football.get_team_statistics(away_team["id"], league["id"], league["season"])
     insufficient_data = not home_stats and not away_stats
 
-    home_season_attack, home_season_defense = backtest.estimate_expected_goals_from_stats(
-        home_stats, home_stats, league_avg_goals)
-    away_season_attack, away_season_defense = backtest.estimate_expected_goals_from_stats(
-        away_stats, away_stats, league_avg_goals)
+    home_season_a, home_season_d = backtest.estimate_expected_goals_from_stats(home_stats, home_stats, league_avg_goals)
+    away_season_a, away_season_d = backtest.estimate_expected_goals_from_stats(away_stats, away_stats, league_avg_goals)
 
-    home_recent_attack, home_recent_defense = backtest.estimate_recent_form_goals(
-        home_team["id"], league_avg_goals)
-    away_recent_attack, away_recent_defense = backtest.estimate_recent_form_goals(
-        away_team["id"], league_avg_goals)
+    home_recent_a, home_recent_d = backtest.estimate_recent_form_goals(home_team["id"], league_avg_goals)
+    away_recent_a, away_recent_d = backtest.estimate_recent_form_goals(away_team["id"], league_avg_goals)
 
-    home_attack = backtest.blend_season_and_recent(home_season_attack, home_recent_attack)
-    home_defense = backtest.blend_season_and_recent(home_season_defense, home_recent_defense)
-    away_attack = backtest.blend_season_and_recent(away_season_attack, away_recent_attack)
-    away_defense = backtest.blend_season_and_recent(away_season_defense, away_recent_defense)
+    h2h_home_a, h2h_home_d, h2h_away_a, h2h_away_d = backtest.estimate_head_to_head_goals(
+        home_team["id"], away_team["id"], league_avg_goals)
+
+    home_attack = backtest.blend_three(home_season_a, home_recent_a, h2h_home_a)
+    home_defense = backtest.blend_three(home_season_d, home_recent_d, h2h_home_d)
+    away_attack = backtest.blend_three(away_season_a, away_recent_a, h2h_away_a)
+    away_defense = backtest.blend_three(away_season_d, away_recent_d, h2h_away_d)
 
     home_xg = poisson_model.expected_goals(home_attack, away_defense, league_avg_goals, is_home=True)
     away_xg = poisson_model.expected_goals(away_attack, home_defense, league_avg_goals, is_home=False)
@@ -137,6 +162,15 @@ def predict_fixture(fixture, league_avg_goals, fetch_odds=False):
         markets = poisson_model.market_probabilities(home_xg, away_xg)
         markets["is_live"] = False
         markets["cards"] = poisson_model.cards_market(home_cards_avg, away_cards_avg)
+
+        # Blend Elo's independent view into the main match-result probabilities
+        markets["match_result"] = _blend_elo_into_match_result(
+            markets["match_result"], elo_cross_check, config.ELO_BLEND_WEIGHT)
+        markets["double_chance"] = {
+            "home_or_draw": markets["match_result"]["home_win"] + markets["match_result"]["draw"],
+            "away_or_draw": markets["match_result"]["away_win"] + markets["match_result"]["draw"],
+            "home_or_away": markets["match_result"]["home_win"] + markets["match_result"]["away_win"],
+        }
 
     conf = confidence.confidence_flag(markets["match_result"])
     safest = confidence.safest_pick(build_football_safest_candidates(markets))
@@ -185,7 +219,8 @@ def print_prediction(pred):
         print(f"  Expected goals: {m['expected_goals']['home']} - {m['expected_goals']['away']}")
 
     print(f"  Win/Draw/Loss:  Home {m['match_result']['home_win']:.0%} | "
-          f"Draw {m['match_result']['draw']:.0%} | Away {m['match_result']['away_win']:.0%}")
+          f"Draw {m['match_result']['draw']:.0%} | Away {m['match_result']['away_win']:.0%}"
+          f"  (Elo blended in)")
     print(f"  Over/Under 2.5: Over {m['over_under']['over_2_5']:.0%} | "
           f"Under {m['over_under']['under_2_5']:.0%}")
     print(f"  BTTS:           Yes {m['btts']['yes']:.0%} | No {m['btts']['no']:.0%}")
@@ -201,7 +236,7 @@ def print_prediction(pred):
 
     ec = pred.get("elo_cross_check")
     if ec:
-        print(f"  Elo cross-check: Home {ec['home']:.0%} | Draw {ec['draw']:.0%} | Away {ec['away']:.0%}")
+        print(f"  Elo (pre-blend): Home {ec['home']:.0%} | Draw {ec['draw']:.0%} | Away {ec['away']:.0%}")
 
     if pred.get("odds_comparison"):
         oc = pred["odds_comparison"]
@@ -240,8 +275,7 @@ def run_daily(date_str, league_id=None, limit=None, fetch_odds=False):
             print("  Skipping remaining matches - daily API quota appears exhausted.")
             break
         try:
-            league_avg_goals = get_league_avg_goals(
-                fixture["league"]["id"], fixture["league"]["season"])
+            league_avg_goals = get_league_avg_goals(fixture["league"]["id"], fixture["league"]["season"])
             pred = predict_fixture(fixture, league_avg_goals, fetch_odds)
 
             if pred["insufficient_data"]:
@@ -503,4 +537,4 @@ if __name__ == "__main__":
         else:
             date_str = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             league_id = resolve_league_id(args.league, args.league_name)
-            run_daily(date_str, league_id, args.limit, args.with_odds)
+            run_daily(date_str, league_id, args.limit, args.with_odds) accuracy (top pick correct)
