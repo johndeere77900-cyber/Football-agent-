@@ -1,10 +1,5 @@
 """
 Backtesting and prediction-building helpers.
-
-The synthetic self-test checks the math is sound. run_real_backtest()
-checks real accuracy against real historical results - using ONLY match
-data that happened BEFORE each backtested match, so there's no leakage
-of future results into past predictions.
 """
 
 import api_football
@@ -61,9 +56,46 @@ def estimate_recent_form_goals(team_id, league_avg_goals, last=None):
     return avg_for / league_avg_goals, avg_against / league_avg_goals
 
 
-def blend_season_and_recent(season_ratio, recent_ratio, recent_weight=None):
-    weight = recent_weight if recent_weight is not None else config.RECENT_FORM_WEIGHT
-    return season_ratio * (1 - weight) + recent_ratio * weight
+def estimate_head_to_head_goals(home_id, away_id, league_avg_goals, last=None):
+    """
+    How these two SPECIFIC teams have historically scored against each
+    other - some teams just struggle against particular opponents
+    regardless of general form. Small sample size, so this gets a modest
+    weight in the final blend. Falls back to neutral if they've never
+    met, or met too rarely to be meaningful.
+    """
+    last = last or config.HEAD_TO_HEAD_MATCHES
+    matches = api_football.get_head_to_head(home_id, away_id, last=last)
+
+    home_goals_for, away_goals_for = [], []
+    for m in matches:
+        m_home_id = m["teams"]["home"]["id"]
+        m_away_id = m["teams"]["away"]["id"]
+        hg, ag = m["goals"]["home"], m["goals"]["away"]
+        if hg is None or ag is None:
+            continue
+        if m_home_id == home_id:
+            home_goals_for.append(hg)
+            away_goals_for.append(ag)
+        elif m_away_id == home_id:
+            home_goals_for.append(ag)
+            away_goals_for.append(hg)
+
+    if not home_goals_for:
+        return 1.0, 1.0, 1.0, 1.0
+
+    home_avg = sum(home_goals_for) / len(home_goals_for)
+    away_avg = sum(away_goals_for) / len(away_goals_for)
+    return (home_avg / league_avg_goals, 1.0, away_avg / league_avg_goals, 1.0)
+
+
+def blend_three(season_ratio, recent_ratio, h2h_ratio):
+    """Weighted blend of season, recent-form, and head-to-head signals."""
+    return (
+        season_ratio * config.SEASON_WEIGHT
+        + recent_ratio * config.RECENT_FORM_WEIGHT
+        + h2h_ratio * config.HEAD_TO_HEAD_WEIGHT
+    )
 
 
 def estimate_avg_cards(team_stats, league_avg_cards=3.8):
