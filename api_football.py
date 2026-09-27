@@ -125,8 +125,6 @@ def get_league_standings(league_id, season):
     """
     Current live standings for a league/season - used to calculate a real,
     up-to-date league-average-goals figure instead of a guessed constant.
-    Returns an empty list if standings aren't available (e.g. very early
-    season, or some international competitions don't have this endpoint).
     """
     params = {"league": league_id, "season": season}
     data = _get("standings", params)
@@ -138,3 +136,15 @@ def get_league_standings(league_id, season):
         return [team for group in groups for team in group]
     except (KeyError, IndexError, TypeError):
         return []
+
+
+def search_leagues(name):
+    """
+    Searches API-Football's own league list by name - the safe way to find
+    a correct league ID rather than guessing one, since numbering has
+    changed between API versions in the past.
+    """
+    params = {"search": name}
+    data = _get("leagues", params)
+    response = data.get("response", [])
+    return response if isinstance(response, list) else []
