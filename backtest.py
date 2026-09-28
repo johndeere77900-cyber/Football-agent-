@@ -1,14 +1,34 @@
 """
 Backtesting and prediction-building helpers.
+
+Historical backtesting uses the authoritative prediction_engine so that
+the mathematical prediction path is shared with production.
+
+Historical feature construction is strictly cutoff-safe:
+- completed matches only;
+- timestamps strictly before the prediction cutoff;
+- historical league average;
+- historical season statistics;
+- historical recent form;
+- historical H2H;
+- chronological historical Elo.
+
+The legacy API-backed helper functions remain available for the existing
+production path until main.py is migrated to prediction_engine.
 """
+
+from __future__ import annotations
 
 import random
 
 import api_football
 import confidence
 import config
+import historical_elo
 import historical_features
+import historical_h2h
 import poisson_model
+import prediction_engine
 
 
 def estimate_expected_goals_from_stats(
@@ -16,10 +36,17 @@ def estimate_expected_goals_from_stats(
     team_stats_against,
     league_avg_goals,
 ):
+    """Convert current API team statistics into attack/defence ratios."""
     if not isinstance(team_stats_for, dict):
         team_stats_for = {}
+
     if not isinstance(team_stats_against, dict):
         team_stats_against = {}
+
+    if league_avg_goals <= 0:
+        raise ValueError(
+            "league_avg_goals must be positive."
+        )
 
     goals_for_avg = (
         team_stats_for
@@ -28,6 +55,7 @@ def estimate_expected_goals_from_stats(
         .get("average", {})
         .get("total")
     )
+
     goals_against_avg = (
         team_stats_against
         .get("goals", {})
@@ -65,10 +93,26 @@ def estimate_recent_form_goals(
     league_avg_goals,
     last=None,
 ):
-    last = last or config.RECENT_FORM_MATCHES
-    matches = api_football.get_recent_form(team_id, last=last)
+    """
+    Legacy production helper.
 
-    goals_for, goals_against = [], []
+    Historical backtesting must not call this function because it retrieves
+    current API history rather than reconstructing history as of a past
+    cutoff.
+    """
+    if league_avg_goals <= 0:
+        raise ValueError(
+            "league_avg_goals must be positive."
+        )
+
+    last = last or config.RECENT_FORM_MATCHES
+    matches = api_football.get_recent_form(
+        team_id,
+        last=last,
+    )
+
+    goals_for = []
+    goals_against = []
 
     for match in matches:
         home_id = match["teams"]["home"]["id"]
@@ -82,6 +126,7 @@ def estimate_recent_form_goals(
         if home_id == team_id:
             goals_for.append(home_goals)
             goals_against.append(away_goals)
+
         elif away_id == team_id:
             goals_for.append(away_goals)
             goals_against.append(home_goals)
@@ -90,7 +135,7 @@ def estimate_recent_form_goals(
         return 1.0, 1.0
 
     avg_for = sum(goals_for) / len(goals_for)
-    avg_against = sum(goals_against) / len(goals_for)
+    avg_against = sum(goals_against) / len(goals_against)
 
     return (
         avg_for / league_avg_goals,
@@ -105,13 +150,18 @@ def estimate_head_to_head_goals(
     last=None,
 ):
     """
-    Estimate historical H2H goal ratios for the two teams.
+    Legacy production H2H helper.
 
-    This function remains API-backed for the existing prediction path.
-    Historical backtesting should use the dedicated historical feature
-    modules rather than current/live API results.
+    Historical backtesting uses historical_h2h instead so that only
+    pre-cutoff meetings are visible.
     """
+    if league_avg_goals <= 0:
+        raise ValueError(
+            "league_avg_goals must be positive."
+        )
+
     last = last or config.HEAD_TO_HEAD_MATCHES
+
     matches = api_football.get_head_to_head(
         home_id,
         away_id,
@@ -123,7 +173,6 @@ def estimate_head_to_head_goals(
 
     for match in matches:
         match_home_id = match["teams"]["home"]["id"]
-        match_away_id = match["teams"]["away"]["id"]
         home_goals = match["goals"]["home"]
         away_goals = match["goals"]["away"]
 
@@ -134,7 +183,7 @@ def estimate_head_to_head_goals(
             home_goals_for.append(home_goals)
             away_goals_for.append(away_goals)
 
-        elif match_away_id == home_id:
+        elif match["teams"]["away"]["id"] == home_id:
             home_goals_for.append(away_goals)
             away_goals_for.append(home_goals)
 
@@ -157,11 +206,13 @@ def blend_three(
     recent_ratio,
     h2h_ratio,
 ):
-    """Weighted blend of season, recent-form, and H2H signals."""
-    return (
-        season_ratio * config.SEASON_WEIGHT
-        + recent_ratio * config.RECENT_FORM_WEIGHT
-        + h2h_ratio * config.HEAD_TO_HEAD_WEIGHT
+    """
+    Compatibility wrapper around the authoritative configured blend.
+    """
+    return prediction_engine.blend_signal(
+        season_ratio,
+        recent_ratio,
+        h2h_ratio,
     )
 
 
@@ -169,6 +220,7 @@ def estimate_avg_cards(
     team_stats,
     league_avg_cards=3.8,
 ):
+    """Estimate average yellow cards from current API statistics."""
     if not isinstance(team_stats, dict):
         return league_avg_cards
 
@@ -208,43 +260,40 @@ def predict_match(
     away_defense,
     league_avg_goals,
 ):
-    home_xg = poisson_model.expected_goals(
-        home_attack,
-        away_defense,
-        league_avg_goals,
-    )
+    """
+    Compatibility wrapper for the shared mathematical prediction engine.
 
-    away_xg = poisson_model.expected_goals(
-        away_attack,
-        home_defense,
-        league_avg_goals,
-    )
+    This helper has no H2H/Elo context, so it supplies neutral H2H values.
+    """
+    features = {
+        "home_attack": home_attack,
+        "home_defence": home_defense,
+        "away_attack": away_attack,
+        "away_defence": away_defense,
+        "league_avg_goals": league_avg_goals,
+    }
 
-    markets = poisson_model.market_probabilities(
-        home_xg,
-        away_xg,
+    result = prediction_engine.predict_from_features(
+        features
     )
 
     conf = confidence.confidence_flag(
-        markets["match_result"]
+        result["markets"]["match_result"]
     )
 
-    return markets, conf
+    return result["markets"], conf
 
 
 def run_synthetic_selftest():
+    """Run a small deterministic mathematical self-test."""
     league_avg_goals = 1.4
-    home_attack = 1.6
-    home_defense = 0.7
-    away_attack = 0.7
-    away_defense = 1.4
 
     markets, conf = predict_match(
-        home_attack,
-        home_defense,
-        away_attack,
-        away_defense,
-        league_avg_goals,
+        home_attack=1.6,
+        home_defense=0.7,
+        away_attack=0.7,
+        away_defense=1.4,
+        league_avg_goals=league_avg_goals,
     )
 
     print(
@@ -282,77 +331,24 @@ def _compute_stats_as_of(
     cutoff,
 ):
     """
-    Calculate a team's historical goal averages strictly before a
-    prediction timestamp.
+    Compatibility wrapper around the authoritative historical feature
+    calculation.
+
+    This remains available for existing tests/callers, but run_real_backtest
+    no longer uses it directly.
     """
-    goals_for = []
-    goals_against = []
+    result = historical_features.team_goal_averages(
+        all_fixtures,
+        team_id,
+        cutoff,
+    )
 
-    for fixture in all_fixtures:
-        fixture_date = (
-            fixture.get("fixture", {}).get("date", "")
-        )
-
-        if not fixture_date:
-            continue
-
-        if fixture_date >= cutoff:
-            continue
-
-        if fixture.get("fixture", {}).get(
-            "status", {}
-        ).get("short") != "FT":
-            continue
-
-        home_id = (
-            fixture.get("teams", {})
-            .get("home", {})
-            .get("id")
-        )
-        away_id = (
-            fixture.get("teams", {})
-            .get("away", {})
-            .get("id")
-        )
-
-        home_goals = (
-            fixture.get("goals", {})
-            .get("home")
-        )
-        away_goals = (
-            fixture.get("goals", {})
-            .get("away")
-        )
-
-        if home_id is None or away_id is None:
-            continue
-
-        if not isinstance(home_goals, (int, float)) or isinstance(
-            home_goals,
-            bool,
-        ):
-            continue
-
-        if not isinstance(away_goals, (int, float)) or isinstance(
-            away_goals,
-            bool,
-        ):
-            continue
-
-        if home_id == team_id:
-            goals_for.append(home_goals)
-            goals_against.append(away_goals)
-
-        elif away_id == team_id:
-            goals_for.append(away_goals)
-            goals_against.append(home_goals)
-
-    if not goals_for:
+    if result is None:
         return None, None
 
     return (
-        sum(goals_for) / len(goals_for),
-        sum(goals_against) / len(goals_against),
+        result["goals_for"],
+        result["goals_against"],
     )
 
 
@@ -362,13 +358,8 @@ def _filter_candidates_by_minimum_history(
     minimum_matches,
 ):
     """
-    Keep only fixtures for which BOTH participating teams have the required
-    number of valid completed matches before that fixture's kickoff.
-
-    The prediction fixture itself is excluded because its kickoff timestamp
-    is used as the strict historical cutoff.
-
-    Returned candidates are chronological.
+    Keep fixtures where BOTH participating teams have enough valid,
+    completed, pre-cutoff history.
     """
     if (
         not isinstance(minimum_matches, int)
@@ -387,7 +378,9 @@ def _filter_candidates_by_minimum_history(
 
     for fixture in finished_fixtures:
         fixture_date = (
-            fixture.get("fixture", {}).get("date", "")
+            fixture
+            .get("fixture", {})
+            .get("date", "")
         )
 
         if not fixture_date:
@@ -431,10 +424,7 @@ def _sample_backtest_candidates(
     seed=42,
 ):
     """
-    Select a reproducible random sample from eligible backtest candidates.
-
-    A local Random instance is used so sampling does not modify Python's
-    global random state.
+    Select a reproducible sample without changing global random state.
     """
     if (
         not isinstance(sample_size, int)
@@ -462,6 +452,156 @@ def _sample_backtest_candidates(
     )
 
 
+def _historical_prediction_for_fixture(
+    all_fixtures,
+    match,
+    min_prior_matches,
+):
+    """
+    Build a complete leakage-safe prediction for one historical fixture.
+
+    Every feature is reconstructed from the same fixture cutoff.
+    """
+    cutoff = (
+        match
+        .get("fixture", {})
+        .get("date")
+    )
+
+    if not cutoff:
+        return None
+
+    home_id = (
+        match
+        .get("teams", {})
+        .get("home", {})
+        .get("id")
+    )
+
+    away_id = (
+        match
+        .get("teams", {})
+        .get("away", {})
+        .get("id")
+    )
+
+    if home_id is None or away_id is None:
+        return None
+
+    league_avg_goals = (
+        historical_features.historical_league_avg_goals(
+            all_fixtures,
+            cutoff,
+        )
+    )
+
+    if league_avg_goals is None or league_avg_goals <= 0:
+        return None
+
+    historical_snapshot = (
+        historical_features.historical_feature_snapshot(
+            all_fixtures,
+            home_id,
+            away_id,
+            cutoff,
+            minimum_matches=min_prior_matches,
+        )
+    )
+
+    if historical_snapshot is None:
+        return None
+
+    recent_snapshot = (
+        historical_features.fixture_recent_form(
+            all_fixtures,
+            home_id,
+            away_id,
+            cutoff,
+            window=config.RECENT_FORM_MATCHES,
+            minimum_matches=min_prior_matches,
+        )
+    )
+
+    if recent_snapshot is None:
+        return None
+
+    h2h_snapshot = (
+        historical_h2h.historical_h2h_snapshot(
+            all_fixtures,
+            home_id,
+            away_id,
+            cutoff,
+            window=config.HEAD_TO_HEAD_MATCHES,
+            minimum_matches=0,
+        )
+    )
+
+    elo_snapshot = (
+        historical_elo.fixture_elo_snapshot(
+            all_fixtures,
+            home_id,
+            away_id,
+            cutoff,
+        )
+    )
+
+    prediction = (
+        prediction_engine.predict_historical_fixture(
+            historical_snapshot=historical_snapshot,
+            recent_snapshot=recent_snapshot,
+            h2h_snapshot=h2h_snapshot,
+            league_avg_goals=league_avg_goals,
+            home_elo=elo_snapshot["home_rating"],
+            away_elo=elo_snapshot["away_rating"],
+        )
+    )
+
+    return {
+        "prediction": prediction,
+        "cutoff": cutoff,
+        "league_avg_goals": league_avg_goals,
+        "historical_snapshot": historical_snapshot,
+        "recent_snapshot": recent_snapshot,
+        "h2h_snapshot": h2h_snapshot,
+        "elo_snapshot": elo_snapshot,
+    }
+
+
+def _actual_match_result(match):
+    """Convert final goals into the canonical 1X2 outcome key."""
+    actual_home = (
+        match
+        .get("goals", {})
+        .get("home")
+    )
+
+    actual_away = (
+        match
+        .get("goals", {})
+        .get("away")
+    )
+
+    if not isinstance(actual_home, (int, float)):
+        return None
+
+    if isinstance(actual_home, bool):
+        return None
+
+    if not isinstance(actual_away, (int, float)):
+        return None
+
+    if isinstance(actual_away, bool):
+        return None
+
+    if actual_home > actual_away:
+        return "home_win"
+
+    if actual_home < actual_away:
+        return "away_win"
+
+    return "draw"
+
+
 def run_real_backtest(
     league_id,
     season,
@@ -469,10 +609,29 @@ def run_real_backtest(
     min_prior_matches=5,
     sample_seed=42,
 ):
+    """
+    Run a chronological historical backtest using the authoritative
+    prediction engine.
+
+    The API is used only once to retrieve the league fixture dataset.
+    Historical features are then calculated locally from stored/fetched
+    fixtures, preventing per-fixture feature API calls.
+    """
+    if not isinstance(league_id, int):
+        raise ValueError("league_id must be an integer.")
+
+    if not isinstance(season, int):
+        raise ValueError("season must be an integer.")
+
     all_fixtures = api_football.get_league_fixtures(
         league_id,
         season,
     )
+
+    if not isinstance(all_fixtures, list):
+        raise ValueError(
+            "League fixture response must be a list."
+        )
 
     print(
         f"DEBUG: fetched {len(all_fixtures)} total fixtures "
@@ -483,9 +642,19 @@ def run_real_backtest(
         [
             fixture
             for fixture in all_fixtures
-            if fixture["fixture"]["status"]["short"] == "FT"
+            if (
+                fixture
+                .get("fixture", {})
+                .get("status", {})
+                .get("short")
+                == "FT"
+            )
         ],
-        key=lambda fixture: fixture["fixture"]["date"],
+        key=lambda fixture: (
+            fixture
+            .get("fixture", {})
+            .get("date", "")
+        ),
     )
 
     print(
@@ -520,93 +689,69 @@ def run_real_backtest(
     log = []
 
     for match in candidates:
-        cutoff = match["fixture"]["date"]
-
-        league_avg_goals = (
-            historical_features.historical_league_avg_goals(
-                all_fixtures,
-                cutoff,
-            )
+        result = _historical_prediction_for_fixture(
+            all_fixtures,
+            match,
+            min_prior_matches,
         )
 
-        if league_avg_goals is None or league_avg_goals <= 0:
+        if result is None:
             continue
 
-        home_id = match["teams"]["home"]["id"]
-        away_id = match["teams"]["away"]["id"]
+        actual = _actual_match_result(match)
 
-        home_for, home_against = _compute_stats_as_of(
-            all_fixtures,
-            home_id,
-            cutoff,
-        )
-
-        away_for, away_against = _compute_stats_as_of(
-            all_fixtures,
-            away_id,
-            cutoff,
-        )
-
-        if home_for is None or away_for is None:
+        if actual is None:
             continue
 
-        home_attack = home_for / league_avg_goals
-        home_defense = home_against / league_avg_goals
-
-        away_attack = away_for / league_avg_goals
-        away_defense = away_against / league_avg_goals
-
-        home_xg = poisson_model.expected_goals(
-            home_attack,
-            away_defense,
-            league_avg_goals,
-            is_home=True,
-        )
-
-        away_xg = poisson_model.expected_goals(
-            away_attack,
-            home_defense,
-            league_avg_goals,
-            is_home=False,
-        )
-
-        markets = poisson_model.market_probabilities(
-            home_xg,
-            away_xg,
-        )
+        prediction = result["prediction"]
+        markets = prediction["markets"]
 
         predicted = max(
             markets["match_result"],
             key=markets["match_result"].get,
         )
 
-        actual_home = match["goals"]["home"]
-        actual_away = match["goals"]["away"]
-
-        actual = (
-            "home_win"
-            if actual_home > actual_away
-            else "away_win"
-            if actual_home < actual_away
-            else "draw"
-        )
-
-        graded += 1
-
         is_correct = predicted == actual
 
+        graded += 1
         correct += int(is_correct)
 
         log.append(
             {
+                "fixture_id": (
+                    match
+                    .get("fixture", {})
+                    .get("id")
+                ),
+                "date": result["cutoff"],
                 "match": (
                     f"{match['teams']['home']['name']} "
-                    f"{actual_home}-{actual_away} "
+                    f"{match['goals']['home']}-"
+                    f"{match['goals']['away']} "
                     f"{match['teams']['away']['name']}"
                 ),
                 "predicted": predicted,
                 "actual": actual,
                 "correct": is_correct,
+                "probabilities": dict(
+                    markets["match_result"]
+                ),
+                "expected_goals": dict(
+                    prediction["expected_goals"]
+                ),
+                "league_avg_goals": (
+                    result["league_avg_goals"]
+                ),
+                "h2h_available": (
+                    prediction["features"]
+                    .get("h2h_available", False)
+                ),
+                "home_elo": (
+                    result["elo_snapshot"]["home_rating"]
+                ),
+                "away_elo": (
+                    result["elo_snapshot"]["away_rating"]
+                ),
             }
         )
 
@@ -618,6 +763,9 @@ def run_real_backtest(
             if graded
             else 0
         ),
+        "sample_size": len(candidates),
+        "min_prior_matches": min_prior_matches,
+        "sample_seed": sample_seed,
         "log": log,
     }
 
