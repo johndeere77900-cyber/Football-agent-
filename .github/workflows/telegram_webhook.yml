@@ -1,42 +1,101 @@
-name: Telegram Webhook Handler
+# Telegram transport is owned by the Val Town webhook.
+# This workflow only processes one message at a time.
+
+name: Telegram webhook
 
 on:
   workflow_dispatch:
     inputs:
       message:
-        description: 'The message text from Telegram'
+        description: Message received from Telegram
         required: true
+        type: string
+
+concurrency:
+  group: telegram-webhook
+  cancel-in-progress: false
+
+permissions:
+  contents: write
 
 jobs:
-  handle:
+  agent:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      - name: Process the message
+      - name: Check Telegram credentials
         env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          missing=""
+
+          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+            missing="TELEGRAM_BOT_TOKEN"
+          fi
+
+          if [ -z "$TELEGRAM_CHAT_ID" ]; then
+            if [ -n "$missing" ]; then
+              missing="$missing, TELEGRAM_CHAT_ID"
+            else
+              missing="TELEGRAM_CHAT_ID"
+            fi
+          fi
+
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s): $missing"
+            exit 1
+          fi
+
+          echo "Telegram credentials are present."
+
+      - name: Process Telegram message
+        env:
+          TELEGRAM_MESSAGE: ${{ inputs.message }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_MESSAGE: ${{ github.event.inputs.message }}
         run: python3 telegram_bot.py
 
-      - name: Generate dashboard
-        if: always()
-        run: python3 generate_dashboard.py
-
-      - name: Save memory and dashboard
+      - name: Save bot memory
         if: always()
         run: |
-          git config user.name "sports-agent-bot"
+          git config user.name "football-agent-bot"
           git config user.email "actions@github.com"
-          git add telegram_memory.json DASHBOARD.md 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "Telegram webhook update"
-          git push
+
+          git add telegram_memory.json 2>/dev/null || true
+
+          if git diff --staged --quiet; then
+            echo "No memory changes to commit."
+          else
+            git commit -m "Telegram memory update"
+            git push
+          fi
+
+      - name: Report worker failure to Telegram
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -sS -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg c "$TELEGRAM_CHAT_ID" \
+              --arg t "⚠️ The football-agent worker crashed. Log: $RUN_URL" \
+              '{chat_id: $c, text: $t}')"
