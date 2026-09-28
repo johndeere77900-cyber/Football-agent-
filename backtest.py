@@ -511,6 +511,8 @@ def _grade_prediction_markets(
     This grades selected outcomes while retaining the complete original
     probability distributions in the prediction record.
     """
+    if not isinstance(prediction_markets, dict):
+        return {}
     outcomes = market_grading.grade_goal_markets(
         fixture
         .get("goals", {})
@@ -519,8 +521,7 @@ def _grade_prediction_markets(
         .get("goals", {})
         .get("away"),
         )
-            if not isinstance(prediction_markets, dict):
-        return {}
+            
 
     graded: Dict[str, Any] = {}
 
