@@ -23,6 +23,10 @@ Market grading is performed after prediction generation:
 
 Historical corners/cards can optionally be enriched in batches through
 API-Football. Missing statistical data is never fabricated.
+
+The backtest report displays every market already produced by the
+prediction engine. Reporting does not alter prediction mathematics,
+market probabilities, grading, or production logic.
 """
 
 from __future__ import annotations
@@ -718,10 +722,8 @@ def _pick_binary_line(
             else None
         ),
         "outcome": actual.get("outcome"),
-    }
-
-
-def _grade_prediction_markets(
+            }
+    def _grade_prediction_markets(
     prediction_markets,
     fixture,
 ):
@@ -1080,6 +1082,337 @@ def _prepare_statistical_enrichment(
         return {}, str(exc)
 
 
+def _format_probability(value):
+    """Format a probability for human-readable backtest output."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return "n/a"
+
+    return f"{value:.0%}"
+
+
+def _print_market_prediction_block(markets):
+    """
+    Print every market actually produced by prediction_engine.
+
+    This function is presentation-only. It does not alter probabilities,
+    selections, grading, or prediction logic.
+    """
+    if not isinstance(markets, dict):
+        return
+
+    print("    MATCH RESULT:")
+
+    match_result = markets.get(
+        "match_result",
+        {},
+    )
+
+    if isinstance(match_result, dict):
+        for key, label in (
+            ("home_win", "Home Win"),
+            ("draw", "Draw"),
+            ("away_win", "Away Win"),
+        ):
+            if key in match_result:
+                print(
+                    f"      {label}: "
+                    f"{_format_probability(match_result[key])}"
+                )
+
+    for section, title in (
+        ("double_chance", "DOUBLE CHANCE"),
+        ("btts", "BTTS"),
+    ):
+        values = markets.get(section)
+
+        if isinstance(values, dict) and values:
+            print(f"    {title}:")
+
+            for key, value in values.items():
+                print(
+                    f"      {key}: "
+                    f"{_format_probability(value)}"
+                )
+
+    values = markets.get(
+        "over_under",
+        {},
+    )
+
+    if isinstance(values, dict) and values:
+        print("    OVER/UNDER:")
+
+        for key, value in values.items():
+            print(
+                f"      {key}: "
+                f"{_format_probability(value)}"
+            )
+
+    values = markets.get(
+        "team_goals",
+        {},
+    )
+
+    if isinstance(values, dict) and values:
+        print("    TEAM GOALS:")
+
+        for key, value in values.items():
+            print(
+                f"      {key}: "
+                f"{_format_probability(value)}"
+            )
+
+    scorelines = markets.get(
+        "top_scorelines",
+        [],
+    )
+
+    if isinstance(scorelines, list) and scorelines:
+        print("    TOP SCORELINES:")
+
+        for item in scorelines:
+            if not isinstance(item, dict):
+                continue
+
+            score = item.get("score")
+            probability = item.get("probability")
+
+            if score is not None:
+                print(
+                    f"      {score}: "
+                    f"{_format_probability(probability)}"
+                )
+
+    for section, title in (
+        ("cards", "CARDS"),
+        ("corners", "CORNERS"),
+    ):
+        values = markets.get(section)
+
+        if isinstance(values, dict) and values:
+            print(f"    {title}:")
+
+            for key, value in values.items():
+                print(
+                    f"      {key}: "
+                    f"{_format_probability(value)}"
+                )
+
+
+def _print_market_grading_block(market_grading):
+    """Print selected market results without changing grading."""
+    if not isinstance(market_grading, dict):
+        return
+
+    selected = market_grading.get(
+        "selected",
+        {},
+    )
+
+    if not isinstance(selected, dict):
+        return
+
+    print("    SELECTED MARKET RESULTS:")
+
+    def print_selected(label, result):
+        if not isinstance(result, dict):
+            return
+
+        pick = result.get("pick")
+        won = result.get("won")
+
+        if pick is None:
+            return
+
+        if won is True:
+            mark = "✓"
+        elif won is False:
+            mark = "✗"
+        else:
+            mark = "-"
+
+        probability = _format_probability(
+            result.get("probability")
+        )
+
+        print(
+            f"      {mark} {label}: "
+            f"{pick} ({probability})"
+        )
+
+    print_selected(
+        "Match result",
+        selected.get("match_result"),
+    )
+
+    print_selected(
+        "Double chance",
+        selected.get("double_chance"),
+    )
+
+    print_selected(
+        "BTTS",
+        selected.get("btts"),
+    )
+
+    print_selected(
+        "Scoreline",
+        selected.get("scoreline"),
+    )
+
+    for line, result in (
+        selected
+        .get("over_under", {})
+        .items()
+    ):
+        print_selected(
+            f"Over/Under {line}",
+            result,
+        )
+
+    for line, result in (
+        selected
+        .get("team_goals", {})
+        .items()
+    ):
+        print_selected(
+            f"Team goals {line}",
+            result,
+        )
+
+
+def _print_market_backtest_report(result):
+    """
+    Print the complete market-level backtest report.
+
+    Accuracy is intentionally kept separate by market. Different markets
+    are never combined into a single artificial overall accuracy.
+    """
+    print(
+        "\n=== FULL MARKET BACKTEST REPORT ==="
+    )
+
+    print(
+        f"Fixtures graded: {result['graded']} "
+        f"(sample requested: {result['sample_size']})"
+    )
+
+    print("\nMARKET SUMMARY")
+    print(
+        "  Market | Graded | Correct | Accuracy"
+    )
+
+    def print_summary(label, entry):
+        if (
+            not isinstance(entry, dict)
+            or not entry.get("graded")
+        ):
+            return
+
+        print(
+            f"  {label} | "
+            f"{entry['graded']} | "
+            f"{entry['correct']} | "
+            f"{entry['accuracy']:.1%}"
+        )
+
+    summary = result.get(
+        "market_summary",
+        {},
+    )
+
+    print_summary(
+        "Match Result (1X2)",
+        summary.get("match_result"),
+    )
+
+    print_summary(
+        "Double Chance",
+        summary.get("double_chance"),
+    )
+
+    print_summary(
+        "BTTS",
+        summary.get("btts"),
+    )
+
+    print_summary(
+        "Scoreline",
+        summary.get("scoreline"),
+    )
+
+    for line, entry in (
+        summary
+        .get("over_under", {})
+        .items()
+    ):
+        print_summary(
+            f"Over/Under {line}",
+            entry,
+        )
+
+    for line, entry in (
+        summary
+        .get("team_goals", {})
+        .items()
+    ):
+        print_summary(
+            f"Team Goals {line}",
+            entry,
+        )
+
+    available = result.get(
+        "statistical_data_available",
+        {},
+    )
+
+    if (
+        available.get("corners")
+        or available.get("cards")
+    ):
+        print(
+            "\nSTATISTICAL DATA AVAILABLE"
+        )
+
+        if available.get("corners"):
+            print(
+                "  Corners actuals available: "
+                f"{available['corners']}"
+            )
+
+        if available.get("cards"):
+            print(
+                "  Cards actuals available: "
+                f"{available['cards']}"
+            )
+
+    print(
+        "\nFIXTURE-BY-FIXTURE MARKET DETAIL"
+    )
+
+    for entry in result.get(
+        "log",
+        [],
+    ):
+        print(
+            f"\n  {entry['match']}"
+        )
+
+        _print_market_prediction_block(
+            entry.get(
+                "markets",
+                {},
+            )
+        )
+
+        _print_market_grading_block(
+            entry.get(
+                "market_grading",
+                {},
+            )
+        )
+
+
 def run_real_backtest(
     league_id,
     season,
@@ -1313,7 +1646,7 @@ def run_real_backtest(
             }
         )
 
-    return {
+    result = {
         "graded": graded,
         "correct": correct,
         "accuracy": (
@@ -1332,6 +1665,10 @@ def run_real_backtest(
         "market_summary": market_summary,
         "log": log,
     }
+
+    _print_market_backtest_report(result)
+
+    return result
 
 
 if __name__ == "__main__":
