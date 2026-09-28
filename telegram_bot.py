@@ -1315,6 +1315,6 @@ if __name__ == "__main__":
     # Telegram polling/getUpdates is not used here.
     response = handle_message(message)
 
-    send_telegram_message(response)
+    send_message(response)
 
-    save_memory()
+    save_memory(load_memory())
