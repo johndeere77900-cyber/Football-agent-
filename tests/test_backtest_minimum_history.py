@@ -99,16 +99,16 @@ def test_candidate_fixture_is_not_counted_as_prior_history():
         fixture(
             "2025-01-02T15:00:00+00:00",
             3,
-            1,
+            4,
             0,
             1,
         ),
         fixture(
             "2025-01-03T15:00:00+00:00",
+            1,
+            3,
             2,
-            4,
-            1,
-            1,
+            0,
         ),
         fixture(
             "2025-01-04T15:00:00+00:00",
@@ -394,4 +394,4 @@ def test_minimum_history_preserves_chronological_candidate_order():
         "2025-01-05T15:00:00+00:00",
         "2025-01-06T15:00:00+00:00",
         "2025-01-07T15:00:00+00:00",
-    ]
+            ]
