@@ -1,842 +1,483 @@
-"""
-Football Agent — Real Historical Backtest Engine
+"""Football Agent historical backtest engine.
 
-Purpose
--------
-Run the prediction engine against real historical fixtures and grade the
-markets that the agent actually predicts.
+This file is the backtest integration layer only.  It uses the repository's
+existing API-Football fixture source, leakage-safe historical feature modules,
+chronological Elo reconstruction, shared prediction engine, and pure market
+grading functions.
 
-Important principles
---------------------
-- Historical fixtures are the source of truth.
-- No fabricated odds, outcomes, corners, or cards.
-- Match-result accuracy remains the primary returned `accuracy` metric for
-  backward compatibility with the existing application.
-- Additional markets are graded independently and reported separately.
-- Every probability distribution produced by the prediction engine is
-  retained in the backtest log.
+No missing outcome, odds, corner, or card value is fabricated.
 """
 
 from __future__ import annotations
 
 import json
 import math
-import statistics
-from collections import defaultdict
-from datetime import datetime
+import random
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import api_football
+import config
+import historical_elo
+import historical_features
+import historical_h2h
 import market_grading
 import prediction_engine
 
 
-# ---------------------------------------------------------------------------
-# Paths / configuration
-# ---------------------------------------------------------------------------
-
 BASE_DIR = Path(__file__).resolve().parent
-
 BACKTEST_LOG_DIR = BASE_DIR / "data" / "backtests"
 BACKTEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
-# Generic helpers
+# Basic validation / extraction
 # ---------------------------------------------------------------------------
 
 
 def _safe_float(value: Any) -> Optional[float]:
-    """Return a finite float or None."""
     try:
         result = float(value)
     except (TypeError, ValueError):
         return None
-
     if not math.isfinite(result):
         return None
-
     return result
 
 
-def _safe_int(value: Any) -> Optional[int]:
-    """Return an integer or None."""
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _normalise_text(value: Any) -> Optional[str]:
-    """Return stripped text or None."""
-    if value is None:
-        return None
-
-    text = str(value).strip()
-
-    return text or None
-
-
-def _first_present(
-    mapping: Dict[str, Any],
-    keys: Iterable[str],
-    default: Any = None,
-) -> Any:
-    """Return the first non-None value found for the supplied keys."""
-    for key in keys:
-        if key in mapping and mapping[key] is not None:
-            return mapping[key]
-
-    return default
-
-
-def _extract_team_name(team: Any) -> Optional[str]:
-    """Extract a team name from common historical-data representations."""
-    if isinstance(team, str):
-        return _normalise_text(team)
-
-    if not isinstance(team, dict):
-        return None
-
-    return _normalise_text(
-        _first_present(
-            team,
-            (
-                "name",
-                "team_name",
-                "short_name",
-                "display_name",
-            ),
-        )
+def _valid_goal(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value >= 0
     )
 
 
-def _extract_score_value(
-    score: Any,
-    keys: Iterable[str],
-) -> Optional[int]:
-    """Extract an integer score from a mapping."""
-    if not isinstance(score, dict):
-        return None
-
-    value = _first_present(score, keys)
-
-    return _safe_int(value)
-
-
-def _extract_goals(
-    fixture: Dict[str, Any],
-) -> Tuple[Optional[int], Optional[int]]:
-    """
-    Extract full-time home and away goals.
-
-    The historical data used by the project has appeared in several
-    representations over time, so this function intentionally accepts the
-    common variants without inventing values.
-    """
-
-    home_score = fixture.get("home_score")
-    away_score = fixture.get("away_score")
-
-    home = _safe_int(home_score)
-    away = _safe_int(away_score)
-
-    if home is not None and away is not None:
-        return home, away
-
-    score = fixture.get("score")
-
-    if isinstance(score, dict):
-        home = _extract_score_value(
-            score,
-            (
-                "home",
-                "home_score",
-                "home_goals",
-                "fulltime_home",
-                "full_time_home",
-            ),
-        )
-
-        away = _extract_score_value(
-            score,
-            (
-                "away",
-                "away_score",
-                "away_goals",
-                "fulltime_away",
-                "full_time_away",
-            ),
-        )
-
-        if home is not None and away is not None:
-            return home, away
-
-        full_time = score.get("fullTime")
-
-        if isinstance(full_time, dict):
-            home = _extract_score_value(
-                full_time,
-                (
-                    "home",
-                    "home_score",
-                    "home_goals",
-                ),
-            )
-
-            away = _extract_score_value(
-                full_time,
-                (
-                    "away",
-                    "away_score",
-                    "away_goals",
-                ),
-            )
-
-            if home is not None and away is not None:
-                return home, away
-
-    return None, None
-
-
-def _extract_fixture_id(
-    fixture: Dict[str, Any],
-) -> Optional[str]:
-    """Extract the most stable fixture identifier available."""
-    value = _first_present(
-        fixture,
-        (
-            "fixture_id",
-            "id",
-            "match_id",
-            "event_id",
-        ),
-    )
+def _fixture_date(fixture: Dict[str, Any]) -> str:
+    return str(fixture.get("fixture", {}).get("date", ""))
 
-    if value is None:
-        return None
 
-    return str(value)
+def _fixture_id(fixture: Dict[str, Any]) -> Optional[Any]:
+    return fixture.get("fixture", {}).get("id")
 
 
-def _extract_fixture_date(
-    fixture: Dict[str, Any],
-) -> Optional[str]:
-    """Extract the fixture date without changing it."""
-    value = _first_present(
-        fixture,
-        (
-            "date",
-            "fixture_date",
-            "match_date",
-            "kickoff",
-            "kickoff_time",
-        ),
-    )
+def _home_id(fixture: Dict[str, Any]) -> Optional[Any]:
+    return fixture.get("teams", {}).get("home", {}).get("id")
 
-    return _normalise_text(value)
 
+def _away_id(fixture: Dict[str, Any]) -> Optional[Any]:
+    return fixture.get("teams", {}).get("away", {}).get("id")
 
-def _extract_home_team(
-    fixture: Dict[str, Any],
-) -> Optional[str]:
-    """Extract the historical home-team name."""
-    direct = _first_present(
-        fixture,
-        (
-            "home_team",
-            "home_name",
-            "home",
-        ),
-    )
 
-    name = _extract_team_name(direct)
+def _home_name(fixture: Dict[str, Any]) -> str:
+    return str(fixture.get("teams", {}).get("home", {}).get("name", "Unknown Home"))
 
-    if name:
-        return name
 
-    teams = fixture.get("teams")
+def _away_name(fixture: Dict[str, Any]) -> str:
+    return str(fixture.get("teams", {}).get("away", {}).get("name", "Unknown Away"))
 
-    if isinstance(teams, dict):
-        return _extract_team_name(teams.get("home"))
 
-    return None
+def _goals(fixture: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+    goals = fixture.get("goals", {})
+    home = goals.get("home")
+    away = goals.get("away")
+    if not _valid_goal(home) or not _valid_goal(away):
+        return None, None
+    return int(home), int(away)
 
 
-def _extract_away_team(
-    fixture: Dict[str, Any],
-) -> Optional[str]:
-    """Extract the historical away-team name."""
-    direct = _first_present(
-        fixture,
-        (
-            "away_team",
-            "away_name",
-            "away",
-        ),
-    )
+def _is_finished(fixture: Dict[str, Any]) -> bool:
+    return fixture.get("fixture", {}).get("status", {}).get("short") == "FT"
 
-    name = _extract_team_name(direct)
 
-    if name:
-        return name
+def _fixture_is_gradeable(fixture: Dict[str, Any]) -> bool:
+    home, away = _goals(fixture)
+    return home is not None and away is not None
 
-    teams = fixture.get("teams")
 
-    if isinstance(teams, dict):
-        return _extract_team_name(teams.get("away"))
-
-    return None
-
-
-def _fixture_is_graded(
-    fixture: Dict[str, Any],
-) -> bool:
-    """A fixture is gradeable only when both full-time scores exist."""
-    home_goals, away_goals = _extract_goals(fixture)
-
-    return home_goals is not None and away_goals is not None
-
-
-def _actual_match_result(
-    home_goals: Optional[int],
-    away_goals: Optional[int],
-) -> Optional[str]:
-    """Return Home Win, Draw, or Away Win."""
-    if home_goals is None or away_goals is None:
-        return None
-
-    if home_goals > away_goals:
-        return "Home Win"
-
-    if home_goals < away_goals:
-        return "Away Win"
-
-    return "Draw"
-
-
-def _actual_double_chance(
-    home_goals: Optional[int],
-    away_goals: Optional[int],
-) -> Optional[str]:
-    """Return the correct double-chance result."""
-    if home_goals is None or away_goals is None:
-        return None
-
-    if home_goals > away_goals:
-        return "1X"
-
-    if home_goals < away_goals:
-        return "X2"
-
-    return "1X"
-
-
-def _actual_btts(
-    home_goals: Optional[int],
-    away_goals: Optional[int],
-) -> Optional[str]:
-    """Return BTTS Yes/No."""
-    if home_goals is None or away_goals is None:
-        return None
-
-    return "Yes" if home_goals > 0 and away_goals > 0 else "No"
-
-
-def _actual_total_goals(
-    home_goals: Optional[int],
-    away_goals: Optional[int],
-) -> Optional[int]:
-    """Return total goals."""
-    if home_goals is None or away_goals is None:
-        return None
-
-    return home_goals + away_goals
-
-
-def _actual_over_under(
-    home_goals: Optional[int],
-    away_goals: Optional[int],
-    line: Any,
-) -> Optional[str]:
-    """
-    Grade an Over/Under line.
-
-    Pushes are represented as `Push` when the total equals the line.
-    """
-    total = _actual_total_goals(home_goals, away_goals)
-
-    threshold = _safe_float(line)
-
-    if total is None or threshold is None:
-        return None
-
-    if total > threshold:
-        return "Over"
-
-    if total < threshold:
-        return "Under"
-
-    return "Push"
-
-
-def _actual_team_goals(
-    goals: Optional[int],
-    line: Any,
-) -> Optional[str]:
-    """Grade a team-goal Over/Under line."""
-    threshold = _safe_float(line)
-
-    if goals is None or threshold is None:
-        return None
-
-    if goals > threshold:
-        return "Over"
-
-    if goals < threshold:
-        return "Under"
-
-    return "Push"
-
-
-# ---------------------------------------------------------------------------
-# Probability helpers
-# ---------------------------------------------------------------------------
-
-
-def _normalise_probability_distribution(
-    distribution: Any,
-) -> Dict[str, float]:
-    """
-    Return a clean probability mapping.
-
-    Values are not re-scaled because the prediction engine's original
-    distribution is useful for audit purposes exactly as produced.
-    """
-    if not isinstance(distribution, dict):
+def _normalise_probability_distribution(value: Any) -> Dict[str, float]:
+    if not isinstance(value, dict):
         return {}
+    result: Dict[str, float] = {}
+    for key, probability in value.items():
+        number = _safe_float(probability)
+        if number is not None:
+            result[str(key)] = number
+    return result
 
-    cleaned: Dict[str, float] = {}
 
-    for key, value in distribution.items():
-        probability = _safe_float(value)
+def _probability_pick(distribution: Any) -> Optional[Tuple[str, float]]:
+    cleaned = _normalise_probability_distribution(distribution)
+    if not cleaned:
+        return None
+    key = max(cleaned, key=cleaned.get)
+    return key, cleaned[key]
 
-        if probability is None:
+
+# ---------------------------------------------------------------------------
+# Leakage-safe compatibility helpers used by tests and callers
+# ---------------------------------------------------------------------------
+
+
+def _compute_stats_as_of(
+    fixtures: Sequence[Dict[str, Any]],
+    team_id: Any,
+    cutoff: str,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Return average goals-for/goals-against known strictly before cutoff."""
+    goals_for: List[float] = []
+    goals_against: List[float] = []
+
+    for fixture in fixtures:
+        if not _is_finished(fixture):
             continue
+        if _fixture_date(fixture) >= cutoff:
+            continue
+        home_id = _home_id(fixture)
+        away_id = _away_id(fixture)
+        home_goals, away_goals = _goals(fixture)
+        if home_goals is None or away_goals is None:
+            continue
+        if team_id == home_id:
+            goals_for.append(home_goals)
+            goals_against.append(away_goals)
+        elif team_id == away_id:
+            goals_for.append(away_goals)
+            goals_against.append(home_goals)
 
-        cleaned[str(key)] = probability
+    if not goals_for:
+        return None, None
+    return sum(goals_for) / len(goals_for), sum(goals_against) / len(goals_against)
 
-    return cleaned
+
+def _sample_backtest_candidates(
+    candidates: Sequence[Any],
+    sample_size: int,
+    seed: Optional[int] = 42,
+) -> List[Any]:
+    """Sample without mutating the input or global random state."""
+    if (
+        isinstance(sample_size, bool)
+        or not isinstance(sample_size, int)
+        or sample_size <= 0
+    ):
+        raise ValueError("sample_size must be a positive integer.")
+
+    original = list(candidates)
+    if sample_size >= len(original):
+        return original
+
+    rng = random.Random(seed)
+    return rng.sample(original, sample_size)
 
 
-def _pick_probability(
-    probabilities: Any,
-) -> Optional[Tuple[str, float]]:
-    """Return the highest-probability outcome."""
-    distribution = _normalise_probability_distribution(probabilities)
+def _filter_candidates_by_minimum_history(
+    finished_fixtures: Sequence[Dict[str, Any]],
+    all_fixtures: Sequence[Dict[str, Any]],
+    minimum_matches: int = 5,
+) -> List[Dict[str, Any]]:
+    """Keep completed fixtures whose two teams each have enough prior history."""
+    if (
+        isinstance(minimum_matches, bool)
+        or not isinstance(minimum_matches, int)
+        or minimum_matches < 0
+    ):
+        raise ValueError("minimum_matches must be a non-negative integer.")
 
-    if not distribution:
-        return None
-
-    selected = max(
-        distribution,
-        key=distribution.get,
+    ordered = sorted(
+        [fixture for fixture in finished_fixtures if _fixture_is_gradeable(fixture)],
+        key=_fixture_date,
     )
 
-    return selected, distribution[selected]
-
-
-def _pick_binary_line(
-    probabilities,
-    actual_distribution,
-    over_key,
-    under_key,
-):
-    if not isinstance(probabilities, dict):
-        return None
-
-    candidates = {}
-
-    for key in (over_key, under_key):
-        value = probabilities.get(key)
-
-        if (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
+    result: List[Dict[str, Any]] = []
+    for fixture in ordered:
+        home_id = _home_id(fixture)
+        away_id = _away_id(fixture)
+        cutoff = _fixture_date(fixture)
+        if home_id is None or away_id is None:
+            continue
+        if historical_features.fixture_has_minimum_history(
+            all_fixtures,
+            home_id,
+            away_id,
+            cutoff,
+            minimum_matches,
         ):
-            candidates[key] = value
+            result.append(fixture)
+    return result
 
-    if not candidates:
+
+# ---------------------------------------------------------------------------
+# Historical prediction path
+# ---------------------------------------------------------------------------
+
+
+def _historical_prediction_for_fixture(
+    fixtures: Sequence[Dict[str, Any]],
+    fixture: Dict[str, Any],
+    min_prior_matches: int = 5,
+) -> Optional[Dict[str, Any]]:
+    """Build every prediction input strictly from information before cutoff."""
+    if not _fixture_is_gradeable(fixture):
         return None
 
-    selected = max(
-        candidates,
-        key=candidates.get,
+    if (
+        isinstance(min_prior_matches, bool)
+        or not isinstance(min_prior_matches, int)
+        or min_prior_matches < 0
+    ):
+        raise ValueError("min_prior_matches must be a non-negative integer.")
+
+    home_id = _home_id(fixture)
+    away_id = _away_id(fixture)
+    cutoff = _fixture_date(fixture)
+
+    if home_id is None or away_id is None or not cutoff:
+        return None
+
+    historical_snapshot = historical_features.historical_feature_snapshot(
+        fixtures,
+        home_id,
+        away_id,
+        cutoff,
+        minimum_matches=min_prior_matches,
+    )
+    recent_snapshot = historical_features.fixture_recent_form(
+        fixtures,
+        home_id,
+        away_id,
+        cutoff,
+        window=config.RECENT_FORM_MATCHES,
+        minimum_matches=min_prior_matches,
     )
 
-    actual = (
-        actual_distribution.get(selected)
-        if isinstance(actual_distribution, dict)
-        else None
+    if historical_snapshot is None or recent_snapshot is None:
+        return None
+
+    league_avg_goals = historical_features.historical_league_avg_goals(
+        fixtures,
+        cutoff,
+    )
+    if league_avg_goals is None or league_avg_goals <= 0:
+        return None
+
+    h2h_snapshot = historical_h2h.historical_h2h_snapshot(
+        fixtures,
+        home_id,
+        away_id,
+        cutoff,
+        window=config.HEAD_TO_HEAD_MATCHES,
+        minimum_matches=0,
     )
 
-    if not isinstance(actual, dict):
-        return {
-            "pick": selected,
-            "probability": candidates[selected],
-            "won": None,
-            "outcome": None,
-        }
+    elo_snapshot = historical_elo.fixture_elo_snapshot(
+        fixtures,
+        home_id,
+        away_id,
+        cutoff,
+    )
+
+    prediction = prediction_engine.predict_historical_fixture(
+        historical_snapshot=historical_snapshot,
+        recent_snapshot=recent_snapshot,
+        h2h_snapshot=h2h_snapshot,
+        league_avg_goals=league_avg_goals,
+        home_elo=elo_snapshot["home_rating"],
+        away_elo=elo_snapshot["away_rating"],
+    )
 
     return {
-        "pick": selected,
-        "probability": candidates[selected],
-        "won": (
-            selected
-            == actual.get("outcome")
-            if actual.get("outcome") is not None
-            else None
-        ),
-        "outcome": actual.get("outcome"),
+        "prediction": prediction,
+        "historical_snapshot": historical_snapshot,
+        "recent_snapshot": recent_snapshot,
+        "h2h_snapshot": h2h_snapshot,
+        "elo_snapshot": elo_snapshot,
+        "league_avg_goals": league_avg_goals,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Actual outcomes and market grading
+# ---------------------------------------------------------------------------
+
+
+def _actual_match_result(fixture: Dict[str, Any]) -> Optional[str]:
+    home, away = _goals(fixture)
+    if home is None or away is None:
+        return None
+    if home > away:
+        return "home_win"
+    if home < away:
+        return "away_win"
+    return "draw"
+
+
+def _actual_double_chance(fixture: Dict[str, Any]) -> Optional[str]:
+    result = _actual_match_result(fixture)
+    if result == "home_win" or result == "draw":
+        return "home_or_draw"
+    if result == "away_win":
+        return "away_or_draw"
+    return None
+
+
+def _actual_btts(fixture: Dict[str, Any]) -> Optional[str]:
+    home, away = _goals(fixture)
+    if home is None or away is None:
+        return None
+    return "yes" if home >= 1 and away >= 1 else "no"
+
+
+def _actual_binary_total(total: Optional[float], line: Any) -> Optional[str]:
+    threshold = _safe_float(line)
+    if total is None or threshold is None:
+        return None
+    if total > threshold:
+        return "over"
+    if total < threshold:
+        return "under"
+    return "push"
+
+
+def _pick_and_grade(
+    distribution: Any,
+    actual: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    picked = _probability_pick(distribution)
+    if picked is None:
+        return None
+    pick, probability = picked
+    return {
+        "pick": pick,
+        "probability": probability,
+        "actual": actual,
+        "won": pick == actual if actual is not None else None,
     }
 
 
 def _grade_prediction_markets(
-    prediction_markets,
-    fixture,
-):
-    """
-    Grade every probability distribution produced by prediction_engine.
+    prediction_markets: Dict[str, Any],
+    fixture: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Return selected predictions plus independent actual market outcomes."""
+    selected: Dict[str, Any] = {}
+    outcomes: Dict[str, Any] = {}
 
-    This grades selected outcomes while retaining the complete original
-    probability distributions in the prediction record.
-    """
-    if not isinstance(prediction_markets, dict):
-        return {}
-    outcomes = market_grading.grade_goal_markets(
-        fixture
-        .get("goals", {})
-        .get("home"),
-        fixture
-        .get("goals", {})
-        .get("away"),
-        )
-            
+    home, away = _goals(fixture)
+    total = (home + away) if home is not None and away is not None else None
 
-    graded: Dict[str, Any] = {}
-
-    # ------------------------------------------------------------------
-    # Match result
-    # ------------------------------------------------------------------
-
-    match_result = _normalise_probability_distribution(
-        prediction_markets.get("match_result")
+    # 1X2
+    selected_1x2 = _pick_and_grade(
+        prediction_markets.get("match_result"),
+        _actual_match_result(fixture),
     )
+    if selected_1x2 is not None:
+        selected["match_result"] = selected_1x2
+    outcomes["match_result"] = market_grading.grade_match_result(home, away)
 
-    if match_result:
-        graded["match_result"] = {
-            "probabilities": match_result,
-            "pick": max(
-                match_result,
-                key=match_result.get,
-            ),
-            "probability": match_result[
-                max(match_result, key=match_result.get)
-            ],
-            "actual": _actual_match_result(
-                *_extract_goals(fixture)
-            ),
-        }
-
-        graded["match_result"]["won"] = (
-            graded["match_result"]["pick"]
-            == graded["match_result"]["actual"]
-        )
-
-    # ------------------------------------------------------------------
-    # Double chance
-    # ------------------------------------------------------------------
-
-    double_chance = _normalise_probability_distribution(
-        prediction_markets.get("double_chance")
+    # Double Chance
+    selected_dc = _pick_and_grade(
+        prediction_markets.get("double_chance"),
+        _actual_double_chance(fixture),
     )
+    if selected_dc is not None:
+        selected["double_chance"] = selected_dc
+    outcomes["double_chance"] = market_grading.grade_double_chance(home, away)
 
-    if double_chance:
-        pick = max(
-            double_chance,
-            key=double_chance.get,
-        )
-
-        graded["double_chance"] = {
-            "probabilities": double_chance,
-            "pick": pick,
-            "probability": double_chance[pick],
-            "actual": _actual_double_chance(
-                *_extract_goals(fixture)
-            ),
-        }
-
-        graded["double_chance"]["won"] = (
-            pick == graded["double_chance"]["actual"]
-        )
-
-    # ------------------------------------------------------------------
     # BTTS
-    # ------------------------------------------------------------------
-
-    btts = _normalise_probability_distribution(
-        prediction_markets.get("btts")
+    selected_btts = _pick_and_grade(
+        prediction_markets.get("btts"),
+        _actual_btts(fixture),
     )
+    if selected_btts is not None:
+        selected["btts"] = selected_btts
+    outcomes["btts"] = market_grading.grade_btts(home, away)
 
-    if btts:
-        pick = max(
-            btts,
-            key=btts.get,
-        )
-
-        graded["btts"] = {
-            "probabilities": btts,
-            "pick": pick,
-            "probability": btts[pick],
-            "actual": _actual_btts(
-                *_extract_goals(fixture)
-            ),
-        }
-
-        graded["btts"]["won"] = (
-            pick == graded["btts"]["actual"]
-        )
-
-    # ------------------------------------------------------------------
-    # Over / Under
-    # ------------------------------------------------------------------
-
-    over_under = prediction_markets.get("over_under")
-
+    # Over / Under.  The prediction engine uses flat keys such as over_2_5.
+    over_under_selected: Dict[str, Any] = {}
+    over_under_outcomes = market_grading.grade_over_under(home, away)
+    over_under = prediction_markets.get("over_under", {})
     if isinstance(over_under, dict):
-        graded_over_under: Dict[str, Any] = {}
-
-        home_goals, away_goals = _extract_goals(fixture)
-
-        for line, probabilities in over_under.items():
-            distribution = _normalise_probability_distribution(
-                probabilities
-            )
-
-            if not distribution:
+        lines: Dict[str, Tuple[float, Dict[str, float]]] = {}
+        for key, value in over_under.items():
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
                 continue
+            if not (str(key).startswith("over_") or str(key).startswith("under_")):
+                continue
+            parts = str(key).split("_", 1)
+            if len(parts) != 2:
+                continue
+            try:
+                line = float(parts[1].replace("_", "."))
+            except ValueError:
+                continue
+            lines.setdefault(str(line), (line, {}))[1][str(key)] = float(value)
+        for line_key, (line, distribution) in lines.items():
+            actual = _actual_binary_total(total, line)
+            picked = _pick_and_grade(distribution, actual)
+            if picked is not None:
+                over_under_selected[line_key] = picked
+    if over_under_selected:
+        selected["over_under"] = over_under_selected
+    outcomes["over_under"] = over_under_outcomes or {}
 
-            pick = max(
-                distribution,
-                key=distribution.get,
-            )
-
-            graded_over_under[str(line)] = {
-                "probabilities": distribution,
-                "pick": pick,
-                "probability": distribution[pick],
-                "actual": _actual_over_under(
-                    home_goals,
-                    away_goals,
-                    line,
-                ),
-            }
-
-            graded_over_under[str(line)]["won"] = (
-                graded_over_under[str(line)]["actual"] == pick
-            )
-
-        if graded_over_under:
-            graded["over_under"] = graded_over_under
-
-    # ------------------------------------------------------------------
-    # Team goals
-    # ------------------------------------------------------------------
-
-    team_goals = prediction_markets.get("team_goals")
-
+    # Team goals.  The prediction engine also uses flat keys.
+    team_selected: Dict[str, Any] = {}
+    team_goals = prediction_markets.get("team_goals", {})
     if isinstance(team_goals, dict):
-        graded_team_goals: Dict[str, Any] = {}
-
-        home_goals, away_goals = _extract_goals(fixture)
-
-        for team, team_lines in team_goals.items():
-            if not isinstance(team_lines, dict):
+        lines: Dict[str, Tuple[float, Dict[str, float]]] = {}
+        for key, value in team_goals.items():
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
                 continue
-
-            team_result: Dict[str, Any] = {}
-
-            if str(team).lower() in {
-                "home",
-                "home_team",
-            }:
-                actual_goals = home_goals
-            elif str(team).lower() in {
-                "away",
-                "away_team",
-            }:
-                actual_goals = away_goals
-            else:
-                actual_goals = None
-
-            for line, probabilities in team_lines.items():
-                distribution = _normalise_probability_distribution(
-                    probabilities
-                )
-
-                if not distribution:
-                    continue
-
-                pick = max(
-                    distribution,
-                    key=distribution.get,
-                )
-
-                team_result[str(line)] = {
-                    "probabilities": distribution,
-                    "pick": pick,
-                    "probability": distribution[pick],
-                    "actual": _actual_team_goals(
-                        actual_goals,
-                        line,
-                    ),
-                }
-
-                team_result[str(line)]["won"] = (
-                    team_result[str(line)]["actual"] == pick
-                )
-
-            if team_result:
-                graded_team_goals[str(team)] = team_result
-
-        if graded_team_goals:
-            graded["team_goals"] = graded_team_goals
-
-    # ------------------------------------------------------------------
-    # Scorelines
-    # ------------------------------------------------------------------
-
-    scorelines = _normalise_probability_distribution(
-        prediction_markets.get("scoreline")
-        or prediction_markets.get("scorelines")
-        or prediction_markets.get("correct_score")
-    )
-
-    if scorelines:
-        home_goals, away_goals = _extract_goals(fixture)
-
-        actual_scoreline = None
-
-        if home_goals is not None and away_goals is not None:
-            actual_scoreline = f"{home_goals}-{away_goals}"
-
-        pick = max(
-            scorelines,
-            key=scorelines.get,
-        )
-
-        graded["scoreline"] = {
-            "probabilities": scorelines,
-            "pick": pick,
-            "probability": scorelines[pick],
-            "actual": actual_scoreline,
-            "won": (
-                pick == actual_scoreline
-                if actual_scoreline is not None
-                else None
-            ),
-        }
-
-    return graded
-
-
-# ---------------------------------------------------------------------------
-# Market summary helpers
-# ---------------------------------------------------------------------------
-
-
-def _new_market_summary() -> Dict[str, Dict[str, Any]]:
-    """Create the market-by-market summary container."""
-    return {}
-
-
-def _update_summary_entry(
-    summary: Dict[str, Dict[str, Any]],
-    market: str,
-    won: Optional[bool],
-) -> None:
-    """Update one market summary entry."""
-    if market not in summary:
-        summary[market] = {
-            "graded": 0,
-            "correct": 0,
-            "accuracy": 0.0,
-        }
-
-    if won is None:
-        return
-
-    summary[market]["graded"] += 1
-
-    if won:
-        summary[market]["correct"] += 1
-
-    graded = summary[market]["graded"]
-
-    summary[market]["accuracy"] = (
-        summary[market]["correct"] / graded
-        if graded
-        else 0.0
-    )
-
-
-def _update_market_summary(
-    summary: Dict[str, Dict[str, Any]],
-    graded_markets: Dict[str, Any],
-) -> None:
-    """Update the global market summary from one fixture."""
-    if not isinstance(graded_markets, dict):
-        return
-
-    for market, result in graded_markets.items():
-        if market in {
-            "match_result",
-            "double_chance",
-            "btts",
-            "scoreline",
-        }:
-            if isinstance(result, dict):
-                _update_summary_entry(
-                    summary,
-                    market,
-                    result.get("won"),
-                )
-
-            continue
-
-        if market in {
-            "over_under",
-            "team_goals",
-        }:
-            if not isinstance(result, dict):
+            key_text = str(key)
+            parts = key_text.rsplit("_", 2)
+            if len(parts) != 3 or parts[0] not in {"home", "away"}:
                 continue
+            try:
+                line = float(f"{parts[1]}.{parts[2]}")
+            except ValueError:
+                continue
+            prefix = parts[0]
+            line_key = f"{prefix}_{parts[1]}_{parts[2]}"
+            lines.setdefault(line_key, (line, {}))[1][key_text] = float(value)
+        for line_key, (line, distribution) in lines.items():
+            team = line_key.split("_", 1)[0]
+            actual_goals = home if team == "home" else away
+            actual = _actual_binary_total(actual_goals, line)
+            picked = _pick_and_grade(distribution, actual)
+            if picked is not None:
+                team_selected[line_key] = picked
+    if team_selected:
+        selected["team_goals"] = team_selected
+    outcomes["team_goals"] = market_grading.grade_team_goals(home, away) or {}
 
-            for line_result in result.values():
-                if market == "team_goals":
-                    if isinstance(line_result, dict):
-                        for item in line_result.values():
-                            if isinstance(item, dict):
-                                _update_summary_entry(
-                                    summary,
-                                    f"{market}",
-                                    item.get("won"),
-                                )
-                elif isinstance(line_result, dict):
-                    _update_summary_entry(
-                        summary,
-                        f"{market} {line_result.get('line', '')}".strip(),
-                        line_result.get("won"),
-                    )
+    # Correct score / top scorelines.
+    scorelines = prediction_markets.get("top_scorelines")
+    if not isinstance(scorelines, list):
+        scorelines = prediction_markets.get("scoreline")
+    if isinstance(scorelines, list) and scorelines:
+        clean_scores = {
+            str(item.get("score")): _safe_float(item.get("probability"))
+            for item in scorelines
+            if isinstance(item, dict) and item.get("score") is not None
+            and _safe_float(item.get("probability")) is not None
+        }
+        actual_score = f"{home}-{away}" if home is not None and away is not None else None
+        picked = _pick_and_grade(clean_scores, actual_score)
+        if picked is not None:
+            selected["scoreline"] = picked
+    elif isinstance(scorelines, dict):
+        actual_score = f"{home}-{away}" if home is not None and away is not None else None
+        picked = _pick_and_grade(scorelines, actual_score)
+        if picked is not None:
+            selected["scoreline"] = picked
+    outcomes["scoreline"] = market_grading.grade_scoreline(home, away)
+
+    return {
+        "selected": selected,
+        "outcomes": outcomes,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -844,414 +485,171 @@ def _update_market_summary(
 # ---------------------------------------------------------------------------
 
 
-def _statistical_actuals(
-    fixture: Dict[str, Any],
+def _statistical_actuals(fixture: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Return only real corners/cards present in an enriched API fixture."""
+    stats = market_grading.extract_fixture_statistics(fixture)
+    corners: Dict[str, Any] = {}
+    cards: Dict[str, Any] = {}
+
+    if stats["home_corners"] is not None and stats["away_corners"] is not None:
+        corners = {
+            "home": stats["home_corners"],
+            "away": stats["away_corners"],
+            "total": stats["home_corners"] + stats["away_corners"],
+        }
+
+    if all(stats[key] is not None for key in (
+        "home_yellow_cards", "away_yellow_cards",
+        "home_red_cards", "away_red_cards",
+    )):
+        cards = {
+            "home_yellow": stats["home_yellow_cards"],
+            "away_yellow": stats["away_yellow_cards"],
+            "home_red": stats["home_red_cards"],
+            "away_red": stats["away_red_cards"],
+            "total": (
+                stats["home_yellow_cards"]
+                + stats["away_yellow_cards"]
+                + stats["home_red_cards"]
+                + stats["away_red_cards"]
+            ),
+        }
+
+    return {"corners": corners, "cards": cards}
+
+
+def _merge_enriched_fixture(
+    original: Dict[str, Any],
+    enriched: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """
-    Extract real statistical outcomes when present.
-
-    Missing statistics remain missing. This function never estimates or
-    fabricates historical corners/cards.
-    """
-    result: Dict[str, Any] = {}
-
-    for key in (
-        "corners",
-        "cards",
-        "yellow_cards",
-        "red_cards",
-        "shots",
-        "shots_on_target",
-        "possession",
-        "fouls",
-    ):
-        if key in fixture and fixture[key] is not None:
-            result[key] = fixture[key]
-
-    statistics_data = fixture.get("statistics")
-
-    if isinstance(statistics_data, dict):
-        for key, value in statistics_data.items():
-            if value is not None:
-                result.setdefault(key, value)
-
-    return result
-
-
-def _prepare_statistical_enrichment(
-    fixture: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    Prepare real historical statistics for reporting.
-
-    The backtest may report availability, but it must not convert absent
-    historical data into fake outcomes.
-    """
-    actuals = _statistical_actuals(fixture)
-
-    return {
-        "available": bool(actuals),
-        "data": actuals,
-    }
+    if not isinstance(enriched, dict):
+        return original
+    merged = dict(original)
+    merged.update(enriched)
+    return merged
 
 
 # ---------------------------------------------------------------------------
-# Formatting
+# Summary/reporting
 # ---------------------------------------------------------------------------
 
 
-def _format_probability(
-    probability: Any,
-) -> str:
-    """Format probability for human-readable backtest output."""
-    value = _safe_float(probability)
+def _new_market_summary() -> Dict[str, Any]:
+    """Create a summary that supports both aggregate and line-specific markets."""
+    return {}
 
-    if value is None:
+
+def _summary_entry() -> Dict[str, Any]:
+    return {"graded": 0, "correct": 0, "accuracy": 0.0}
+
+
+def _update_summary_bucket(bucket: Dict[str, Any], won: Optional[bool]) -> None:
+    if won is None:
+        return
+    bucket["graded"] += 1
+    if won:
+        bucket["correct"] += 1
+    bucket["accuracy"] = bucket["correct"] / bucket["graded"]
+
+
+def _update_market_summary(
+    summary: Dict[str, Any],
+    selected: Dict[str, Any],
+) -> None:
+    if not isinstance(selected, dict):
+        return
+
+    for market in ("match_result", "double_chance", "btts", "scoreline"):
+        item = selected.get(market)
+        if isinstance(item, dict):
+            bucket = summary.setdefault(market, _summary_entry())
+            _update_summary_bucket(bucket, item.get("won"))
+
+    over_under = selected.get("over_under")
+    if isinstance(over_under, dict):
+        market_bucket = summary.setdefault("over_under", {})
+        for line, item in over_under.items():
+            if not isinstance(item, dict):
+                continue
+            line_bucket = market_bucket.setdefault(str(line), _summary_entry())
+            _update_summary_bucket(line_bucket, item.get("won"))
+
+    team_goals = selected.get("team_goals")
+    if isinstance(team_goals, dict):
+        market_bucket = summary.setdefault("team_goals", {})
+        for line, item in team_goals.items():
+            if not isinstance(item, dict):
+                continue
+            line_bucket = market_bucket.setdefault(str(line), _summary_entry())
+            _update_summary_bucket(line_bucket, item.get("won"))
+
+
+def _format_probability(value: Any) -> str:
+    number = _safe_float(value)
+    if number is None:
         return "N/A"
-
-    if abs(value) <= 1:
-        return f"{value:.1%}"
-
-    return f"{value:.2f}"
+    return f"{number:.1%}" if abs(number) <= 1 else f"{number:.2f}"
 
 
-def _print_market_prediction_block(
-    market: str,
-    prediction: Dict[str, Any],
-) -> None:
-    """Print one market prediction."""
-    if not isinstance(prediction, dict):
-        return
-
-    pick = prediction.get("pick")
-    probability = prediction.get("probability")
-
-    print(
-        f"  {market}: "
-        f"{pick} "
-        f"({_format_probability(probability)})"
-    )
-
-
-def _print_market_grading_block(
-    market: str,
-    prediction: Dict[str, Any],
-) -> None:
-    """Print one market prediction and its historical result."""
-    if not isinstance(prediction, dict):
-        return
-
-    pick = prediction.get("pick")
-    probability = prediction.get("probability")
-    actual = prediction.get("actual")
-    won = prediction.get("won")
-
-    if won is True:
-        status = "CORRECT"
-    elif won is False:
-        status = "WRONG"
-    else:
-        status = "UNGRADED"
-
-    print(
-        f"  {market}: "
-        f"pick={pick} "
-        f"prob={_format_probability(probability)} "
-        f"actual={actual} "
-        f"[{status}]"
-    )
-
-
-def _print_market_backtest_report(
-    result: Dict[str, Any],
-) -> None:
-    """
-    Print the complete market-by-market backtest report.
-
-    This deliberately avoids collapsing different markets into one artificial
-    accuracy number.
-    """
-    print()
-    print("=== FULL MARKET BACKTEST REPORT ===")
-    print()
-
-    print(
-        f"Fixtures graded: "
-        f"{result.get('graded', 0)}"
-    )
-
-    print(
-        f"Sample requested: "
-        f"{result.get('sample_size', 0)}"
-    )
-
-    print()
-    print("MARKET SUMMARY")
+def _print_market_summary(summary: Dict[str, Any]) -> None:
+    print("\nMARKET SUMMARY")
     print("-" * 72)
-    print(
-        f"{'Market':30}"
-        f"{'Graded':>10}"
-        f"{'Correct':>10}"
-        f"{'Accuracy':>12}"
-    )
+    print(f"{'Market':30}{'Graded':>10}{'Correct':>10}{'Accuracy':>12}")
     print("-" * 72)
-
-    market_summary = result.get(
-        "market_summary",
-        {},
-    )
-
-    for market, summary in market_summary.items():
-        if not isinstance(summary, dict):
+    for market in ("match_result", "double_chance", "btts", "scoreline"):
+        item = summary.get(market)
+        if not isinstance(item, dict) or "graded" not in item:
             continue
-
         print(
             f"{market:30}"
-            f"{summary.get('graded', 0):>10}"
-            f"{summary.get('correct', 0):>10}"
-            f"{summary.get('accuracy', 0.0):>11.1%}"
+            f"{item.get('graded', 0):>10}"
+            f"{item.get('correct', 0):>10}"
+            f"{item.get('accuracy', 0.0):>11.1%}"
         )
 
+    for market in ("over_under", "team_goals"):
+        lines = summary.get(market, {})
+        if not isinstance(lines, dict):
+            continue
+        for line, item in lines.items():
+            if not isinstance(item, dict) or "graded" not in item:
+                continue
+            label = f"{market} {line}"
+            print(
+                f"{label:30}"
+                f"{item.get('graded', 0):>10}"
+                f"{item.get('correct', 0):>10}"
+                f"{item.get('accuracy', 0.0):>11.1%}"
+            )
     print("-" * 72)
 
-    statistical_available = result.get(
-        "statistical_fixtures",
-        0,
-    )
 
-    statistical_total = result.get(
-        "graded",
-        0,
-    )
-
-    print()
-    print("STATISTICAL DATA AVAILABILITY")
+def _print_backtest_report(result: Dict[str, Any]) -> None:
+    print("\n=== FULL MARKET BACKTEST REPORT ===")
+    print(f"Fixtures fetched: {result['fixtures_fetched']}")
+    print(f"Finished fixtures: {result['finished_fixtures']}")
+    print(f"Eligible candidates: {result['eligible_candidates']}")
+    print(f"Sample requested: {result['requested_sample']}")
+    print(f"Fixtures actually graded: {result['graded']}")
+    print(f"1X2: {result['market_summary'].get('match_result', _summary_entry())}")
+    print(f"Double Chance: {result['market_summary'].get('double_chance', _summary_entry())}")
+    print(f"BTTS: {result['market_summary'].get('btts', _summary_entry())}")
+    print(f"Over/Under: {result['market_summary'].get('over_under', {})}")
+    print(f"Team Goals: {result['market_summary'].get('team_goals', {})}")
+    print(f"Scoreline: {result['market_summary'].get('scoreline', _summary_entry())}")
     print(
-        f"Fixtures containing real historical statistical data: "
-        f"{statistical_available}/{statistical_total}"
+        "Real statistical availability: "
+        f"corners={result['statistical_data_available']['corners']}, "
+        f"cards={result['statistical_data_available']['cards']}"
     )
-
-    print()
-    print("FIXTURE-BY-FIXTURE MARKET DETAIL")
-    print("=" * 72)
-
-    for index, entry in enumerate(
-        result.get("log", []),
-        start=1,
-    ):
-        fixture = entry.get("fixture", {})
-        predictions = entry.get("graded_markets", {})
-
-        home_team = (
-            fixture.get("home_team")
-            or "Unknown Home"
-        )
-
-        away_team = (
-            fixture.get("away_team")
-            or "Unknown Away"
-        )
-
-        date = fixture.get("date") or ""
-
-        print()
-        print(
-            f"[{index}] "
-            f"{home_team} vs {away_team}"
-        )
-
-        if date:
-            print(f"  Date: {date}")
-
-        home_goals = fixture.get("home_goals")
-        away_goals = fixture.get("away_goals")
-
-        if (
-            home_goals is not None
-            and away_goals is not None
-        ):
-            print(
-                f"  Final score: "
-                f"{home_goals}-{away_goals}"
-            )
-
-        for market, prediction in predictions.items():
-            if market in {
-                "match_result",
-                "double_chance",
-                "btts",
-                "scoreline",
-            }:
-                _print_market_grading_block(
-                    market,
-                    prediction,
-                )
-
-            elif market == "over_under":
-                if isinstance(prediction, dict):
-                    for line, line_result in prediction.items():
-                        _print_market_grading_block(
-                            f"over_under {line}",
-                            line_result,
-                        )
-
-            elif market == "team_goals":
-                if isinstance(prediction, dict):
-                    for team, team_result in prediction.items():
-                        if not isinstance(
-                            team_result,
-                            dict,
-                        ):
-                            continue
-
-                        for line, line_result in team_result.items():
-                            _print_market_grading_block(
-                                f"team_goals {team} {line}",
-                                line_result,
-                            )
-
-        statistics_data = entry.get(
-            "statistical_enrichment",
-            {},
-        )
-
-        if statistics_data.get("available"):
-            print(
-                "  Historical statistics: "
-                "AVAILABLE"
-            )
-        else:
-            print(
-                "  Historical statistics: "
-                "NOT AVAILABLE"
-            )
-
-    print()
-    print("=== END FULL MARKET BACKTEST REPORT ===")
-    print()
-# ---------------------------------------------------------------------------
-# Prediction-engine integration
-# ---------------------------------------------------------------------------
-
-
-def _call_prediction_engine(
-    fixture: Dict[str, Any],
-    historical_data: Optional[Any] = None,
-) -> Dict[str, Any]:
-    """
-    Call the prediction engine using the available public interface.
-
-    The adapter intentionally supports the common interfaces used by the
-    project so the backtest remains isolated from transport/UI concerns.
-    """
-    candidates = (
-        "predict_fixture",
-        "predict",
-        "generate_prediction",
-        "run_prediction",
-    )
-
-    last_error: Optional[Exception] = None
-
-    for function_name in candidates:
-        function = getattr(
-            prediction_engine,
-            function_name,
-            None,
-        )
-
-        if not callable(function):
-            continue
-
-        calls = [
-            lambda: function(
-                fixture,
-                historical_data=historical_data,
-            ),
-            lambda: function(
-                fixture,
-                historical_data,
-            ),
-            lambda: function(fixture),
-        ]
-
-        for call in calls:
-            try:
-                result = call()
-
-                if isinstance(result, dict):
-                    return result
-
-            except TypeError as exc:
-                last_error = exc
-                continue
-
-    if last_error is not None:
-        raise last_error
-
-    raise AttributeError(
-        "prediction_engine does not expose a supported prediction "
-        "function."
-    )
+    print(f"Statistics enriched: {result['statistics_enriched']}")
+    print(f"No zero-fixture regression: {'PASS' if result['graded'] > 0 else 'FAIL'}")
+    _print_market_summary(result["market_summary"])
+    print("=== END FULL MARKET BACKTEST REPORT ===\n")
 
 
 # ---------------------------------------------------------------------------
-# Historical fixture preparation
-# ---------------------------------------------------------------------------
-
-
-def _prepare_fixture_for_prediction(
-    fixture: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    Create the prediction input without modifying the original fixture.
-
-    Historical result fields remain available for grading, while the
-    prediction engine receives the same fixture information it expects.
-    """
-    return dict(fixture)
-
-
-def _extract_prediction_markets(
-    prediction: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Extract the market container from a prediction-engine response."""
-    if not isinstance(prediction, dict):
-        return {}
-
-    for key in (
-        "markets",
-        "prediction_markets",
-        "predictions",
-    ):
-        value = prediction.get(key)
-
-        if isinstance(value, dict):
-            return value
-
-    # Some prediction-engine responses place markets directly at the root.
-    known_markets = {
-        "match_result",
-        "double_chance",
-        "btts",
-        "over_under",
-        "team_goals",
-        "scoreline",
-        "scorelines",
-        "correct_score",
-    }
-
-    direct = {
-        key: value
-        for key, value in prediction.items()
-        if key in known_markets
-    }
-
-    return direct
-
-
-# ---------------------------------------------------------------------------
-# Backtest execution
+# Main backtest
 # ---------------------------------------------------------------------------
 
 
@@ -1259,426 +657,203 @@ def run_real_backtest(
     league_id: Any,
     season: Any,
     sample_size: int = 50,
+    min_prior_matches: int = 5,
+    sample_seed: Optional[int] = 42,
+    enrich_statistics: bool = False,
 ) -> Dict[str, Any]:
-    """
-    Run the historical backtest.
+    """Run a chronological, leakage-safe historical backtest."""
+    if isinstance(league_id, bool) or not isinstance(league_id, int):
+        raise ValueError("league_id must be an integer.")
+    if isinstance(season, bool) or not isinstance(season, int) or season < 1900:
+        raise ValueError("season must be a valid integer year.")
+    if isinstance(sample_size, bool) or not isinstance(sample_size, int) or sample_size <= 0:
+        raise ValueError("sample_size must be a positive integer.")
+    if isinstance(min_prior_matches, bool) or not isinstance(min_prior_matches, int) or min_prior_matches < 0:
+        raise ValueError("min_prior_matches must be a non-negative integer.")
+    if enrich_statistics not in (True, False):
+        raise ValueError("enrich_statistics must be a boolean.")
+    if sample_seed is not None and (
+        isinstance(sample_seed, bool) or not isinstance(sample_seed, int)
+    ):
+        raise ValueError("sample_seed must be an integer or None.")
 
-    Parameters
-    ----------
-    league_id:
-        Historical league identifier or name accepted by the project's
-        historical-data layer.
+    fixtures = api_football.get_league_fixtures(league_id, season)
+    if not isinstance(fixtures, list):
+        fixtures = []
 
-    season:
-        Historical season identifier.
+    fixtures = [fixture for fixture in fixtures if isinstance(fixture, dict)]
+    finished = [fixture for fixture in fixtures if _is_finished(fixture)]
+    finished.sort(key=_fixture_date)
 
-    sample_size:
-        Maximum number of historical fixtures to grade.
-
-    Returns
-    -------
-    dict
-        Backward-compatible result containing the primary 1X2 accuracy plus
-        independent market summaries and the complete backtest log.
-    """
-    # Import lazily so importing this module does not unnecessarily trigger
-    # the historical-data stack.
-    try:
-        import historical_data
-    except ImportError:
-        historical_data = None
-
-    candidates: List[Dict[str, Any]] = []
-
-    # ------------------------------------------------------------------
-    # Obtain historical fixtures
-    # ------------------------------------------------------------------
-
-    if historical_data is not None:
-        loaders = (
-            "load_historical_fixtures",
-            "get_historical_fixtures",
-            "fetch_historical_fixtures",
-            "load_fixtures",
-        )
-
-        last_loader_error: Optional[Exception] = None
-
-        for loader_name in loaders:
-            loader = getattr(
-                historical_data,
-                loader_name,
-                None,
-            )
-
-            if not callable(loader):
-                continue
-
-            calls = [
-                lambda loader=loader: loader(
-                    league_id,
-                    season,
-                ),
-                lambda loader=loader: loader(
-                    league_id=league_id,
-                    season=season,
-                ),
-                lambda loader=loader: loader(
-                    season=season,
-                    league=league_id,
-                ),
-            ]
-
-            loaded = False
-
-            for call in calls:
-                try:
-                    result = call()
-
-                    if isinstance(result, dict):
-                        for key in (
-                            "fixtures",
-                            "matches",
-                            "data",
-                            "results",
-                        ):
-                            if isinstance(
-                                result.get(key),
-                                list,
-                            ):
-                                candidates = result[key]
-                                loaded = True
-                                break
-
-                    elif isinstance(result, list):
-                        candidates = result
-                        loaded = True
-
-                    if loaded:
-                        break
-
-                except TypeError as exc:
-                    last_loader_error = exc
-                    continue
-
-            if loaded:
-                break
-
-        if not candidates and last_loader_error is not None:
-            raise last_loader_error
-
-    if not isinstance(candidates, list):
-        candidates = []
-
-    # Only historical fixtures with real final scores are eligible for
-    # grading. Never manufacture outcomes for incomplete fixtures.
-    candidates = [
-        fixture
-        for fixture in candidates
-        if isinstance(fixture, dict)
-        and _fixture_is_graded(fixture)
-    ]
-
-    # Keep deterministic ordering for reproducible backtests.
-    candidates.sort(
-        key=lambda fixture: (
-            _extract_fixture_date(fixture) or "",
-            _extract_fixture_id(fixture) or "",
-        )
+    eligible = _filter_candidates_by_minimum_history(
+        finished,
+        fixtures,
+        minimum_matches=min_prior_matches,
     )
 
-    if sample_size is not None:
-        try:
-            requested_sample = max(
-                0,
-                int(sample_size),
-            )
-        except (TypeError, ValueError):
-            requested_sample = len(candidates)
+    selected = _sample_backtest_candidates(
+        eligible,
+        sample_size,
+        seed=sample_seed,
+    )
+    selected.sort(key=_fixture_date)
 
-        if requested_sample:
-            candidates = candidates[:requested_sample]
+    enriched_by_id: Dict[int, Dict[str, Any]] = {}
+    statistics_enriched = False
+    statistical_data_available = {"corners": 0, "cards": 0}
 
-    # ------------------------------------------------------------------
-    # Grade fixtures
-    # ------------------------------------------------------------------
+    if enrich_statistics and selected:
+        statistics_enriched = True
+        fixture_ids = [
+            _fixture_id(fixture)
+            for fixture in selected
+            if _fixture_id(fixture) is not None
+        ]
+        enriched = api_football.get_enriched_fixtures(fixture_ids)
+        if isinstance(enriched, dict):
+            enriched_by_id = {
+                int(key): value
+                for key, value in enriched.items()
+                if isinstance(value, dict) and str(key).lstrip("-").isdigit()
+            }
 
     log: List[Dict[str, Any]] = []
-
     market_summary = _new_market_summary()
-
     correct = 0
     graded = 0
 
-    statistical_fixtures = 0
+    for candidate in selected:
+        fixture_id = _fixture_id(candidate)
+        enriched_fixture = enriched_by_id.get(int(fixture_id)) if fixture_id is not None else None
+        fixture_for_stats = _merge_enriched_fixture(candidate, enriched_fixture)
 
-    for fixture in candidates:
-        home_goals, away_goals = _extract_goals(
-            fixture
+        historical = _historical_prediction_for_fixture(
+            fixtures,
+            candidate,
+            min_prior_matches=min_prior_matches,
         )
+        if historical is None:
+            continue
 
-        fixture_record = {
-            "fixture_id": _extract_fixture_id(
-                fixture
-            ),
-            "date": _extract_fixture_date(
-                fixture
-            ),
-            "home_team": _extract_home_team(
-                fixture
-            ),
-            "away_team": _extract_away_team(
-                fixture
-            ),
-            "home_goals": home_goals,
-            "away_goals": away_goals,
-        }
-
-        prediction_input = _prepare_fixture_for_prediction(
-            fixture
-        )
-
-        prediction = _call_prediction_engine(
-            prediction_input
-        )
-
-        prediction_markets = _extract_prediction_markets(
-            prediction
-        )
-
-        graded_markets = _grade_prediction_markets(
+        prediction = historical["prediction"]
+        prediction_markets = prediction.get("markets", {})
+        market_grading = _grade_prediction_markets(
             prediction_markets,
-            fixture,
+            candidate,
         )
+        selected_markets = market_grading["selected"]
 
-        # --------------------------------------------------------------
-        # Primary 1X2 metric
-        # --------------------------------------------------------------
+        primary = selected_markets.get("match_result")
+        primary_won = primary.get("won") if isinstance(primary, dict) else None
+        if primary_won is not None:
+            graded += 1
+            if primary_won:
+                correct += 1
 
-        match_result = graded_markets.get(
-            "match_result"
-        )
+        _update_market_summary(market_summary, selected_markets)
 
-        if isinstance(match_result, dict):
-            match_won = match_result.get("won")
+        statistical_actuals = _statistical_actuals(fixture_for_stats)
+        if statistical_actuals["corners"]:
+            statistical_data_available["corners"] += 1
+        if statistical_actuals["cards"]:
+            statistical_data_available["cards"] += 1
 
-            if match_won is not None:
-                graded += 1
-
-                if match_won:
-                    correct += 1
-
-        # --------------------------------------------------------------
-        # Independent market metrics
-        # --------------------------------------------------------------
-
-        _update_market_summary(
-            market_summary,
-            graded_markets,
-        )
-
-        # --------------------------------------------------------------
-        # Statistical availability
-        # --------------------------------------------------------------
-
-        statistical_enrichment = (
-            _prepare_statistical_enrichment(
-                fixture
-            )
-        )
-
-        if statistical_enrichment.get("available"):
-            statistical_fixtures += 1
-
-        # --------------------------------------------------------------
-        # Full audit record
-        # --------------------------------------------------------------
-
-        log.append(
-            {
-                "fixture": fixture_record,
-                "prediction": prediction,
-                "prediction_markets": prediction_markets,
-                "graded_markets": graded_markets,
-                "statistical_enrichment": (
-                    statistical_enrichment
-                ),
-            }
-        )
-
-    # ------------------------------------------------------------------
-    # Result
-    # ------------------------------------------------------------------
+        match_result = _actual_match_result(candidate)
+        predicted = primary.get("pick") if isinstance(primary, dict) else None
+        entry = {
+            "fixture_id": fixture_id,
+            "match": f"{_home_name(candidate)} vs {_away_name(candidate)}",
+            "date": _fixture_date(candidate),
+            "home_team": _home_name(candidate),
+            "away_team": _away_name(candidate),
+            "correct": bool(primary_won) if primary_won is not None else False,
+            "predicted": predicted,
+            "actual": match_result,
+            "probabilities": prediction_markets.get("match_result", {}),
+            "market_grading": {
+                "selected": selected_markets,
+                "outcomes": market_grading["outcomes"],
+                "statistical_actuals": statistical_actuals,
+            },
+            "prediction": prediction,
+            "historical_features": {
+                "historical_snapshot": historical["historical_snapshot"],
+                "recent_snapshot": historical["recent_snapshot"],
+                "h2h_snapshot": historical["h2h_snapshot"],
+                "elo_snapshot": historical["elo_snapshot"],
+                "league_avg_goals": historical["league_avg_goals"],
+            },
+        }
+        log.append(entry)
 
     result = {
+        "fixtures_fetched": len(fixtures),
+        "finished_fixtures": len(finished),
+        "eligible_candidates": len(eligible),
+        "requested_sample": sample_size,
+        "selected": len(selected),
+        "sample_size": len(selected),
         "graded": graded,
         "correct": correct,
-        "accuracy": (
-            correct / graded
-            if graded
-            else 0
-        ),
-        "sample_size": len(candidates),
+        "accuracy": correct / graded if graded else 0.0,
         "league_id": league_id,
         "season": season,
+        "min_prior_matches": min_prior_matches,
+        "sample_seed": sample_seed,
+        "statistics_enriched": statistics_enriched,
+        "statistical_data_available": statistical_data_available,
         "market_summary": market_summary,
-        "statistical_fixtures": statistical_fixtures,
         "log": log,
     }
 
-    # ------------------------------------------------------------------
-    # Persist audit log
-    # ------------------------------------------------------------------
-
-    timestamp = datetime.utcnow().strftime(
-        "%Y%m%d_%H%M%S"
-    )
-
-    safe_league = (
-        str(league_id)
-        .replace("/", "_")
-        .replace(" ", "_")
-    )
-
-    safe_season = (
-        str(season)
-        .replace("/", "_")
-        .replace(" ", "_")
-    )
-
-    log_path = (
-        BACKTEST_LOG_DIR
-        / (
-            f"backtest_"
-            f"{safe_league}_"
-            f"{safe_season}_"
-            f"{timestamp}.json"
-        )
-    )
-
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    log_path = BACKTEST_LOG_DIR / f"backtest_{league_id}_{season}_{timestamp}.json"
     try:
-        with log_path.open(
-            "w",
+        log_path.write_text(
+            json.dumps(result, indent=2, ensure_ascii=False, default=str),
             encoding="utf-8",
-        ) as handle:
-            json.dump(
-                result,
-                handle,
-                indent=2,
-                ensure_ascii=False,
-                default=str,
-            )
-
+        )
         result["log_path"] = str(log_path)
-
     except OSError:
-        # A reporting failure must not destroy an otherwise valid backtest
-        # result.
         result["log_path"] = None
 
-    # ------------------------------------------------------------------
-    # Human-readable report
-    # ------------------------------------------------------------------
-
-    _print_market_backtest_report(
-        result
-    )
-
+    _print_backtest_report(result)
     return result
 
 
-# ---------------------------------------------------------------------------
-# Compatibility aliases
-# ---------------------------------------------------------------------------
+# Compatibility aliases.
+def run_backtest(league_id: Any, season: Any, sample_size: int = 50, **kwargs: Any) -> Dict[str, Any]:
+    return run_real_backtest(league_id, season, sample_size, **kwargs)
 
 
-def run_backtest(
-    league_id: Any,
-    season: Any,
-    sample_size: int = 50,
-) -> Dict[str, Any]:
-    """Compatibility wrapper for callers using the shorter function name."""
-    return run_real_backtest(
-        league_id=league_id,
-        season=season,
-        sample_size=sample_size,
-    )
-
-
-def backtest(
-    league_id: Any,
-    season: Any,
-    sample_size: int = 50,
-) -> Dict[str, Any]:
-    """Compatibility wrapper for legacy callers."""
-    return run_real_backtest(
-        league_id=league_id,
-        season=season,
-        sample_size=sample_size,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Command-line entry point
-# ---------------------------------------------------------------------------
+def backtest(league_id: Any, season: Any, sample_size: int = 50, **kwargs: Any) -> Dict[str, Any]:
+    return run_real_backtest(league_id, season, sample_size, **kwargs)
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description=(
-            "Run the Football Agent historical backtest."
-        )
-    )
-
-    parser.add_argument(
-        "--league-id",
-        default=None,
-        help="Historical league identifier.",
-    )
-
-    parser.add_argument(
-        "--league-name",
-        default=None,
-        help="Historical league name.",
-    )
-
-    parser.add_argument(
-        "--season",
-        required=True,
-        help="Historical season.",
-    )
-
-    parser.add_argument(
-        "--sample",
-        type=int,
-        default=50,
-        help="Maximum number of fixtures to grade.",
-    )
-
+    parser = argparse.ArgumentParser(description="Run the Football Agent historical backtest.")
+    parser.add_argument("--league-id", type=int, default=None)
+    parser.add_argument("--league-name", default=None)
+    parser.add_argument("--season", type=int, required=True)
+    parser.add_argument("--sample", type=int, default=50)
     args = parser.parse_args()
 
-    league = (
-        args.league_id
-        if args.league_id is not None
-        else args.league_name
-    )
+    league_id = args.league_id
+    if league_id is None and args.league_name:
+        # Direct backtest.py use accepts the common configured league name.
+        league_names = {
+            "premier league": 39,
+            "la liga": 140,
+            "serie a": 135,
+            "bundesliga": 78,
+            "ligue 1": 61,
+        }
+        league_id = league_names.get(args.league_name.strip().lower())
 
-    if league is None:
-        parser.error(
-            "Either --league-id or --league-name is required."
-        )
+    if league_id is None:
+        parser.error("A supported --league-id or --league-name is required.")
 
-    output = run_real_backtest(
-        league_id=league,
-        season=args.season,
-        sample_size=args.sample,
-    )
-
-    print(
-        f"Backtest accuracy: "
-        f"{output['accuracy']:.1%} "
-        f"({output['correct']}/"
-        f"{output['graded']})"
-)
+    result = run_real_backtest(league_id, args.season, args.sample)
+    print(f"Backtest accuracy: {result['accuracy']:.1%} ({result['correct']}/{result['graded']})")
