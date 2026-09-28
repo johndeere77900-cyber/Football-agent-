@@ -1294,7 +1294,7 @@ def handle_message(text):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    if not TELEGRAM_BOT_TOKEN:
+    if not TELEGRAM_TOKEN:
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN or TELEGRAM_TOKEN is required."
         )
