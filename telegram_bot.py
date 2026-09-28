@@ -50,8 +50,6 @@ TELEGRAM_API = (
 
 MEMORY_FILE = "telegram_memory.json"
 
-WAIT_TEXT = "Ready. What would you like me to analyze?"
-
 
 # ---------------------------------------------------------------------------
 # Natural-language routing
@@ -749,7 +747,9 @@ def handle_schedule_question(text):
     )
 
     return True
-
+    # ---------------------------------------------------------------------------
+# Live and accuracy questions
+# ---------------------------------------------------------------------------
 
 def handle_live_question(text):
     normalized = normalize_text(text)
@@ -798,9 +798,7 @@ def handle_live_question(text):
         ]
 
         for fixture in live:
-            home, away = fixture_teams(
-                fixture
-            )
+            home, away = fixture_teams(fixture)
 
             status = fixture.get(
                 "fixture",
@@ -1058,7 +1056,8 @@ def research_football(
         ) as exc:
             print(
                 "Skipping football fixture due "
-                f"to expected data/API issue: {exc}",
+                "to expected data/API issue: "
+                f"{exc}",
                 flush=True,
             )
             continue
@@ -1154,7 +1153,8 @@ def research_basketball(
         ) as exc:
             print(
                 "Skipping basketball game due "
-                f"to expected data/API issue: {exc}",
+                "to expected data/API issue: "
+                f"{exc}",
                 flush=True,
             )
             continue
@@ -1385,15 +1385,16 @@ def handle_greeting(text):
             "*Commands:* "
             "\"Research 10 football games today\" "
             "or "
-            "\"Analyze tomorrow's NBA games.\"\n\n"
-            f"Unsupported messages stay in WAIT STATE: "
-            f"*{WAIT_TEXT}*"
+            "\"Analyze tomorrow's NBA games.\""
         )
 
         return True
 
     if normalized in GREETINGS:
-        send_message(WAIT_TEXT)
+        send_message(
+            "Hello. Send me a question or a "
+            "research request and I'll work from there."
+        )
         return True
 
     return False
@@ -1416,7 +1417,9 @@ def handle_message(
     original = str(text or "").strip()
 
     if not original:
-        send_message(WAIT_TEXT)
+        send_message(
+            "I didn't receive a message to process."
+        )
         return
 
     recent = memory.setdefault(
@@ -1465,7 +1468,16 @@ def handle_message(
         )
         return
 
-    send_message(WAIT_TEXT)
+    # Do not return to the old generic:
+    # "Ready. What would you like me to analyze?"
+    #
+    # Instead, treat an unsupported natural-language
+    # message as something that needs clarification.
+    send_message(
+        "I can work with natural-language questions "
+        "and research requests. Tell me what you "
+        "want to find, check, compare, or research."
+    )
 
 
 # ---------------------------------------------------------------------------
