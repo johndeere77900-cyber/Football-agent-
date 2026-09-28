@@ -46,6 +46,92 @@ def prior_completed_fixtures(fixtures, cutoff):
     )
 
 
+def _valid_goals(fixture):
+    """
+    Return valid numeric final goals for a completed fixture.
+
+    Boolean values are rejected because bool is a subclass of int in Python.
+    """
+    home_goals = fixture.get("goals", {}).get("home")
+    away_goals = fixture.get("goals", {}).get("away")
+
+    if not isinstance(home_goals, (int, float)):
+        return None
+
+    if isinstance(home_goals, bool):
+        return None
+
+    if not isinstance(away_goals, (int, float)):
+        return None
+
+    if isinstance(away_goals, bool):
+        return None
+
+    return home_goals, away_goals
+
+
+def historical_league_avg_goals(
+    fixtures,
+    cutoff,
+):
+    """
+    Calculate the historical league average goals per team per match.
+
+    Only completed fixtures strictly before the cutoff are used.
+
+    A valid fixture must contain:
+    - a completed FT status;
+    - both team IDs;
+    - numeric final goals for both teams.
+
+    The returned value is:
+
+        total goals / (2 * completed valid fixtures)
+
+    This is a per-team-per-match average, matching the scale expected by
+    the existing football model's league-average parameter.
+
+    Returns None when no qualifying historical fixtures exist.
+    """
+    total_goals = 0.0
+    match_count = 0
+
+    for fixture in prior_completed_fixtures(
+        fixtures,
+        cutoff,
+    ):
+        home_id = (
+            fixture
+            .get("teams", {})
+            .get("home", {})
+            .get("id")
+        )
+        away_id = (
+            fixture
+            .get("teams", {})
+            .get("away", {})
+            .get("id")
+        )
+
+        if home_id is None or away_id is None:
+            continue
+
+        goals = _valid_goals(fixture)
+
+        if goals is None:
+            continue
+
+        home_goals, away_goals = goals
+
+        total_goals += home_goals + away_goals
+        match_count += 1
+
+    if match_count == 0:
+        return None
+
+    return total_goals / (2 * match_count)
+
+
 def team_match_history(fixtures, team_id, cutoff):
     """
     Return a team's completed historical matches available at cutoff.
@@ -79,14 +165,7 @@ def _team_history_with_valid_goals(fixtures, team_id, cutoff):
     valid = []
 
     for fixture in history:
-        home_goals = fixture.get("goals", {}).get("home")
-        away_goals = fixture.get("goals", {}).get("away")
-
-        if isinstance(home_goals, (int, float)) and not isinstance(
-            home_goals, bool
-        ) and isinstance(away_goals, (int, float)) and not isinstance(
-            away_goals, bool
-        ):
+        if _valid_goals(fixture) is not None:
             valid.append(fixture)
 
     return valid
@@ -361,4 +440,4 @@ def fixture_recent_form(
         "window": window,
         "home": home,
         "away": away,
-    }
+        }
