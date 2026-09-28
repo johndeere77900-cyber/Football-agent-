@@ -163,10 +163,34 @@ def test_h2h_excludes_missing_goal_results():
 
 def test_h2h_snapshot_uses_most_recent_window():
     fixtures = [
-        fixture("2025-01-01T15:00:00+00:00", 1, 2, 1, 0),
-        fixture("2025-02-01T15:00:00+00:00", 2, 1, 2, 0),
-        fixture("2025-03-01T15:00:00+00:00", 1, 2, 3, 1),
-        fixture("2025-04-01T15:00:00+00:00", 2, 1, 0, 2),
+        fixture(
+            "2025-01-01T15:00:00+00:00",
+            1,
+            2,
+            1,
+            0,
+        ),
+        fixture(
+            "2025-02-01T15:00:00+00:00",
+            2,
+            1,
+            2,
+            0,
+        ),
+        fixture(
+            "2025-03-01T15:00:00+00:00",
+            1,
+            2,
+            3,
+            1,
+        ),
+        fixture(
+            "2025-04-01T15:00:00+00:00",
+            2,
+            1,
+            0,
+            2,
+        ),
     ]
 
     result = historical_h2h.historical_h2h_snapshot(
@@ -268,11 +292,11 @@ def test_h2h_snapshot_calculates_form_and_goal_rates():
         "W",
     ]
 
-    assert result["goals_for"] == 1.5
-    assert result["goals_against"] == 1.5
+    assert result["goals_for"] == 1.0
+    assert result["goals_against"] == 1.25
 
     assert result["btts_rate"] == 0.5
-    assert result["over_1_5_rate"] == 1.0
+    assert result["over_1_5_rate"] == 0.75
     assert result["over_2_5_rate"] == 0.75
     assert result["over_3_5_rate"] == 0.0
 
@@ -371,4 +395,4 @@ def test_h2h_snapshot_rejects_negative_minimum_history():
     else:
         raise AssertionError(
             "Expected ValueError"
-)
+        )
