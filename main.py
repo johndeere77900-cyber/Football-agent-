@@ -1,9 +1,21 @@
 """
 Main entry point for the football and basketball prediction agent.
 
-Production football prediction uses prediction_engine.
-This module handles orchestration, API-backed feature retrieval,
-CLI validation, storage, and presentation.
+Production football prediction uses prediction_engine as the
+authoritative mathematical prediction path.
+
+This module is responsible for:
+- API-backed feature retrieval
+- production feature construction
+- prediction orchestration
+- storage
+- grading
+- reporting
+- CLI handling
+
+Important feature contract:
+prediction_engine expects goals_for and goals_against as PER-MATCH
+averages, not cumulative season totals.
 """
 
 import argparse
@@ -21,9 +33,9 @@ import config
 import elo
 import live_model
 import odds_api
+import poisson_model
 import prediction_engine
 import storage
-import poisson_model
 
 
 FOOTBALL_FINISHED_STATUSES = {
@@ -62,11 +74,12 @@ _league_avg_cache = {}
 # Validation
 # ----------------------------------------------------------------------
 
+
 def validate_date_string(date_str):
     """Validate a date strictly as YYYY-MM-DD."""
     if not isinstance(date_str, str):
         raise ValueError(
-            "date must be a string in YYYY-MM-DD format"
+            "date must be a string in YYYY-MM-DD format."
         )
 
     try:
@@ -110,8 +123,8 @@ def validate_allowed_league(league_id):
     """
     Enforce the configured football league allow-list.
 
-    An explicitly supplied --league value must not bypass
-    the configured allowed league IDs.
+    An explicitly supplied league must never bypass the configured
+    allowed league IDs.
     """
     if league_id is None:
         return None
@@ -133,17 +146,56 @@ def validate_allowed_league(league_id):
     return league_id
 
 
+def _valid_nonnegative_number(value):
+    """Return True for finite, non-negative numeric values."""
+    if isinstance(value, bool):
+        return False
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+
+    return number >= 0
+
+
+def _valid_probability(value):
+    """Return True when value is a probability in [0, 1]."""
+    if isinstance(value, bool):
+        return False
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+
+    return 0.0 <= number <= 1.0
+
+
 # ----------------------------------------------------------------------
 # General football helpers
 # ----------------------------------------------------------------------
 
+
 def get_league_avg_goals(league_id, season):
+    """
+    Return the configured league scoring average.
+
+    API standings are preferred. The calculation is:
+
+        total goals for / total matches played
+
+    across the available teams.
+
+    A configured fallback is used only when the API does not provide
+    usable standings data.
+    """
     cache_key = (league_id, season)
 
     if cache_key in _league_avg_cache:
         return _league_avg_cache[cache_key]
 
-    avg = None
+    average = None
 
     try:
         standings = api_football.get_league_standings(
@@ -151,21 +203,28 @@ def get_league_avg_goals(league_id, season):
             season,
         )
 
-        ratios = []
+        total_goals = 0.0
+        total_played = 0
 
         for team in standings or []:
-            played = (
-                team
-                .get("all", {})
-                .get("played")
+            if not isinstance(team, dict):
+                continue
+
+            all_data = team.get("all", {})
+            if not isinstance(all_data, dict):
+                continue
+
+            played = all_data.get("played")
+
+            goals_data = all_data.get(
+                "goals",
+                {},
             )
 
-            goals_for = (
-                team
-                .get("all", {})
-                .get("goals", {})
-                .get("for")
-            )
+            if not isinstance(goals_data, dict):
+                continue
+
+            goals_for = goals_data.get("for")
 
             if (
                 isinstance(played, (int, float))
@@ -181,37 +240,59 @@ def get_league_avg_goals(league_id, season):
                 )
                 and goals_for >= 0
             ):
-                ratios.append(
-                    goals_for / played
-                )
+                total_played += int(played)
+                total_goals += float(goals_for)
 
-        if ratios:
-            avg = sum(ratios) / len(ratios)
+        if total_played > 0:
+            average = total_goals / total_played
 
     except requests.exceptions.RequestException:
-        avg = None
+        average = None
 
-    if avg is None:
-        avg = config.LEAGUE_AVG_GOALS.get(
+    if (
+        average is None
+        or average <= 0
+    ):
+        average = config.LEAGUE_AVG_GOALS.get(
             league_id,
             config.LEAGUE_AVG_GOALS_FALLBACK,
         )
 
-    _league_avg_cache[cache_key] = avg
+    if (
+        not _valid_nonnegative_number(average)
+        or float(average) <= 0
+    ):
+        raise ValueError(
+            f"Invalid league average goals for league "
+            f"{league_id}: {average!r}"
+        )
 
-    return avg
+    average = float(average)
+
+    _league_avg_cache[cache_key] = average
+
+    return average
 
 
 def resolve_league_id(
     league_arg,
     league_name_arg,
 ):
+    """Resolve a configured football league ID."""
     if league_name_arg:
         key = " ".join(
             league_name_arg.strip().lower().split()
         )
 
-        key_no_trailing_s = (
+        if not key:
+            raise ValueError(
+                "league-name cannot be empty."
+            )
+
+        if key in config.LEAGUE_NAME_TO_ID:
+            return config.LEAGUE_NAME_TO_ID[key]
+
+        key_without_plural = (
             key.rstrip("s")
             if (
                 key.endswith("s")
@@ -220,22 +301,22 @@ def resolve_league_id(
             else key
         )
 
-        if key in config.LEAGUE_NAME_TO_ID:
-            return config.LEAGUE_NAME_TO_ID[key]
-
         if (
-            key_no_trailing_s
+            key_without_plural
             in config.LEAGUE_NAME_TO_ID
         ):
             return config.LEAGUE_NAME_TO_ID[
-                key_no_trailing_s
+                key_without_plural
             ]
 
         matches = [
             (name, league_id)
             for name, league_id
             in config.LEAGUE_NAME_TO_ID.items()
-            if key in name or name in key
+            if (
+                key in name
+                or name in key
+            )
         ]
 
         if len(matches) == 1:
@@ -253,20 +334,25 @@ def resolve_league_id(
     return league_arg
 
 
-def _valid_goal(value):
-    if isinstance(value, bool):
-        return False
-
-    try:
-        return float(value) >= 0
-    except (TypeError, ValueError):
-        return False
+# ----------------------------------------------------------------------
+# Production feature construction
+# ----------------------------------------------------------------------
 
 
 def _extract_average_goals(
     team_stats,
     side,
 ):
+    """
+    Extract a team's average goals per match.
+
+    API-Football's statistics endpoint exposes values under:
+
+        goals -> for/against -> average -> total
+
+    This function deliberately returns the average, not the cumulative
+    season total.
+    """
     if not isinstance(team_stats, dict):
         return None
 
@@ -301,6 +387,16 @@ def _current_team_feature(
     team_stats,
     name,
 ):
+    """
+    Build the season feature snapshot expected by prediction_engine.
+
+    CRITICAL:
+    goals_for and goals_against are PER-MATCH averages.
+
+    Do not multiply them by fixtures_played. The prediction engine
+    normalizes these values against league_avg_goals and therefore
+    expects average goals per match.
+    """
     if not isinstance(team_stats, dict):
         return None
 
@@ -315,7 +411,13 @@ def _current_team_feature(
         fixtures_played = int(
             fixtures_played
         )
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+    if fixtures_played <= 0:
         return None
 
     goals_for = _extract_average_goals(
@@ -329,20 +431,15 @@ def _current_team_feature(
     )
 
     if (
-        fixtures_played <= 0
-        or goals_for is None
+        goals_for is None
         or goals_against is None
     ):
         return None
 
     return {
         "matches": fixtures_played,
-        "goals_for": (
-            goals_for * fixtures_played
-        ),
-        "goals_against": (
-            goals_against * fixtures_played
-        ),
+        "goals_for": goals_for,
+        "goals_against": goals_against,
         "source": name,
     }
 
@@ -351,6 +448,13 @@ def _recent_feature(
     team_id,
     last,
 ):
+    """
+    Build recent-form features as per-match averages.
+
+    The API returns individual match scores. We aggregate them and
+    divide by the number of valid matches before passing the feature
+    to prediction_engine.
+    """
     matches = api_football.get_recent_form(
         team_id,
         last=last,
@@ -375,6 +479,12 @@ def _recent_feature(
             .get("away", {})
         )
 
+        if (
+            not isinstance(home, dict)
+            or not isinstance(away, dict)
+        ):
+            continue
+
         home_goals = (
             match
             .get("goals", {})
@@ -388,12 +498,19 @@ def _recent_feature(
         )
 
         if (
-            not _valid_goal(home_goals)
-            or not _valid_goal(away_goals)
+            not _valid_nonnegative_number(
+                home_goals
+            )
+            or not _valid_nonnegative_number(
+                away_goals
+            )
         ):
             continue
 
-        if home.get("id") == team_id:
+        home_id = home.get("id")
+        away_id = away.get("id")
+
+        if home_id == team_id:
             goals_for.append(
                 float(home_goals)
             )
@@ -401,7 +518,7 @@ def _recent_feature(
                 float(away_goals)
             )
 
-        elif away.get("id") == team_id:
+        elif away_id == team_id:
             goals_for.append(
                 float(away_goals)
             )
@@ -412,10 +529,16 @@ def _recent_feature(
     if not goals_for:
         return None
 
+    match_count = len(goals_for)
+
     return {
-        "matches": len(goals_for),
-        "goals_for": sum(goals_for),
-        "goals_against": sum(goals_against),
+        "matches": match_count,
+        "goals_for": (
+            sum(goals_for) / match_count
+        ),
+        "goals_against": (
+            sum(goals_against) / match_count
+        ),
     }
 
 
@@ -424,6 +547,14 @@ def _h2h_feature(
     away_id,
     last,
 ):
+    """
+    Build H2H features as per-meeting averages.
+
+    The returned perspective is always the requested home-team
+    perspective:
+        goals_for     = requested home team's goals
+        goals_against = requested home team's conceded goals
+    """
     matches = api_football.get_head_to_head(
         home_id,
         away_id,
@@ -449,6 +580,12 @@ def _h2h_feature(
             .get("away", {})
         )
 
+        if (
+            not isinstance(home, dict)
+            or not isinstance(away, dict)
+        ):
+            continue
+
         home_goals = (
             match
             .get("goals", {})
@@ -462,8 +599,12 @@ def _h2h_feature(
         )
 
         if (
-            not _valid_goal(home_goals)
-            or not _valid_goal(away_goals)
+            not _valid_nonnegative_number(
+                home_goals
+            )
+            or not _valid_nonnegative_number(
+                away_goals
+            )
         ):
             continue
 
@@ -492,10 +633,16 @@ def _h2h_feature(
     if not goals_for:
         return None
 
+    meeting_count = len(goals_for)
+
     return {
-        "meetings": len(goals_for),
-        "goals_for": sum(goals_for),
-        "goals_against": sum(goals_against),
+        "meetings": meeting_count,
+        "goals_for": (
+            sum(goals_for) / meeting_count
+        ),
+        "goals_against": (
+            sum(goals_against) / meeting_count
+        ),
     }
 
 
@@ -503,8 +650,7 @@ def _estimate_avg_cards(team_stats):
     """
     Calculate observed yellow cards per played match.
 
-    No fabricated league-wide/default card value is returned.
-    Missing or invalid card data returns None.
+    Missing card data returns None. No card value is fabricated.
     """
     if not isinstance(team_stats, dict):
         return None
@@ -555,9 +701,7 @@ def _estimate_avg_cards(team_stats):
         ):
             return None
 
-        return (
-            total_yellow / fixtures_played
-        )
+        return total_yellow / fixtures_played
 
     except (
         TypeError,
@@ -567,7 +711,16 @@ def _estimate_avg_cards(team_stats):
         return None
 
 
+# ----------------------------------------------------------------------
+# Safest-pick construction
+# ----------------------------------------------------------------------
+
+
 def build_football_safest_candidates(markets):
+    """Build validated candidate markets for safest_pick()."""
+    if not isinstance(markets, dict):
+        return []
+
     candidates = []
 
     def add_pair(prefix, values):
@@ -575,28 +728,23 @@ def build_football_safest_candidates(markets):
             return
 
         for key, probability in values.items():
-            if (
-                isinstance(
-                    probability,
-                    (int, float),
-                )
-                and not isinstance(
-                    probability,
-                    bool,
-                )
+            if not _valid_probability(
+                probability
             ):
-                label = (
-                    str(key)
-                    .replace("_", " ")
-                    .title()
-                )
+                continue
 
-                candidates.append(
-                    (
-                        f"{prefix}{label}",
-                        probability,
-                    )
+            label = (
+                str(key)
+                .replace("_", " ")
+                .title()
+            )
+
+            candidates.append(
+                (
+                    f"{prefix}{label}",
+                    float(probability),
                 )
+            )
 
     add_pair(
         "",
@@ -606,9 +754,7 @@ def build_football_safest_candidates(markets):
     double_chance_labels = {
         "home_or_draw": "Home or Draw",
         "away_or_draw": "Away or Draw",
-        "home_or_away": (
-            "Home or Away (no draw)"
-        ),
+        "home_or_away": "Home or Away (no draw)",
     }
 
     double_chance = markets.get(
@@ -616,27 +762,19 @@ def build_football_safest_candidates(markets):
         {},
     )
 
-    for key, label in (
-        double_chance_labels.items()
-    ):
-        probability = double_chance.get(key)
+    if isinstance(double_chance, dict):
+        for key, label in double_chance_labels.items():
+            probability = double_chance.get(key)
 
-        if (
-            isinstance(
-                probability,
-                (int, float),
-            )
-            and not isinstance(
-                probability,
-                bool,
-            )
-        ):
-            candidates.append(
-                (
-                    label,
-                    probability,
+            if _valid_probability(
+                probability
+            ):
+                candidates.append(
+                    (
+                        label,
+                        float(probability),
+                    )
                 )
-            )
 
     add_pair(
         "",
@@ -645,14 +783,7 @@ def build_football_safest_candidates(markets):
 
     add_pair(
         "BTTS ",
-        {
-            key: value
-            for key, value
-            in markets.get(
-                "btts",
-                {},
-            ).items()
-        },
+        markets.get("btts"),
     )
 
     add_pair(
@@ -667,41 +798,131 @@ def build_football_safest_candidates(markets):
         under = cards.get("under")
         line = cards.get("over_line")
 
-        if (
-            isinstance(over, (int, float))
-            and not isinstance(over, bool)
-        ):
+        if _valid_probability(over):
             candidates.append(
                 (
                     f"Over {line} Cards",
-                    over,
+                    float(over),
                 )
             )
 
-        if (
-            isinstance(under, (int, float))
-            and not isinstance(under, bool)
-        ):
+        if _valid_probability(under):
             candidates.append(
                 (
                     f"Under {line} Cards",
-                    under,
+                    float(under),
                 )
             )
 
     return candidates
-    
+
+
+# ----------------------------------------------------------------------
+# Prediction construction
+# ----------------------------------------------------------------------
+
+
+def _fixture_identity(fixture):
+    """
+    Validate and extract the minimum fixture structure needed by the
+    production prediction path.
+    """
+    if not isinstance(fixture, dict):
+        raise ValueError(
+            "fixture must be a dictionary."
+        )
+
+    fixture_data = fixture.get("fixture")
+    teams = fixture.get("teams")
+    league = fixture.get("league")
+
+    if not isinstance(fixture_data, dict):
+        raise ValueError(
+            "fixture.fixture is missing."
+        )
+
+    if not isinstance(teams, dict):
+        raise ValueError(
+            "fixture.teams is missing."
+        )
+
+    if not isinstance(league, dict):
+        raise ValueError(
+            "fixture.league is missing."
+        )
+
+    home_team = teams.get("home")
+    away_team = teams.get("away")
+
+    if (
+        not isinstance(home_team, dict)
+        or not isinstance(away_team, dict)
+    ):
+        raise ValueError(
+            "fixture home/away teams are missing."
+        )
+
+    required_home = (
+        home_team.get("id"),
+        home_team.get("name"),
+    )
+
+    required_away = (
+        away_team.get("id"),
+        away_team.get("name"),
+    )
+
+    if (
+        required_home[0] is None
+        or not required_home[1]
+        or required_away[0] is None
+        or not required_away[1]
+    ):
+        raise ValueError(
+            "fixture team identity is incomplete."
+        )
+
+    if (
+        fixture_data.get("id") is None
+        or not fixture_data.get("date")
+    ):
+        raise ValueError(
+            "fixture identity/date is incomplete."
+        )
+
+    if (
+        league.get("id") is None
+        or league.get("season") is None
+        or not league.get("name")
+    ):
+        raise ValueError(
+            "fixture league identity is incomplete."
+        )
+
+    return (
+        fixture_data,
+        home_team,
+        away_team,
+        league,
+    )
+
+
 def _insufficient_prediction(
     fixture,
     is_live,
+    reason="Validated prediction inputs were unavailable.",
 ):
-    home_team = fixture["teams"]["home"]
-    away_team = fixture["teams"]["away"]
-    league = fixture["league"]
+    """Return a consistent non-prediction result."""
+    (
+        fixture_data,
+        home_team,
+        away_team,
+        league,
+    ) = _fixture_identity(fixture)
 
     return {
-        "fixture_id": fixture["fixture"]["id"],
-        "date": fixture["fixture"]["date"],
+        "fixture_id": fixture_data["id"],
+        "date": fixture_data["date"],
         "home_team": home_team["name"],
         "away_team": away_team["name"],
         "home_team_id": home_team["id"],
@@ -710,8 +931,9 @@ def _insufficient_prediction(
         "markets": None,
         "confidence": None,
         "safest": None,
-        "is_live": is_live,
+        "is_live": bool(is_live),
         "insufficient_data": True,
+        "reason": reason,
         "odds_comparison": None,
         "elo_cross_check": None,
     }
@@ -722,17 +944,53 @@ def predict_fixture(
     league_avg_goals,
     fetch_odds=False,
 ):
-    home_team = fixture["teams"]["home"]
-    away_team = fixture["teams"]["away"]
-    league = fixture["league"]
+    """
+    Generate one authoritative football prediction.
 
-    status = fixture["fixture"]["status"]
-    status_short = status["short"]
-    elapsed = status.get("elapsed")
+    All production feature snapshots are converted to per-match
+    averages before being handed to prediction_engine.
+    """
+    (
+        fixture_data,
+        home_team,
+        away_team,
+        league,
+    ) = _fixture_identity(fixture)
+
+    status = fixture_data.get(
+        "status",
+        {},
+    )
+
+    if not isinstance(status, dict):
+        status = {}
+
+    status_short = status.get(
+        "short",
+        "",
+    )
+
+    elapsed = status.get(
+        "elapsed"
+    )
 
     is_live = (
         status_short
         in FOOTBALL_LIVE_STATUSES
+    )
+
+    if (
+        not _valid_nonnegative_number(
+            league_avg_goals
+        )
+        or float(league_avg_goals) <= 0
+    ):
+        raise ValueError(
+            "league_avg_goals must be a positive number."
+        )
+
+    league_avg_goals = float(
+        league_avg_goals
     )
 
     home_stats = (
@@ -768,6 +1026,7 @@ def predict_fixture(
         return _insufficient_prediction(
             fixture,
             is_live,
+            "Season team statistics are incomplete.",
         )
 
     recent_home = _recent_feature(
@@ -787,6 +1046,7 @@ def predict_fixture(
         return _insufficient_prediction(
             fixture,
             is_live,
+            "Recent team form data is incomplete.",
         )
 
     h2h = _h2h_feature(
@@ -833,25 +1093,28 @@ def predict_fixture(
         )
     )
 
+    if not isinstance(prediction, dict):
+        raise ValueError(
+            "prediction_engine returned an invalid result."
+        )
+
     if is_live:
         current_home_goals = (
-            fixture
-            .get("goals", {})
+            fixture.get("goals", {})
             .get("home")
         )
 
         current_away_goals = (
-            fixture
-            .get("goals", {})
+            fixture.get("goals", {})
             .get("away")
         )
 
-        if not _valid_goal(
+        if not _valid_nonnegative_number(
             current_home_goals
         ):
             current_home_goals = 0
 
-        if not _valid_goal(
+        if not _valid_nonnegative_number(
             current_away_goals
         ):
             current_away_goals = 0
@@ -873,7 +1136,10 @@ def predict_fixture(
 
     else:
         markets = dict(
-            prediction["markets"]
+            prediction.get(
+                "markets",
+                {},
+            )
         )
 
         markets["is_live"] = False
@@ -886,7 +1152,6 @@ def predict_fixture(
             away_stats
         )
 
-        # Never manufacture card data.
         if (
             home_cards is not None
             and away_cards is not None
@@ -898,8 +1163,22 @@ def predict_fixture(
                 )
             )
 
+    if not isinstance(markets, dict):
+        raise ValueError(
+            "Prediction markets are invalid."
+        )
+
+    match_result = markets.get(
+        "match_result"
+    )
+
+    if not isinstance(match_result, dict):
+        raise ValueError(
+            "Prediction is missing match_result probabilities."
+        )
+
     conf = confidence.confidence_flag(
-        markets["match_result"]
+        match_result
     )
 
     safest = confidence.safest_pick(
@@ -928,12 +1207,12 @@ def predict_fixture(
                 )
             except requests.exceptions.RequestException as exc:
                 print(
-                    f"  (Odds lookup failed: {exc})"
+                    f"  Odds lookup failed: {exc}"
                 )
 
     return {
-        "fixture_id": fixture["fixture"]["id"],
-        "date": fixture["fixture"]["date"],
+        "fixture_id": fixture_data["id"],
+        "date": fixture_data["date"],
         "home_team": home_team["name"],
         "away_team": away_team["name"],
         "home_team_id": home_team["id"],
@@ -946,10 +1225,45 @@ def predict_fixture(
         "insufficient_data": False,
         "odds_comparison": odds_comparison,
         "elo_cross_check": elo_probabilities,
+        "feature_snapshot": {
+            "season": {
+                "home": home_feature,
+                "away": away_feature,
+            },
+            "recent": {
+                "home": recent_home,
+                "away": recent_away,
+            },
+            "h2h": h2h,
+            "league_avg_goals": league_avg_goals,
+        },
     }
 
 
+# ----------------------------------------------------------------------
+# Presentation
+# ----------------------------------------------------------------------
+
+
 def print_prediction(pred):
+    """Print one production prediction safely."""
+    if not isinstance(pred, dict):
+        raise ValueError(
+            "Prediction must be a dictionary."
+        )
+
+    if pred.get("insufficient_data"):
+        print(
+            f"\n{pred.get('home_team')} vs "
+            f"{pred.get('away_team')} "
+            f"({pred.get('league')})"
+        )
+        print(
+            "  Prediction unavailable: "
+            f"{pred.get('reason', 'insufficient data')}"
+        )
+        return
+
     markets = pred["markets"]
     confidence_data = pred["confidence"]
     safest = pred["safest"]
@@ -960,49 +1274,59 @@ def print_prediction(pred):
         f"({pred['league']})"
     )
 
-    if pred["is_live"]:
+    if pred.get("is_live"):
         print(
             f"  LIVE - "
-            f"{markets['minutes_elapsed']}' "
+            f"{markets.get('minutes_elapsed', '?')}' "
             f"(est. "
-            f"{markets['minutes_remaining_estimate']} "
+            f"{markets.get('minutes_remaining_estimate', '?')} "
             f"min remaining)"
         )
 
-        score = markets["current_score"]
+        score = markets.get(
+            "current_score",
+            {},
+        )
 
         print(
             f"  Current score: "
-            f"{score['home']} - "
-            f"{score['away']}"
+            f"{score.get('home', 0)} - "
+            f"{score.get('away', 0)}"
         )
 
-        additional = (
-            markets["expected_additional_goals"]
+        additional = markets.get(
+            "expected_additional_goals",
+            {},
         )
 
         print(
             f"  Expected additional goals: "
-            f"{additional['home']} - "
-            f"{additional['away']}"
+            f"{additional.get('home', 0):.2f} - "
+            f"{additional.get('away', 0):.2f}"
         )
 
     else:
-        expected = markets["expected_goals"]
+        expected = markets.get(
+            "expected_goals",
+            {},
+        )
 
         print(
             f"  Expected goals: "
-            f"{expected['home']} - "
-            f"{expected['away']}"
+            f"{expected.get('home', 0):.2f} - "
+            f"{expected.get('away', 0):.2f}"
         )
 
-    result = markets["match_result"]
+    result = markets.get(
+        "match_result",
+        {},
+    )
 
     print(
         f"  Win/Draw/Loss: "
-        f"Home {result['home_win']:.0%} | "
-        f"Draw {result['draw']:.0%} | "
-        f"Away {result['away_win']:.0%}"
+        f"Home {result.get('home_win', 0):.0%} | "
+        f"Draw {result.get('draw', 0):.0%} | "
+        f"Away {result.get('away_win', 0):.0%}"
     )
 
     over_under = markets.get(
@@ -1010,19 +1334,25 @@ def print_prediction(pred):
         {},
     )
 
-    if "over_2_5" in over_under:
+    if (
+        isinstance(over_under, dict)
+        and "over_2_5" in over_under
+        and "under_2_5" in over_under
+    ):
         print(
             f"  Over/Under 2.5: "
-            f"Over "
-            f"{over_under['over_2_5']:.0%} | "
-            f"Under "
-            f"{over_under['under_2_5']:.0%}"
+            f"Over {over_under['over_2_5']:.0%} | "
+            f"Under {over_under['under_2_5']:.0%}"
         )
 
-    btts = markets.get("btts", {})
+    btts = markets.get(
+        "btts",
+        {},
+    )
 
     if (
-        "yes" in btts
+        isinstance(btts, dict)
+        and "yes" in btts
         and "no" in btts
     ):
         print(
@@ -1036,10 +1366,10 @@ def print_prediction(pred):
     if isinstance(cards, dict):
         print(
             f"  Cards: "
-            f"Over {cards['over_line']}: "
-            f"{cards['over']:.0%} | "
+            f"Over {cards.get('over_line')}: "
+            f"{cards.get('over', 0):.0%} | "
             f"Under: "
-            f"{cards['under']:.0%}"
+            f"{cards.get('under', 0):.0%}"
         )
 
     scorelines = markets.get(
@@ -1047,23 +1377,24 @@ def print_prediction(pred):
         [],
     )
 
-    if scorelines:
+    if isinstance(scorelines, list) and scorelines:
         top = scorelines[0]
 
-        print(
-            f"  Top scoreline: "
-            f"{top['score']} "
-            f"({top['probability']:.0%})"
-        )
+        if isinstance(top, dict):
+            print(
+                f"  Top scoreline: "
+                f"{top.get('score')} "
+                f"({top.get('probability', 0):.0%})"
+            )
 
-    if confidence_data:
+    if isinstance(confidence_data, dict):
         print(
             f"  Confidence: "
-            f"{confidence_data['emoji']} "
-            f"{confidence_data['label']} "
+            f"{confidence_data.get('emoji', '')} "
+            f"{confidence_data.get('label', '')} "
             f"(pick: "
-            f"{confidence_data['top_pick']}, "
-            f"{confidence_data['top_probability']:.0%})"
+            f"{confidence_data.get('top_pick', '')}, "
+            f"{confidence_data.get('top_probability', 0):.0%})"
         )
 
     if safest:
@@ -1076,29 +1407,26 @@ def print_prediction(pred):
         "elo_cross_check"
     )
 
-    if elo_data:
+    if isinstance(elo_data, dict):
         print(
             f"  Elo pre-blend: "
-            f"Home {elo_data['home']:.0%} | "
-            f"Draw {elo_data['draw']:.0%} | "
-            f"Away {elo_data['away']:.0%}"
+            f"Home {elo_data.get('home', 0):.0%} | "
+            f"Draw {elo_data.get('draw', 0):.0%} | "
+            f"Away {elo_data.get('away', 0):.0%}"
         )
 
-    if pred.get("odds_comparison"):
-        odds = pred["odds_comparison"]
+    odds = pred.get(
+        "odds_comparison"
+    )
 
+    if isinstance(odds, dict):
         print(
             f"  Market odds: "
-            f"Home "
-            f"{odds.get('implied_home_win', 0):.0%} | "
-            f"Draw "
-            f"{odds.get('implied_draw', 0):.0%} | "
-            f"Away "
-            f"{odds.get('implied_away_win', 0):.0%}"
-        )
-
-
-# ----------------------------------------------------------------------
+            f"Home {odds.get('implied_home_win', 0):.0%} | "
+            f"Draw {odds.get('implied_draw', 0):.0%} | "
+            f"Away {odds.get('implied_away_win', 0):.0%}"
+)
+        # ----------------------------------------------------------------------
 # Football daily prediction
 # ----------------------------------------------------------------------
 
@@ -1108,6 +1436,12 @@ def run_daily(
     limit=None,
     fetch_odds=False,
 ):
+    """
+    Generate and persist football predictions for a date.
+
+    Only configured leagues are allowed. Finished fixtures are excluded.
+    Predictions with insufficient validated data are not persisted.
+    """
     validate_date_string(date_str)
     validate_positive_int(limit, "limit")
     validate_allowed_league(league_id)
@@ -1119,7 +1453,8 @@ def run_daily(
         league_id,
     )
 
-    # Always enforce the configured allow-list.
+    # Enforce the configured league allow-list even when the API
+    # returns more leagues than requested.
     fixtures = [
         fixture
         for fixture in fixtures or []
@@ -1127,6 +1462,7 @@ def run_daily(
         in config.ALLOWED_LEAGUE_IDS
     ]
 
+    # Do not create a new prediction for an already-finished fixture.
     fixtures = [
         fixture
         for fixture in fixtures
@@ -1154,6 +1490,7 @@ def run_daily(
 
     predicted_count = 0
     skipped_no_data = 0
+    skipped_errors = 0
     quota_hit = False
 
     for fixture in fixtures:
@@ -1179,17 +1516,21 @@ def run_daily(
             ):
                 continue
 
-            if not isinstance(
-                season,
-                int,
+            if (
+                isinstance(season, bool)
+                or not isinstance(season, int)
+                or season < 1900
             ):
+                print(
+                    "  Skipped a fixture: "
+                    "invalid league season."
+                )
+                skipped_errors += 1
                 continue
 
-            league_avg = (
-                get_league_avg_goals(
-                    league_id_value,
-                    season,
-                )
+            league_avg = get_league_avg_goals(
+                league_id_value,
+                season,
             )
 
             prediction = predict_fixture(
@@ -1198,9 +1539,7 @@ def run_daily(
                 fetch_odds=fetch_odds,
             )
 
-            if prediction[
-                "insufficient_data"
-            ]:
+            if prediction["insufficient_data"]:
                 print(
                     f"\n{prediction['home_team']} "
                     f"vs "
@@ -1216,38 +1555,18 @@ def run_daily(
                 skipped_no_data += 1
                 continue
 
-            print_prediction(
-                prediction
-            )
+            print_prediction(prediction)
 
             storage.save_prediction(
-                fixture_id=prediction[
-                    "fixture_id"
-                ],
-                match_date=prediction[
-                    "date"
-                ],
-                home_team=prediction[
-                    "home_team"
-                ],
-                away_team=prediction[
-                    "away_team"
-                ],
-                league=prediction[
-                    "league"
-                ],
-                markets=prediction[
-                    "markets"
-                ],
-                confidence=prediction[
-                    "confidence"
-                ],
-                home_team_id=prediction[
-                    "home_team_id"
-                ],
-                away_team_id=prediction[
-                    "away_team_id"
-                ],
+                fixture_id=prediction["fixture_id"],
+                match_date=prediction["date"],
+                home_team=prediction["home_team"],
+                away_team=prediction["away_team"],
+                league=prediction["league"],
+                markets=prediction["markets"],
+                confidence=prediction["confidence"],
+                home_team_id=prediction["home_team_id"],
+                away_team_id=prediction["away_team_id"],
                 odds_comparison=prediction.get(
                     "odds_comparison"
                 ),
@@ -1268,25 +1587,61 @@ def run_daily(
             else:
                 print(
                     f"  Skipped a fixture due "
-                    f"to an API error: {exc}"
+                    f"to an HTTP API error: {exc}"
                 )
+                skipped_errors += 1
 
         except requests.exceptions.RequestException as exc:
             print(
                 f"  Skipped a fixture due "
                 f"to a request error: {exc}"
             )
+            skipped_errors += 1
+
+        except RuntimeError as exc:
+            # api_football.py converts API-level errors into RuntimeError.
+            # Handle them per fixture so one bad API response does not
+            # destroy the entire daily prediction run.
+            message = str(exc)
+
+            if "429" in message or "quota" in message.lower():
+                print(
+                    "  Daily API quota appears exhausted."
+                )
+                quota_hit = True
+            else:
+                print(
+                    f"  Skipped a fixture due "
+                    f"to an API/data error: {exc}"
+                )
+
+            skipped_errors += 1
 
     print(
         f"\nSuccessfully predicted "
         f"{predicted_count} of "
-        f"{len(fixtures)} fixture(s) "
-        f"({skipped_no_data} skipped due "
-        f"to insufficient data)."
+        f"{len(fixtures)} fixture(s)."
     )
+
+    if skipped_no_data:
+        print(
+            f"Skipped {skipped_no_data} "
+            f"fixture(s) due to insufficient data."
+        )
+
+    if skipped_errors:
+        print(
+            f"Skipped {skipped_errors} "
+            f"fixture(s) due to errors."
+        )
 
 
 def run_grading():
+    """
+    Grade all pending football predictions whose fixtures have finished.
+
+    storage.record_result() is responsible for idempotency and Elo updates.
+    """
     storage.init_db()
 
     pending = storage.get_pending_fixtures()
@@ -1298,6 +1653,7 @@ def run_grading():
         return
 
     graded_count = 0
+    skipped_count = 0
     quota_hit = False
 
     for (
@@ -1311,39 +1667,60 @@ def run_grading():
             break
 
         try:
-            result = (
-                api_football.get_fixture_result(
-                    fixture_id
-                )
+            result = api_football.get_fixture_result(
+                fixture_id
             )
 
-            if (
-                not result
-                or result["fixture"]["status"]["short"]
-                != "FT"
-            ):
+            if not result:
+                skipped_count += 1
                 continue
 
-            home_goals = result["goals"]["home"]
-            away_goals = result["goals"]["away"]
+            status_short = (
+                result
+                .get("fixture", {})
+                .get("status", {})
+                .get("short")
+            )
+
+            # Only final results are graded.
+            if status_short not in {
+                "FT",
+                "AET",
+                "PEN",
+            }:
+                skipped_count += 1
+                continue
+
+            home_goals = (
+                result
+                .get("goals", {})
+                .get("home")
+            )
+
+            away_goals = (
+                result
+                .get("goals", {})
+                .get("away")
+            )
 
             if (
                 not _valid_goal(home_goals)
                 or not _valid_goal(away_goals)
             ):
+                skipped_count += 1
                 continue
 
             storage.record_result(
                 fixture_id,
-                home_goals,
-                away_goals,
+                int(home_goals),
+                int(away_goals),
             )
 
             print(
                 f"Graded: "
                 f"{home_team} "
-                f"{home_goals}-"
-                f"{away_goals} "
+                f"{int(home_goals)}-"
+                f"{int(away_goals)} "
                 f"{away_team}"
             )
 
@@ -1365,6 +1742,7 @@ def run_grading():
                     f"{home_team} vs "
                     f"{away_team}: {exc}"
                 )
+                skipped_count += 1
 
         except requests.exceptions.RequestException as exc:
             print(
@@ -1372,11 +1750,26 @@ def run_grading():
                 f"{home_team} vs "
                 f"{away_team}: {exc}"
             )
+            skipped_count += 1
+
+        except RuntimeError as exc:
+            print(
+                f"Could not grade "
+                f"{home_team} vs "
+                f"{away_team}: {exc}"
+            )
+            skipped_count += 1
 
     print(
         f"\nGraded {graded_count} of "
         f"{len(pending)} pending fixture(s)."
     )
+
+    if skipped_count:
+        print(
+            f"Skipped {skipped_count} "
+            f"fixture(s) that were not ready or valid."
+        )
 
 
 # ----------------------------------------------------------------------
@@ -1484,13 +1877,9 @@ def run_backtest_command(
     )
 
     if league_id is None:
-        league_id = (
-            config.ALLOWED_LEAGUE_IDS[0]
-        )
+        league_id = config.ALLOWED_LEAGUE_IDS[0]
 
-    validate_allowed_league(
-        league_id
-    )
+    validate_allowed_league(league_id)
 
     if season is None:
         season = (
@@ -1552,9 +1941,7 @@ def run_backtest_command(
 
 
 def run_find_league(name):
-    results = api_football.search_leagues(
-        name
-    )
+    results = api_football.search_leagues(name)
 
     if not results:
         print(
@@ -1568,7 +1955,7 @@ def run_find_league(name):
     )
 
     for result in results:
-        league = result["league"]
+        league = result.get("league", {})
         country = result.get(
             "country",
             {},
@@ -1577,22 +1964,21 @@ def run_find_league(name):
             "",
         )
 
+        if not league:
+            continue
+
         print(
-            f"  ID {league['id']}: "
-            f"{league['name']} "
+            f"  ID {league.get('id')}: "
+            f"{league.get('name')} "
             f"({country})"
         )
 
 
 def run_check_coverage(league_id):
-    validate_allowed_league(
-        league_id
-    )
+    validate_allowed_league(league_id)
 
-    seasons = (
-        api_football.get_league_coverage(
-            league_id
-        )
+    seasons = api_football.get_league_coverage(
+        league_id
     )
 
     if not seasons:
@@ -1636,6 +2022,15 @@ def run_raw_debug(
     league_id,
     season,
 ):
+    if (
+        isinstance(season, bool)
+        or not isinstance(season, int)
+        or season < 1900
+    ):
+        raise ValueError(
+            "season must be a valid integer year."
+        )
+
     data = api_football.raw_debug_call(
         "fixtures",
         {
@@ -1685,24 +2080,24 @@ def run_daily_basketball(
 
     storage.init_basketball_db()
 
-    games = (
-        basketball_api.get_games_by_date(
-            date_str,
-            config.ALLOWED_BASKETBALL_LEAGUE_IDS[
-                0
-            ],
-        )
+    league_id = (
+        config.ALLOWED_BASKETBALL_LEAGUE_IDS[0]
+    )
+
+    games = basketball_api.get_games_by_date(
+        date_str,
+        league_id,
     )
 
     games = [
         game
         for game in games or []
-        if game.get(
-            "status",
-            {},
-        ).get("short")
+        if game.get("status", {}).get("short")
         not in BASKETBALL_FINISHED_STATUSES
     ]
+
+    if limit is not None:
+        games = games[:limit]
 
     if not games:
         print(
@@ -1710,9 +2105,6 @@ def run_daily_basketball(
             f"for {date_str}."
         )
         return
-
-    if limit is not None:
-        games = games[:limit]
 
     print(
         f"Found {len(games)} "
@@ -1722,6 +2114,7 @@ def run_daily_basketball(
 
     quota_hit = False
     predicted_count = 0
+    skipped_count = 0
 
     for game in games:
         if quota_hit:
@@ -1733,6 +2126,12 @@ def run_daily_basketball(
                     game
                 )
             )
+
+            if not isinstance(prediction, dict):
+                raise RuntimeError(
+                    "Basketball model returned "
+                    "an invalid prediction object."
+                )
 
             basketball_model.print_prediction(
                 prediction
@@ -1765,18 +2164,33 @@ def run_daily_basketball(
                     f"  Skipped a game due "
                     f"to an API error: {exc}"
                 )
+                skipped_count += 1
 
         except requests.exceptions.RequestException as exc:
             print(
                 f"  Skipped a game due "
                 f"to a request error: {exc}"
             )
+            skipped_count += 1
+
+        except RuntimeError as exc:
+            print(
+                f"  Skipped a game due "
+                f"to a model/API error: {exc}"
+            )
+            skipped_count += 1
 
     print(
         f"\nSuccessfully predicted "
         f"{predicted_count} of "
         f"{len(games)} game(s)."
     )
+
+    if skipped_count:
+        print(
+            f"Skipped {skipped_count} "
+            f"game(s) due to errors."
+        )
 
 
 def run_grading_basketball():
@@ -1794,6 +2208,7 @@ def run_grading_basketball():
         return
 
     graded_count = 0
+    skipped_count = 0
     quota_hit = False
 
     for (
@@ -1813,43 +2228,55 @@ def run_grading_basketball():
                 )
             )
 
-            if (
-                not result
-                or result.get(
-                    "status",
-                    {},
-                ).get("short")
-                != "FT"
-            ):
+            if not result:
+                skipped_count += 1
+                continue
+
+            status_short = (
+                result
+                .get("status", {})
+                .get("short")
+            )
+
+            if status_short not in {
+                "FT",
+                "AOT",
+            }:
+                skipped_count += 1
                 continue
 
             home_points = (
-                result["scores"]
-                ["home"]["total"]
+                result
+                .get("scores", {})
+                .get("home", {})
+                .get("total")
             )
 
             away_points = (
-                result["scores"]
-                ["away"]["total"]
+                result
+                .get("scores", {})
+                .get("away", {})
+                .get("total")
             )
 
             if (
                 not _valid_goal(home_points)
                 or not _valid_goal(away_points)
             ):
+                skipped_count += 1
                 continue
 
             storage.record_basketball_result(
                 game_id,
-                home_points,
-                away_points,
+                int(home_points),
+                int(away_points),
             )
 
             print(
                 f"Graded: "
                 f"{home_team} "
-                f"{home_points}-"
-                f"{away_points} "
+                f"{int(home_points)}-"
+                f"{int(away_points)} "
                 f"{away_team}"
             )
 
@@ -1871,6 +2298,7 @@ def run_grading_basketball():
                     f"{home_team} vs "
                     f"{away_team}: {exc}"
                 )
+                skipped_count += 1
 
         except requests.exceptions.RequestException as exc:
             print(
@@ -1878,11 +2306,26 @@ def run_grading_basketball():
                 f"{home_team} vs "
                 f"{away_team}: {exc}"
             )
+            skipped_count += 1
+
+        except RuntimeError as exc:
+            print(
+                f"Could not grade "
+                f"{home_team} vs "
+                f"{away_team}: {exc}"
+            )
+            skipped_count += 1
 
     print(
         f"\nGraded {graded_count} of "
         f"{len(pending)} pending game(s)."
     )
+
+    if skipped_count:
+        print(
+            f"Skipped {skipped_count} "
+            f"game(s) that were not ready or valid."
+        )
 
 
 def run_accuracy_report_basketball():
@@ -1925,10 +2368,8 @@ def run_accuracy_report_basketball():
             f"  {label}: "
             f"{stats['accuracy']:.1%} "
             f"({stats['count']} predictions)"
-        )
-
-
-# ----------------------------------------------------------------------
+            )
+        # ----------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------
 
@@ -1971,20 +2412,19 @@ def build_parser():
     parser.add_argument(
         "--grade",
         action="store_true",
+        help="Grade completed predictions.",
     )
 
     parser.add_argument(
         "--accuracy",
         action="store_true",
+        help="Show prediction accuracy.",
     )
 
     parser.add_argument(
         "--cleanup",
         action="store_true",
-        help=(
-            "Request cleanup. "
-            "Deletion requires --confirm-cleanup."
-        ),
+        help="Request prediction cleanup.",
     )
 
     parser.add_argument(
@@ -2045,42 +2485,39 @@ def main():
     args = parser.parse_args()
 
     try:
-        validate_positive_int(
-            args.limit,
-            "limit",
-        )
+        # Validate numeric CLI arguments before dispatch.
+        if args.limit is not None:
+            validate_positive_int(
+                args.limit,
+                "limit",
+            )
 
-        validate_positive_int(
-            args.sample,
-            "sample",
-        )
+        if args.sample is not None:
+            validate_positive_int(
+                args.sample,
+                "sample",
+            )
 
         if args.date is not None:
-            validate_date_string(
-                args.date
-            )
+            validate_date_string(args.date)
 
-        if (
-            args.league is not None
-            and args.sport == "football"
-        ):
-            validate_allowed_league(
-                args.league
-            )
+        # --------------------------------------------------------------
+        # Informational commands
+        # --------------------------------------------------------------
 
         if args.find_league:
-            run_find_league(
-                args.find_league
-            )
+            run_find_league(args.find_league)
             return 0
 
         if args.check_coverage is not None:
             validate_allowed_league(
                 args.check_coverage
             )
+
             run_check_coverage(
                 args.check_coverage
             )
+
             return 0
 
         if args.raw_debug:
@@ -2090,9 +2527,7 @@ def main():
                 else config.ALLOWED_LEAGUE_IDS[0]
             )
 
-            validate_allowed_league(
-                league_id
-            )
+            validate_allowed_league(league_id)
 
             season = (
                 args.season
@@ -2100,58 +2535,148 @@ def main():
                 else (
                     datetime.now(
                         timezone.utc
-                    ).year
-                    - 1
+                    ).year - 1
                 )
             )
+
+            if (
+                isinstance(season, bool)
+                or not isinstance(season, int)
+                or season < 1900
+            ):
+                raise ValueError(
+                    "season must be a valid integer year."
+                )
 
             run_raw_debug(
                 league_id,
                 season,
             )
+
             return 0
+
+        # --------------------------------------------------------------
+        # Basketball
+        # --------------------------------------------------------------
 
         if args.sport == "basketball":
+
+            # Basketball does not use football league validation.
+            if args.league is not None:
+                raise ValueError(
+                    "--league is only valid for football."
+                )
+
+            if args.league_name is not None:
+                raise ValueError(
+                    "--league-name is only valid for football."
+                )
+
+            if args.with_odds:
+                print(
+                    "Basketball odds comparison is not "
+                    "enabled by the current basketball model."
+                )
+
+            if args.backtest:
+                raise ValueError(
+                    "Basketball backtesting is not "
+                    "available through this CLI."
+                )
+
+            if args.cleanup:
+                raise ValueError(
+                    "Cleanup is currently a football "
+                    "prediction database operation."
+                )
+
             if args.grade:
                 run_grading_basketball()
+                return 0
 
-            elif args.accuracy:
+            if args.accuracy:
                 run_accuracy_report_basketball()
+                return 0
 
-            else:
-                date_str = (
-                    args.date
-                    or datetime.now(
-                        timezone.utc
-                    ).strftime("%Y-%m-%d")
-                )
+            date_str = (
+                args.date
+                or datetime.now(
+                    timezone.utc
+                ).strftime("%Y-%m-%d")
+            )
 
-                validate_date_string(
-                    date_str
-                )
+            validate_date_string(date_str)
 
-                run_daily_basketball(
-                    date_str,
-                    args.limit,
-                )
+            run_daily_basketball(
+                date_str,
+                args.limit,
+            )
 
             return 0
 
+        # --------------------------------------------------------------
+        # Football
+        # --------------------------------------------------------------
+
         if args.grade:
+            if (
+                args.date is not None
+                or args.limit is not None
+                or args.with_odds
+                or args.backtest
+            ):
+                raise ValueError(
+                    "--grade cannot be combined with "
+                    "date, limit, odds, or backtest options."
+                )
+
             run_grading()
             return 0
 
         if args.accuracy:
+            if (
+                args.date is not None
+                or args.limit is not None
+                or args.with_odds
+                or args.backtest
+            ):
+                raise ValueError(
+                    "--accuracy cannot be combined with "
+                    "date, limit, odds, or backtest options."
+                )
+
             run_accuracy_report()
             return 0
 
         if args.cleanup:
+            if (
+                args.date is not None
+                or args.limit is not None
+                or args.with_odds
+                or args.backtest
+            ):
+                raise ValueError(
+                    "--cleanup cannot be combined with "
+                    "prediction-generation options."
+                )
+
             run_cleanup(
                 confirm=args.confirm_cleanup
             )
+
             return 0
 
         if args.backtest:
+            if (
+                args.date is not None
+                or args.limit is not None
+                or args.with_odds
+            ):
+                raise ValueError(
+                    "--backtest cannot be combined with "
+                    "date, limit, or odds options."
+                )
+
             league_id = resolve_league_id(
                 args.league,
                 args.league_name,
@@ -2167,7 +2692,17 @@ def main():
                 args.season,
                 args.sample,
             )
+
             return 0
+
+        # --------------------------------------------------------------
+        # Normal football prediction path
+        # --------------------------------------------------------------
+
+        if args.confirm_cleanup:
+            raise ValueError(
+                "--confirm-cleanup requires --cleanup."
+            )
 
         date_str = (
             args.date
@@ -2176,9 +2711,7 @@ def main():
             ).strftime("%Y-%m-%d")
         )
 
-        validate_date_string(
-            date_str
-        )
+        validate_date_string(date_str)
 
         league_id = resolve_league_id(
             args.league,
@@ -2212,6 +2745,13 @@ def main():
             file=sys.stderr,
         )
         return 1
+
+    except KeyboardInterrupt:
+        print(
+            "\nOperation cancelled.",
+            file=sys.stderr,
+        )
+        return 130
 
 
 if __name__ == "__main__":
