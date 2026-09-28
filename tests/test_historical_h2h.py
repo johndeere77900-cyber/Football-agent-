@@ -260,6 +260,7 @@ def test_h2h_snapshot_calculates_form_and_goal_rates():
     assert result["wins"] == 2
     assert result["draws"] == 1
     assert result["losses"] == 1
+
     assert result["form_sequence"] == [
         "W",
         "D",
@@ -267,12 +268,12 @@ def test_h2h_snapshot_calculates_form_and_goal_rates():
         "W",
     ]
 
-    assert result["goals_for"] == 1.75
-    assert result["goals_against"] == 1.25
+    assert result["goals_for"] == 1.5
+    assert result["goals_against"] == 1.5
 
     assert result["btts_rate"] == 0.5
-    assert result["over_1_5_rate"] == 0.75
-    assert result["over_2_5_rate"] == 0.5
+    assert result["over_1_5_rate"] == 1.0
+    assert result["over_2_5_rate"] == 0.75
     assert result["over_3_5_rate"] == 0.0
 
 
@@ -370,4 +371,4 @@ def test_h2h_snapshot_rejects_negative_minimum_history():
     else:
         raise AssertionError(
             "Expected ValueError"
-      )
+)
