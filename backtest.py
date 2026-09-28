@@ -519,7 +519,7 @@ def _grade_prediction_markets(
         .get("goals", {})
         .get("away"),
         )
-        if not isinstance(prediction_markets, dict):
+  if not isinstance(prediction_markets, dict):
         return {}
 
     graded: Dict[str, Any] = {}
