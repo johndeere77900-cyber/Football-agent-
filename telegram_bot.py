@@ -1049,10 +1049,11 @@ def research_football(
                 fetch_odds,
             )
 
-        except (
+      except (
             KeyError,
             TypeError,
             ValueError,
+            RuntimeError,
             requests.RequestException,
         ) as exc:
             print(
