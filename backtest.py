@@ -727,7 +727,6 @@ def _pick_binary_line(
     prediction_markets,
     fixture,
 ):
-    """
     Grade every probability distribution produced by prediction_engine.
 
     This grades selected outcomes while retaining the complete original
