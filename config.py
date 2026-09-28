@@ -23,24 +23,22 @@ SEASON_WEIGHT = 0.40
 RECENT_FORM_WEIGHT = 0.45
 HEAD_TO_HEAD_WEIGHT = 0.15
 
-# How much Elo's independent rating-based view gets blended into the
-# final match-result probabilities, on top of the above.
+# How much Elo's independent view gets blended into the final
+# match-result probabilities.
 ELO_BLEND_WEIGHT = 0.15
 
-# Dixon-Coles low-score correction factor - a standard adjustment used in
-# public football models to fix plain Poisson's known tendency to slightly
-# misjudge 0-0, 1-0, 0-1, and 1-1 outcomes. -0.13 is a commonly cited value.
+# Dixon-Coles low-score correction factor.
 DIXON_COLES_RHO = -0.13
 
 MAX_GOALS_GRID = 10
 
-# Home advantage multipliers
-HOME_ADVANTAGE_MULTIPLIER = 1.30
+# Home advantage multipliers. Home/away ratio is about 1.27 and the two
+# average to 1.0, so total goals are not inflated.
+HOME_ADVANTAGE_MULTIPLIER = 1.12
 AWAY_DISADVANTAGE_MULTIPLIER = 0.88
 
 # Fallback per-league averages, used only when live standings data isn't
-# available yet (e.g. very early season, or a competition with no
-# standings endpoint like some international tournaments).
+# available.
 LEAGUE_AVG_GOALS = {
     39: 1.40, 140: 1.30, 135: 1.35, 78: 1.55, 61: 1.35,
     2: 1.40, 3: 1.35, 5: 1.30, 1: 1.30, 4: 1.30,
