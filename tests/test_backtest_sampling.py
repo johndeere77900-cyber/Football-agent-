@@ -1,3 +1,5 @@
+import random
+
 import pytest
 
 import backtest
@@ -137,13 +139,14 @@ def test_sampling_rejects_boolean_sample_size():
 
 
 def test_sampling_does_not_change_global_random_state():
-    import random
+    random.seed(12345)
+
+    expected_first = random.random()
+    expected_second = random.random()
 
     random.seed(12345)
 
     before = random.random()
-
-    random.seed(12345)
 
     backtest._sample_backtest_candidates(
         make_candidates(100),
@@ -153,9 +156,5 @@ def test_sampling_does_not_change_global_random_state():
 
     after = random.random()
 
-    random.seed(12345)
-    expected_before = random.random()
-    expected_after = random.random()
-
-    assert before == expected_before
-    assert after == expected_after
+    assert before == expected_first
+    assert after == expected_second
