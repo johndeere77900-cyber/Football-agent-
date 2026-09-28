@@ -35,31 +35,59 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Check Telegram credentials
+      - name: Validate external API credentials
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
+          set -euo pipefail
+
           missing=""
 
-          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-            missing="TELEGRAM_BOT_TOKEN"
-          fi
-
-          if [ -z "$TELEGRAM_CHAT_ID" ]; then
-            if [ -n "$missing" ]; then
-              missing="$missing, TELEGRAM_CHAT_ID"
-            else
-              missing="TELEGRAM_CHAT_ID"
-            fi
-          fi
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && missing="$missing TELEGRAM_BOT_TOKEN"
+          [ -z "$TELEGRAM_CHAT_ID" ] && missing="$missing TELEGRAM_CHAT_ID"
+          [ -z "$API_FOOTBALL_KEY" ] && missing="$missing API_FOOTBALL_KEY"
 
           if [ -n "$missing" ]; then
-            echo "::error::Missing repository secret(s): $missing"
+            echo "::error::Missing required secret(s):$missing"
             exit 1
           fi
 
-          echo "Telegram credentials are present."
+          echo "Required credentials are present."
+
+          echo "Checking Telegram token..."
+
+          telegram_response="$(
+            curl -sS \
+              --fail-with-body \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"
+          )"
+
+          if ! echo "$telegram_response" | jq -e '.ok == true' >/dev/null; then
+            echo "::error::Telegram token validation failed."
+            echo "$telegram_response" | jq '{ok,error_code,description}' || true
+            exit 1
+          fi
+
+          echo "Telegram token is valid."
+
+          echo "Checking API-Football token..."
+
+          football_response="$(
+            curl -sS \
+              -H "x-apisports-key: ${API_FOOTBALL_KEY}" \
+              "https://v3.football.api-sports.io/status"
+          )"
+
+          if ! echo "$football_response" | jq -e '.response.account' >/dev/null; then
+            echo "::error::API-Football credential/status validation failed."
+            echo "$football_response" | jq '{get,errors,response}' || true
+            exit 1
+          fi
+
+          echo "API-Football credential is accepted."
 
       - name: Process Telegram message
         env:
@@ -92,6 +120,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram failure report skipped because credentials are unavailable."
+            exit 0
+          fi
+
           curl -sS -X POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
