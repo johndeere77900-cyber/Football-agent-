@@ -5,8 +5,10 @@ Configuration for the football and basketball prediction agent.
 import os
 
 # --- API Keys -------------------------------------------------------------
-API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "PUT_YOUR_API_FOOTBALL_KEY_HERE")
-ODDS_API_KEY = os.environ.get("ODDS_API_KEY", "PUT_YOUR_ODDS_API_KEY_HERE")
+# Credentials must be supplied through the runtime environment.
+# GitHub Actions is responsible for validating required credentials.
+API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
+ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
 
 # --- API endpoints ----------------------------------------------------------
 API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io"
@@ -74,9 +76,13 @@ LEAGUE_NAME_TO_ID = {
 }
 
 LEAGUE_ID_TO_ODDS_SPORT_KEY = {
-    39: "soccer_epl", 140: "soccer_spain_la_liga", 135: "soccer_italy_serie_a",
-    78: "soccer_germany_bundesliga", 61: "soccer_france_ligue_one",
-    2: "soccer_uefa_champs_league", 3: "soccer_uefa_europa_league",
+    39: "soccer_epl",
+    140: "soccer_spain_la_liga",
+    135: "soccer_italy_serie_a",
+    78: "soccer_germany_bundesliga",
+    61: "soccer_france_ligue_one",
+    2: "soccer_uefa_champs_league",
+    3: "soccer_uefa_europa_league",
     1: "soccer_fifa_world_cup",
 }
 
