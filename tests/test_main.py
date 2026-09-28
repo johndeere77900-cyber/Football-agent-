@@ -137,9 +137,7 @@ def h2h_matches():
     ]
 
 
-def patch_prediction_dependencies(
-    monkeypatch,
-):
+def patch_prediction_dependencies(monkeypatch):
     monkeypatch.setattr(
         main.api_football,
         "get_team_statistics",
@@ -167,6 +165,10 @@ def patch_prediction_dependencies(
         lambda team_id: 1500.0,
     )
 
+
+# ----------------------------------------------------------------------
+# Prediction engine / production path
+# ----------------------------------------------------------------------
 
 def test_predict_fixture_uses_shared_prediction_engine(
     monkeypatch,
@@ -519,6 +521,78 @@ def test_odds_are_only_fetched_when_requested(
     assert len(calls) == 1
 
 
+# ----------------------------------------------------------------------
+# Card-data integrity
+# ----------------------------------------------------------------------
+
+def test_missing_card_data_does_not_create_fabricated_cards_market(
+    monkeypatch,
+    football_fixture,
+):
+    patch_prediction_dependencies(
+        monkeypatch
+    )
+
+    def stats_without_cards():
+        stats = team_stats()
+        stats.pop("cards")
+        return stats
+
+    monkeypatch.setattr(
+        main.api_football,
+        "get_team_statistics",
+        lambda team_id, league_id, season:
+        stats_without_cards(),
+    )
+
+    result = main.predict_fixture(
+        football_fixture,
+        1.35,
+    )
+
+    assert (
+        "cards"
+        not in result["markets"]
+    )
+
+
+def test_estimate_avg_cards_returns_none_when_missing():
+    stats = team_stats()
+    stats.pop("cards")
+
+    assert (
+        main._estimate_avg_cards(stats)
+        is None
+    )
+
+
+def test_estimate_avg_cards_returns_observed_average():
+    result = main._estimate_avg_cards(
+        team_stats()
+    )
+
+    assert result == pytest.approx(
+        0.9
+    )
+
+
+def test_estimate_avg_cards_rejects_invalid_values():
+    stats = team_stats()
+
+    stats["cards"]["yellow"]["0-15"][
+        "total"
+    ] = -1
+
+    assert (
+        main._estimate_avg_cards(stats)
+        is None
+    )
+
+
+# ----------------------------------------------------------------------
+# Safest candidates
+# ----------------------------------------------------------------------
+
 def test_safest_candidates_include_all_generated_goal_markets():
     markets = {
         "match_result": {
@@ -584,3 +658,286 @@ def test_safest_candidates_include_all_generated_goal_markets():
     assert "Home Over 2 5" in labels
     assert "Away Under 2 5" in labels
     assert "Over 3.5 Cards" in labels
+
+
+# ----------------------------------------------------------------------
+# CLI validation
+# ----------------------------------------------------------------------
+
+def test_validate_date_string_accepts_valid_date():
+    assert (
+        main.validate_date_string(
+            "2026-09-28"
+        )
+        == "2026-09-28"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "2026-9-28",
+        "28-09-2026",
+        "2026-02-30",
+        "not-a-date",
+    ],
+)
+def test_validate_date_string_rejects_invalid_dates(
+    value,
+):
+    with pytest.raises(ValueError):
+        main.validate_date_string(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        0,
+        -1,
+        -10,
+        True,
+        False,
+    ],
+)
+def test_validate_positive_int_rejects_non_positive_values(
+    value,
+):
+    with pytest.raises(ValueError):
+        main.validate_positive_int(
+            value,
+            "limit",
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        1,
+        5,
+        20,
+    ],
+)
+def test_validate_positive_int_accepts_positive_values(
+    value,
+):
+    assert (
+        main.validate_positive_int(
+            value,
+            "limit",
+        )
+        == value
+    )
+
+
+def test_validate_allowed_league_accepts_configured_league():
+    league_id = (
+        config.ALLOWED_LEAGUE_IDS[0]
+    )
+
+    assert (
+        main.validate_allowed_league(
+            league_id
+        )
+        == league_id
+    )
+
+
+def test_validate_allowed_league_rejects_unconfigured_league():
+    disallowed = next(
+        (
+            value
+            for value in range(1, 1000)
+            if value
+            not in config.ALLOWED_LEAGUE_IDS
+        ),
+        None,
+    )
+
+    assert disallowed is not None
+
+    with pytest.raises(ValueError):
+        main.validate_allowed_league(
+            disallowed
+        )
+
+
+def test_run_daily_rejects_disallowed_explicit_league(
+    monkeypatch,
+):
+    called = {
+        "api": False,
+    }
+
+    def fail_if_called(*args, **kwargs):
+        called["api"] = True
+        raise AssertionError(
+            "Fixture API should not be called "
+            "for a disallowed league."
+        )
+
+    monkeypatch.setattr(
+        main.api_football,
+        "get_fixtures_by_date",
+        fail_if_called,
+    )
+
+    with pytest.raises(ValueError):
+        main.run_daily(
+            "2026-09-28",
+            league_id=999999,
+        )
+
+    assert called["api"] is False
+
+
+def test_run_daily_rejects_invalid_date(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        main.storage,
+        "init_db",
+        lambda: None,
+    )
+
+    with pytest.raises(ValueError):
+        main.run_daily(
+            "2026-02-30"
+        )
+
+
+def test_run_daily_rejects_non_positive_limit(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        main.storage,
+        "init_db",
+        lambda: None,
+    )
+
+    with pytest.raises(ValueError):
+        main.run_daily(
+            "2026-09-28",
+            limit=0,
+        )
+
+
+def test_run_daily_does_not_hide_programming_errors(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        main.storage,
+        "init_db",
+        lambda: None,
+    )
+
+    monkeypatch.setattr(
+        main.api_football,
+        "get_fixtures_by_date",
+        lambda *args: [
+            {
+                "fixture": {
+                    "id": 123,
+                    "status": {
+                        "short": "NS",
+                    },
+                },
+                "league": {
+                    "id": config.ALLOWED_LEAGUE_IDS[0],
+                    "season": 2026,
+                },
+                "teams": {
+                    "home": {
+                        "id": 1,
+                        "name": "Home",
+                    },
+                    "away": {
+                        "id": 2,
+                        "name": "Away",
+                    },
+                },
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        main,
+        "get_league_avg_goals",
+        lambda *args: 1.35,
+    )
+
+    def programming_error(*args, **kwargs):
+        raise RuntimeError(
+            "unexpected programming failure"
+        )
+
+    monkeypatch.setattr(
+        main,
+        "predict_fixture",
+        programming_error,
+    )
+
+    with pytest.raises(RuntimeError):
+        main.run_daily(
+            "2026-09-28"
+        )
+
+
+# ----------------------------------------------------------------------
+# Cleanup safety
+# ----------------------------------------------------------------------
+
+def test_cleanup_requires_explicit_confirmation(
+    monkeypatch,
+):
+    called = {
+        "cleanup": False,
+    }
+
+    monkeypatch.setattr(
+        main.storage,
+        "init_db",
+        lambda: None,
+    )
+
+    def cleanup(*args, **kwargs):
+        called["cleanup"] = True
+        return 1, 1
+
+    monkeypatch.setattr(
+        main.storage,
+        "cleanup_non_target_leagues",
+        cleanup,
+    )
+
+    main.run_cleanup(confirm=False)
+
+    assert called["cleanup"] is False
+
+
+def test_cleanup_runs_only_after_confirmation(
+    monkeypatch,
+):
+    called = {
+        "cleanup": False,
+    }
+
+    monkeypatch.setattr(
+        main.storage,
+        "init_db",
+        lambda: None,
+    )
+
+    def cleanup(*args, **kwargs):
+        called["cleanup"] = True
+        return 1, 2
+
+    monkeypatch.setattr(
+        main.storage,
+        "cleanup_non_target_leagues",
+        cleanup,
+    )
+
+    main.run_cleanup(confirm=True)
+
+    assert called["cleanup"] is True
