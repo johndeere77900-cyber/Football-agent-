@@ -691,7 +691,7 @@ def build_football_safest_candidates(markets):
 
     return candidates
     
-    def _insufficient_prediction(
+def _insufficient_prediction(
     fixture,
     is_live,
 ):
