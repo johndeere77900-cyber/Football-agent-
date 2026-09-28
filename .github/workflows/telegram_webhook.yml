@@ -98,18 +98,22 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: python3 telegram_bot.py
 
-      - name: Save bot memory
+      - name: Save bot state
         if: always()
         run: |
+          set -euo pipefail
+
           git config user.name "football-agent-bot"
           git config user.email "actions@github.com"
 
-          git add telegram_memory.json 2>/dev/null || true
+          # Persist conversation memory and prediction history
+          # between GitHub Actions runs.
+          git add telegram_memory.json predictions.db 2>/dev/null || true
 
           if git diff --staged --quiet; then
-            echo "No memory changes to commit."
+            echo "No persistent state changes to commit."
           else
-            git commit -m "Telegram memory update"
+            git commit -m "Persist bot state"
             git push
           fi
 
