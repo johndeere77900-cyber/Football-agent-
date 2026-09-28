@@ -9,22 +9,27 @@ on:
         default: 'backtest'
         type: choice
         options:
+          - tests
           - backtest
           - check-coverage
           - find-league
           - raw-debug
+
       league_name:
         description: 'League name (for backtest or find-league)'
         required: false
         default: 'Premier League'
+
       league_id:
         description: 'League ID (for check-coverage or raw-debug)'
         required: false
         default: '39'
+
       season:
         description: 'Season year, e.g. 2025 (for backtest or raw-debug)'
         required: false
         default: '2025'
+
       sample:
         description: 'Number of matches to sample (for backtest)'
         required: false
@@ -33,12 +38,20 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - run: pip install -r requirements.txt
+
+      - name: Run tests
+        if: github.event.inputs.mode == 'tests'
+        run: |
+          pytest -q
 
       - name: Run backtest
         if: github.event.inputs.mode == 'backtest'
