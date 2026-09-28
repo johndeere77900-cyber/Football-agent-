@@ -2,6 +2,8 @@
 Backtesting and prediction-building helpers.
 """
 
+import random
+
 import api_football
 import confidence
 import config
@@ -125,13 +127,23 @@ def run_synthetic_selftest():
     home_attack, home_defense = 1.6, 0.7
     away_attack, away_defense = 0.7, 1.4
 
-    markets, conf = predict_match(home_attack, home_defense, away_attack, away_defense, league_avg_goals)
+    markets, conf = predict_match(
+        home_attack,
+        home_defense,
+        away_attack,
+        away_defense,
+        league_avg_goals,
+    )
 
     print("=== Synthetic self-test: strong home side vs weak away side ===")
-    print(f"Expected goals -> Home: {markets['expected_goals']['home']}, "
-          f"Away: {markets['expected_goals']['away']}")
+    print(
+        f"Expected goals -> Home: {markets['expected_goals']['home']}, "
+        f"Away: {markets['expected_goals']['away']}"
+    )
     total_prob = sum(markets["match_result"].values())
-    assert 0.99 <= total_prob <= 1.01, f"Probabilities don't sum to 1: {total_prob}"
+    assert 0.99 <= total_prob <= 1.01, (
+        f"Probabilities don't sum to 1: {total_prob}"
+    )
     assert markets["match_result"]["home_win"] > markets["match_result"]["away_win"]
     print("Self-test passed: math checks out.")
     return markets, conf
@@ -139,16 +151,21 @@ def run_synthetic_selftest():
 
 def _compute_stats_as_of(all_fixtures, team_id, cutoff_date_str):
     goals_for, goals_against = [], []
+
     for f in all_fixtures:
         if f["fixture"]["date"][:10] >= cutoff_date_str:
             continue
+
         if f["fixture"]["status"]["short"] != "FT":
             continue
+
         home_id = f["teams"]["home"]["id"]
         away_id = f["teams"]["away"]["id"]
         hg, ag = f["goals"]["home"], f["goals"]["away"]
+
         if hg is None or ag is None:
             continue
+
         if home_id == team_id:
             goals_for.append(hg)
             goals_against.append(ag)
@@ -158,28 +175,84 @@ def _compute_stats_as_of(all_fixtures, team_id, cutoff_date_str):
 
     if not goals_for:
         return None, None
-    return sum(goals_for) / len(goals_for), sum(goals_against) / len(goals_for)
+
+    return (
+        sum(goals_for) / len(goals_for),
+        sum(goals_against) / len(goals_for),
+    )
 
 
-def run_real_backtest(league_id, season, sample_size=20, min_prior_matches=5):
+def _sample_backtest_candidates(candidates, sample_size, seed=42):
+    """
+    Select a reproducible random sample from eligible backtest candidates.
+
+    The previous implementation used evenly stepped slicing, which biased
+    the sample toward the beginning of the candidate sequence.
+
+    A local Random instance is used so sampling does not modify Python's
+    global random state.
+    """
+    if not isinstance(sample_size, int) or isinstance(sample_size, bool):
+        raise ValueError("sample_size must be a positive integer.")
+
+    if sample_size <= 0:
+        raise ValueError("sample_size must be a positive integer.")
+
+    candidates = list(candidates)
+
+    if len(candidates) <= sample_size:
+        return candidates.copy()
+
+    rng = random.Random(seed)
+    return rng.sample(candidates, sample_size)
+
+
+def run_real_backtest(
+    league_id,
+    season,
+    sample_size=20,
+    min_prior_matches=5,
+    sample_seed=42,
+):
     all_fixtures = api_football.get_league_fixtures(league_id, season)
-    print(f"DEBUG: fetched {len(all_fixtures)} total fixtures for league {league_id}, season {season}")
+    print(
+        f"DEBUG: fetched {len(all_fixtures)} total fixtures "
+        f"for league {league_id}, season {season}"
+    )
 
     finished = sorted(
-        [f for f in all_fixtures if f["fixture"]["status"]["short"] == "FT"],
-        key=lambda f: f["fixture"]["date"]
+        [
+            f
+            for f in all_fixtures
+            if f["fixture"]["status"]["short"] == "FT"
+        ],
+        key=lambda f: f["fixture"]["date"],
     )
+
     print(f"DEBUG: {len(finished)} of those are finished (FT)")
 
     candidates = finished[min_prior_matches * 2:]
-    print(f"DEBUG: {len(candidates)} candidates after skipping early-season matches")
 
-    if len(candidates) > sample_size:
-        step = max(len(candidates) // sample_size, 1)
-        candidates = candidates[::step][:sample_size]
-    print(f"DEBUG: {len(candidates)} candidates selected for backtest")
+    print(
+        f"DEBUG: {len(candidates)} candidates "
+        f"after skipping early-season matches"
+    )
 
-    league_avg_goals = config.LEAGUE_AVG_GOALS.get(league_id, config.LEAGUE_AVG_GOALS_FALLBACK)
+    candidates = _sample_backtest_candidates(
+        candidates,
+        sample_size,
+        seed=sample_seed,
+    )
+
+    print(
+        f"DEBUG: {len(candidates)} candidates selected "
+        f"for backtest (seed={sample_seed})"
+    )
+
+    league_avg_goals = config.LEAGUE_AVG_GOALS.get(
+        league_id,
+        config.LEAGUE_AVG_GOALS_FALLBACK,
+    )
 
     correct = 0
     graded = 0
@@ -190,30 +263,75 @@ def run_real_backtest(league_id, season, sample_size=20, min_prior_matches=5):
         home_id = match["teams"]["home"]["id"]
         away_id = match["teams"]["away"]["id"]
 
-        home_for, home_against = _compute_stats_as_of(all_fixtures, home_id, cutoff)
-        away_for, away_against = _compute_stats_as_of(all_fixtures, away_id, cutoff)
+        home_for, home_against = _compute_stats_as_of(
+            all_fixtures,
+            home_id,
+            cutoff,
+        )
+        away_for, away_against = _compute_stats_as_of(
+            all_fixtures,
+            away_id,
+            cutoff,
+        )
+
         if home_for is None or away_for is None:
             continue
 
-        home_attack, home_defense = home_for / league_avg_goals, home_against / league_avg_goals
-        away_attack, away_defense = away_for / league_avg_goals, away_against / league_avg_goals
+        home_attack = home_for / league_avg_goals
+        home_defense = home_against / league_avg_goals
+        away_attack = away_for / league_avg_goals
+        away_defense = away_against / league_avg_goals
 
-        home_xg = poisson_model.expected_goals(home_attack, away_defense, league_avg_goals, is_home=True)
-        away_xg = poisson_model.expected_goals(away_attack, home_defense, league_avg_goals, is_home=False)
-        markets = poisson_model.market_probabilities(home_xg, away_xg)
-        predicted = max(markets["match_result"], key=markets["match_result"].get)
+        home_xg = poisson_model.expected_goals(
+            home_attack,
+            away_defense,
+            league_avg_goals,
+            is_home=True,
+        )
+        away_xg = poisson_model.expected_goals(
+            away_attack,
+            home_defense,
+            league_avg_goals,
+            is_home=False,
+        )
 
-        ah, aw = match["goals"]["home"], match["goals"]["away"]
-        actual = "home_win" if ah > aw else "away_win" if ah < aw else "draw"
+        markets = poisson_model.market_probabilities(
+            home_xg,
+            away_xg,
+        )
+
+        predicted = max(
+            markets["match_result"],
+            key=markets["match_result"].get,
+        )
+
+        ah = match["goals"]["home"]
+        aw = match["goals"]["away"]
+
+        actual = (
+            "home_win"
+            if ah > aw
+            else "away_win"
+            if ah < aw
+            else "draw"
+        )
 
         graded += 1
         is_correct = predicted == actual
         correct += int(is_correct)
 
-        log.append({
-            "match": f"{match['teams']['home']['name']} {ah}-{aw} {match['teams']['away']['name']}",
-            "predicted": predicted, "actual": actual, "correct": is_correct,
-        })
+        log.append(
+            {
+                "match": (
+                    f"{match['teams']['home']['name']} "
+                    f"{ah}-{aw} "
+                    f"{match['teams']['away']['name']}"
+                ),
+                "predicted": predicted,
+                "actual": actual,
+                "correct": is_correct,
+            }
+        )
 
     return {
         "graded": graded,
