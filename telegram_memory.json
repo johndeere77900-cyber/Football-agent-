@@ -23,6 +23,11 @@
     "Good\nTell me about today games",
     "How many football teams are playing tomorrow",
     "Analyze 10 games for tomorrow",
-    "Football"
+    "Football",
+    {
+      "role": "user",
+      "text": "Today’s football predictions",
+      "timestamp": "2026-09-28T22:53:19.639823+00:00"
+    }
   ]
 }
