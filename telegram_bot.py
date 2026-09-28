@@ -262,7 +262,18 @@ def save_memory(memory):
             ensure_ascii=False,
             indent=2,
         )
+def append_memory(entry):
+    """Append one conversation entry and persist it."""
 
+    memory = load_memory()
+
+    recent = memory.setdefault("recent", [])
+    recent.append(entry)
+
+    # Keep only the most recent conversation entries.
+    memory["recent"] = recent[-50:]
+
+    save_memory(memory) 
 
 # ---------------------------------------------------------------------------
 # Text parsing
