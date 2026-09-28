@@ -96,7 +96,12 @@ def test_future_and_same_cutoff_matches_do_not_affect_rating():
         ),
     ]
 
-    cutoff = "2025-01-03T15:00:00+00:00"
+    # The prediction cutoff is exactly the timestamp of the second
+    # fixture. Therefore:
+    # - January 1 is historical and must be included.
+    # - January 2 is the prediction/same-cutoff fixture and must be excluded.
+    # - January 3 is future and must be excluded.
+    cutoff = "2025-01-02T15:00:00+00:00"
 
     expected_home, expected_away = update_ratings(
         DEFAULT_RATING,
@@ -305,4 +310,4 @@ def test_invalid_initial_rating_is_rejected():
     else:
         raise AssertionError(
             "Expected ValueError"
-)
+    )
