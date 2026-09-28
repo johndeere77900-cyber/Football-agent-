@@ -2,10 +2,10 @@
 Historical, leakage-safe football feature calculations.
 
 All features in this module are calculated strictly from completed matches
-whose kickoff date is BEFORE the prediction cutoff.
+whose kickoff timestamp is BEFORE the prediction cutoff.
 
-This module is intentionally independent of live API calls so it can be
-used by chronological backtests and tested deterministically.
+This module is independent of live API calls so it can be used by
+chronological backtests and tested deterministically.
 """
 
 
@@ -23,8 +23,6 @@ def _is_before_cutoff(fixture, cutoff):
     """
     A historical fixture is usable only when its timestamp is strictly
     earlier than the prediction cutoff.
-
-    Strictly-before prevents same-day/same-time leakage.
     """
     return _fixture_date(fixture) < cutoff
 
@@ -66,21 +64,42 @@ def team_match_history(fixtures, team_id, cutoff):
     return history
 
 
+def _team_history_with_valid_goals(fixtures, team_id, cutoff):
+    """
+    Return prior team matches that have usable numeric final goals.
+
+    Fixtures with missing final goals are not silently treated as 0-0.
+    """
+    history = team_match_history(
+        fixtures,
+        team_id,
+        cutoff,
+    )
+
+    valid = []
+
+    for fixture in history:
+        home_goals = fixture.get("goals", {}).get("home")
+        away_goals = fixture.get("goals", {}).get("away")
+
+        if isinstance(home_goals, (int, float)) and not isinstance(
+            home_goals, bool
+        ) and isinstance(away_goals, (int, float)) and not isinstance(
+            away_goals, bool
+        ):
+            valid.append(fixture)
+
+    return valid
+
+
 def team_goal_averages(fixtures, team_id, cutoff):
     """
     Calculate goals-for and goals-against averages for one team using only
     its prior completed matches.
 
-    Returns:
-        None when the team has no qualifying history.
-        Otherwise:
-        {
-            "matches": int,
-            "goals_for": float,
-            "goals_against": float,
-        }
+    Returns None when the team has no qualifying history.
     """
-    history = team_match_history(
+    history = _team_history_with_valid_goals(
         fixtures,
         team_id,
         cutoff,
@@ -91,13 +110,8 @@ def team_goal_averages(fixtures, team_id, cutoff):
 
     for fixture in history:
         home_id = fixture["teams"]["home"]["id"]
-        away_id = fixture["teams"]["away"]["id"]
-
         home_goals = fixture["goals"]["home"]
         away_goals = fixture["goals"]["away"]
-
-        if home_goals is None or away_goals is None:
-            continue
 
         if home_id == team_id:
             goals_for.append(home_goals)
@@ -117,11 +131,11 @@ def team_goal_averages(fixtures, team_id, cutoff):
 
 
 def has_minimum_history(fixtures, team_id, cutoff, minimum_matches):
-    """Check whether a team individually has enough prior matches."""
+    """Check whether a team individually has enough prior valid matches."""
     if minimum_matches < 0:
         raise ValueError("minimum_matches cannot be negative.")
 
-    history = team_match_history(
+    history = _team_history_with_valid_goals(
         fixtures,
         team_id,
         cutoff,
@@ -139,9 +153,6 @@ def fixture_has_minimum_history(
 ):
     """
     Validate minimum historical coverage for BOTH teams independently.
-
-    This fixes the previous global shortcut where the first N league
-    fixtures were discarded instead of checking each team's actual history.
     """
     return (
         has_minimum_history(
@@ -204,4 +215,150 @@ def historical_feature_snapshot(
         "source_match_count": (
             home["matches"] + away["matches"]
         ),
-  }
+    }
+
+
+def team_recent_form(
+    fixtures,
+    team_id,
+    cutoff,
+    window=8,
+    minimum_matches=0,
+):
+    """
+    Calculate a team's recent form strictly as of the historical cutoff.
+
+    The window is applied AFTER filtering to completed, pre-cutoff matches,
+    so the result is the team's most recent N matches known at that time.
+
+    Returns None when fewer than minimum_matches valid matches are available.
+    If minimum_matches is zero, the function still returns None when there is
+    no valid historical match at all.
+    """
+    if window < 1:
+        raise ValueError("window must be at least 1.")
+
+    if minimum_matches < 0:
+        raise ValueError("minimum_matches cannot be negative.")
+
+    history = _team_history_with_valid_goals(
+        fixtures,
+        team_id,
+        cutoff,
+    )
+
+    recent = history[-window:]
+
+    if len(recent) < minimum_matches or not recent:
+        return None
+
+    wins = 0
+    draws = 0
+    losses = 0
+    goals_for = 0
+    goals_against = 0
+    points = 0
+
+    for fixture in recent:
+        home_id = fixture["teams"]["home"]["id"]
+        home_goals = fixture["goals"]["home"]
+        away_goals = fixture["goals"]["away"]
+
+        if home_id == team_id:
+            team_goals = home_goals
+            opponent_goals = away_goals
+        else:
+            team_goals = away_goals
+            opponent_goals = home_goals
+
+        goals_for += team_goals
+        goals_against += opponent_goals
+
+        if team_goals > opponent_goals:
+            wins += 1
+            points += 3
+        elif team_goals == opponent_goals:
+            draws += 1
+            points += 1
+        else:
+            losses += 1
+
+    matches = len(recent)
+
+    return {
+        "matches": matches,
+        "window": window,
+        "goals_for": goals_for / matches,
+        "goals_against": goals_against / matches,
+        "wins": wins,
+        "draws": draws,
+        "losses": losses,
+        "points": points,
+        "points_per_match": points / matches,
+        "form_sequence": [
+            (
+                "W"
+                if (
+                    (
+                        fixture["goals"]["home"]
+                        > fixture["goals"]["away"]
+                        and fixture["teams"]["home"]["id"] == team_id
+                    )
+                    or (
+                        fixture["goals"]["away"]
+                        > fixture["goals"]["home"]
+                        and fixture["teams"]["away"]["id"] == team_id
+                    )
+                )
+                else "D"
+                if fixture["goals"]["home"] == fixture["goals"]["away"]
+                else "L"
+            )
+            for fixture in recent
+        ],
+        "source_dates": [
+            _fixture_date(fixture)
+            for fixture in recent
+        ],
+    }
+
+
+def fixture_recent_form(
+    fixtures,
+    home_team_id,
+    away_team_id,
+    cutoff,
+    window=8,
+    minimum_matches=0,
+):
+    """
+    Return independent historical recent-form snapshots for both teams.
+
+    No current/live API data is accessed and no future fixture is included.
+    Returns None if either team lacks the requested minimum history.
+    """
+    home = team_recent_form(
+        fixtures,
+        home_team_id,
+        cutoff,
+        window=window,
+        minimum_matches=minimum_matches,
+    )
+
+    away = team_recent_form(
+        fixtures,
+        away_team_id,
+        cutoff,
+        window=window,
+        minimum_matches=minimum_matches,
+    )
+
+    if home is None or away is None:
+        return None
+
+    return {
+        "cutoff": cutoff,
+        "window": window,
+        "home": home,
+        "away": away,
+    }
