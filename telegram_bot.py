@@ -138,6 +138,17 @@ QUESTION_MARKERS = {
     "have",
 }
 
+PREDICTION_TERMS = {
+    "prediction",
+    "predictions",
+    "forecast",
+    "forecasts",
+    "tip",
+    "tips",
+    "pick",
+    "picks",
+}
+
 SUPPORTED_COMMAND_TERMS = {
     "research",
     "analyze",
@@ -473,7 +484,41 @@ def classify_intent(text):
         for term in SUPPORTED_COMMAND_TERMS
     )
 
-    if has_command_verb and has_subject:
+    has_prediction_term = any(
+        re.search(
+            rf"\b{re.escape(term)}\b",
+            normalized,
+        )
+        for term in PREDICTION_TERMS
+    )
+
+    has_sport = detect_sport(normalized) is not None
+
+    has_prediction_context = (
+        has_prediction_term
+        and (
+            has_sport
+            or any(
+                word in normalized
+                for word in (
+                    "game",
+                    "games",
+                    "match",
+                    "matches",
+                    "fixture",
+                    "fixtures",
+                    "today",
+                    "tomorrow",
+                    "tonight",
+                )
+            )
+        )
+    )
+
+    if (
+        (has_command_verb and has_subject)
+        or has_prediction_context
+    ):
         return "COMMAND"
 
     return "UNKNOWN"
@@ -754,287 +799,153 @@ def handle_schedule_question(text):
 def handle_live_question(text):
     normalized = normalize_text(text)
 
-    if "live" not in normalized:
-        return False
-
-    sport = detect_sport(text) or "football"
-
-    if sport == "football":
-        today = datetime.now(
-            timezone.utc
-        ).strftime("%Y-%m-%d")
-
-        fixtures = get_tracked_fixtures_for_date(
-            today
+    wants_live = any(
+        phrase in normalized
+        for phrase in (
+            "live",
+            "live now",
+            "playing now",
+            "playing live",
+            "currently playing",
+            "what is happening now",
+            "whats happening now",
         )
-
-        live_statuses = set(
-            agent.FOOTBALL_LIVE_STATUSES
-        )
-
-        live = [
-            fixture
-            for fixture in fixtures
-            if fixture.get(
-                "fixture",
-                {},
-            ).get(
-                "status",
-                {},
-            ).get("short")
-            in live_statuses
-        ]
-
-        if not live:
-            send_message(
-                "⚽ Nothing is live right now "
-                "in the tracked football leagues."
-            )
-            return True
-
-        lines = [
-            f"⚽ *{len(live)} live "
-            "football match(es):*"
-        ]
-
-        for fixture in live:
-            home, away = fixture_teams(fixture)
-
-            status = fixture.get(
-                "fixture",
-                {},
-            ).get(
-                "status",
-                {},
-            )
-
-            elapsed = status.get(
-                "elapsed",
-                "?",
-            )
-
-            goals = fixture.get(
-                "goals",
-                {},
-            )
-
-            home_goals = (
-                0
-                if goals.get("home") is None
-                else goals.get("home")
-            )
-
-            away_goals = (
-                0
-                if goals.get("away") is None
-                else goals.get("away")
-            )
-
-            lines.append(
-                f"• {home} "
-                f"{home_goals}-{away_goals} "
-                f"{away} ({elapsed}')"
-            )
-
-        send_message(
-            "\n".join(lines)
-        )
-
-        return True
-
-    today = datetime.now(
-        timezone.utc
-    ).strftime("%Y-%m-%d")
-
-    league_ids = getattr(
-        config,
-        "ALLOWED_BASKETBALL_LEAGUE_IDS",
-        [],
     )
 
-    if not league_ids:
-        send_message(
-            "🏀 No tracked basketball league "
-            "is configured."
-        )
-        return True
+    if not wants_live:
+        return None
 
-    league_id = league_ids[0]
+    football_live = []
+    basketball_live = []
 
-    games = basketball_api.get_games_by_date(
-        today,
-        league_id,
-    )
+    try:
+        football_live = api_football.get_live_fixtures() or []
+    except Exception as exc:
+        print(f"Live football lookup failed: {exc}")
 
-    finished_statuses = {
-        "NS",
-        "FT",
-        "AOT",
-        "CANC",
-        "ABD",
-    }
+    try:
+        basketball_live = basketball_api.get_live_games() or []
+    except Exception as exc:
+        print(f"Live basketball lookup failed: {exc}")
 
-    live = [
-        game
-        for game in games
-        if game.get(
-            "status",
-            {},
-        ).get("short")
-        not in finished_statuses
-    ]
-
-    if not live:
-        send_message(
-            "🏀 No tracked basketball games "
-            "are live right now."
-        )
-        return True
-
-    lines = [
-        f"🏀 *{len(live)} live "
-        "basketball game(s):*"
-    ]
-
-    for game in live:
-        home = game.get(
-            "teams",
-            {},
-        ).get(
-            "home",
-            {},
-        ).get(
-            "name",
-            "Home",
+    if not football_live and not basketball_live:
+        return (
+            "🔴 There are no live tracked football or basketball games "
+            "available right now."
         )
 
-        away = game.get(
-            "teams",
-            {},
-        ).get(
-            "away",
-            {},
-        ).get(
-            "name",
-            "Away",
+    lines = ["🔴 Live games right now:"]
+
+    for fixture in football_live:
+        home, away = fixture_teams(fixture)
+        if home and away:
+            lines.append(f"⚽ {home} vs {away}")
+
+    for game in basketball_live:
+        home = (
+            game.get("home_team")
+            or game.get("homeTeam")
+            or game.get("home")
+            or "Home"
         )
-
-        status = game.get(
-            "status",
-            {},
-        ).get(
-            "short",
-            "LIVE",
+        away = (
+            game.get("away_team")
+            or game.get("awayTeam")
+            or game.get("away")
+            or "Away"
         )
+        lines.append(f"🏀 {home} vs {away}")
 
-        lines.append(
-            f"• {home} vs {away} ({status})"
-        )
-
-    send_message(
-        "\n".join(lines)
-    )
-
-    return True
+    return "\n".join(lines)
 
 
 def handle_accuracy_question(text):
     normalized = normalize_text(text)
 
-    if not any(
-        term in normalized
-        for term in (
-            "accuracy",
-            "track record",
-            "graded predictions",
-        )
-    ):
-        return False
-
-    sport = detect_sport(text) or "football"
-
-    storage.init_db()
-    storage.init_basketball_db()
-
-    if sport == "basketball":
-        summary = storage.basketball_accuracy_summary()
-    else:
-        summary = storage.accuracy_summary()
-
-    total = summary.get(
-        "total_graded",
-        0,
+    accuracy_terms = (
+        "accuracy",
+        "accurate",
+        "hit rate",
+        "win rate",
+        "success rate",
+        "how well",
+        "how good",
+        "performance",
     )
 
-    if total == 0:
-        send_message(
-            f"📈 There are no graded "
-            f"{sport} predictions yet."
-        )
-        return True
+    if not any(term in normalized for term in accuracy_terms):
+        return None
 
-    lines = [
-        f"📈 *{sport.title()} prediction record:*",
-        (
-            f"Overall: "
-            f"{summary['overall_accuracy']:.0%} "
-            f"({total} graded)"
-        ),
-    ]
-
-    for label, stats in summary.get(
-        "by_confidence",
-        {},
-    ).items():
-        lines.append(
-            f"• {label}: "
-            f"{stats['accuracy']:.0%} "
-            f"({stats['count']})"
+    try:
+        summary = storage.get_prediction_summary()
+    except Exception as exc:
+        print(f"Accuracy summary failed: {exc}")
+        return (
+            "📊 I could not read the prediction history right now."
         )
 
-    send_message(
-        "\n".join(lines)
+    if not summary:
+        return (
+            "📊 There are no graded predictions in the history yet, "
+            "so there is no measured accuracy to report."
+        )
+
+    total = summary.get("total", 0)
+    graded = summary.get("graded", 0)
+    correct = summary.get("correct", 0)
+
+    if not graded:
+        return (
+            f"📊 I have {total} recorded predictions, but none have been "
+            "graded yet, so there is no measured accuracy yet."
+        )
+
+    accuracy = (correct / graded) * 100
+
+    return (
+        f"📊 Prediction record:\n"
+        f"• Recorded predictions: {total}\n"
+        f"• Graded predictions: {graded}\n"
+        f"• Correct: {correct}\n"
+        f"• Measured accuracy: {accuracy:.1f}%"
     )
-
-    return True
 
 
 # ---------------------------------------------------------------------------
-# Research engine
+# Prediction / research engine
 # ---------------------------------------------------------------------------
 
-def research_football(
-    date_str,
-    quantity,
-    fetch_odds,
-):
-    fixtures = get_tracked_fixtures_for_date(
-        date_str
-    )
+def research_football(date_str, quantity=1, fetch_odds=False):
+    fixtures = get_tracked_fixtures_for_date(date_str)
 
-    finished = set(
-        agent.FOOTBALL_FINISHED_STATUSES
-    )
+    if not fixtures:
+        return []
 
-    fixtures = [
-        fixture
-        for fixture in fixtures
-        if fixture.get(
-            "fixture",
-            {},
-        ).get(
-            "status",
-            {},
-        ).get("short")
-        not in finished
-    ]
-
-    results = []
+    predictions = []
 
     for fixture in fixtures:
+        status = (
+            fixture.get("fixture", {})
+            .get("status", {})
+            .get("short", "")
+        )
+
+        if status in {
+            "FT",
+            "AET",
+            "PEN",
+            "CANC",
+            "PST",
+            "ABD",
+            "AWD",
+            "WO",
+        }:
+            continue
+
         try:
-            league_id = fixture["league"]["id"]
-            season = fixture["league"]["season"]
+            league = fixture.get("league", {})
+            league_id = league.get("id")
+            season = league.get("season")
 
             league_avg = agent.get_league_avg_goals(
                 league_id,
@@ -1044,7 +955,7 @@ def research_football(
             prediction = agent.predict_fixture(
                 fixture,
                 league_avg,
-                fetch_odds,
+                fetch_odds=fetch_odds,
             )
 
         except (
@@ -1055,146 +966,93 @@ def research_football(
             requests.RequestException,
         ) as exc:
             print(
-                "Skipping football fixture due "
-                "to expected data/API issue: "
-                f"{exc}",
-                flush=True,
+                f"Skipping football fixture because prediction failed: "
+                f"{exc}"
             )
             continue
 
-        safest = prediction.get(
-            "safest"
-        )
-
-        probability = (
-            safest.get("probability")
-            if isinstance(safest, dict)
-            else None
-        )
-
-        if (
-            prediction.get("insufficient_data")
-            or not safest
-        ):
+        if not prediction:
             continue
 
-        if not isinstance(
-            probability,
-            (int, float),
-        ):
+        safest = prediction.get("safest")
+        safest_probability = prediction.get("safest_probability")
+
+        if not safest or safest_probability is None:
             continue
 
-        results.append(prediction)
+        try:
+            safest_probability = float(safest_probability)
+        except (TypeError, ValueError):
+            continue
 
-    results.sort(
-        key=lambda item: item["safest"]["probability"],
+        predictions.append(
+            {
+                "fixture": fixture,
+                "prediction": prediction,
+                "safest_probability": safest_probability,
+            }
+        )
+
+    predictions.sort(
+        key=lambda item: item["safest_probability"],
         reverse=True,
     )
 
-    return results[:quantity]
+    return predictions[:quantity]
 
 
-def research_basketball(
-    date_str,
-    quantity,
-):
-    league_ids = getattr(
-        config,
-        "ALLOWED_BASKETBALL_LEAGUE_IDS",
-        [],
-    )
+def research_basketball(date_str, quantity=1):
+    games = basketball_api.get_games_for_date(date_str) or []
 
-    if not league_ids:
+    if not games:
         return []
 
-    league_id = league_ids[0]
-
-    games = basketball_api.get_games_by_date(
-        date_str,
-        league_id,
-    )
-
-    finished = set(
-        getattr(
-            agent,
-            "BASKETBALL_FINISHED_STATUSES",
-            {
-                "FT",
-                "AOT",
-                "CANC",
-                "ABD",
-            },
-        )
-    )
-
-    games = [
-        game
-        for game in games
-        if game.get(
-            "status",
-            {},
-        ).get("short")
-        not in finished
-    ]
-
-    results = []
+    predictions = []
 
     for game in games:
         try:
-            prediction = basketball_model.predict_game(
-                game
-            )
-
+            prediction = basketball_model.predict_game(game)
         except (
             KeyError,
             TypeError,
             ValueError,
+            RuntimeError,
             requests.RequestException,
         ) as exc:
             print(
-                "Skipping basketball game due "
-                "to expected data/API issue: "
-                f"{exc}",
-                flush=True,
+                f"Skipping basketball game because prediction failed: "
+                f"{exc}"
             )
             continue
 
-        if not isinstance(
-            prediction,
-            dict,
-        ):
+        if not prediction:
             continue
 
-        safest = prediction.get(
-            "safest"
+        safest = prediction.get("safest")
+        safest_probability = prediction.get("safest_probability")
+
+        if not safest or safest_probability is None:
+            continue
+
+        try:
+            safest_probability = float(safest_probability)
+        except (TypeError, ValueError):
+            continue
+
+        predictions.append(
+            {
+                "game": game,
+                "prediction": prediction,
+                "safest_probability": safest_probability,
+            }
         )
 
-        probability = (
-            safest.get("probability")
-            if isinstance(safest, dict)
-            else None
-        )
-
-        if (
-            prediction.get("insufficient_data")
-            or not safest
-        ):
-            continue
-
-        if not isinstance(
-            probability,
-            (int, float),
-        ):
-            continue
-
-        results.append(prediction)
-
-    results.sort(
-        key=lambda item: item["safest"]["probability"],
+    predictions.sort(
+        key=lambda item: item["safest_probability"],
         reverse=True,
     )
 
-    return results[:quantity]
+    return predictions[:quantity]
 
 
 def handle_research_command(text):
@@ -1215,312 +1073,248 @@ def handle_research_command(text):
         "picks",
     )
 
-    if not any(
-        term in normalized
-        for term in research_terms
-    ):
-        return False
+    if not any(term in normalized for term in research_terms):
+        return None
 
-    sport = detect_sport(text)
+    sport = detect_sport(normalized)
 
     if sport is None:
-        send_message(
-            "I understand the command, but please "
-            "specify football or basketball."
+        return (
+            "I can make predictions for football or basketball. "
+            "Tell me which sport you want."
         )
-        return True
 
-    quantity = parse_quantity(
-        text,
-        default=5,
-    )
+    quantity = parse_quantity(normalized, default=1)
 
-    if quantity > 100:
-        send_message(
-            "I can research up to 100 matches "
-            "in one command."
-        )
-        return True
-
-    date_str, date_label = resolve_date(
-        text
-    )
+    date_str, date_label = resolve_date(normalized)
 
     fetch_odds = any(
-        term in normalized
-        for term in (
+        phrase in normalized
+        for phrase in (
             "odds",
+            "betting odds",
             "bookmaker",
-            "market price",
-            "price",
+            "bookmakers",
+            "market",
+            "markets",
         )
     )
 
-    send_message(
-        f"🔎 Command received: researching "
-        f"{quantity} {sport} match(es) "
-        f"for {date_label}."
+    print(
+        f"Prediction command received: sport={sport}, "
+        f"date={date_str}, quantity={quantity}, odds={fetch_odds}"
+    )
+
+    send_telegram_message(
+        "Command received. I’m checking the available fixtures and "
+        "running the prediction pipeline now."
     )
 
     if sport == "football":
         results = research_football(
             date_str,
-            quantity,
-            fetch_odds,
+            quantity=quantity,
+            fetch_odds=fetch_odds,
         )
     else:
         results = research_basketball(
             date_str,
-            quantity,
+            quantity=quantity,
         )
 
     if not results:
-        send_message(
-            f"🔎 No {sport} predictions "
-            f"could be produced for {date_label} "
-            "from the available data."
+        return (
+            f"🔎 No {sport} predictions could be produced for "
+            f"{date_label} from the available data."
         )
-        return True
-
-    emoji = (
-        "⚽"
-        if sport == "football"
-        else "🏀"
-    )
 
     lines = [
-        f"{emoji} *Research results — {date_label}*",
-        (
-            f"Requested: {quantity} | "
-            f"Produced: {len(results)}"
-        ),
+        f"📊 {sport.title()} predictions for {date_label}:"
     ]
 
-    for prediction in results:
-        safest = prediction["safest"]
+    for index, item in enumerate(results, start=1):
+        prediction = item["prediction"]
 
-        home_team = prediction.get(
-            "home_team",
-            "Home",
-        )
+        if sport == "football":
+            home, away = fixture_teams(item["fixture"])
 
-        away_team = prediction.get(
-            "away_team",
-            "Away",
-        )
+            if not home:
+                home = "Home"
 
-        label = safest.get(
-            "label",
-            "Selected market",
-        )
+            if not away:
+                away = "Away"
 
-        probability = safest.get(
-            "probability"
-        )
+            title = f"{home} vs {away}"
 
-        lines.append(
-            f"\n*{home_team} vs {away_team}*\n"
-            f"• {label}: "
-            f"{probability:.0%}"
-        )
+        else:
+            game = item["game"]
 
-        if prediction.get("league"):
-            lines.append(
-                f"• League: "
-                f"{prediction['league']}"
+            home = (
+                game.get("home_team")
+                or game.get("homeTeam")
+                or game.get("home")
+                or "Home"
             )
 
-    send_message(
-        "\n".join(lines)
-    )
+            away = (
+                game.get("away_team")
+                or game.get("awayTeam")
+                or game.get("away")
+                or "Away"
+            )
 
-    return True
+            title = f"{home} vs {away}"
+
+        safest = prediction.get("safest", "N/A")
+        probability = item["safest_probability"] * 100
+
+        lines.append(
+            f"\n{index}. {title}\n"
+            f"Prediction: {safest}\n"
+            f"Probability: {probability:.1f}%"
+        )
+
+        confidence = prediction.get("confidence")
+
+        if confidence is not None:
+            lines.append(f"Confidence: {confidence}")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# Question routing
+# General question / greeting handlers
 # ---------------------------------------------------------------------------
 
 def handle_question(text):
-    if handle_accuracy_question(text):
-        return True
+    result = handle_accuracy_question(text)
 
-    if handle_schedule_question(text):
-        return True
+    if result is not None:
+        return result
 
-    normalized = normalize_text(text)
+    result = handle_schedule_question(text)
 
-    if (
-        "how many" in normalized
-        or "how many games" in normalized
-        or "how many matches" in normalized
-    ):
-        return handle_count_question(text)
+    if result is not None:
+        return result
 
-    if handle_live_question(text):
-        return True
+    result = handle_count_question(text)
 
-    return False
+    if result is not None:
+        return result
 
+    result = handle_live_question(text)
 
-# ---------------------------------------------------------------------------
-# Greeting/help routing
-# ---------------------------------------------------------------------------
+    if result is not None:
+        return result
+
+    return (
+        "I understand that as a question, but I don't have a supported "
+        "data handler for it yet."
+    )
+
 
 def handle_greeting(text):
     normalized = normalize_text(text)
 
-    if normalized in {
-        "/start",
-        "/help",
-        "help",
-    }:
-        send_message(
-            "👋 I understand natural-language "
-            "questions and commands.\n\n"
-            "*Questions:* "
-            "\"How many Premier League games "
-            "are today?\" or "
-            "\"What time is Arsenal playing?\"\n\n"
-            "*Commands:* "
-            "\"Research 10 football games today\" "
-            "or "
-            "\"Analyze tomorrow's NBA games.\""
-        )
-
-        return True
-
     if normalized in GREETINGS:
-        send_message(
-            "Hello. Send me a question or a "
-            "research request and I'll work from there."
+        return (
+            "Hello. I’m ready to analyze football or basketball fixtures "
+            "and produce predictions."
         )
-        return True
 
-    return False
-
-
-# ---------------------------------------------------------------------------
-# Main message dispatcher
-# ---------------------------------------------------------------------------
-
-def handle_message(
-    text,
-    memory,
-):
-    """
-    Process exactly one Telegram message.
-
-    This function does not poll Telegram.
-    """
-
-    original = str(text or "").strip()
-
-    if not original:
-        send_message(
-            "I didn't receive a message to process."
+    if normalized in {
+        "help",
+        "/help",
+        "what can you do",
+        "what can you do?",
+    }:
+        return (
+            "I can analyze football and basketball fixtures, produce "
+            "predictions, check schedules and live games, and report "
+            "prediction-history results."
         )
-        return
 
-    recent = memory.setdefault(
-        "recent",
-        [],
+    return None
+
+
+def handle_message(text):
+    append_memory(
+        {
+            "role": "user",
+            "text": text,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
     )
 
-    recent.append(original)
+    intent = classify_intent(text)
 
-    memory["recent"] = recent[-20:]
-
-    intent = classify_intent(
-        original
-    )
-
-    print(
-        f"Intent={intent} "
-        f"message={original!r}",
-        flush=True,
-    )
+    print(f"Classified intent: {intent}")
 
     if intent == "GREETING":
-        handle_greeting(original)
-        return
+        response = handle_greeting(text)
 
-    if intent == "QUESTION":
-        if handle_question(original):
-            return
+    elif intent == "QUESTION":
+        response = handle_question(text)
 
-        send_message(
-            "I understand that as a question, "
-            "but I don't have a supported "
-            "data handler for it yet."
+        if response is None:
+            response = (
+                "I understand that as a question, but I don't have a "
+                "supported data handler for it yet."
+            )
+
+    elif intent == "COMMAND":
+        response = handle_research_command(text)
+
+        if response is None:
+            response = (
+                "I understand that as a prediction command, but it is "
+                "outside the current football/basketball prediction "
+                "capabilities."
+            )
+
+    else:
+        response = (
+            "I can work with natural-language prediction requests. "
+            "Tell me which football or basketball predictions you want."
         )
-        return
 
-    if intent == "COMMAND":
-        if handle_research_command(original):
-            return
-
-        send_message(
-            "I understand that as a command, "
-            "but it is outside the current "
-            "football/basketball research "
-            "capabilities."
-        )
-        return
-
-    # Do not return to the old generic:
-    # "Ready. What would you like me to analyze?"
-    #
-    # Instead, treat an unsupported natural-language
-    # message as something that needs clarification.
-    send_message(
-        "I can work with natural-language questions "
-        "and research requests. Tell me what you "
-        "want to find, check, compare, or research."
+    append_memory(
+        {
+            "role": "assistant",
+            "text": response,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
     )
+
+    return response
 
 
 # ---------------------------------------------------------------------------
-# One-shot GitHub Actions entry point
+# Main
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-
-    # Credentials are required for the worker to respond.
-    if not TELEGRAM_TOKEN or not CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError(
-            "Telegram credentials are not configured."
+            "TELEGRAM_BOT_TOKEN or TELEGRAM_TOKEN is required."
         )
 
-    memory = load_memory()
-
-    # IMPORTANT:
-    # Val Town passes exactly one Telegram message
-    # through GitHub Actions as TELEGRAM_MESSAGE.
-    single_message = os.environ.get(
-        "TELEGRAM_MESSAGE"
-    )
-
-    # Deliberately reject execution without a message.
-    # This prevents the old polling architecture
-    # from silently returning.
-    if not single_message:
+    if not TELEGRAM_CHAT_ID:
         raise RuntimeError(
-            "Polling mode is disabled. "
-            "Telegram messages must arrive "
-            "through Val Town."
+            "TELEGRAM_CHAT_ID is required."
         )
 
-    print(
-        "Processing single Telegram message: "
-        f"{single_message}",
-        flush=True,
-    )
+    message = os.environ.get("TELEGRAM_MESSAGE", "").strip()
 
-    try:
-        handle_message(
-            single_message,
-            memory,
+    if not message:
+        raise RuntimeError(
+            "TELEGRAM_MESSAGE is required."
         )
-    finally:
-        save_memory(memory)
+
+    # This worker is deliberately single-message based.
+    # Telegram polling/getUpdates is not used here.
+    response = handle_message(message)
+
+    send_telegram_message(response)
+
+    save_memory()
