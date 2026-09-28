@@ -1049,7 +1049,7 @@ def research_football(
                 fetch_odds,
             )
 
-          except (
+        except (
             KeyError,
             TypeError,
             ValueError,
