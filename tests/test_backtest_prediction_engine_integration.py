@@ -464,3 +464,161 @@ def test_backtest_rejects_invalid_season():
             league_id=39,
             season="2025",
   )
+def test_market_grading_is_returned_by_backtest(monkeypatch):
+    fixtures = historical_dataset()
+
+    monkeypatch.setattr(
+        backtest.api_football,
+        "get_league_fixtures",
+        lambda league_id, season: fixtures,
+    )
+
+    monkeypatch.setattr(
+        backtest.api_football,
+        "get_enriched_fixtures",
+        lambda fixture_ids: {},
+    )
+
+    result = backtest.run_real_backtest(
+        league_id=39,
+        season=2025,
+        sample_size=2,
+        min_prior_matches=5,
+        sample_seed=42,
+        enrich_statistics=True,
+    )
+
+    assert "market_summary" in result
+
+    for row in result["log"]:
+        assert "market_grading" in row
+        assert "selected" in row["market_grading"]
+        assert "outcomes" in row["market_grading"]
+
+        assert (
+            row["market_grading"]["outcomes"]
+            ["match_result"]
+            ["won"]
+            in (True, False)
+        )
+
+
+def test_backtest_grades_goal_markets_beyond_1x2(
+    monkeypatch,
+):
+    fixtures = historical_dataset()
+
+    monkeypatch.setattr(
+        backtest.api_football,
+        "get_league_fixtures",
+        lambda league_id, season: fixtures,
+    )
+
+    monkeypatch.setattr(
+        backtest.api_football,
+        "get_enriched_fixtures",
+        lambda fixture_ids: {},
+    )
+
+    result = backtest.run_real_backtest(
+        league_id=39,
+        season=2025,
+        sample_size=2,
+        min_prior_matches=5,
+        sample_seed=42,
+        enrich_statistics=True,
+    )
+
+    assert result["market_summary"]
+
+    assert "match_result" in result["market_summary"]
+    assert "over_under" in result["market_summary"]
+    assert "btts" in result["market_summary"]
+    assert "team_goals" in result["market_summary"]
+
+
+def test_backtest_does_not_fabricate_statistical_markets(
+    monkeypatch,
+):
+    fixtures = historical_dataset()
+
+    monkeypatch.setattr(
+        backtest.api_football,
+        "get_league_fixtures",
+        lambda league_id, season: fixtures,
+    )
+
+    monkeypatch.setattr(
+        backtest.api_football,
+        "get_enriched_fixtures",
+        lambda fixture_ids: {},
+    )
+
+    result = backtest.run_real_backtest(
+        league_id=39,
+        season=2025,
+        sample_size=2,
+        min_prior_matches=5,
+        sample_seed=42,
+        enrich_statistics=True,
+    )
+
+    assert result[
+        "statistical_data_available"
+    ]["corners"] == 0
+
+    assert result[
+        "statistical_data_available"
+    ]["cards"] == 0
+
+    for row in result["log"]:
+        statistical_actuals = (
+            row["market_grading"]
+            ["statistical_actuals"]
+        )
+
+        assert statistical_actuals["corners"] == {}
+        assert statistical_actuals["cards"] == {}
+
+
+def test_backtest_can_disable_statistical_enrichment(
+    monkeypatch,
+):
+    fixtures = historical_dataset()
+
+    monkeypatch.setattr(
+        backtest.api_football,
+        "get_league_fixtures",
+        lambda league_id, season: fixtures,
+    )
+
+    def should_not_be_called(*args, **kwargs):
+        raise AssertionError(
+            "Fixture enrichment should be disabled."
+        )
+
+    monkeypatch.setattr(
+        backtest.api_football,
+        "get_enriched_fixtures",
+        should_not_be_called,
+    )
+
+    result = backtest.run_real_backtest(
+        league_id=39,
+        season=2025,
+        sample_size=2,
+        min_prior_matches=5,
+        sample_seed=42,
+        enrich_statistics=False,
+    )
+
+    assert result["statistics_enriched"] is False
+
+
+def test_backtest_rejects_invalid_enrichment_flag():
+    with pytest.raises(ValueError):
+        backtest.run_real_backtest(
+            league_id=39,
+            season=2025,
+            enrich_statistics="yes",
+    )
