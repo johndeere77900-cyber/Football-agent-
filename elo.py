@@ -1,28 +1,34 @@
 """
-A simple Elo rating system for football teams.
+Simple Elo rating system for football teams.
 
-Elo gives us a single number representing team strength that updates after
-every match - it's the same underlying idea used by chess ratings, FIFA's
-own rankings, and most serious football prediction models (e.g. ClubElo).
+This module is deterministic and API-free so it can be used by both
+production prediction and chronological historical backtesting.
 
-This module doesn't call any API - it just does the math. main.py feeds it
-match results to build up ratings over time, storing them via storage.py.
+Important:
+- Elo ratings must be updated chronologically in historical backtests.
+- The 1X2 probabilities are an approximation, not a calibrated standalone
+  football model.
+- Calibration and model weighting must be validated separately.
 """
 
-K_FACTOR = 20          # how much one result moves a team's rating
-HOME_ADVANTAGE = 60    # Elo points added to the home team's rating pre-match
-DEFAULT_RATING = 1500  # starting point for a team with no history
+K_FACTOR = 20
+HOME_ADVANTAGE = 60
+DEFAULT_RATING = 1500
 
 
 def expected_score(rating_a, rating_b):
-    """Probability that team A beats team B (draws are split 50/50 into this)."""
+    """
+    Expected share for team A in a two-outcome Elo comparison.
+    """
     return 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
 
 
 def update_ratings(rating_home, rating_away, home_goals, away_goals):
     """
-    Returns (new_rating_home, new_rating_away) after a match result.
-    Score for Elo purposes: 1 = win, 0.5 = draw, 0 = loss.
+    Update both ratings after a completed match.
+
+    Returns:
+        (new_home_rating, new_away_rating)
     """
     adjusted_home = rating_home + HOME_ADVANTAGE
 
@@ -35,23 +41,64 @@ def update_ratings(rating_home, rating_away, home_goals, away_goals):
 
     expected_home = expected_score(adjusted_home, rating_away)
 
-    # Scale K by goal difference so a 4-0 moves ratings more than a 1-0
-    margin_multiplier = 1 + min(abs(home_goals - away_goals), 4) * 0.15
+    margin_multiplier = (
+        1 + min(abs(home_goals - away_goals), 4) * 0.15
+    )
 
-    new_rating_home = rating_home + K_FACTOR * margin_multiplier * (actual_home - expected_home)
-    new_rating_away = rating_away + K_FACTOR * margin_multiplier * ((1 - actual_home) - (1 - expected_home))
+    delta = (
+        K_FACTOR
+        * margin_multiplier
+        * (actual_home - expected_home)
+    )
 
-    return new_rating_home, new_rating_away
+    return rating_home + delta, rating_away - delta
 
 
 def win_draw_loss_probabilities(rating_home, rating_away):
     """
-    Elo alone can't cleanly produce a draw probability (it's a two-outcome
-    model), so this is a rough approximation used only as a cross-check
-    against the Poisson model's win/draw/loss numbers - the Poisson model
-    is the primary source for match markets.
+    Convert Elo strength into a normalized 1X2 probability vector.
+
+    Elo is fundamentally a two-outcome rating system, so draw probability
+    requires an explicit approximation here.
+
+    This function is therefore intended as an Elo cross-check/blend signal,
+    NOT as a standalone calibrated football probability model.
+
+    Returns:
+        {
+            "home": float,
+            "draw": float,
+            "away": float
+        }
     """
     adjusted_home = rating_home + HOME_ADVANTAGE
-    p_home_raw = expected_score(adjusted_home, rating_away)
 
-    #
+    p_home_raw = expected_score(
+        adjusted_home,
+        rating_away,
+    )
+
+    # Conservative draw approximation.
+    # Draw likelihood is highest when adjusted ratings are close.
+    rating_gap = abs(adjusted_home - rating_away)
+
+    draw = 0.28 * max(
+        0.0,
+        1.0 - rating_gap / 400.0,
+    )
+
+    # Keep the approximation within reasonable bounds.
+    draw = min(max(draw, 0.05), 0.28)
+
+    remaining = 1.0 - draw
+
+    home = remaining * p_home_raw
+    away = remaining * (1.0 - p_home_raw)
+
+    total = home + draw + away
+
+    return {
+        "home": home / total,
+        "draw": draw / total,
+        "away": away / total,
+    }
