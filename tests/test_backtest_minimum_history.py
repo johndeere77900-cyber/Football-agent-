@@ -394,4 +394,4 @@ def test_minimum_history_preserves_chronological_candidate_order():
         "2025-01-05T15:00:00+00:00",
         "2025-01-06T15:00:00+00:00",
         "2025-01-07T15:00:00+00:00",
-  ]
+    ]
