@@ -328,6 +328,8 @@ def _filter_candidates_by_minimum_history(
 
     The prediction fixture itself is excluded because its kickoff timestamp
     is used as the strict historical cutoff.
+
+    Returned candidates are chronological.
     """
     if (
         not isinstance(minimum_matches, int)
@@ -378,7 +380,10 @@ def _filter_candidates_by_minimum_history(
         ):
             eligible.append(fixture)
 
-    return eligible
+    return sorted(
+        eligible,
+        key=lambda fixture: fixture["fixture"]["date"],
+    )
 
 
 def _sample_backtest_candidates(
