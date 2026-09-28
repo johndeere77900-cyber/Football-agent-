@@ -284,10 +284,6 @@ def _compute_stats_as_of(
     """
     Calculate a team's historical goal averages strictly before a
     prediction timestamp.
-
-    The complete timestamp is used deliberately. A completed fixture
-    earlier on the same calendar day is historical if its kickoff is
-    before the prediction cutoff.
     """
     goals_for = []
     goals_against = []
@@ -519,17 +515,22 @@ def run_real_backtest(
         f"for backtest (seed={sample_seed})"
     )
 
-    league_avg_goals = config.LEAGUE_AVG_GOALS.get(
-        league_id,
-        config.LEAGUE_AVG_GOALS_FALLBACK,
-    )
-
     correct = 0
     graded = 0
     log = []
 
     for match in candidates:
         cutoff = match["fixture"]["date"]
+
+        league_avg_goals = (
+            historical_features.historical_league_avg_goals(
+                all_fixtures,
+                cutoff,
+            )
+        )
+
+        if league_avg_goals is None or league_avg_goals <= 0:
+            continue
 
         home_id = match["teams"]["home"]["id"]
         away_id = match["teams"]["away"]["id"]
