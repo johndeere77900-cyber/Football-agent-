@@ -1049,7 +1049,7 @@ def research_football(
                 fetch_odds,
             )
 
-      except (
+          except (
             KeyError,
             TypeError,
             ValueError,
@@ -1061,12 +1061,6 @@ def research_football(
                 f"to expected data/API issue: {exc}",
                 flush=True,
             )
-            continue
-
-        if not isinstance(
-            prediction,
-            dict,
-        ):
             continue
 
         safest = prediction.get(
