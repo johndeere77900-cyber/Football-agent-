@@ -279,25 +279,68 @@ def run_synthetic_selftest():
 def _compute_stats_as_of(
     all_fixtures,
     team_id,
-    cutoff_date_str,
+    cutoff,
 ):
+    """
+    Calculate a team's historical goal averages strictly before a
+    prediction timestamp.
+
+    The complete timestamp is used deliberately. A completed fixture
+    earlier on the same calendar day is historical if its kickoff is
+    before the prediction cutoff.
+    """
     goals_for = []
     goals_against = []
 
     for fixture in all_fixtures:
-        if fixture["fixture"]["date"][:10] >= cutoff_date_str:
+        fixture_date = (
+            fixture.get("fixture", {}).get("date", "")
+        )
+
+        if not fixture_date:
             continue
 
-        if fixture["fixture"]["status"]["short"] != "FT":
+        if fixture_date >= cutoff:
             continue
 
-        home_id = fixture["teams"]["home"]["id"]
-        away_id = fixture["teams"]["away"]["id"]
+        if fixture.get("fixture", {}).get(
+            "status", {}
+        ).get("short") != "FT":
+            continue
 
-        home_goals = fixture["goals"]["home"]
-        away_goals = fixture["goals"]["away"]
+        home_id = (
+            fixture.get("teams", {})
+            .get("home", {})
+            .get("id")
+        )
+        away_id = (
+            fixture.get("teams", {})
+            .get("away", {})
+            .get("id")
+        )
 
-        if home_goals is None or away_goals is None:
+        home_goals = (
+            fixture.get("goals", {})
+            .get("home")
+        )
+        away_goals = (
+            fixture.get("goals", {})
+            .get("away")
+        )
+
+        if home_id is None or away_id is None:
+            continue
+
+        if not isinstance(home_goals, (int, float)) or isinstance(
+            home_goals,
+            bool,
+        ):
+            continue
+
+        if not isinstance(away_goals, (int, float)) or isinstance(
+            away_goals,
+            bool,
+        ):
             continue
 
         if home_id == team_id:
@@ -313,7 +356,7 @@ def _compute_stats_as_of(
 
     return (
         sum(goals_for) / len(goals_for),
-        sum(goals_against) / len(goals_for),
+        sum(goals_against) / len(goals_against),
     )
 
 
@@ -486,7 +529,7 @@ def run_real_backtest(
     log = []
 
     for match in candidates:
-        cutoff = match["fixture"]["date"][:10]
+        cutoff = match["fixture"]["date"]
 
         home_id = match["teams"]["home"]["id"]
         away_id = match["teams"]["away"]["id"]
