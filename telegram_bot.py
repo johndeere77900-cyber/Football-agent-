@@ -1299,7 +1299,7 @@ if __name__ == "__main__":
             "TELEGRAM_BOT_TOKEN or TELEGRAM_TOKEN is required."
         )
 
-    if not TELEGRAM_CHAT_ID:
+    if not CHAT_ID:
         raise RuntimeError(
             "TELEGRAM_CHAT_ID is required."
         )
