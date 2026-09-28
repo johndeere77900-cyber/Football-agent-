@@ -93,30 +93,61 @@ def _get(endpoint, params):
         1,
         MAX_RETRIES + 1,
     ):
-        resp = requests.get(
-            url,
-            headers=_headers(),
-            params=params,
-            timeout=15,
-        )
+        try:
+            resp = requests.get(
+                url,
+                headers=_headers(),
+                params=params,
+                timeout=15,
+            )
+        except requests.RequestException:
+            if attempt >= MAX_RETRIES:
+                raise
+
+            time.sleep(backoff)
+            backoff *= 2
+            continue
 
         if (
             resp.status_code == 429
             and attempt < MAX_RETRIES
         ):
             print(
-                "  Rate limited (429), "
+                "API-Football rate limited (429), "
                 f"retrying in {backoff}s "
-                f"(attempt {attempt}/{MAX_RETRIES})..."
+                f"(attempt {attempt}/{MAX_RETRIES})",
+                flush=True,
             )
 
             time.sleep(backoff)
             backoff *= 2
             continue
 
-        resp.raise_for_status()
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise RuntimeError(
+                "API-Football returned invalid JSON "
+                f"for /{endpoint} "
+                f"(HTTP {resp.status_code})."
+            ) from exc
 
-        data = resp.json()
+        if not resp.ok:
+            errors = data.get("errors")
+
+            raise RuntimeError(
+                "API-Football HTTP error: "
+                f"{resp.status_code}; "
+                f"errors={errors!r}"
+            )
+
+        api_errors = data.get("errors")
+
+        if api_errors:
+            raise RuntimeError(
+                "API-Football API error: "
+                f"{api_errors!r}"
+            )
 
         if data.get("response"):
             _cache_set(
@@ -126,7 +157,9 @@ def _get(endpoint, params):
 
         return data
 
-    resp.raise_for_status()
+    raise RuntimeError(
+        f"API-Football request failed: /{endpoint}"
+    )
 
 
 def get_fixtures_by_date(
