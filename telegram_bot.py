@@ -1,14 +1,14 @@
 """
-Telegram bot brain - understands what you're asking for and either answers
-instantly or runs a real prediction. Can run two ways: process a single
-message passed directly (via the Val Town webhook path), or poll for new
-messages (the older, now-disabled scheduled approach).
+Telegram interface for the football/basketball research agent.
+
+Receives one Telegram message at a time from the Val Town webhook ->
+GitHub Actions path. Separates factual questions from executable research
+commands. Legacy "strong/safe/best" keyword routing is intentionally removed.
 """
 
 import json
 import os
 import re
-import sys
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -18,300 +18,545 @@ import basketball_api
 import basketball_model
 import config
 import main as agent
-import odds_api
 import storage
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-
-OFFSET_FILE = "telegram_offset.txt"
 MEMORY_FILE = "telegram_memory.json"
+WAIT_TEXT = "Ready. What would you like me to analyze?"
 
-GREETINGS = {"hi", "hello", "hey", "yo", "sup", "what's up", "whats up", "morning", "evening"}
-STRONG_PICK_WORDS = {"strong", "safe", "sure", "best", "good", "solid", "reliable", "confident"}
+GREETINGS = {"hi", "hello", "hey", "yo", "sup", "morning", "evening", "good morning", "good evening"}
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+}
+COMMAND_VERBS = {
+    "analyze", "analyse", "backtest", "check", "compare", "find", "get",
+    "give", "list", "research", "run", "show", "predict", "scan",
+}
+QUESTION_MARKERS = {
+    "how", "what", "when", "where", "who", "which", "why", "is", "are",
+    "can", "does", "do", "will", "has", "have",
+}
+SUPPORTED_COMMAND_TERMS = {
+    "research", "analyze", "analyse", "predict", "find", "show", "list",
+    "give", "get", "check", "compare", "scan", "pick", "picks", "game",
+    "games", "match", "matches", "fixture", "fixtures", "football",
+    "soccer", "basketball", "nba",
+}
 
 
 def send_message(text):
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        raise RuntimeError("Telegram credentials are not configured.")
     resp = requests.post(
         f"{TELEGRAM_API}/sendMessage",
         json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
         timeout=15,
     )
-    if not resp.ok:
-        print(f"Telegram send failed: {resp.status_code} {resp.text}")
-
-
-def get_updates():
-    offset = 0
-    if os.path.exists(OFFSET_FILE):
-        with open(OFFSET_FILE) as f:
-            offset = int(f.read().strip() or 0)
-
-    resp = requests.get(f"{TELEGRAM_API}/getUpdates", params={"offset": offset, "timeout": 0}, timeout=15)
-    data = resp.json()
-    updates = data.get("result", [])
-
-    if updates:
-        new_offset = updates[-1]["update_id"] + 1
-        with open(OFFSET_FILE, "w") as f:
-            f.write(str(new_offset))
-
-    return updates
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    if not resp.ok or not data.get("ok"):
+        raise RuntimeError(
+            f"Telegram sendMessage failed: {resp.status_code} {resp.text[:400]}"
+        )
+    return data
 
 
 def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE) as f:
-            return json.load(f)
-    return {"preference_counts": {"football": 0, "basketball": 0}, "recent": []}
+    default = {"recent": [], "preference_counts": {"football": 0, "basketball": 0}}
+    if not os.path.exists(MEMORY_FILE):
+        return default
+    try:
+        with open(MEMORY_FILE, "r", encoding="utf-8") as handle:
+            memory = json.load(handle)
+    except (OSError, ValueError, TypeError):
+        return default
+    if not isinstance(memory, dict):
+        return default
+    if not isinstance(memory.get("recent"), list):
+        memory["recent"] = []
+    if not isinstance(memory.get("preference_counts"), dict):
+        memory["preference_counts"] = {"football": 0, "basketball": 0}
+    return memory
 
 
 def save_memory(memory):
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(memory, f)
+    with open(MEMORY_FILE, "w", encoding="utf-8") as handle:
+        json.dump(memory, handle, ensure_ascii=False, indent=2)
 
 
-def top_preference(memory):
-    counts = memory.get("preference_counts", {})
-    return "basketball" if counts.get("basketball", 0) > counts.get("football", 0) else "football"
+def normalize_text(text):
+    return re.sub(r"\s+", " ", str(text).strip().lower())
+
+
+def parse_quantity(text, default=5):
+    match = re.search(r"\b(\d{1,3})\b", text)
+    if match:
+        value = int(match.group(1))
+        return value if value > 0 else default
+    for token in re.findall(r"[a-z]+", text):
+        if token in NUMBER_WORDS:
+            return NUMBER_WORDS[token]
+    return default
 
 
 def mentions_league(text):
-    for name, league_id in config.LEAGUE_NAME_TO_ID.items():
-        if name in text:
+    normalized = normalize_text(text)
+    for name, league_id in sorted(
+        config.LEAGUE_NAME_TO_ID.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        if name in normalized:
             return name, league_id
     return None, None
 
 
+def detect_sport(text):
+    normalized = normalize_text(text)
+    if "basketball" in normalized or re.search(r"\bnba\b", normalized):
+        return "basketball"
+    if "football" in normalized or "soccer" in normalized:
+        return "football"
+    return None
+
+
 def resolve_date(text):
+    normalized = normalize_text(text)
     today = datetime.now(timezone.utc).date()
-
-    iso_match = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text)
+    iso_match = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", normalized)
     if iso_match:
-        return iso_match.group(0), iso_match.group(0)
+        value = iso_match.group(0)
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("The date in the message is invalid.") from exc
+        return value, value
+    if "tomorrow" in normalized:
+        return (today + timedelta(days=1)).isoformat(), "tomorrow"
+    if "today" in normalized or "tonight" in normalized:
+        return today.isoformat(), "today"
+    for index, day_name in enumerate(WEEKDAYS):
+        if re.search(rf"\b{day_name}\b", normalized):
+            days_ahead = (index - today.weekday()) % 7 or 7
+            return (today + timedelta(days=days_ahead)).isoformat(), day_name.title()
+    return today.isoformat(), "today"
 
-    if "tomorrow" in text:
-        d = today + timedelta(days=1)
-        return d.strftime("%Y-%m-%d"), "tomorrow"
 
-    for i, day_name in enumerate(WEEKDAYS):
-        if day_name in text:
-            days_ahead = (i - today.weekday()) % 7
-            days_ahead = days_ahead or 7
-            d = today + timedelta(days=days_ahead)
-            return d.strftime("%Y-%m-%d"), day_name.title()
+def classify_intent(text):
+    normalized = normalize_text(text)
+    if not normalized:
+        return "UNKNOWN"
+    if normalized in GREETINGS or normalized in {"/start", "/help", "help"}:
+        return "GREETING"
+    first_word = normalized.split(" ", 1)[0]
+    question_phrases = (
+        "how many", "how much", "what time", "when is", "when are",
+        "where is", "who is", "which team", "is there", "are there",
+        "is ", "are ", "does ", "do ", "can you tell", "tell me how many",
+    )
+    if "?" in normalized or first_word in QUESTION_MARKERS:
+        return "QUESTION"
+    if any(phrase in normalized for phrase in question_phrases):
+        return "QUESTION"
+    if first_word in COMMAND_VERBS:
+        return "COMMAND"
+    starters = (
+        "i want you to", "i need you to", "please", "go and", "go ahead and",
+        "run ", "look for", "find me", "give me", "show me", "get me",
+        "check ", "research ", "analyze ", "analyse ", "compare ",
+    )
+    if any(normalized.startswith(prefix) for prefix in starters):
+        return "COMMAND"
+    has_command_verb = any(
+        re.search(rf"\b{re.escape(verb)}\b", normalized)
+        for verb in COMMAND_VERBS
+    )
+    has_subject = any(
+        re.search(rf"\b{re.escape(term)}\b", normalized)
+        for term in SUPPORTED_COMMAND_TERMS
+    )
+    return "COMMAND" if has_command_verb and has_subject else "UNKNOWN"
 
-    return today.strftime("%Y-%m-%d"), "today"
+
+def format_fixture_time(fixture):
+    raw = fixture.get("fixture", {}).get("date")
+    if not raw:
+        return "time unavailable"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc).strftime("%H:%M UTC")
+    except (TypeError, ValueError):
+        return "time unavailable"
 
 
-def handle_count_question(text, memory):
-    name, league_id = mentions_league(text)
-    if not league_id:
-        return False
+def fixture_teams(fixture):
+    teams = fixture.get("teams", {})
+    home = teams.get("home", {}) or {}
+    away = teams.get("away", {}) or {}
+    return str(home.get("name") or ""), str(away.get("name") or "")
+
+
+def fixture_matches_team(fixture, team_query):
+    query = normalize_text(team_query)
+    home, away = fixture_teams(fixture)
+    return query in normalize_text(home) or query in normalize_text(away)
+
+
+def get_tracked_fixtures_for_date(date_str):
+    fixtures = api_football.get_fixtures_by_date(date_str)
+    if not isinstance(fixtures, list):
+        return []
+    return [
+        fixture for fixture in fixtures
+        if isinstance(fixture, dict)
+        and fixture.get("league", {}).get("id") in config.ALLOWED_LEAGUE_IDS
+    ]
+
+
+def handle_count_question(text):
+    league_name, league_id = mentions_league(text)
     date_str, date_label = resolve_date(text)
-    fixtures = api_football.get_fixtures_by_date(date_str, league_id)
-    if fixtures:
-        send_message(f"📊 There {'is' if len(fixtures)==1 else 'are'} *{len(fixtures)}* {name.title()} "
-                     f"match{'es' if len(fixtures)!=1 else ''} {date_label}.")
+    fixtures = get_tracked_fixtures_for_date(date_str)
+    if league_id:
+        fixtures = [
+            fixture for fixture in fixtures
+            if fixture.get("league", {}).get("id") == league_id
+        ]
+        label = league_name.title()
     else:
-        send_message(f"📊 No {name.title()} matches scheduled {date_label}.")
-    return True
-
-
-def handle_live_question(text, memory):
-    if "live" not in text:
-        return False
-
-    sport = "basketball" if ("basketball" in text or "nba" in text) else "football"
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    sport_emoji = "🏀" if sport == "basketball" else "⚽"
-
-    if sport == "football":
-        fixtures = api_football.get_fixtures_by_date(today)
-        fixtures = [f for f in fixtures if f["league"]["id"] in config.ALLOWED_LEAGUE_IDS]
-        live = [f for f in fixtures if f["fixture"]["status"]["short"] in agent.FOOTBALL_LIVE_STATUSES]
-        if not live:
-            send_message(f"{sport_emoji} Nothing live right now in your tracked leagues.")
-            return True
-        lines = [f"{sport_emoji} *{len(live)} live match(es):*\n"]
-        for f in live[:10]:
-            home, away = f["teams"]["home"]["name"], f["teams"]["away"]["name"]
-            elapsed = f["fixture"]["status"].get("elapsed", "?")
-            hg, ag = f["goals"]["home"] or 0, f["goals"]["away"] or 0
-            lines.append(f"{home} {hg}-{ag} {away} ({elapsed}')")
-        send_message("\n".join(lines))
-    else:
-        games = basketball_api.get_games_by_date(today, config.ALLOWED_BASKETBALL_LEAGUE_IDS[0])
-        live = [g for g in games if g.get("status", {}).get("short") not in
-                ("NS", "FT", "AOT", "CANC", "ABD")]
-        if not live:
-            send_message(f"{sport_emoji} No NBA games live right now.")
-            return True
-        lines = [f"{sport_emoji} *{len(live)} live game(s):*\n"]
-        for g in live[:10]:
-            home, away = g["teams"]["home"]["name"], g["teams"]["away"]["name"]
-            lines.append(f"{home} vs {away}")
-        send_message("\n".join(lines))
-
-    return True
-
-
-def handle_strong_picks(text, memory, n_default=5):
-    number_match = re.search(r"\d+", text)
-    n = int(number_match.group()) if number_match else n_default
-    fetch_odds = "odds" in text or "bookmaker" in text or "market" in text
-    date_str, date_label = resolve_date(text)
-
-    if "basketball" in text or "nba" in text:
-        sport = "basketball"
-    elif "football" in text or "soccer" in text:
-        sport = "football"
-    else:
-        sport = top_preference(memory)
-
-    memory["preference_counts"][sport] = memory["preference_counts"].get(sport, 0) + 1
-
-    sport_emoji = "🏀" if sport == "basketball" else "⚽"
-    send_message(f"{sport_emoji} On it - looking for {n} good {sport} pick(s) for {date_label}, one moment...")
-
-    results = []
-    if sport == "football":
-        fixtures = api_football.get_fixtures_by_date(date_str)
-        fixtures = [f for f in fixtures if f["league"]["id"] in config.ALLOWED_LEAGUE_IDS]
-        fixtures = [f for f in fixtures if f["fixture"]["status"]["short"] not in agent.FOOTBALL_FINISHED_STATUSES]
-        for fixture in fixtures[:12]:
-            try:
-                league_avg = agent.get_league_avg_goals(fixture["league"]["id"], fixture["league"]["season"])
-                pred = agent.predict_fixture(fixture, league_avg, fetch_odds)
-                if not pred["insufficient_data"] and pred["safest"]:
-                    results.append(pred)
-            except Exception:
-                continue
-    else:
-        games = basketball_api.get_games_by_date(date_str, config.ALLOWED_BASKETBALL_LEAGUE_IDS[0])
-        games = [g for g in games if g.get("status", {}).get("short") not in agent.BASKETBALL_FINISHED_STATUSES]
-        for game in games[:12]:
-            try:
-                pred = basketball_model.predict_game(game)
-                if pred["safest"]:
-                    results.append(pred)
-            except Exception:
-                continue
-
-    results.sort(key=lambda r: r["safest"]["probability"], reverse=True)
-    top_n = results[:n]
-
-    if not top_n:
-        send_message(
-            f"{sport_emoji} Nothing solid for {date_label} - either there's nothing scheduled, "
-            "or the teams playing don't have enough data yet. Try a different day!"
-        )
-        return
-
-    lines = [f"{sport_emoji} *Here's what looks good for {date_label}:*\n"]
-    for pred in top_n:
-        safest = pred["safest"]
-        emoji = "🟢" if safest["probability"] >= 0.75 else "🟡" if safest["probability"] >= 0.6 else "🔴"
-        line = f"*{pred['home_team']} vs {pred['away_team']}* ({pred['league']})\n  {emoji} {safest['label']} ({safest['probability']:.0%})"
-        if pred.get("odds_comparison"):
-            oc = pred["odds_comparison"]
-            line += f"\n  Market: Home {oc.get('implied_home_win', 0):.0%} | Away {oc.get('implied_away_win', 0):.0%}"
-        lines.append(line)
-    send_message("\n\n".join(lines))
-
-
-def handle_accuracy_question(text, memory):
-    if "accuracy" not in text and "track record" not in text and "how good" not in text:
-        return False
-
-    sport = "basketball" if ("basketball" in text or "nba" in text) else "football"
-    storage.init_db()
-    storage.init_basketball_db()
-    summary = storage.basketball_accuracy_summary() if sport == "basketball" else storage.accuracy_summary()
-
-    if summary["total_graded"] == 0:
-        send_message(f"📈 No graded {sport} predictions yet - check back after some matches finish.")
+        label = "tracked"
+    count = len(fixtures)
+    if count == 0:
+        send_message(f"📊 There are no {label} matches scheduled for {date_label}.")
         return True
+    noun = "match" if count == 1 else "matches"
+    send_message(f"📊 There are *{count}* {label} {noun} scheduled for {date_label}.")
+    return True
 
-    lines = [f"📈 *{sport.title()} track record:*\n",
-             f"Overall: {summary['overall_accuracy']:.0%} ({summary['total_graded']} graded)\n"]
-    for label, stats in summary.get("by_confidence", {}).items():
-        emoji = {"High": "🟢", "Moderate": "🟡", "Toss-up": "🔴"}.get(label, "")
-        lines.append(f"{emoji} {label}: {stats['accuracy']:.0%} ({stats['count']})")
+
+def handle_schedule_question(text):
+    normalized = normalize_text(text)
+    if not any(
+        phrase in normalized
+        for phrase in ("what time", "when is", "when are", "playing", "kickoff", "kick-off")
+    ):
+        return False
+    stop_words = {
+        "what", "time", "is", "are", "when", "will", "the", "a", "an",
+        "playing", "play", "kickoff", "kick-off", "today", "tomorrow",
+        "please", "me", "tell", "match", "game", "on", "at",
+    }
+    words = re.findall(r"[a-z0-9'-]+", normalized)
+    team_query = " ".join(word for word in words if word not in stop_words)
+    if not team_query:
+        return False
+    date_str, date_label = resolve_date(text)
+    dates_to_check = [date_str]
+    if date_label == "today":
+        dates_to_check.extend(
+            (datetime.fromisoformat(date_str).date() + timedelta(days=i)).isoformat()
+            for i in range(1, 7)
+        )
+    found = []
+    for candidate_date in dates_to_check:
+        fixtures = get_tracked_fixtures_for_date(candidate_date)
+        found.extend(
+            fixture for fixture in fixtures
+            if fixture_matches_team(fixture, team_query)
+        )
+        if found and date_label == "today":
+            break
+    if not found:
+        send_message(
+            f"📅 I couldn't find a scheduled tracked match for *{team_query}* "
+            f"starting {date_label}."
+        )
+        return True
+    lines = [f"📅 Matches for *{team_query}*:"]
+    for fixture in found[:5]:
+        home, away = fixture_teams(fixture)
+        league = fixture.get("league", {}).get("name", "Unknown league")
+        fixture_date = fixture.get("fixture", {}).get("date", "")
+        date_text = fixture_date[:10] if fixture_date else "date unavailable"
+        lines.append(
+            f"• {home} vs {away} — {date_text}, {format_fixture_time(fixture)} ({league})"
+        )
     send_message("\n".join(lines))
     return True
 
 
-def handle_start(memory):
-    send_message(
-        "👋 Hey, good to see you! I'm your football & basketball buddy.\n\n"
-        "Ask me stuff like:\n"
-        "• \"what's good today\" or \"find me some strong picks\"\n"
-        "• \"any solid basketball games tomorrow\"\n"
-        "• \"how many premier league games this saturday\"\n"
-        "• \"any live football games\"\n"
-        "• \"what's my accuracy so far\"\n\n"
-        "I check in every few minutes, so I might take a moment to reply."
+def handle_live_question(text):
+    normalized = normalize_text(text)
+    if "live" not in normalized:
+        return False
+    sport = detect_sport(text) or "football"
+    if sport == "football":
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        fixtures = get_tracked_fixtures_for_date(today)
+        live = [
+            fixture for fixture in fixtures
+            if fixture.get("fixture", {}).get("status", {}).get("short")
+            in set(agent.FOOTBALL_LIVE_STATUSES)
+        ]
+        if not live:
+            send_message("⚽ Nothing is live right now in the tracked football leagues.")
+            return True
+        lines = [f"⚽ *{len(live)} live football match(es):*"]
+        for fixture in live:
+            home, away = fixture_teams(fixture)
+            status = fixture.get("fixture", {}).get("status", {})
+            elapsed = status.get("elapsed", "?")
+            goals = fixture.get("goals", {})
+            hg = 0 if goals.get("home") is None else goals.get("home")
+            ag = 0 if goals.get("away") is None else goals.get("away")
+            lines.append(f"• {home} {hg}-{ag} {away} ({elapsed}')")
+        send_message("\n".join(lines))
+        return True
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    league_id = config.ALLOWED_BASKETBALL_LEAGUE_IDS[0]
+    games = basketball_api.get_games_by_date(today, league_id)
+    live = [
+        game for game in games
+        if game.get("status", {}).get("short") not in {"NS", "FT", "AOT", "CANC", "ABD"}
+    ]
+    if not live:
+        send_message("🏀 No tracked basketball games are live right now.")
+        return True
+    lines = [f"🏀 *{len(live)} live basketball game(s):*"]
+    for game in live:
+        home = game.get("teams", {}).get("home", {}).get("name", "Home")
+        away = game.get("teams", {}).get("away", {}).get("name", "Away")
+        status = game.get("status", {}).get("short", "LIVE")
+        lines.append(f"• {home} vs {away} ({status})")
+    send_message("\n".join(lines))
+    return True
+
+
+def handle_accuracy_question(text):
+    normalized = normalize_text(text)
+    if not any(term in normalized for term in ("accuracy", "track record", "graded predictions")):
+        return False
+    sport = detect_sport(text) or "football"
+    storage.init_db()
+    storage.init_basketball_db()
+    summary = (
+        storage.basketball_accuracy_summary()
+        if sport == "basketball"
+        else storage.accuracy_summary()
     )
+    total = summary.get("total_graded", 0)
+    if total == 0:
+        send_message(f"📈 There are no graded {sport} predictions yet.")
+        return True
+    lines = [
+        f"📈 *{sport.title()} prediction record:*",
+        f"Overall: {summary['overall_accuracy']:.0%} ({total} graded)",
+    ]
+    for label, stats in summary.get("by_confidence", {}).items():
+        lines.append(f"• {label}: {stats['accuracy']:.0%} ({stats['count']})")
+    send_message("\n".join(lines))
+    return True
+
+
+def research_football(date_str, quantity, fetch_odds):
+    fixtures = get_tracked_fixtures_for_date(date_str)
+    finished = set(agent.FOOTBALL_FINISHED_STATUSES)
+    fixtures = [
+        fixture for fixture in fixtures
+        if fixture.get("fixture", {}).get("status", {}).get("short") not in finished
+    ]
+    results = []
+    for fixture in fixtures:
+        try:
+            league_id = fixture["league"]["id"]
+            season = fixture["league"]["season"]
+            league_avg = agent.get_league_avg_goals(league_id, season)
+            prediction = agent.predict_fixture(fixture, league_avg, fetch_odds)
+        except (KeyError, TypeError, ValueError, requests.RequestException) as exc:
+            print(f"Skipping fixture due to expected data/API issue: {exc}", flush=True)
+            continue
+        if not isinstance(prediction, dict):
+            continue
+        safest = prediction.get("safest")
+        probability = safest.get("probability") if isinstance(safest, dict) else None
+        if prediction.get("insufficient_data") or not safest:
+            continue
+        if not isinstance(probability, (int, float)):
+            continue
+        results.append(prediction)
+    results.sort(key=lambda item: item["safest"]["probability"], reverse=True)
+    return results[:quantity]
+
+
+def research_basketball(date_str, quantity):
+    league_id = config.ALLOWED_BASKETBALL_LEAGUE_IDS[0]
+    games = basketball_api.get_games_by_date(date_str, league_id)
+    finished = set(agent.BASKETBALL_FINISHED_STATUSES)
+    games = [
+        game for game in games
+        if game.get("status", {}).get("short") not in finished
+    ]
+    results = []
+    for game in games:
+        try:
+            prediction = basketball_model.predict_game(game)
+        except (KeyError, TypeError, ValueError, requests.RequestException) as exc:
+            print(f"Skipping basketball game due to expected data/API issue: {exc}", flush=True)
+            continue
+        if not isinstance(prediction, dict):
+            continue
+        safest = prediction.get("safest")
+        probability = safest.get("probability") if isinstance(safest, dict) else None
+        if prediction.get("insufficient_data") or not safest:
+            continue
+        if not isinstance(probability, (int, float)):
+            continue
+        results.append(prediction)
+    results.sort(key=lambda item: item["safest"]["probability"], reverse=True)
+    return results[:quantity]
+
+
+def handle_research_command(text):
+    normalized = normalize_text(text)
+    if not any(
+        term in normalized
+        for term in (
+            "research", "analyze", "analyse", "predict", "find", "show",
+            "list", "give", "get", "scan", "pick", "picks",
+        )
+    ):
+        return False
+    sport = detect_sport(text)
+    if sport is None:
+        send_message(
+            "I understand the command, but please specify football or basketball."
+        )
+        return True
+    quantity = parse_quantity(text, default=5)
+    if quantity > 100:
+        send_message("I can research up to 100 matches in one command.")
+        return True
+    date_str, date_label = resolve_date(text)
+    fetch_odds = any(
+        term in normalized
+        for term in ("odds", "bookmaker", "market price", "price")
+    )
+    send_message(
+        f"🔎 Command received: researching {quantity} {sport} match(es) for {date_label}."
+    )
+    results = (
+        research_football(date_str, quantity, fetch_odds)
+        if sport == "football"
+        else research_basketball(date_str, quantity)
+    )
+    if not results:
+        send_message(
+            f"🔎 No {sport} predictions could be produced for {date_label} "
+            "from the available data."
+        )
+        return True
+    emoji = "⚽" if sport == "football" else "🏀"
+    lines = [
+        f"{emoji} *Research results — {date_label}*",
+        f"Requested: {quantity} | Produced: {len(results)}",
+    ]
+    for prediction in results:
+        safest = prediction["safest"]
+        lines.append(
+            f"\n*{prediction.get('home_team', 'Home')} vs "
+            f"{prediction.get('away_team', 'Away')}*\n"
+            f"• {safest.get('label', 'Selected market')}: "
+            f"{safest['probability']:.0%}"
+        )
+        if prediction.get("league"):
+            lines.append(f"• League: {prediction['league']}")
+    send_message("\n".join(lines))
+    return True
+
+
+def handle_question(text):
+    if handle_accuracy_question(text):
+        return True
+    if handle_schedule_question(text):
+        return True
+    normalized = normalize_text(text)
+    if "how many" in normalized or "how many games" in normalized or "how many matches" in normalized:
+        return handle_count_question(text)
+    if handle_live_question(text):
+        return True
+    return False
+
+
+def handle_greeting(text):
+    normalized = normalize_text(text)
+    if normalized in {"/start", "/help", "help"}:
+        send_message(
+            "👋 I understand natural-language questions and commands.\n\n"
+            "*Questions:* \"How many Premier League games are today?\" "
+            "or \"What time is Arsenal playing?\"\n\n"
+            "*Commands:* \"Research 10 football games today\" or "
+            "\"Analyze tomorrow's NBA games.\"\n\n"
+            f"Unsupported messages stay in WAIT STATE: *{WAIT_TEXT}*"
+        )
+        return True
+    if normalized in GREETINGS:
+        send_message(WAIT_TEXT)
+        return True
+    return False
 
 
 def handle_message(text, memory):
-    text = text.lower().strip()
-    memory["recent"].append(text)
-    memory["recent"] = memory["recent"][-10:]
-
-    if text in ("/start", "/help", "help") or text in GREETINGS:
-        handle_start(memory)
+    original = str(text or "").strip()
+    if not original:
+        send_message(WAIT_TEXT)
         return
-
-    if handle_accuracy_question(text, memory):
+    recent = memory.setdefault("recent", [])
+    recent.append(original)
+    memory["recent"] = recent[-20:]
+    intent = classify_intent(original)
+    print(f"Intent={intent} message={original!r}", flush=True)
+    if intent == "GREETING":
+        handle_greeting(original)
         return
-
-    if handle_live_question(text, memory):
-        return
-
-    if "how many" in text or ("how much" in text and "game" in text):
-        if handle_count_question(text, memory):
+    if intent == "QUESTION":
+        if handle_question(original):
             return
-
-    has_number = bool(re.search(r"\d+", text))
-    mentions_games = any(w in text for w in ["game", "match", "pick", "fixture"])
-    mentions_strong = any(w in text for w in STRONG_PICK_WORDS)
-
-    if mentions_games or (mentions_strong and (has_number or "today" in text or "tonight" in text
-                                                or "tomorrow" in text or any(d in text for d in WEEKDAYS))):
-        handle_strong_picks(text, memory)
+        send_message(
+            "I understand that as a question, but I don't have a supported "
+            "data handler for it yet."
+        )
         return
-
-    send_message(
-        "Hmm, not sure I caught that one 🤔 Try something like \"what's good tomorrow\" "
-        "or \"any live games right now\"!"
-    )
+    if intent == "COMMAND":
+        if handle_research_command(original):
+            return
+        send_message(
+            "I understand that as a command, but it is outside the current "
+            "football/basketball research capabilities."
+        )
+        return
+    send_message(WAIT_TEXT)
 
 
 if __name__ == "__main__":
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("Telegram credentials not configured, skipping.")
-        sys.exit(0)
-
+        raise RuntimeError("Telegram credentials are not configured.")
     memory = load_memory()
-
     single_message = os.environ.get("TELEGRAM_MESSAGE")
-    if single_message:
-        print(f"Processing single message: {single_message}")
+    if not single_message:
+        raise RuntimeError(
+            "Polling mode is disabled. Telegram messages must arrive through Val Town."
+        )
+    print(f"Processing single Telegram message: {single_message}", flush=True)
+    try:
         handle_message(single_message, memory)
+    finally:
         save_memory(memory)
-        sys.exit(0)
-
-    updates = get_updates()
-    for update in updates:
-        message = update.get("message")
-        if not message or not message.get("text"):
-            continue
-        if str(message["chat"]["id"]) != CHAT_ID:
-            continue
-        handle_message(message["text"], memory)
-
-    save_memory(memory)
