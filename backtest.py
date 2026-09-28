@@ -2,7 +2,7 @@
 Backtesting and prediction-building helpers.
 
 Historical backtesting uses the authoritative prediction_engine so that
-the mathematical prediction path is shared with production.
+production and historical predictions share the same mathematical path.
 
 Historical feature construction is strictly cutoff-safe:
 - completed matches only;
@@ -13,8 +13,16 @@ Historical feature construction is strictly cutoff-safe:
 - historical H2H;
 - chronological historical Elo.
 
-The legacy API-backed helper functions remain available for the existing
-production path until main.py is migrated to prediction_engine.
+Market grading is performed after prediction generation:
+- 1X2;
+- Double Chance;
+- Over/Under;
+- BTTS;
+- team goals;
+- predicted top scoreline.
+
+Historical corners/cards can optionally be enriched in batches through
+API-Football. Missing statistical data is never fabricated.
 """
 
 from __future__ import annotations
@@ -27,7 +35,7 @@ import config
 import historical_elo
 import historical_features
 import historical_h2h
-import poisson_model
+import market_grading
 import prediction_engine
 
 
@@ -106,6 +114,7 @@ def estimate_recent_form_goals(
         )
 
     last = last or config.RECENT_FORM_MATCHES
+
     matches = api_football.get_recent_form(
         team_id,
         last=last,
@@ -206,9 +215,7 @@ def blend_three(
     recent_ratio,
     h2h_ratio,
 ):
-    """
-    Compatibility wrapper around the authoritative configured blend.
-    """
+    """Compatibility wrapper around the authoritative configured blend."""
     return prediction_engine.blend_signal(
         season_ratio,
         recent_ratio,
@@ -220,7 +227,7 @@ def estimate_avg_cards(
     team_stats,
     league_avg_cards=3.8,
 ):
-    """Estimate average yellow cards from current API statistics."""
+    """Legacy current-statistics card estimator."""
     if not isinstance(team_stats, dict):
         return league_avg_cards
 
@@ -262,8 +269,6 @@ def predict_match(
 ):
     """
     Compatibility wrapper for the shared mathematical prediction engine.
-
-    This helper has no H2H/Elo context, so it supplies neutral H2H values.
     """
     features = {
         "home_attack": home_attack,
@@ -330,13 +335,7 @@ def _compute_stats_as_of(
     team_id,
     cutoff,
 ):
-    """
-    Compatibility wrapper around the authoritative historical feature
-    calculation.
-
-    This remains available for existing tests/callers, but run_real_backtest
-    no longer uses it directly.
-    """
+    """Compatibility wrapper around historical feature calculation."""
     result = historical_features.team_goal_averages(
         all_fixtures,
         team_id,
@@ -423,9 +422,7 @@ def _sample_backtest_candidates(
     sample_size,
     seed=42,
 ):
-    """
-    Select a reproducible sample without changing global random state.
-    """
+    """Select a reproducible sample without changing global RNG state."""
     if (
         not isinstance(sample_size, int)
         or isinstance(sample_size, bool)
@@ -459,8 +456,6 @@ def _historical_prediction_for_fixture(
 ):
     """
     Build a complete leakage-safe prediction for one historical fixture.
-
-    Every feature is reconstructed from the same fixture cutoff.
     """
     cutoff = (
         match
@@ -602,26 +597,529 @@ def _actual_match_result(match):
     return "draw"
 
 
+def _fixture_id(match):
+    value = (
+        match
+        .get("fixture", {})
+        .get("id")
+    )
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pick_single_distribution(
+    probabilities,
+    actual_distribution,
+):
+    """
+    Grade the highest-probability outcome in one distribution.
+
+    The full probability distribution remains untouched elsewhere.
+    """
+    if not isinstance(probabilities, dict):
+        return None
+
+    valid = {
+        key: value
+        for key, value in probabilities.items()
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        )
+    }
+
+    if not valid:
+        return None
+
+    selected = max(
+        valid,
+        key=valid.get,
+    )
+
+    actual = (
+        actual_distribution.get(selected)
+        if isinstance(actual_distribution, dict)
+        else None
+    )
+
+    if not isinstance(actual, dict):
+        return {
+            "pick": selected,
+            "probability": valid[selected],
+            "won": None,
+            "outcome": None,
+        }
+
+    return {
+        "pick": selected,
+        "probability": valid[selected],
+        "won": (
+            selected
+            == actual.get("outcome")
+            if actual.get("outcome") is not None
+            else None
+        ),
+        "outcome": actual.get("outcome"),
+    }
+
+
+def _pick_binary_line(
+    probabilities,
+    actual_distribution,
+    over_key,
+    under_key,
+):
+    if not isinstance(probabilities, dict):
+        return None
+
+    candidates = {}
+
+    for key in (over_key, under_key):
+        value = probabilities.get(key)
+
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
+            candidates[key] = value
+
+    if not candidates:
+        return None
+
+    selected = max(
+        candidates,
+        key=candidates.get,
+    )
+
+    actual = (
+        actual_distribution.get(selected)
+        if isinstance(actual_distribution, dict)
+        else None
+    )
+
+    if not isinstance(actual, dict):
+        return {
+            "pick": selected,
+            "probability": candidates[selected],
+            "won": None,
+            "outcome": None,
+        }
+
+    return {
+        "pick": selected,
+        "probability": candidates[selected],
+        "won": (
+            selected
+            == actual.get("outcome")
+            if actual.get("outcome") is not None
+            else None
+        ),
+        "outcome": actual.get("outcome"),
+    }
+
+
+def _grade_prediction_markets(
+    prediction_markets,
+    fixture,
+):
+    """
+    Grade every probability distribution produced by prediction_engine.
+
+    This grades selected outcomes while retaining the complete original
+    probability distributions in the prediction record.
+    """
+    outcomes = market_grading.grade_goal_markets(
+        fixture
+        .get("goals", {})
+        .get("home"),
+        fixture
+        .get("goals", {})
+        .get("away"),
+    )
+
+    selected = {}
+
+    selected["match_result"] = _pick_single_distribution(
+        prediction_markets.get("match_result"),
+        outcomes.get("match_result"),
+    )
+
+    selected["double_chance"] = _pick_single_distribution(
+        prediction_markets.get("double_chance"),
+        outcomes.get("double_chance"),
+    )
+
+    selected["btts"] = _pick_single_distribution(
+        prediction_markets.get("btts"),
+        outcomes.get("btts"),
+    )
+
+    over_under_selected = {}
+
+    predicted_over_under = prediction_markets.get(
+        "over_under",
+        {},
+    )
+
+    actual_over_under = outcomes.get(
+        "over_under",
+        {},
+    )
+
+    if isinstance(predicted_over_under, dict):
+        for key in predicted_over_under:
+            if not key.startswith("over_"):
+                continue
+
+            suffix = key[len("over_"):]
+            under_key = f"under_{suffix}"
+
+            picked = _pick_binary_line(
+                predicted_over_under,
+                actual_over_under,
+                key,
+                under_key,
+            )
+
+            if picked is not None:
+                over_under_selected[suffix] = picked
+
+    selected["over_under"] = over_under_selected
+
+    team_goals_selected = {}
+
+    predicted_team_goals = prediction_markets.get(
+        "team_goals",
+        {},
+    )
+
+    actual_team_goals = outcomes.get(
+        "team_goals",
+        {},
+    )
+
+    if isinstance(predicted_team_goals, dict):
+        for prefix in ("home", "away"):
+            for key in predicted_team_goals:
+                start = f"{prefix}_over_"
+
+                if not key.startswith(start):
+                    continue
+
+                suffix = key[len(start):]
+
+                under_key = (
+                    f"{prefix}_under_{suffix}"
+                )
+
+                picked = _pick_binary_line(
+                    predicted_team_goals,
+                    actual_team_goals,
+                    key,
+                    under_key,
+                )
+
+                if picked is not None:
+                    team_goals_selected[
+                        f"{prefix}_{suffix}"
+                    ] = picked
+
+    selected["team_goals"] = team_goals_selected
+
+    top_scorelines = prediction_markets.get(
+        "top_scorelines",
+        [],
+    )
+
+    scoreline_actual = outcomes.get(
+        "scoreline"
+    )
+
+    if isinstance(top_scorelines, list) and top_scorelines:
+        first = top_scorelines[0]
+
+        if isinstance(first, dict):
+            predicted_score = first.get("score")
+            probability = first.get("probability")
+
+            if (
+                predicted_score is not None
+                and isinstance(
+                    probability,
+                    (int, float),
+                )
+                and not isinstance(
+                    probability,
+                    bool,
+                )
+            ):
+                selected["scoreline"] = {
+                    "pick": predicted_score,
+                    "probability": probability,
+                    "won": (
+                        predicted_score
+                        == scoreline_actual.get("outcome")
+                        if isinstance(
+                            scoreline_actual,
+                            dict,
+                        )
+                        else None
+                    ),
+                    "outcome": (
+                        scoreline_actual.get("outcome")
+                        if isinstance(
+                            scoreline_actual,
+                            dict,
+                        )
+                        else None
+                    ),
+                }
+            else:
+                selected["scoreline"] = None
+        else:
+            selected["scoreline"] = None
+    else:
+        selected["scoreline"] = None
+
+    return {
+        "selected": selected,
+        "outcomes": outcomes,
+    }
+
+
+def _new_market_summary():
+    return {
+        "match_result": {
+            "graded": 0,
+            "correct": 0,
+            "accuracy": 0.0,
+        },
+        "double_chance": {
+            "graded": 0,
+            "correct": 0,
+            "accuracy": 0.0,
+        },
+        "over_under": {},
+        "btts": {
+            "graded": 0,
+            "correct": 0,
+            "accuracy": 0.0,
+        },
+        "team_goals": {},
+        "scoreline": {
+            "graded": 0,
+            "correct": 0,
+            "accuracy": 0.0,
+        },
+    }
+
+
+def _update_summary_entry(
+    summary,
+    key,
+    selected,
+):
+    if not isinstance(selected, dict):
+        return
+
+    won = selected.get("won")
+
+    if won not in (True, False):
+        return
+
+    entry = summary.setdefault(
+        key,
+        {
+            "graded": 0,
+            "correct": 0,
+            "accuracy": 0.0,
+        },
+    )
+
+    entry["graded"] += 1
+
+    if won:
+        entry["correct"] += 1
+
+    entry["accuracy"] = (
+        entry["correct"]
+        / entry["graded"]
+        if entry["graded"]
+        else 0.0
+    )
+
+
+def _update_market_summary(
+    summary,
+    selected,
+):
+    if not isinstance(selected, dict):
+        return
+
+    _update_summary_entry(
+        summary,
+        "match_result",
+        selected.get("match_result"),
+    )
+
+    _update_summary_entry(
+        summary,
+        "double_chance",
+        selected.get("double_chance"),
+    )
+
+    _update_summary_entry(
+        summary,
+        "btts",
+        selected.get("btts"),
+    )
+
+    _update_summary_entry(
+        summary,
+        "scoreline",
+        selected.get("scoreline"),
+    )
+
+    for line, result in (
+        selected
+        .get("over_under", {})
+        .items()
+    ):
+        _update_summary_entry(
+            summary["over_under"],
+            line,
+            result,
+        )
+
+    for line, result in (
+        selected
+        .get("team_goals", {})
+        .items()
+    ):
+        _update_summary_entry(
+            summary["team_goals"],
+            line,
+            result,
+        )
+
+
+def _statistical_actuals(
+    enriched_fixture,
+):
+    """
+    Return actual corners/cards only when enrichment supplied them.
+
+    No prediction is created here because the current prediction engine
+    does not yet generate historical corner/card probability distributions.
+    """
+    if not isinstance(enriched_fixture, dict):
+        return {
+            "corners": {},
+            "cards": {},
+        }
+
+    graded = market_grading.grade_statistical_markets(
+        enriched_fixture
+    )
+
+    return {
+        "corners": graded.get(
+            "corners",
+            {},
+        ),
+        "cards": graded.get(
+            "cards",
+            {},
+        ),
+    }
+
+
+def _prepare_statistical_enrichment(
+    candidates,
+    enrich_statistics,
+):
+    if not isinstance(enrich_statistics, bool):
+        raise ValueError(
+            "enrich_statistics must be a boolean."
+        )
+
+    if not enrich_statistics:
+        return {}, None
+
+    fixture_ids = [
+        _fixture_id(match)
+        for match in candidates
+    ]
+
+    fixture_ids = [
+        fixture_id
+        for fixture_id in fixture_ids
+        if fixture_id is not None
+    ]
+
+    if not fixture_ids:
+        return {}, None
+
+    try:
+        enriched = api_football.get_enriched_fixtures(
+            fixture_ids
+        )
+
+        if not isinstance(enriched, dict):
+            return {}, (
+                "Fixture enrichment returned "
+                "an invalid result."
+            )
+
+        return enriched, None
+
+    except Exception as exc:
+        return {}, str(exc)
+
+
 def run_real_backtest(
     league_id,
     season,
     sample_size=20,
     min_prior_matches=5,
     sample_seed=42,
+    enrich_statistics=False,
 ):
     """
-    Run a chronological historical backtest using the authoritative
-    prediction engine.
+    Run a chronological historical backtest.
 
-    The API is used only once to retrieve the league fixture dataset.
-    Historical features are then calculated locally from stored/fetched
-    fixtures, preventing per-fixture feature API calls.
+    API behaviour:
+    - One league-fixture retrieval for the historical dataset.
+    - Optional batched fixture enrichment for corners/cards.
+    - No per-fixture feature API requests.
+    - No fallback/fabricated historical statistical values.
+
+    The full prediction probability distributions remain in each log row.
+    Market-level grading is stored separately from the predictions.
     """
-    if not isinstance(league_id, int):
-        raise ValueError("league_id must be an integer.")
+    if (
+        not isinstance(league_id, int)
+        or isinstance(league_id, bool)
+    ):
+        raise ValueError(
+            "league_id must be an integer."
+        )
 
-    if not isinstance(season, int):
-        raise ValueError("season must be an integer.")
+    if (
+        not isinstance(season, int)
+        or isinstance(season, bool)
+    ):
+        raise ValueError(
+            "season must be an integer."
+        )
+
+    if not isinstance(enrich_statistics, bool):
+        raise ValueError(
+            "enrich_statistics must be a boolean."
+        )
 
     all_fixtures = api_football.get_league_fixtures(
         league_id,
@@ -684,6 +1182,26 @@ def run_real_backtest(
         f"for backtest (seed={sample_seed})"
     )
 
+    enriched_fixtures, enrichment_error = (
+        _prepare_statistical_enrichment(
+            candidates,
+            enrich_statistics,
+        )
+    )
+
+    if enrichment_error:
+        print(
+            "WARNING: historical fixture enrichment "
+            f"unavailable: {enrichment_error}"
+        )
+
+    market_summary = _new_market_summary()
+
+    statistical_data_available = {
+        "corners": 0,
+        "cards": 0,
+    }
+
     correct = 0
     graded = 0
     log = []
@@ -713,6 +1231,34 @@ def run_real_backtest(
 
         is_correct = predicted == actual
 
+        market_grade = _grade_prediction_markets(
+            markets,
+            match,
+        )
+
+        _update_market_summary(
+            market_summary,
+            market_grade["selected"],
+        )
+
+        fixture_id = _fixture_id(match)
+
+        enriched_fixture = (
+            enriched_fixtures.get(fixture_id)
+            if fixture_id is not None
+            else None
+        )
+
+        statistical_actuals = _statistical_actuals(
+            enriched_fixture
+        )
+
+        if statistical_actuals["corners"]:
+            statistical_data_available["corners"] += 1
+
+        if statistical_actuals["cards"]:
+            statistical_data_available["cards"] += 1
+
         graded += 1
         correct += int(is_correct)
 
@@ -736,6 +1282,18 @@ def run_real_backtest(
                 "probabilities": dict(
                     markets["match_result"]
                 ),
+                "markets": markets,
+                "market_grading": {
+                    "selected": market_grade[
+                        "selected"
+                    ],
+                    "outcomes": market_grade[
+                        "outcomes"
+                    ],
+                    "statistical_actuals": (
+                        statistical_actuals
+                    ),
+                },
                 "expected_goals": dict(
                     prediction["expected_goals"]
                 ),
@@ -766,6 +1324,12 @@ def run_real_backtest(
         "sample_size": len(candidates),
         "min_prior_matches": min_prior_matches,
         "sample_seed": sample_seed,
+        "statistics_enriched": enrich_statistics,
+        "statistical_enrichment_error": enrichment_error,
+        "statistical_data_available": (
+            statistical_data_available
+        ),
+        "market_summary": market_summary,
         "log": log,
     }
 
