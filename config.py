@@ -15,6 +15,7 @@ API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io"
 API_BASKETBALL_BASE_URL = "https://v1.basketball.api-sports.io"
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 
+ODDS_CACHE_TTL_MINUTES = 15
 # --- Model settings (football) ----------------------------------------------
 RECENT_FORM_MATCHES = 8
 HEAD_TO_HEAD_MATCHES = 6
