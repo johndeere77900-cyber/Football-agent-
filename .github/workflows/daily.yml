@@ -3,24 +3,51 @@ name: Daily Football Predictions
 on:
   schedule:
     - cron: '0 11 * * 3,6'
+
   workflow_dispatch:
     inputs:
       football_games:
         description: 'Number of football matches to predict (blank = skip football)'
         required: false
         default: ''
+
       basketball_games:
         description: 'Number of basketball games to predict (blank = skip basketball)'
         required: false
         default: ''
 
-    
+# IMPORTANT:
+# This MUST be the same concurrency group used by telegram_webhook.yml.
+#
+# Both workflows modify predictions.db.
+# Serializing them prevents a stale checkout from overwriting newer
+# prediction or grading records.
+concurrency:
+  group: prediction-repo-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
 jobs:
   predict:
     runs-on: ubuntu-latest
+
+    timeout-minutes: 30
+
     steps:
+      # -------------------------------------------------------------------
+      # Repository
+      # -------------------------------------------------------------------
+
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # -------------------------------------------------------------------
+      # Python
+      # -------------------------------------------------------------------
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,14 +55,27 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+
+      # -------------------------------------------------------------------
+      # Football grading
+      # -------------------------------------------------------------------
 
       - name: Grade yesterday's football predictions
         continue-on-error: true
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-        run: python3 main.py --grade
+        run: |
+          set -euo pipefail
+          python3 main.py --grade
+
+      # -------------------------------------------------------------------
+      # Football predictions
+      # -------------------------------------------------------------------
 
       - name: Run football predictions
         if: github.event_name == 'schedule' || github.event.inputs.football_games != ''
@@ -44,11 +84,19 @@ jobs:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
+          set -euo pipefail
+
           LIMIT="${{ github.event.inputs.football_games }}"
+
           if [ -z "$LIMIT" ]; then
             LIMIT="12"
           fi
+
           python3 main.py --limit "$LIMIT"
+
+      # -------------------------------------------------------------------
+      # Football accuracy
+      # -------------------------------------------------------------------
 
       - name: Show football accuracy report
         continue-on-error: true
@@ -56,14 +104,26 @@ jobs:
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-        run: python3 main.py --accuracy
+        run: |
+          set -euo pipefail
+          python3 main.py --accuracy
+
+      # -------------------------------------------------------------------
+      # Basketball grading
+      # -------------------------------------------------------------------
 
       - name: Grade yesterday's basketball predictions
         continue-on-error: true
         if: always()
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-        run: python3 main.py --sport basketball --grade
+        run: |
+          set -euo pipefail
+          python3 main.py --sport basketball --grade
+
+      # -------------------------------------------------------------------
+      # Basketball predictions
+      # -------------------------------------------------------------------
 
       - name: Run basketball predictions
         if: github.event_name == 'schedule' || github.event.inputs.basketball_games != ''
@@ -71,29 +131,62 @@ jobs:
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
+          set -euo pipefail
+
           LIMIT="${{ github.event.inputs.basketball_games }}"
+
           if [ -z "$LIMIT" ]; then
             LIMIT="10"
           fi
-          python3 main.py --sport basketball --limit "$LIMIT"
+
+          python3 main.py \
+            --sport basketball \
+            --limit "$LIMIT"
+
+      # -------------------------------------------------------------------
+      # Basketball accuracy
+      # -------------------------------------------------------------------
 
       - name: Show basketball accuracy report
         continue-on-error: true
         if: always()
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-        run: python3 main.py --sport basketball --accuracy
+        run: |
+          set -euo pipefail
+          python3 main.py --sport basketball --accuracy
+
+      # -------------------------------------------------------------------
+      # Dashboard
+      # -------------------------------------------------------------------
 
       - name: Generate dashboard
         if: always()
-        run: python3 generate_dashboard.py
+        run: |
+          set -euo pipefail
+          python3 generate_dashboard.py
+
+      # -------------------------------------------------------------------
+      # Persist database + dashboard
+      # -------------------------------------------------------------------
 
       - name: Save results back to the repo
         if: always()
         run: |
+          set -euo pipefail
+
           git config user.name "sports-agent-bot"
           git config user.email "actions@github.com"
-          git add predictions.db DASHBOARD.md
-          git diff --staged --quiet || git commit -m "Prediction update $(date -u +%Y-%m-%d)"
-          git push
-      
+
+          # Both the prediction database and dashboard are generated state.
+          git add predictions.db DASHBOARD.md 2>/dev/null || true
+
+          if git diff --staged --quiet; then
+            echo "No prediction-state changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "Prediction update $(date -u +%Y-%m-%d)"
+
+          git push origin HEAD:${GITHUB_REF_NAME}
