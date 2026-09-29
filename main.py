@@ -1142,8 +1142,7 @@ def predict_fixture(
             current_away_goals
         ):
             current_away_goals = 0
-
-      markets = (
+            markets = (
             live_model.live_market_probabilities(
                 prediction[
                     "expected_goals"
