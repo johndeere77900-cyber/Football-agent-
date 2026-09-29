@@ -1067,8 +1067,15 @@ def compute_brier_score(
     predictions: Sequence[Dict[str, float]],
     actuals: Sequence[str],
     outcomes: Optional[Sequence[str]] = None,
+    target_outcome: Optional[str] = None,
 ) -> Optional[float]:
-    """Compute multi-class or binary Brier score over all prediction distributions."""
+    """
+    Compute Brier score over all predictions.
+
+    For binary events (2 complementary outcomes), computes standard binary
+    Brier score (p_event - y)^2. For multi-class events (3+ outcomes), computes
+    multiclass Brier score sum_k (p_k - y_k)^2.
+    """
     if not predictions or len(predictions) != len(actuals):
         return None
 
@@ -1083,11 +1090,21 @@ def compute_brier_score(
         if actual not in possible_outcomes:
             continue
 
-        sample_error = 0.0
-        for outcome in possible_outcomes:
-            prob = _safe_float(pred.get(outcome, 0.0)) or 0.0
-            target = 1.0 if actual == outcome else 0.0
-            sample_error += (prob - target) ** 2
+        if target_outcome is not None:
+            prob = _safe_float(pred.get(target_outcome, 0.0)) or 0.0
+            target = 1.0 if actual == target_outcome else 0.0
+            sample_error = (prob - target) ** 2
+        elif len(possible_outcomes) == 2:
+            event_outcome = possible_outcomes[0]
+            prob = _safe_float(pred.get(event_outcome, 0.0)) or 0.0
+            target = 1.0 if actual == event_outcome else 0.0
+            sample_error = (prob - target) ** 2
+        else:
+            sample_error = 0.0
+            for outcome in possible_outcomes:
+                prob = _safe_float(pred.get(outcome, 0.0)) or 0.0
+                target = 1.0 if actual == outcome else 0.0
+                sample_error += (prob - target) ** 2
 
         total_squared_error += sample_error
         count += 1

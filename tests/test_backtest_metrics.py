@@ -202,8 +202,8 @@ def test_over_under_2_5_evaluation_consistency():
     acts = ["over"]
 
     brier = backtest.compute_brier_score(preds, acts, outcomes=("over", "under"))
-    # (0.45 - 1.0)^2 + (0.55 - 0.0)^2 = 0.55^2 + 0.55^2 = 0.3025 + 0.3025 = 0.605
-    assert abs(brier - 0.605) < 1e-6
+    # Standard binary Brier score: (p_over - y)^2 = (0.45 - 1.0)^2 = 0.3025
+    assert abs(brier - 0.3025) < 1e-6
 
     log_loss = backtest.compute_log_loss(preds, acts, outcomes=("over", "under"))
     # -ln(0.45) = 0.798507696
