@@ -19,6 +19,7 @@ averages, not cumulative season totals.
 """
 
 import argparse
+import math
 import sys
 from datetime import datetime, timezone
 
@@ -156,11 +157,14 @@ def _valid_nonnegative_number(value):
     except (TypeError, ValueError):
         return False
 
-    return number >= 0
+    return (
+        math.isfinite(number)
+        and number >= 0
+    )
 
 
 def _valid_probability(value):
-    """Return True when value is a probability in [0, 1]."""
+    """Return True when value is a finite probability in [0, 1]."""
     if isinstance(value, bool):
         return False
 
@@ -169,7 +173,32 @@ def _valid_probability(value):
     except (TypeError, ValueError):
         return False
 
-    return 0.0 <= number <= 1.0
+    return (
+        math.isfinite(number)
+        and 0.0 <= number <= 1.0
+    )
+
+
+def _valid_goal(value):
+    """
+    Return True when value is a finite, non-negative whole-number goal.
+
+    Football and basketball final scores are integer counts. Decimal,
+    negative, boolean, NaN, and infinite values are rejected rather than
+    silently converted.
+    """
+    if isinstance(value, bool):
+        return False
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+
+    if not math.isfinite(number) or number < 0:
+        return False
+
+    return number.is_integer()
 
 
 # ----------------------------------------------------------------------
@@ -229,6 +258,7 @@ def get_league_avg_goals(league_id, season):
             if (
                 isinstance(played, (int, float))
                 and not isinstance(played, bool)
+                and math.isfinite(float(played))
                 and played > 0
                 and isinstance(
                     goals_for,
@@ -238,6 +268,7 @@ def get_league_avg_goals(league_id, season):
                     goals_for,
                     bool,
                 )
+                and math.isfinite(float(goals_for))
                 and goals_for >= 0
             ):
                 total_played += int(played)
@@ -370,7 +401,10 @@ def _extract_average_goals(
 
         value = float(value)
 
-        if value < 0:
+        if (
+            not math.isfinite(value)
+            or value < 0
+        ):
             return None
 
         return value
@@ -682,7 +716,10 @@ def _estimate_avg_cards(team_stats):
 
             total = float(total)
 
-            if total < 0:
+            if (
+                not math.isfinite(total)
+                or total < 0
+            ):
                 return None
 
             total_yellow += total
@@ -1237,6 +1274,986 @@ def predict_fixture(
             "h2h": h2h,
             "league_avg_goals": league_avg_goals,
         },
+}
+
+
+# ----------------------------------------------------------------------
+# Presentation
+# ----------------------------------------------------------------------
+
+
+def print_prediction(pred):
+    """Print one production prediction safely."""
+    if not isinstance(pred, dict):
+        raise ValueError(
+            "Prediction must be a dictionary."
+        )
+
+    if pred.get("insufficient_data"):
+        print(
+            f"\n{pred.get('home_team')} vs "
+            f"{pred.get('away_team')} "
+            f"({pred.get('league')})"
+        )
+        print(
+            "  Prediction unavailable: "
+            f"{pred.get('reason', 'insufficient data')}"
+        )
+        return
+
+    markets = pred["markets"]
+    confidence_data = pred["confidence"]
+    safest = pred["safest"]
+
+    print(
+        f"\n{pred['home_team']} vs "
+        f"{pred['away_team']} "
+        f"({pred['league']})"
+    )
+
+    if pred.get("is_live"):
+        print(
+            f"  LIVE - "
+            f"{markets.get('minutes_elapsed', '?')}' "
+            f"(est. "
+            f"{markets.get('minutes_remaining_estimate', '?')} "
+            f"min remaining)"
+        )
+
+        score = markets.get(
+            "current_score",
+            {},
+        )
+
+        print(
+            f"  Current score: "
+            f"{score.get('home', 0)} - "
+            f"{score.get('away', 0)}"
+        )
+
+        additional = markets.get(
+            "expected_additional_goals",
+            {},
+        )
+
+        print(
+            f"  Expected additional goals: "
+            f"{additional.get('home', 0):.2f} - "
+            f"{additional.get('away', 0):.2f}"
+        )
+
+    else:
+        expected = markets.get(
+            "expected_goals",
+            {},
+        )
+
+        print(
+            f"  Expected goals: "
+            f"{expected.get('home', 0):.2f} - "
+            f"{expected.get('away', 0):.2f}"
+        )
+
+    result = markets.get(
+        "match_result",
+        {},
+    )
+
+    print(
+        f"  Win/Draw/Loss: "
+        f"Home {result.get('home_win', 0):.0%} | "
+        f"Draw {result.get('draw', 0):.0%} | "
+        f"Away {result.get('away_win', 0):.0%}"
+    )
+
+    over_under = markets.get(
+        "over_under",
+        {},
+    )
+
+    if (
+        isinstance(over_under, dict)
+        and "over_2_5" in over_under
+        and "under_2_5" in over_under
+    ):
+        print(
+            f"  Over/Under 2.5: "
+            f"Over {over_under['over_2_5']:.0%} | "
+            f"Under {over_under['under_2_5']:.0%}"
+        )
+
+    btts = markets.get(
+        "btts",
+        {},
+    )
+
+    if (
+        isinstance(btts, dict)
+        and "yes" in btts
+        and "no" in btts
+    ):
+        print(
+            f"  BTTS: "
+            f"Yes {btts['yes']:.0%} | "
+            f"No {btts['no']:.0%}"
+        )
+
+    cards = markets.get("cards")
+
+    if isinstance(cards, dict):
+        print(
+            f"  Cards: "
+            f"Over {cards.get('over_line')}: "
+            f"{cards.get('over', 0):.0%} | "
+            f"Under: "
+            f"{cards.get('under', 0):.0%}"
+        )
+
+    scorelines = markets.get(
+        "top_scorelines",
+        [],
+    )
+
+    if isinstance(scorelines, list) and scorelines:
+        top = scorelines[0]
+
+        if isinstance(top, dict):
+            print(
+                f"  Top scoreline: "
+                f"{top.get('score')} "
+                f"({top.get('probability', 0):.0%})"
+            )
+
+    if isinstance(confidence_data, dict):
+        print(
+            f"  Confidence: "
+            f"{confidence_data.get('emoji', '')} "
+            f"{confidence_data.get('label', '')} "
+            f"(pick: "
+            f"{confidence_data.get('top_pick', '')}, "
+            f"{confidence_data.get('top_probability', 0):.0%})"
+        )
+
+    if safest:
+        print(
+            f"  Safest generated market: "
+            f"{safest}"
+        )
+
+    elo_data = pred.get(
+        "elo_cross_check"
+    )
+
+    if isinstance(elo_data, dict):
+        print(
+            f"  Elo pre-blend: "
+            f"Home {elo_data.get('home', 0):.0%} | "
+            f"Draw {elo_data.get('draw', 0):.0%} | "
+            f"Away {elo_data.get('away', 0):.0%}"
+        )
+
+    odds = pred.get(
+        "odds_comparison"
+    )
+
+    if isinstance(odds, dict):
+        print(
+            f"  Market odds: "
+            f"Home {odds.get('implied_home_win', 0):.0%} | "
+            f"Draw {odds.get('implied_draw', 0):.0%} | "
+            f"Away {odds.get('implied_away_win', 0):.0%}"
+        )
+
+
+# ----------------------------------------------------------------------
+# Football daily prediction
+# ----------------------------------------------------------------------
+
+
+def run_daily(
+    date_str,
+    league_id=None,
+    limit=None,
+    fetch_odds=False,
+):
+    """
+    Generate and persist football predictions for a date.
+
+    Only configured leagues are allowed. Finished fixtures are excluded.
+    Predictions with insufficient validated data are not persisted.
+
+    API-Football service failures are handled per fixture through the
+    dedicated APIFootballError type. Ordinary RuntimeError exceptions
+    are deliberately NOT swallowed here because they can indicate
+    programming defects.
+    """
+    validate_date_string(date_str)
+    validate_positive_int(limit, "limit")
+    validate_allowed_league(league_id)
+
+    storage.init_db()
+
+    fixtures = api_football.get_fixtures_by_date(
+        date_str,
+        league_id,
+    )
+
+    # Enforce the configured league allow-list even when the API
+    # returns more leagues than requested.
+    fixtures = [
+        fixture
+        for fixture in fixtures or []
+        if fixture.get("league", {}).get("id")
+        in config.ALLOWED_LEAGUE_IDS
+    ]
+
+    # Do not create a new prediction for an already-finished fixture.
+    fixtures = [
+        fixture
+        for fixture in fixtures
+        if fixture.get("fixture", {})
+        .get("status", {})
+        .get("short")
+        not in FOOTBALL_FINISHED_STATUSES
+    ]
+
+    if limit is not None:
+        fixtures = fixtures[:limit]
+
+    if not fixtures:
+        print(
+            f"No eligible football fixtures "
+            f"found for {date_str}."
+        )
+        return
+
+    print(
+        f"Found {len(fixtures)} "
+        f"eligible football fixture(s) "
+        f"for {date_str}."
+    )
+
+    predicted_count = 0
+    skipped_no_data = 0
+    skipped_errors = 0
+    quota_hit = False
+
+    for fixture in fixtures:
+        if quota_hit:
+            print(
+                "  Skipping remaining fixtures - "
+                "daily API quota appears exhausted."
+            )
+            break
+
+        try:
+            league = fixture.get(
+                "league",
+                {},
+            )
+
+            league_id_value = league.get("id")
+            season = league.get("season")
+
+            if (
+                league_id_value
+                not in config.ALLOWED_LEAGUE_IDS
+            ):
+                continue
+
+            if (
+                isinstance(season, bool)
+                or not isinstance(season, int)
+                or season < 1900
+            ):
+                print(
+                    "  Skipped a fixture: "
+                    "invalid league season."
+                )
+                skipped_errors += 1
+                continue
+
+            league_avg = get_league_avg_goals(
+                league_id_value,
+                season,
+            )
+
+            prediction = predict_fixture(
+                fixture,
+                league_avg,
+                fetch_odds=fetch_odds,
+            )
+
+            if prediction["insufficient_data"]:
+                print(
+                    f"\n{prediction['home_team']} "
+                    f"vs "
+                    f"{prediction['away_team']} "
+                    f"({prediction['league']})"
+                )
+
+                print(
+                    "  Skipped: insufficient "
+                    "validated team data."
+                )
+
+                skipped_no_data += 1
+                continue
+
+            print_prediction(prediction)
+
+            storage.save_prediction(
+                fixture_id=prediction["fixture_id"],
+                match_date=prediction["date"],
+                home_team=prediction["home_team"],
+                away_team=prediction["away_team"],
+                league=prediction["league"],
+                markets=prediction["markets"],
+                confidence=prediction["confidence"],
+                home_team_id=prediction["home_team_id"],
+                away_team_id=prediction["away_team_id"],
+                odds_comparison=prediction.get(
+                    "odds_comparison"
+                ),
+            )
+
+            predicted_count += 1
+
+        except requests.exceptions.HTTPError as exc:
+            if (
+                exc.response is not None
+                and exc.response.status_code == 429
+            ):
+                print(
+                    "  Skipped a fixture: "
+                    "daily API quota exhausted (429)."
+                )
+                quota_hit = True
+            else:
+                print(
+                    f"  Skipped a fixture due "
+                    f"to an HTTP API error: {exc}"
+                )
+                skipped_errors += 1
+
+        except requests.exceptions.RequestException as exc:
+            print(
+                f"  Skipped a fixture due "
+                f"to a request error: {exc}"
+            )
+            skipped_errors += 1
+
+        except api_football.APIFootballError as exc:
+            # Only known API-Football/service failures are handled
+            # per fixture. Ordinary RuntimeError exceptions are allowed
+            # to propagate because they may indicate programming bugs.
+            message = str(exc)
+
+            if (
+                "429" in message
+                or "rate limit" in message.lower()
+                or "quota" in message.lower()
+            ):
+                print(
+                    "  Daily API quota appears exhausted."
+                )
+                quota_hit = True
+            else:
+                print(
+                    f"  Skipped a fixture due "
+                    f"to an API/data error: {exc}"
+                )
+
+            skipped_errors += 1
+
+    print(
+        f"\nSuccessfully predicted "
+        f"{predicted_count} of "
+        f"{len(fixtures)} fixture(s)."
+    )
+
+    if skipped_no_data:
+        print(
+            f"Skipped {skipped_no_data} "
+            f"fixture(s) due to insufficient data."
+        )
+
+    if skipped_errors:
+        print(
+            f"Skipped {skipped_errors} "
+            f"fixture(s) due to errors."
+        )
+
+
+# ----------------------------------------------------------------------
+# Football grading
+# ----------------------------------------------------------------------
+
+
+def run_grading():
+    """
+    Grade all pending football predictions whose fixtures have finished.
+
+    storage.record_result() is responsible for idempotency and Elo updates.
+
+    API-Football failures are handled separately from programming errors.
+    """
+    storage.init_db()
+
+    pending = storage.get_pending_fixtures()
+
+    if not pending:
+        print(
+            "No pending predictions to grade."
+        )
+        return
+
+    graded_count = 0
+    skipped_count = 0
+    quota_hit = False
+
+    for (
+        fixture_id,
+        match_date,
+        home_team,
+        away_team,
+    ) in pending:
+
+        if quota_hit:
+            break
+
+        try:
+            result = api_football.get_fixture_result(
+                fixture_id
+            )
+
+            if not result:
+                skipped_count += 1
+                continue
+
+            status_short = (
+                result
+                .get("fixture", {})
+                .get("status", {})
+                .get("short")
+            )
+
+            # Only final results are graded.
+            if status_short not in {
+                "FT",
+                "AET",
+                "PEN",
+            }:
+                skipped_count += 1
+                continue
+
+            home_goals = (
+                result
+                .get("goals", {})
+                .get("home")
+            )
+
+            away_goals = (
+                result
+                .get("goals", {})
+                .get("away")
+            )
+
+            if (
+                not _valid_goal(home_goals)
+                or not _valid_goal(away_goals)
+            ):
+                skipped_count += 1
+                continue
+
+            storage.record_result(
+                fixture_id,
+                int(home_goals),
+                int(away_goals),
+            )
+
+            print(
+                f"Graded: "
+                f"{home_team} "
+                f"{int(home_goals)}-"
+                f"{int(away_goals)} "
+                f"{away_team}"
+            )
+
+            graded_count += 1
+
+        except requests.exceptions.HTTPError as exc:
+            if (
+                exc.response is not None
+                and exc.response.status_code == 429
+            ):
+                print(
+                    "Daily API quota exhausted "
+                    "(429)."
+                )
+                quota_hit = True
+            else:
+                print(
+                    f"Could not grade "
+                    f"{home_team} vs "
+                    f"{away_team}: {exc}"
+                )
+                skipped_count += 1
+
+        except requests.exceptions.RequestException as exc:
+            print(
+                f"Could not grade "
+                f"{home_team} vs "
+                f"{away_team}: {exc}"
+            )
+            skipped_count += 1
+
+        except api_football.APIFootballError as exc:
+            message = str(exc)
+
+            if (
+                "429" in message
+                or "rate limit" in message.lower()
+                or "quota" in message.lower()
+            ):
+                print(
+                    "Daily API quota appears exhausted."
+                )
+                quota_hit = True
+            else:
+                print(
+                    f"Could not grade "
+                    f"{home_team} vs "
+                    f"{away_team}: {exc}"
+                )
+
+            skipped_count += 1
+
+    print(
+        f"\nGraded {graded_count} of "
+        f"{len(pending)} pending fixture(s)."
+    )
+
+    if skipped_count:
+        print(
+            f"Skipped {skipped_count} "
+            f"fixture(s) that were not ready or valid."
+        )
+
+
+# ----------------------------------------------------------------------
+# Cleanup / reporting
+# ----------------------------------------------------------------------
+
+
+def run_cleanup(confirm=False):
+    """
+    Cleanup is destructive.
+
+    It therefore requires explicit confirmation from the CLI.
+    """
+    storage.init_db()
+
+    if not confirm:
+        print(
+            "Cleanup is disabled by default. "
+            "No predictions were deleted."
+        )
+        print(
+            "Use --cleanup --confirm-cleanup "
+            "only after reviewing the target policy."
+        )
+        return
+
+    keep_keywords = [
+        "Premier League",
+        "La Liga",
+        "Serie A",
+        "Bundesliga",
+        "Ligue 1",
+        "Champions League",
+        "Europa League",
+        "Nations League",
+        "World Cup",
+        "Euro",
+    ]
+
+    deleted, total = (
+        storage.cleanup_non_target_leagues(
+            keep_keywords
+        )
+    )
+
+    print(
+        f"Removed {deleted} of {total} "
+        "predictions from leagues outside "
+        "your current tracked list."
+    )
+
+    print(
+        f"Kept {total - deleted} "
+        "prediction(s) from your tracked leagues."
+    )
+
+
+def run_accuracy_report():
+    storage.init_db()
+
+    summary = storage.accuracy_summary()
+
+    if summary["total_graded"] == 0:
+        print(
+            "No graded predictions yet - "
+            "run --grade after matches finish."
+        )
+        return
+
+    print(
+        f"Total graded predictions: "
+        f"{summary['total_graded']}"
+    )
+
+    print(
+        f"Overall accuracy "
+        f"(top pick correct): "
+        f"{summary['overall_accuracy']:.1%}"
+    )
+
+    print(
+        "\nAccuracy by confidence level:"
+    )
+
+    for label, stats in (
+        summary.get(
+            "by_confidence",
+            {},
+        ).items()
+    ):
+        print(
+            f"  {label}: "
+            f"{stats['accuracy']:.1%} "
+            f"({stats['count']} predictions)"
+        )
+
+
+def run_backtest_command(
+    league_id,
+    season,
+    sample_size=20,
+):
+    validate_positive_int(
+        sample_size,
+        "sample_size",
+    )
+
+    if league_id is None:
+        league_id = config.ALLOWED_LEAGUE_IDS[0]
+
+    validate_allowed_league(league_id)
+
+    if season is None:
+        season = (
+            datetime.now(
+                timezone.utc
+            ).year - 1
+        )
+
+    if (
+        isinstance(season, bool)
+        or not isinstance(season, int)
+        or season < 1900
+    ):
+        raise ValueError(
+            "season must be a valid integer year."
+        )
+
+    print(
+        f"Running backtest: "
+        f"league {league_id}, "
+        f"season {season}, "
+        f"sample size {sample_size}..."
+    )
+
+    result = backtest.run_real_backtest(
+        league_id,
+        season,
+        sample_size,
+    )
+
+    if result["graded"] == 0:
+        print(
+            "No matches could be backtested."
+        )
+        return
+
+    print(
+        f"\nBacktest accuracy: "
+        f"{result['accuracy']:.1%} "
+        f"({result['correct']}/"
+        f"{result['graded']})"
+    )
+
+    print("\nSample results:")
+
+    for entry in result["log"][:10]:
+        mark = (
+            "✓"
+            if entry["correct"]
+            else "✗"
+        )
+
+        print(
+            f"  {mark} "
+            f"{entry['match']} | "
+            f"predicted: "
+            f"{entry['predicted']}"
+        )
+
+
+def run_find_league(name):
+    results = api_football.search_leagues(name)
+
+    if not results:
+        print(
+            f"No leagues found matching "
+            f"'{name}'."
+        )
+        return
+
+    print(
+        f"Matches for '{name}':"
+    )
+
+    for result in results:
+        league = result.get("league", {})
+        country = result.get(
+            "country",
+            {},
+        ).get(
+            "name",
+            "",
+        )
+
+        if not league:
+            continue
+
+        print(
+            f"  ID {league.get('id')}: "
+            f"{league.get('name')} "
+            f"({country})"
+        )
+
+
+def run_check_coverage(league_id):
+    validate_allowed_league(league_id)
+
+    seasons = api_football.get_league_coverage(
+        league_id
+    )
+
+    if not seasons:
+        print(
+            f"No season data found "
+            f"for league {league_id}."
+        )
+        return
+
+    print(
+        f"Seasons available for "
+        f"league {league_id}:"
+    )
+
+    for season in seasons:
+        year = season.get("year")
+        current = season.get("current")
+        coverage = season.get(
+            "coverage",
+            {},
+        )
+
+        fixtures = coverage.get(
+            "fixtures",
+            {},
+        )
+
+        print(
+            f"  Year {year} "
+            f"{'(current)' if current else ''}: "
+            f"fixtures events="
+            f"{fixtures.get('events')}, "
+            f"stats="
+            f"{fixtures.get('statistics_fixtures')}, "
+            f"standings="
+            f"{coverage.get('standings')}"
+        )
+
+
+def run_raw_debug(
+    league_id,
+    season,
+):
+    if (
+        isinstance(season, bool)
+        or not isinstance(season, int)
+        or season < 1900
+    ):
+        raise ValueError(
+            "season must be a valid integer year."
+        )
+
+    data = api_football.raw_debug_call(
+        "fixtures",
+        {
+            "league": league_id,
+            "season": season,
+        },
+    )
+
+    print("Full raw response:")
+
+    print(
+        f"  results: "
+        f"{data.get('results')}"
+    )
+
+    print(
+        f"  errors: "
+        f"{data.get('errors')}"
+    )
+
+    print(
+        f"  paging: "
+        f"{data.get('paging')}"
+    )
+
+    print(
+        f"  parameters: "
+        f"{data.get('parameters')}"
+    )
+
+    print(
+        f"  response length: "
+        f"{len(data.get('response', []))}"
+    )
+
+        markets = (
+            live_model.live_market_probabilities(
+                prediction[
+                    "expected_goals"
+                ]["home"],
+                prediction[
+                    "expected_goals"
+                ]["away"],
+                elapsed,
+                status_short,
+                current_home_goals,
+                current_away_goals,
+            )
+        )
+
+    else:
+        markets = dict(
+            prediction.get(
+                "markets",
+                {},
+            )
+        )
+
+        markets["is_live"] = False
+
+        home_cards = _estimate_avg_cards(
+            home_stats
+        )
+
+        away_cards = _estimate_avg_cards(
+            away_stats
+        )
+
+        if (
+            home_cards is not None
+            and away_cards is not None
+        ):
+            markets["cards"] = (
+                poisson_model.cards_market(
+                    home_cards,
+                    away_cards,
+                )
+            )
+
+    if not isinstance(markets, dict):
+        raise ValueError(
+            "Prediction markets are invalid."
+        )
+
+    match_result = markets.get(
+        "match_result"
+    )
+
+    if not isinstance(match_result, dict):
+        raise ValueError(
+            "Prediction is missing match_result probabilities."
+        )
+
+    conf = confidence.confidence_flag(
+        match_result
+    )
+
+    safest = confidence.safest_pick(
+        build_football_safest_candidates(
+            markets
+        )
+    )
+
+    odds_comparison = None
+
+    if fetch_odds:
+        sport_key = (
+            config.LEAGUE_ID_TO_ODDS_SPORT_KEY.get(
+                league["id"]
+            )
+        )
+
+        if sport_key:
+            try:
+                odds_comparison = (
+                    odds_api.get_odds_for_match(
+                        sport_key,
+                        home_team["name"],
+                        away_team["name"],
+                    )
+                )
+            except requests.exceptions.RequestException as exc:
+                print(
+                    f"  Odds lookup failed: {exc}"
+                )
+
+    return {
+        "fixture_id": fixture_data["id"],
+        "date": fixture_data["date"],
+        "home_team": home_team["name"],
+        "away_team": away_team["name"],
+        "home_team_id": home_team["id"],
+        "away_team_id": away_team["id"],
+        "league": league["name"],
+        "markets": markets,
+        "confidence": conf,
+        "safest": safest,
+        "is_live": is_live,
+        "insufficient_data": False,
+        "odds_comparison": odds_comparison,
+        "elo_cross_check": elo_probabilities,
+        "feature_snapshot": {
+            "season": {
+                "home": home_feature,
+                "away": away_feature,
+            },
+            "recent": {
+                "home": recent_home,
+                "away": recent_away,
+            },
+            "h2h": h2h,
+            "league_avg_goals": league_avg_goals,
+        },
     }
 
 
@@ -1425,10 +2442,13 @@ def print_prediction(pred):
             f"Home {odds.get('implied_home_win', 0):.0%} | "
             f"Draw {odds.get('implied_draw', 0):.0%} | "
             f"Away {odds.get('implied_away_win', 0):.0%}"
-)
-        # ----------------------------------------------------------------------
+        )
+
+
+# ----------------------------------------------------------------------
 # Football daily prediction
 # ----------------------------------------------------------------------
+
 
 def run_daily(
     date_str,
@@ -1574,6 +2594,29 @@ def run_daily(
 
             predicted_count += 1
 
+        except api_football.APIFootballError as exc:
+            # Only known API-Football/service failures are handled
+            # per fixture. Ordinary RuntimeError exceptions are allowed
+            # to propagate because they may indicate programming bugs.
+            message = str(exc)
+
+            if (
+                "429" in message
+                or "rate limit" in message.lower()
+                or "quota" in message.lower()
+            ):
+                print(
+                    "  Daily API quota appears exhausted."
+                )
+                quota_hit = True
+            else:
+                print(
+                    f"  Skipped a fixture due "
+                    f"to an API/data error: {exc}"
+                )
+
+            skipped_errors += 1
+
         except requests.exceptions.HTTPError as exc:
             if (
                 exc.response is not None
@@ -1596,25 +2639,6 @@ def run_daily(
                 f"  Skipped a fixture due "
                 f"to a request error: {exc}"
             )
-            skipped_errors += 1
-
-        except RuntimeError as exc:
-            # api_football.py converts API-level errors into RuntimeError.
-            # Handle them per fixture so one bad API response does not
-            # destroy the entire daily prediction run.
-            message = str(exc)
-
-            if "429" in message or "quota" in message.lower():
-                print(
-                    "  Daily API quota appears exhausted."
-                )
-                quota_hit = True
-            else:
-                print(
-                    f"  Skipped a fixture due "
-                    f"to an API/data error: {exc}"
-                )
-
             skipped_errors += 1
 
     print(
@@ -1682,49 +2706,61 @@ def run_grading():
                 .get("short")
             )
 
-            # Only final results are graded.
-            if status_short not in {
-                "FT",
-                "AET",
-                "PEN",
-            }:
+            if status_short not in FOOTBALL_FINISHED_STATUSES:
+                continue
+
+            goals = result.get(
+                "goals",
+                {},
+            )
+
+            home_goals = goals.get("home")
+            away_goals = goals.get("away")
+
+            if not _valid_goal(home_goals):
+                print(
+                    f"  Skipped fixture {fixture_id}: "
+                    "invalid home goal value."
+                )
                 skipped_count += 1
                 continue
 
-            home_goals = (
-                result
-                .get("goals", {})
-                .get("home")
-            )
-
-            away_goals = (
-                result
-                .get("goals", {})
-                .get("away")
-            )
-
-            if (
-                not _valid_goal(home_goals)
-                or not _valid_goal(away_goals)
-            ):
+            if not _valid_goal(away_goals):
+                print(
+                    f"  Skipped fixture {fixture_id}: "
+                    "invalid away goal value."
+                )
                 skipped_count += 1
                 continue
 
             storage.record_result(
-                fixture_id,
-                int(home_goals),
-                int(away_goals),
-            )
-
-            print(
-                f"Graded: "
-                f"{home_team} "
-                f"{int(home_goals)}-"
-                f"{int(away_goals)} "
-                f"{away_team}"
+                fixture_id=fixture_id,
+                home_goals=int(home_goals),
+                away_goals=int(away_goals),
             )
 
             graded_count += 1
+
+        except api_football.APIFootballError as exc:
+            message = str(exc)
+
+            if (
+                "429" in message
+                or "rate limit" in message.lower()
+                or "quota" in message.lower()
+            ):
+                print(
+                    "  Grading stopped: "
+                    "daily API quota appears exhausted."
+                )
+                quota_hit = True
+            else:
+                print(
+                    f"  Skipped fixture {fixture_id} "
+                    f"due to API/data error: {exc}"
+                )
+
+            skipped_count += 1
 
         except requests.exceptions.HTTPError as exc:
             if (
@@ -1732,8 +2768,97 @@ def run_grading():
                 and exc.response.status_code == 429
             ):
                 print(
-                    "Daily API quota exhausted "
-                    "(429)."
+                    "  Grading stopped: "
+                    "daily API quota exhausted (429)."
+                )
+                quota_hit = True
+            else:
+                print(
+                    f"  Skipped fixture {fixture_id} "
+                    f"due to HTTP error: {exc}"
+                )
+
+            skipped_count += 1
+
+        except requests.exceptions.RequestException as exc:
+            print(
+                f"  Skipped fixture {fixture_id} "
+                f"due to request error: {exc}"
+            )
+            skipped_count += 1
+
+    print(
+        f"Graded {graded_count} "
+        f"football fixture(s)."
+    )
+
+    if skipped_count:
+        print(
+            f"Skipped {skipped_count} "
+            f"football fixture(s)."
+        )
+
+
+# ----------------------------------------------------------------------
+# Cleanup
+# ----------------------------------------------------------------------
+
+
+def run_cleanup():
+    print("Running prediction cleanup...")
+
+    storage.init_db()
+
+    deleted = storage.cleanup_old_predictions()
+
+    print(
+        f"Removed {deleted} old prediction record(s)."
+    )
+
+
+# ----------------------------------------------------------------------
+# Accuracy report
+# ----------------------------------------------------------------------
+
+
+def run_accuracy_report():
+    print("Football accuracy report")
+    print("=" * 40)
+
+    storage.init_db()
+
+    summary = storage.accuracy_summary()
+
+    if not summary:
+        print(
+            "No football prediction results yet."
+        )
+        return
+
+    total = summary.get("total", 0)
+    correct = summary.get("correct", 0)
+
+    if total:
+        accuracy = (
+            correct / total
+        ) * 100.0
+    else:
+        accuracy = 0.0
+
+    print(f"Total graded: {total}")
+    print(f"Correct: {correct}")
+    print(f"Incorrect: {total - correct}")
+    print(f"Accuracy: {accuracy:.2f}%")
+         except api_football.APIFootballError as exc:
+            message = str(exc)
+
+            if (
+                "429" in message
+                or "rate limit" in message.lower()
+                or "quota" in message.lower()
+            ):
+                print(
+                    "Daily API quota exhausted."
                 )
                 quota_hit = True
             else:
@@ -1742,22 +2867,7 @@ def run_grading():
                     f"{home_team} vs "
                     f"{away_team}: {exc}"
                 )
-                skipped_count += 1
 
-        except requests.exceptions.RequestException as exc:
-            print(
-                f"Could not grade "
-                f"{home_team} vs "
-                f"{away_team}: {exc}"
-            )
-            skipped_count += 1
-
-        except RuntimeError as exc:
-            print(
-                f"Could not grade "
-                f"{home_team} vs "
-                f"{away_team}: {exc}"
-            )
             skipped_count += 1
 
     print(
@@ -2236,9 +3346,9 @@ def run_grading_basketball():
                 result
                 .get("status", {})
                 .get("short")
-            )
+)
 
-            if status_short not in {
+               if status_short not in {
                 "FT",
                 "AOT",
             }:
@@ -2368,8 +3478,10 @@ def run_accuracy_report_basketball():
             f"  {label}: "
             f"{stats['accuracy']:.1%} "
             f"({stats['count']} predictions)"
-            )
-        # ----------------------------------------------------------------------
+        )
+
+
+# ----------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------
 
