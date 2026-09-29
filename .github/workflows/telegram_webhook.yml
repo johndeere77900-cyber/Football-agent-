@@ -1,21 +1,27 @@
-# Telegram transport is owned by the Val Town webhook.
-# This workflow processes exactly one Telegram message per run.
-#
-# IMPORTANT:
-# This workflow shares repository-state concurrency with the daily
-# prediction workflow because both can modify predictions.db.
-
-name: Telegram webhook
+name: Daily Football Predictions
 
 on:
+  schedule:
+    - cron: '0 11 * * 3,6'
+
   workflow_dispatch:
     inputs:
-      message:
-        description: Message received from Telegram
-        required: true
-        type: string
+      football_games:
+        description: 'Number of football matches to predict (blank = skip football)'
+        required: false
+        default: ''
 
-# Telegram and Daily must never write predictions.db concurrently.
+      basketball_games:
+        description: 'Number of basketball games to predict (blank = skip basketball)'
+        required: false
+        default: ''
+
+# IMPORTANT:
+# This MUST be the same concurrency group used by telegram_webhook.yml.
+#
+# Both workflows modify predictions.db.
+# Serializing them prevents a stale checkout from overwriting newer
+# prediction or grading records.
 concurrency:
   group: prediction-repo-state
   cancel-in-progress: false
@@ -24,16 +30,17 @@ permissions:
   contents: write
 
 jobs:
-  agent:
+  predict:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+
+    timeout-minutes: 30
 
     steps:
       # -------------------------------------------------------------------
       # Repository
       # -------------------------------------------------------------------
 
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -45,7 +52,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
@@ -54,163 +61,132 @@ jobs:
           python3 -m pip install -r requirements.txt
 
       # -------------------------------------------------------------------
-      # Credential validation
+      # Football grading
       # -------------------------------------------------------------------
 
-      - name: Validate external API credentials
+      - name: Grade yesterday's football predictions
+        continue-on-error: true
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-        run: |
-          set -euo pipefail
-
-          missing=""
-
-          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-            missing="$missing TELEGRAM_BOT_TOKEN"
-          fi
-
-          if [ -z "$TELEGRAM_CHAT_ID" ]; then
-            missing="$missing TELEGRAM_CHAT_ID"
-          fi
-
-          if [ -z "$API_FOOTBALL_KEY" ]; then
-            missing="$missing API_FOOTBALL_KEY"
-          fi
-
-          if [ -n "$missing" ]; then
-            echo "::error::Missing required secret(s):$missing"
-            exit 1
-          fi
-
-          echo "Required credentials are present."
-
-          # ---------------------------------------------------------------
-          # Telegram
-          # ---------------------------------------------------------------
-
-          echo "Checking Telegram token..."
-
-          telegram_response="$(
-            curl -sS \
-              --fail-with-body \
-              --max-time 15 \
-              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"
-          )"
-
-          if ! echo "$telegram_response" \
-            | jq -e '.ok == true' >/dev/null; then
-
-            echo "::error::Telegram token validation failed."
-
-            echo "$telegram_response" \
-              | jq '{ok,error_code,description}' || true
-
-            exit 1
-          fi
-
-          echo "Telegram token is valid."
-
-          # ---------------------------------------------------------------
-          # API-Football
-          # ---------------------------------------------------------------
-
-          echo "Checking API-Football token..."
-
-          football_response="$(
-            curl -sS \
-              --max-time 15 \
-              -H "x-apisports-key: ${API_FOOTBALL_KEY}" \
-              "https://v3.football.api-sports.io/status"
-          )"
-
-          if ! echo "$football_response" \
-            | jq -e '.response.account' >/dev/null; then
-
-            echo "::error::API-Football credential/status validation failed."
-
-            echo "$football_response" \
-              | jq '{get,errors,response}' || true
-
-            exit 1
-          fi
-
-          echo "API-Football credential is accepted."
-
-      # -------------------------------------------------------------------
-      # Process exactly one Telegram message
-      # -------------------------------------------------------------------
-
-      - name: Process Telegram message
-        env:
-          TELEGRAM_MESSAGE: ${{ inputs.message }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
           set -euo pipefail
-          python3 telegram_bot.py
+          python3 main.py --grade
 
       # -------------------------------------------------------------------
-      # Persist state
-      #
-      # This runs even when prediction processing fails because conversation
-      # memory and any successfully written prediction state should survive.
+      # Football predictions
       # -------------------------------------------------------------------
 
-      - name: Save bot state
+      - name: Run football predictions
+        if: github.event_name == 'schedule' || github.event.inputs.football_games != ''
+        continue-on-error: true
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          LIMIT="${{ github.event.inputs.football_games }}"
+
+          if [ -z "$LIMIT" ]; then
+            LIMIT="12"
+          fi
+
+          python3 main.py --limit "$LIMIT"
+
+      # -------------------------------------------------------------------
+      # Football accuracy
+      # -------------------------------------------------------------------
+
+      - name: Show football accuracy report
+        continue-on-error: true
+        if: always()
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 main.py --accuracy
+
+      # -------------------------------------------------------------------
+      # Basketball grading
+      # -------------------------------------------------------------------
+
+      - name: Grade yesterday's basketball predictions
+        continue-on-error: true
+        if: always()
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          set -euo pipefail
+          python3 main.py --sport basketball --grade
+
+      # -------------------------------------------------------------------
+      # Basketball predictions
+      # -------------------------------------------------------------------
+
+      - name: Run basketball predictions
+        if: github.event_name == 'schedule' || github.event.inputs.basketball_games != ''
+        continue-on-error: true
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          set -euo pipefail
+
+          LIMIT="${{ github.event.inputs.basketball_games }}"
+
+          if [ -z "$LIMIT" ]; then
+            LIMIT="10"
+          fi
+
+          python3 main.py \
+            --sport basketball \
+            --limit "$LIMIT"
+
+      # -------------------------------------------------------------------
+      # Basketball accuracy
+      # -------------------------------------------------------------------
+
+      - name: Show basketball accuracy report
+        continue-on-error: true
+        if: always()
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          set -euo pipefail
+          python3 main.py --sport basketball --accuracy
+
+      # -------------------------------------------------------------------
+      # Dashboard
+      # -------------------------------------------------------------------
+
+      - name: Generate dashboard
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 generate_dashboard.py
+
+      # -------------------------------------------------------------------
+      # Persist database + dashboard
+      # -------------------------------------------------------------------
+
+      - name: Save results back to the repo
         if: always()
         run: |
           set -euo pipefail
 
-          git config user.name "football-agent-bot"
+          git config user.name "sports-agent-bot"
           git config user.email "actions@github.com"
 
-          # The shared concurrency group means the repository cannot be
-          # modified simultaneously by the daily workflow.
-          #
-          # Ignore missing files because a failed/early run may not have
-          # created one of them.
-          git add telegram_memory.json predictions.db 2>/dev/null || true
+          # Both the prediction database and dashboard are generated state.
+          git add predictions.db DASHBOARD.md 2>/dev/null || true
 
           if git diff --staged --quiet; then
-            echo "No persistent state changes to commit."
+            echo "No prediction-state changes to commit."
             exit 0
           fi
 
-          git commit -m "Persist Telegram bot state"
+          git commit \
+            -m "Prediction update $(date -u +%Y-%m-%d)"
 
           git push origin HEAD:${GITHUB_REF_NAME}
-
-      # -------------------------------------------------------------------
-      # Failure notification
-      # -------------------------------------------------------------------
-
-      - name: Report worker failure to Telegram
-        if: failure()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set +e
-
-          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "Telegram failure report skipped because credentials are unavailable."
-            exit 0
-          fi
-
-          curl -sS \
-            --max-time 15 \
-            -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -H "Content-Type: application/json" \
-            -d "$(jq -n \
-              --arg c "$TELEGRAM_CHAT_ID" \
-              --arg t "⚠️ The football-agent worker failed. Log: $RUN_URL" \
-              '{chat_id: $c, text: $t}')"
-
-          echo
-          echo "Failure notification attempted."
