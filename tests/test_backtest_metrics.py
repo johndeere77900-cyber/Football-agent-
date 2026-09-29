@@ -176,6 +176,40 @@ def test_over_under_and_all_markets_evaluated_in_backtest(monkeypatch):
     assert btts_eval["calibration"]["ece"] is not None
 
 
+def test_over_under_2_5_evaluation_consistency():
+    # 1. Prediction probabilities: P(over_2_5)=0.45, P(under_2_5)=0.55
+    pred_markets = {
+        "over_under": {
+            "over_2_5": 0.45,
+            "under_2_5": 0.55,
+        }
+    }
+    # 2. Actual match with 3 total goals (2-1) -> actual outcome = "over"
+    fixture = {
+        "goals": {"home": 2, "away": 1}
+    }
+
+    grading = backtest._grade_prediction_markets(pred_markets, fixture)
+    selected_ou = grading["selected"]["over_under"]["2.5"]
+
+    # Top pick = "under_2_5" (0.55 > 0.45)
+    assert selected_ou["pick"] == "under_2_5"
+    assert selected_ou["actual"] == "over"
+    assert selected_ou["won"] is False  # Top pick "under_2_5" lost because actual was "over"
+
+    # Evaluate Brier and Log Loss for this sample
+    preds = [{"over": 0.45, "under": 0.55}]
+    acts = ["over"]
+
+    brier = backtest.compute_brier_score(preds, acts, outcomes=("over", "under"))
+    # (0.45 - 1.0)^2 + (0.55 - 0.0)^2 = 0.55^2 + 0.55^2 = 0.3025 + 0.3025 = 0.605
+    assert abs(brier - 0.605) < 1e-6
+
+    log_loss = backtest.compute_log_loss(preds, acts, outcomes=("over", "under"))
+    # -ln(0.45) = 0.798507696
+    assert abs(log_loss - (-math.log(0.45))) < 1e-6
+
+
 def test_run_multi_season_backtest(monkeypatch):
     from tests.test_backtest_prediction_engine_integration import historical_dataset
 
