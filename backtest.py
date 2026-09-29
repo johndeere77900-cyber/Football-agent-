@@ -1436,7 +1436,7 @@ def _print_market_metrics_summary(
 
     for market_key, name in (
         ("match_result", "1X2"),
-        ("double_chance", "Double Chance"),
+        ("double_chance", "Double Chance (Pooled)"),
         ("over_under_2_5", "Over/Under 2.5"),
         ("btts", "BTTS"),
     ):
@@ -1453,11 +1453,34 @@ def _print_market_metrics_summary(
         ece_str = f"{ece:.4f}" if ece is not None else "N/A"
 
         print(
-            f"{name:20}"
+            f"{name:25}"
             f"{brier_str:>15}"
             f"{loss_str:>15}"
             f"{ece_str:>15}"
         )
+
+        if market_key == "double_chance":
+            for sub_key, sub_name in (
+                ("home_or_draw", "  DC: Home/Draw"),
+                ("away_or_draw", "  DC: Away/Draw"),
+                ("home_or_away", "  DC: Home/Away"),
+            ):
+                sub_eval = m_eval.get(sub_key, {})
+                if isinstance(sub_eval, dict):
+                    sb = sub_eval.get("brier_score")
+                    sl = sub_eval.get("log_loss")
+                    se = sub_eval.get("calibration", {}).get("ece")
+
+                    sb_str = f"{sb:.4f}" if sb is not None else "N/A"
+                    sl_str = f"{sl:.4f}" if sl is not None else "N/A"
+                    se_str = f"{se:.4f}" if se is not None else "N/A"
+
+                    print(
+                        f"{sub_name:25}"
+                        f"{sb_str:>15}"
+                        f"{sl_str:>15}"
+                        f"{se_str:>15}"
+                    )
 
     print("-" * 72)
 
@@ -1933,9 +1956,11 @@ def run_real_backtest(
     preds_1x2 = []
     acts_1x2 = []
 
-    # 2. Double Chance market (multiclass)
-    preds_dc = []
-    acts_dc = []
+    # 2. Double Chance market (3 independent binary events)
+    preds_dc, acts_dc = [], []
+    preds_dc_hd, acts_dc_hd = [], []
+    preds_dc_ad, acts_dc_ad = [], []
+    preds_dc_ha, acts_dc_ha = [], []
 
     # 3. Over/Under 2.5 market (binary)
     preds_ou25 = []
@@ -1966,9 +1991,6 @@ def run_real_backtest(
             top_picks_1x2.append(sel_1x2)
 
         # Double Chance - 3 independent binary events (overlapping probabilities)
-        # 1) Home or Draw
-        # 2) Away or Draw
-        # 3) Home or Away
         m_dist_dc = p_markets.get("double_chance")
         out_dc = outcomes.get("double_chance", {})
         if isinstance(m_dist_dc, dict) and isinstance(out_dc, dict):
@@ -1984,13 +2006,22 @@ def run_real_backtest(
                 preds_dc.append({"yes": p_hd, "no": 1.0 - p_hd})
                 acts_dc.append("yes" if won_hd else "no")
 
+                preds_dc_hd.append({"yes": p_hd, "no": 1.0 - p_hd})
+                acts_dc_hd.append("yes" if won_hd else "no")
+
             if p_ad is not None and won_ad is not None:
                 preds_dc.append({"yes": p_ad, "no": 1.0 - p_ad})
                 acts_dc.append("yes" if won_ad else "no")
 
+                preds_dc_ad.append({"yes": p_ad, "no": 1.0 - p_ad})
+                acts_dc_ad.append("yes" if won_ad else "no")
+
             if p_ha is not None and won_ha is not None:
                 preds_dc.append({"yes": p_ha, "no": 1.0 - p_ha})
                 acts_dc.append("yes" if won_ha else "no")
+
+                preds_dc_ha.append({"yes": p_ha, "no": 1.0 - p_ha})
+                acts_dc_ha.append("yes" if won_ha else "no")
 
         # Over / Under 2.5 - check both "2.5" and "2_5" in market grading/selected
         sel_ou = selected.get("over_under", {})
@@ -2025,9 +2056,28 @@ def run_real_backtest(
             "top_pick_calibration": compute_picked_calibration(top_picks_1x2),
         },
         "double_chance": {
+            "sample_count": len(preds_dc),
             "brier_score": compute_brier_score(preds_dc, acts_dc, outcomes=("yes", "no")),
             "log_loss": compute_log_loss(preds_dc, acts_dc, outcomes=("yes", "no")),
             "calibration": compute_market_calibration(preds_dc, acts_dc, outcomes=("yes", "no")),
+            "home_or_draw": {
+                "sample_count": len(preds_dc_hd),
+                "brier_score": compute_brier_score(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+            },
+            "away_or_draw": {
+                "sample_count": len(preds_dc_ad),
+                "brier_score": compute_brier_score(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+            },
+            "home_or_away": {
+                "sample_count": len(preds_dc_ha),
+                "brier_score": compute_brier_score(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+            },
         },
         "over_under_2_5": {
             "brier_score": compute_brier_score(preds_ou25, acts_ou25, outcomes=("over", "under")),
@@ -2191,6 +2241,9 @@ def run_multi_season_backtest(
     # Evaluate combined log across seasons
     preds_1x2, acts_1x2, top_picks_1x2 = [], [], []
     preds_dc, acts_dc = [], []
+    preds_dc_hd, acts_dc_hd = [], []
+    preds_dc_ad, acts_dc_ad = [], []
+    preds_dc_ha, acts_dc_ha = [], []
     preds_ou25, acts_ou25 = [], []
     preds_btts, acts_btts = [], []
 
@@ -2229,13 +2282,22 @@ def run_multi_season_backtest(
                 preds_dc.append({"yes": p_hd, "no": 1.0 - p_hd})
                 acts_dc.append("yes" if won_hd else "no")
 
+                preds_dc_hd.append({"yes": p_hd, "no": 1.0 - p_hd})
+                acts_dc_hd.append("yes" if won_hd else "no")
+
             if p_ad is not None and won_ad is not None:
                 preds_dc.append({"yes": p_ad, "no": 1.0 - p_ad})
                 acts_dc.append("yes" if won_ad else "no")
 
+                preds_dc_ad.append({"yes": p_ad, "no": 1.0 - p_ad})
+                acts_dc_ad.append("yes" if won_ad else "no")
+
             if p_ha is not None and won_ha is not None:
                 preds_dc.append({"yes": p_ha, "no": 1.0 - p_ha})
                 acts_dc.append("yes" if won_ha else "no")
+
+                preds_dc_ha.append({"yes": p_ha, "no": 1.0 - p_ha})
+                acts_dc_ha.append("yes" if won_ha else "no")
 
         # Over / Under 2.5
         sel_ou = selected.get("over_under", {})
@@ -2274,9 +2336,28 @@ def run_multi_season_backtest(
             "accuracy": (
                 combined_market_summary.get("double_chance", {}).get("accuracy", 0.0)
             ),
+            "sample_count": len(preds_dc),
             "brier_score": compute_brier_score(preds_dc, acts_dc, outcomes=("yes", "no")),
             "log_loss": compute_log_loss(preds_dc, acts_dc, outcomes=("yes", "no")),
             "calibration": compute_market_calibration(preds_dc, acts_dc, outcomes=("yes", "no")),
+            "home_or_draw": {
+                "sample_count": len(preds_dc_hd),
+                "brier_score": compute_brier_score(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+            },
+            "away_or_draw": {
+                "sample_count": len(preds_dc_ad),
+                "brier_score": compute_brier_score(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+            },
+            "home_or_away": {
+                "sample_count": len(preds_dc_ha),
+                "brier_score": compute_brier_score(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+            },
         },
         "over_under_2_5": {
             "accuracy": (
