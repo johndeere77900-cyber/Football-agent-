@@ -134,3 +134,67 @@ def test_market_calibration_multiclass():
 
     res = backtest.compute_market_calibration(predictions, actuals, outcomes=("home_win", "draw", "away_win"))
     assert res["total_samples"] == 3  # 3 outcomes evaluated
+
+
+def test_over_under_and_all_markets_evaluated_in_backtest(monkeypatch):
+    from tests.test_backtest_prediction_engine_integration import historical_dataset
+
+    fixtures = historical_dataset()
+    monkeypatch.setattr(
+        backtest.api_football,
+        "get_league_fixtures",
+        lambda l, s: fixtures,
+    )
+
+    res = backtest.run_real_backtest(
+        league_id=39,
+        season=2025,
+        sample_size=10,
+        min_prior_matches=5,
+        sample_seed=42,
+    )
+
+    evaluation = res.get("evaluation", {})
+    assert "match_result" in evaluation
+    assert "double_chance" in evaluation
+    assert "over_under_2_5" in evaluation
+    assert "btts" in evaluation
+
+    ou_eval = evaluation["over_under_2_5"]
+    assert ou_eval["brier_score"] is not None
+    assert ou_eval["log_loss"] is not None
+    assert ou_eval["calibration"]["ece"] is not None
+
+    dc_eval = evaluation["double_chance"]
+    assert dc_eval["brier_score"] is not None
+    assert dc_eval["log_loss"] is not None
+    assert dc_eval["calibration"]["ece"] is not None
+
+    btts_eval = evaluation["btts"]
+    assert btts_eval["brier_score"] is not None
+    assert btts_eval["log_loss"] is not None
+    assert btts_eval["calibration"]["ece"] is not None
+
+
+def test_run_multi_season_backtest(monkeypatch):
+    from tests.test_backtest_prediction_engine_integration import historical_dataset
+
+    fixtures = historical_dataset()
+    monkeypatch.setattr(
+        backtest.api_football,
+        "get_league_fixtures",
+        lambda l, s: fixtures,
+    )
+
+    res = backtest.run_multi_season_backtest(
+        league_id=39,
+        seasons=[2024, 2025],
+        sample_size_per_season=10,
+        min_prior_matches=5,
+        sample_seed=42,
+    )
+
+    assert res["seasons_evaluated"] == [2024, 2025]
+    assert res["graded"] == 20
+    assert "match_result" in res["evaluation"]
+    assert res["evaluation"]["match_result"]["brier_score"] is not None

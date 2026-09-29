@@ -1965,17 +1965,17 @@ def run_real_backtest(
         if isinstance(sel_1x2, dict):
             top_picks_1x2.append(sel_1x2)
 
-        # Double Chance
-        act_dc = outcomes.get("double_chance")
+        # Double Chance - top choice or distribution
+        sel_dc = selected.get("double_chance")
         m_dist_dc = p_markets.get("double_chance")
-        if isinstance(act_dc, str) and act_dc in {"home_or_draw", "away_or_draw", "home_or_away"} and isinstance(m_dist_dc, dict):
+        if isinstance(sel_dc, dict) and sel_dc.get("actual") in {"home_or_draw", "away_or_draw", "home_or_away"} and isinstance(m_dist_dc, dict):
             preds_dc.append(m_dist_dc)
-            acts_dc.append(act_dc)
+            acts_dc.append(sel_dc["actual"])
 
-        # Over / Under 2.5
+        # Over / Under 2.5 - check both "2.5" and "2_5" in market grading/selected
         sel_ou = selected.get("over_under", {})
         if isinstance(sel_ou, dict):
-            sel_ou25 = sel_ou.get("2_5")
+            sel_ou25 = sel_ou.get("2.5") or sel_ou.get("2_5")
             if isinstance(sel_ou25, dict) and sel_ou25.get("actual") in {"over", "under"}:
                 act_ou25 = sel_ou25["actual"]
                 m_dist_ou = p_markets.get("over_under")
@@ -1988,15 +1988,14 @@ def run_real_backtest(
 
         # BTTS
         sel_btts = selected.get("btts")
-        if isinstance(sel_btts, dict) and sel_btts.get("actual") in {"yes", "no"}:
+        m_dist_btts = p_markets.get("btts")
+        if isinstance(sel_btts, dict) and sel_btts.get("actual") in {"yes", "no"} and isinstance(m_dist_btts, dict):
             act_btts = sel_btts["actual"]
-            m_dist_btts = p_markets.get("btts")
-            if isinstance(m_dist_btts, dict):
-                p_yes = _safe_float(m_dist_btts.get("yes"))
-                p_no = _safe_float(m_dist_btts.get("no"))
-                if p_yes is not None and p_no is not None:
-                    preds_btts.append({"yes": p_yes, "no": p_no})
-                    acts_btts.append(act_btts)
+            p_yes = _safe_float(m_dist_btts.get("yes"))
+            p_no = _safe_float(m_dist_btts.get("no"))
+            if p_yes is not None and p_no is not None:
+                preds_btts.append({"yes": p_yes, "no": p_no})
+                acts_btts.append(act_btts)
 
     evaluation = {
         "match_result": {
@@ -2108,6 +2107,174 @@ def run_real_backtest(
     )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Multi-season backtest runner
+# ---------------------------------------------------------------------------
+
+
+def run_multi_season_backtest(
+    league_id: Any,
+    seasons: Sequence[int],
+    sample_size_per_season: int = 380,
+    min_prior_matches: int = 5,
+    sample_seed: Optional[int] = 42,
+    enrich_statistics: bool = False,
+) -> Dict[str, Any]:
+    """
+    Run point-in-time historical backtests across multiple seasons and aggregate results.
+    """
+    all_log: List[Dict[str, Any]] = []
+    season_reports: Dict[int, Dict[str, Any]] = {}
+    season_limitations: Dict[int, str] = {}
+
+    total_fixtures_fetched = 0
+    total_finished_fixtures = 0
+    total_eligible_candidates = 0
+    total_selected = 0
+    total_graded = 0
+    total_correct = 0
+
+    combined_market_summary = _new_market_summary()
+
+    for s in seasons:
+        try:
+            res = run_real_backtest(
+                league_id=league_id,
+                season=s,
+                sample_size=sample_size_per_season,
+                min_prior_matches=min_prior_matches,
+                sample_seed=sample_seed,
+                enrich_statistics=enrich_statistics,
+            )
+
+            season_reports[s] = res
+            total_fixtures_fetched += res.get("fixtures_fetched", 0)
+            total_finished_fixtures += res.get("finished_fixtures", 0)
+            total_eligible_candidates += res.get("eligible_candidates", 0)
+            total_selected += res.get("selected", 0)
+            total_graded += res.get("graded", 0)
+            total_correct += res.get("correct", 0)
+
+            _update_market_summary(combined_market_summary, res.get("market_summary", {}))
+            all_log.extend(res.get("log", []))
+
+            if res.get("graded", 0) == 0:
+                season_limitations[s] = (
+                    f"Season {s} returned 0 graded fixtures "
+                    f"(fetched {res.get('fixtures_fetched', 0)}, eligible {res.get('eligible_candidates', 0)})."
+                )
+
+        except Exception as exc:
+            season_limitations[s] = f"Season {s} failed with error: {exc}"
+
+    # Evaluate combined log across seasons
+    preds_1x2, acts_1x2, top_picks_1x2 = [], [], []
+    preds_dc, acts_dc = [], []
+    preds_ou25, acts_ou25 = [], []
+    preds_btts, acts_btts = [], []
+
+    for entry in all_log:
+        p_markets = entry.get("prediction", {}).get("markets", {})
+        m_grading = entry.get("market_grading", {})
+        outcomes = m_grading.get("outcomes", {})
+        selected = m_grading.get("selected", {})
+
+        # 1X2
+        act_1x2 = entry.get("actual")
+        m_dist_1x2 = p_markets.get("match_result")
+        if isinstance(act_1x2, str) and act_1x2 in {"home_win", "draw", "away_win"} and isinstance(m_dist_1x2, dict):
+            preds_1x2.append(m_dist_1x2)
+            acts_1x2.append(act_1x2)
+
+        sel_1x2 = selected.get("match_result")
+        if isinstance(sel_1x2, dict):
+            top_picks_1x2.append(sel_1x2)
+
+        # Double Chance
+        sel_dc = selected.get("double_chance")
+        m_dist_dc = p_markets.get("double_chance")
+        if isinstance(sel_dc, dict) and sel_dc.get("actual") in {"home_or_draw", "away_or_draw", "home_or_away"} and isinstance(m_dist_dc, dict):
+            preds_dc.append(m_dist_dc)
+            acts_dc.append(sel_dc["actual"])
+
+        # Over / Under 2.5
+        sel_ou = selected.get("over_under", {})
+        if isinstance(sel_ou, dict):
+            sel_ou25 = sel_ou.get("2.5") or sel_ou.get("2_5")
+            if isinstance(sel_ou25, dict) and sel_ou25.get("actual") in {"over", "under"}:
+                act_ou25 = sel_ou25["actual"]
+                m_dist_ou = p_markets.get("over_under")
+                if isinstance(m_dist_ou, dict):
+                    p_over = _safe_float(m_dist_ou.get("over_2_5"))
+                    p_under = _safe_float(m_dist_ou.get("under_2_5"))
+                    if p_over is not None and p_under is not None:
+                        preds_ou25.append({"over": p_over, "under": p_under})
+                        acts_ou25.append(act_ou25)
+
+        # BTTS
+        sel_btts = selected.get("btts")
+        m_dist_btts = p_markets.get("btts")
+        if isinstance(sel_btts, dict) and sel_btts.get("actual") in {"yes", "no"} and isinstance(m_dist_btts, dict):
+            act_btts = sel_btts["actual"]
+            p_yes = _safe_float(m_dist_btts.get("yes"))
+            p_no = _safe_float(m_dist_btts.get("no"))
+            if p_yes is not None and p_no is not None:
+                preds_btts.append({"yes": p_yes, "no": p_no})
+                acts_btts.append(act_btts)
+
+    evaluation = {
+        "match_result": {
+            "accuracy": total_correct / total_graded if total_graded else 0.0,
+            "brier_score": compute_brier_score(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+            "log_loss": compute_log_loss(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+            "calibration": compute_market_calibration(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+            "top_pick_calibration": compute_picked_calibration(top_picks_1x2),
+        },
+        "double_chance": {
+            "accuracy": (
+                combined_market_summary.get("double_chance", {}).get("accuracy", 0.0)
+            ),
+            "brier_score": compute_brier_score(preds_dc, acts_dc, outcomes=("home_or_draw", "away_or_draw", "home_or_away")),
+            "log_loss": compute_log_loss(preds_dc, acts_dc, outcomes=("home_or_draw", "away_or_draw", "home_or_away")),
+            "calibration": compute_market_calibration(preds_dc, acts_dc, outcomes=("home_or_draw", "away_or_draw", "home_or_away")),
+        },
+        "over_under_2_5": {
+            "accuracy": (
+                combined_market_summary.get("over_under", {}).get("2_5", {}).get("accuracy")
+                or combined_market_summary.get("over_under", {}).get("2.5", {}).get("accuracy", 0.0)
+            ),
+            "brier_score": compute_brier_score(preds_ou25, acts_ou25, outcomes=("over", "under")),
+            "log_loss": compute_log_loss(preds_ou25, acts_ou25, outcomes=("over", "under")),
+            "calibration": compute_market_calibration(preds_ou25, acts_ou25, outcomes=("over", "under")),
+        },
+        "btts": {
+            "accuracy": (
+                combined_market_summary.get("btts", {}).get("accuracy", 0.0)
+            ),
+            "brier_score": compute_brier_score(preds_btts, acts_btts, outcomes=("yes", "no")),
+            "log_loss": compute_log_loss(preds_btts, acts_btts, outcomes=("yes", "no")),
+            "calibration": compute_market_calibration(preds_btts, acts_btts, outcomes=("yes", "no")),
+        },
+    }
+
+    return {
+        "league_id": league_id,
+        "seasons_evaluated": list(seasons),
+        "fixtures_fetched": total_fixtures_fetched,
+        "finished_fixtures": total_finished_fixtures,
+        "eligible_candidates": total_eligible_candidates,
+        "selected": total_selected,
+        "graded": total_graded,
+        "correct": total_correct,
+        "accuracy": total_correct / total_graded if total_graded else 0.0,
+        "evaluation": evaluation,
+        "market_summary": combined_market_summary,
+        "season_reports": season_reports,
+        "season_limitations": season_limitations,
+        "log": all_log,
+    }
 
 
 # ---------------------------------------------------------------------------
