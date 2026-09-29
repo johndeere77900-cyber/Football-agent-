@@ -941,3 +941,250 @@ def test_cleanup_runs_only_after_confirmation(
     main.run_cleanup(confirm=True)
 
     assert called["cleanup"] is True
+
+# ----------------------------------------------------------------------
+# Production feature-unit integrity
+# ----------------------------------------------------------------------
+
+def test_current_team_feature_uses_per_match_averages():
+    stats = team_stats()
+
+    stats["fixtures"]["played"]["total"] = 10
+
+    stats["goals"]["for"]["average"]["total"] = 1.6
+    stats["goals"]["against"]["average"]["total"] = 1.0
+
+    result = main._current_team_feature(
+        stats,
+        "Home FC",
+    )
+
+    assert result == {
+        "matches": 10,
+        "goals_for": pytest.approx(1.6),
+        "goals_against": pytest.approx(1.0),
+        "source": "Home FC",
+    }
+
+    # Critical regression guard:
+    # These must NOT become 16.0 and 10.0.
+    assert result["goals_for"] != 16.0
+    assert result["goals_against"] != 10.0
+
+
+def test_recent_feature_uses_average_goals_per_match(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        main.api_football,
+        "get_recent_form",
+        lambda team_id, last: [
+            {
+                "teams": {
+                    "home": {"id": 1},
+                    "away": {"id": 99},
+                },
+                "goals": {
+                    "home": 2,
+                    "away": 1,
+                },
+            },
+            {
+                "teams": {
+                    "home": {"id": 99},
+                    "away": {"id": 1},
+                },
+                "goals": {
+                    "home": 0,
+                    "away": 1,
+                },
+            },
+            {
+                "teams": {
+                    "home": {"id": 1},
+                    "away": {"id": 98},
+                },
+                "goals": {
+                    "home": 3,
+                    "away": 2,
+                },
+            },
+        ],
+    )
+
+    result = main._recent_feature(
+        team_id=1,
+        last=8,
+    )
+
+    assert result["matches"] == 3
+
+    # GF = (2 + 1 + 3) / 3 = 2.0
+    assert result["goals_for"] == pytest.approx(2.0)
+
+    # GA = (1 + 0 + 2) / 3 = 1.0
+    assert result["goals_against"] == pytest.approx(1.0)
+
+    # Regression guard against returning cumulative totals.
+    assert result["goals_for"] != 6.0
+    assert result["goals_against"] != 3.0
+
+
+def test_h2h_feature_uses_average_goals_per_meeting(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        main.api_football,
+        "get_head_to_head",
+        lambda home_id, away_id, last: [
+            {
+                "teams": {
+                    "home": {"id": 1},
+                    "away": {"id": 2},
+                },
+                "goals": {
+                    "home": 2,
+                    "away": 0,
+                },
+            },
+            {
+                "teams": {
+                    "home": {"id": 2},
+                    "away": {"id": 1},
+                },
+                "goals": {
+                    "home": 1,
+                    "away": 1,
+                },
+            },
+            {
+                "teams": {
+                    "home": {"id": 1},
+                    "away": {"id": 2},
+                },
+                "goals": {
+                    "home": 3,
+                    "away": 1,
+                },
+            },
+        ],
+    )
+
+    result = main._h2h_feature(
+        home_id=1,
+        away_id=2,
+        last=6,
+    )
+
+    assert result["meetings"] == 3
+
+    # Requested home team's perspective:
+    # GF = (2 + 1 + 3) / 3 = 2.0
+    # GA = (0 + 1 + 1) / 3 = 2/3
+    assert result["goals_for"] == pytest.approx(2.0)
+    assert result["goals_against"] == pytest.approx(
+        2 / 3
+    )
+
+    # Regression guard against cumulative totals.
+    assert result["goals_for"] != 6.0
+    assert result["goals_against"] != 2.0
+
+
+def test_prediction_engine_receives_average_based_production_features(
+    monkeypatch,
+    football_fixture,
+):
+    patch_prediction_dependencies(
+        monkeypatch
+    )
+
+    captured = {}
+
+    def fake_predict_from_features(
+        features,
+        elo_probabilities=None,
+        elo_weight=None,
+    ):
+        captured["features"] = features
+
+        return {
+            "markets": {
+                "match_result": {
+                    "home_win": 0.50,
+                    "draw": 0.25,
+                    "away_win": 0.25,
+                },
+                "double_chance": {
+                    "home_or_draw": 0.75,
+                    "away_or_draw": 0.50,
+                    "home_or_away": 0.75,
+                },
+                "over_under": {
+                    "over_1_5": 0.70,
+                    "under_1_5": 0.30,
+                    "over_2_5": 0.55,
+                    "under_2_5": 0.45,
+                    "over_3_5": 0.35,
+                    "under_3_5": 0.65,
+                    "over_4_5": 0.20,
+                    "under_4_5": 0.80,
+                    "over_5_5": 0.10,
+                    "under_5_5": 0.90,
+                },
+                "btts": {
+                    "yes": 0.55,
+                    "no": 0.45,
+                },
+                "team_goals": {
+                    "home_over_0_5": 0.80,
+                    "home_under_0_5": 0.20,
+                    "home_over_1_5": 0.60,
+                    "home_under_1_5": 0.40,
+                    "home_over_2_5": 0.35,
+                    "home_under_2_5": 0.65,
+                    "away_over_0_5": 0.70,
+                    "away_under_0_5": 0.30,
+                    "away_over_1_5": 0.40,
+                    "away_under_1_5": 0.60,
+                    "away_over_2_5": 0.20,
+                    "away_under_2_5": 0.80,
+                },
+                "top_scorelines": [
+                    {
+                        "score": "1-0",
+                        "probability": 0.20,
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(
+        main.prediction_engine,
+        "predict_from_features",
+        fake_predict_from_features,
+    )
+
+    result = main.predict_fixture(
+        football_fixture,
+        1.35,
+    )
+
+    assert result["insufficient_data"] is False
+
+    features = captured["features"]
+
+    # Season statistics supplied by team_stats():
+    # Home: 1.6 / 1.0
+    # Away: 1.6 / 1.0
+    assert features["home_attack"] > 0
+    assert features["home_defence"] > 0
+    assert features["away_attack"] > 0
+    assert features["away_defence"] > 0
+
+    # Most importantly, the production path must not be passing
+    # cumulative totals such as 16.0 or 10.0 into the engine.
+    assert features["home_attack"] < 20
+    assert features["home_defence"] < 20
+    assert features["away_attack"] < 20
+    assert features["away_defence"] < 20
