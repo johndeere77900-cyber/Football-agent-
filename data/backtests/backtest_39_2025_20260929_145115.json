@@ -1,0 +1,981 @@
+{
+  "fixtures_fetched": 21,
+  "finished_fixtures": 21,
+  "eligible_candidates": 11,
+  "requested_sample": 2,
+  "selected": 2,
+  "sample_size": 2,
+  "graded": 2,
+  "correct": 1,
+  "accuracy": 0.5,
+  "league_id": 39,
+  "season": 2025,
+  "min_prior_matches": 5,
+  "sample_seed": 42,
+  "statistics_enriched": false,
+  "statistical_data_available": {
+    "corners": 0,
+    "cards": 0
+  },
+  "market_summary": {
+    "match_result": {
+      "graded": 2,
+      "correct": 1,
+      "accuracy": 0.5
+    },
+    "double_chance": {
+      "graded": 2,
+      "correct": 1,
+      "accuracy": 0.5
+    },
+    "btts": {
+      "graded": 2,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "scoreline": {
+      "graded": 2,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "over_under": {
+      "1.5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      },
+      "2.5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      },
+      "3.5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      },
+      "4.5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      },
+      "5.5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      }
+    },
+    "team_goals": {
+      "home_0_5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      },
+      "home_1_5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      },
+      "home_2_5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      },
+      "away_0_5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      },
+      "away_1_5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      },
+      "away_2_5": {
+        "graded": 2,
+        "correct": 0,
+        "accuracy": 0.0
+      }
+    }
+  },
+  "log": [
+    {
+      "fixture_id": "2-4-2025-01-12T15:00:00+00:00",
+      "match": "Team 2 vs Team 4",
+      "date": "2025-01-12T15:00:00+00:00",
+      "home_team": "Team 2",
+      "away_team": "Team 4",
+      "correct": false,
+      "predicted": "away_win",
+      "actual": "draw",
+      "probabilities": {
+        "home_win": 0.18300299703151432,
+        "draw": 0.2909566969637956,
+        "away_win": 0.5260403060046901
+      },
+      "market_grading": {
+        "selected": {
+          "match_result": {
+            "pick": "away_win",
+            "probability": 0.5260403060046901,
+            "actual": "draw",
+            "won": false
+          },
+          "double_chance": {
+            "pick": "away_or_draw",
+            "probability": 0.8169970029684857,
+            "actual": "home_or_draw",
+            "won": false
+          },
+          "btts": {
+            "pick": "no",
+            "probability": 0.6256833235420112,
+            "actual": "yes",
+            "won": false
+          },
+          "over_under": {
+            "1.5": {
+              "pick": "over_1_5",
+              "probability": 0.6332113073142156,
+              "actual": "over",
+              "won": false
+            },
+            "2.5": {
+              "pick": "under_2_5",
+              "probability": 0.6516967807789523,
+              "actual": "over",
+              "won": false
+            },
+            "3.5": {
+              "pick": "under_3_5",
+              "probability": 0.8400861812472626,
+              "actual": "over",
+              "won": false
+            },
+            "4.5": {
+              "pick": "under_4_5",
+              "probability": 0.9386304687084622,
+              "actual": "under",
+              "won": false
+            },
+            "5.5": {
+              "pick": "under_5_5",
+              "probability": 0.9798683581739858,
+              "actual": "under",
+              "won": false
+            }
+          },
+          "team_goals": {
+            "home_0_5": {
+              "pick": "home_under_0_5",
+              "probability": 0.5318729042803779,
+              "actual": "over",
+              "won": false
+            },
+            "home_1_5": {
+              "pick": "home_under_1_5",
+              "probability": 0.8676712453462856,
+              "actual": "over",
+              "won": false
+            },
+            "home_2_5": {
+              "pick": "home_under_2_5",
+              "probability": 0.9736745075496688,
+              "actual": "under",
+              "won": false
+            },
+            "away_0_5": {
+              "pick": "away_over_0_5",
+              "probability": 0.767996303018112,
+              "actual": "over",
+              "won": false
+            },
+            "away_1_5": {
+              "pick": "away_under_1_5",
+              "probability": 0.5709616550812981,
+              "actual": "over",
+              "won": false
+            },
+            "away_2_5": {
+              "pick": "away_under_2_5",
+              "probability": 0.8185708502224673,
+              "actual": "under",
+              "won": false
+            }
+          },
+          "scoreline": {
+            "pick": "0-1",
+            "probability": 0.16548575600056717,
+            "actual": "2-2",
+            "won": false
+          }
+        },
+        "outcomes": {
+          "match_result": {
+            "outcome": "draw",
+            "won": true
+          },
+          "double_chance": {
+            "home_or_draw": {
+              "outcome": "home_or_draw",
+              "won": true
+            },
+            "away_or_draw": {
+              "outcome": "away_or_draw",
+              "won": true
+            },
+            "home_or_away": {
+              "outcome": "home_or_away",
+              "won": false
+            }
+          },
+          "btts": {
+            "yes": {
+              "outcome": "yes",
+              "won": true
+            },
+            "no": {
+              "outcome": "no",
+              "won": false
+            }
+          },
+          "over_under": {
+            "over_1_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "under_1_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "over_2_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "under_2_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "over_3_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "under_3_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "over_4_5": {
+              "outcome": "under",
+              "won": false
+            },
+            "under_4_5": {
+              "outcome": "under",
+              "won": true
+            },
+            "over_5_5": {
+              "outcome": "under",
+              "won": false
+            },
+            "under_5_5": {
+              "outcome": "under",
+              "won": true
+            }
+          },
+          "team_goals": {
+            "home_over_0_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "home_under_0_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "away_over_0_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "away_under_0_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "home_over_1_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "home_under_1_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "away_over_1_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "away_under_1_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "home_over_2_5": {
+              "outcome": "under",
+              "won": false
+            },
+            "home_under_2_5": {
+              "outcome": "under",
+              "won": true
+            },
+            "away_over_2_5": {
+              "outcome": "under",
+              "won": false
+            },
+            "away_under_2_5": {
+              "outcome": "under",
+              "won": true
+            }
+          },
+          "scoreline": {
+            "outcome": "2-2",
+            "won": true
+          }
+        },
+        "statistical_actuals": {
+          "corners": {},
+          "cards": {}
+        }
+      },
+      "prediction": {
+        "expected_goals": {
+          "home": 0.63135072,
+          "away": 1.4610024000000001
+        },
+        "markets": {
+          "expected_goals": {
+            "home": 0.63,
+            "away": 1.46
+          },
+          "match_result": {
+            "home_win": 0.18300299703151432,
+            "draw": 0.2909566969637956,
+            "away_win": 0.5260403060046901
+          },
+          "double_chance": {
+            "home_or_draw": 0.4739596939953099,
+            "away_or_draw": 0.8169970029684857,
+            "home_or_away": 0.7090433030362044
+          },
+          "over_under": {
+            "over_1_5": 0.6332113073142156,
+            "under_1_5": 0.3667886926857844,
+            "over_2_5": 0.3483032192210477,
+            "under_2_5": 0.6516967807789523,
+            "over_3_5": 0.15991381875273733,
+            "under_3_5": 0.8400861812472626,
+            "over_4_5": 0.06136953129153781,
+            "under_4_5": 0.9386304687084622,
+            "over_5_5": 0.02013164182601421,
+            "under_5_5": 0.9798683581739858
+          },
+          "btts": {
+            "yes": 0.3743166764579888,
+            "no": 0.6256833235420112
+          },
+          "team_goals": {
+            "home_over_0_5": 0.468127095719622,
+            "home_under_0_5": 0.5318729042803779,
+            "home_over_1_5": 0.13232875465371438,
+            "home_under_1_5": 0.8676712453462856,
+            "home_over_2_5": 0.026325492450331126,
+            "home_under_2_5": 0.9736745075496688,
+            "away_over_0_5": 0.767996303018112,
+            "away_under_0_5": 0.23200369698188766,
+            "away_over_1_5": 0.4290383449187017,
+            "away_under_1_5": 0.5709616550812981,
+            "away_over_2_5": 0.1814291497775324,
+            "away_under_2_5": 0.8185708502224673
+          },
+          "top_scorelines": [
+            {
+              "score": "0-1",
+              "probability": 0.16548575600056717
+            },
+            {
+              "score": "0-0",
+              "probability": 0.1381932777202544
+            },
+            {
+              "score": "0-2",
+              "probability": 0.13169662174626054
+            },
+            {
+              "score": "1-1",
+              "probability": 0.12861831762358258
+            },
+            {
+              "score": "1-2",
+              "probability": 0.08314675696106925
+            }
+          ]
+        },
+        "features": {
+          "home_attack": 0.5147999999999999,
+          "home_defence": 1.5444,
+          "away_attack": 0.946,
+          "away_defence": 0.9635999999999999,
+          "league_avg_goals": 1.1363636363636365,
+          "h2h_available": true
+        },
+        "elo_probabilities": {
+          "home": 0.3944452337615443,
+          "draw": 0.2628879088984189,
+          "away": 0.3426668573400369
+        },
+        "elo_weight": 0.15
+      },
+      "historical_features": {
+        "historical_snapshot": {
+          "cutoff": "2025-01-12T15:00:00+00:00",
+          "home": {
+            "matches": 5,
+            "goals_for": 0.6,
+            "goals_against": 1.8
+          },
+          "away": {
+            "matches": 5,
+            "goals_for": 1.0,
+            "goals_against": 1.2
+          },
+          "source_match_count": 10
+        },
+        "recent_snapshot": {
+          "cutoff": "2025-01-12T15:00:00+00:00",
+          "window": 8,
+          "home": {
+            "matches": 5,
+            "window": 8,
+            "goals_for": 0.6,
+            "goals_against": 1.8,
+            "wins": 0,
+            "draws": 1,
+            "losses": 4,
+            "points": 1,
+            "points_per_match": 0.2,
+            "form_sequence": [
+              "L",
+              "L",
+              "L",
+              "D",
+              "L"
+            ],
+            "source_dates": [
+              "2025-01-01T15:00:00+00:00",
+              "2025-01-04T15:00:00+00:00",
+              "2025-01-06T15:00:00+00:00",
+              "2025-01-08T15:00:00+00:00",
+              "2025-01-09T15:00:00+00:00"
+            ]
+          },
+          "away": {
+            "matches": 5,
+            "window": 8,
+            "goals_for": 1.0,
+            "goals_against": 1.2,
+            "wins": 1,
+            "draws": 2,
+            "losses": 2,
+            "points": 5,
+            "points_per_match": 1.0,
+            "form_sequence": [
+              "D",
+              "W",
+              "L",
+              "D",
+              "L"
+            ],
+            "source_dates": [
+              "2025-01-02T15:00:00+00:00",
+              "2025-01-04T15:00:00+00:00",
+              "2025-01-05T15:00:00+00:00",
+              "2025-01-08T15:00:00+00:00",
+              "2025-01-10T15:00:00+00:00"
+            ]
+          }
+        },
+        "h2h_snapshot": {
+          "cutoff": "2025-01-12T15:00:00+00:00",
+          "window": 6,
+          "meetings": 2,
+          "available_meetings": 2,
+          "wins": 0,
+          "draws": 1,
+          "losses": 1,
+          "goals_for": 0.5,
+          "goals_against": 1.5,
+          "btts_rate": 0.5,
+          "over_1_5_rate": 1.0,
+          "over_2_5_rate": 0.0,
+          "over_3_5_rate": 0.0,
+          "form_sequence": [
+            "L",
+            "D"
+          ],
+          "source_dates": [
+            "2025-01-04T15:00:00+00:00",
+            "2025-01-08T15:00:00+00:00"
+          ]
+        },
+        "elo_snapshot": {
+          "cutoff": "2025-01-12T15:00:00+00:00",
+          "home_team_id": 2,
+          "away_team_id": 4,
+          "home_rating": 1457.2417157268928,
+          "away_rating": 1492.7958712960626
+        },
+        "league_avg_goals": 1.1363636363636365
+      }
+    },
+    {
+      "fixture_id": "2-1-2025-01-21T15:00:00+00:00",
+      "match": "Team 2 vs Team 1",
+      "date": "2025-01-21T15:00:00+00:00",
+      "home_team": "Team 2",
+      "away_team": "Team 1",
+      "correct": true,
+      "predicted": "away_win",
+      "actual": "away_win",
+      "probabilities": {
+        "home_win": 0.0763402005562564,
+        "draw": 0.17558242241216995,
+        "away_win": 0.7480773770315736
+      },
+      "market_grading": {
+        "selected": {
+          "match_result": {
+            "pick": "away_win",
+            "probability": 0.7480773770315736,
+            "actual": "away_win",
+            "won": true
+          },
+          "double_chance": {
+            "pick": "away_or_draw",
+            "probability": 0.9236597994437435,
+            "actual": "away_or_draw",
+            "won": true
+          },
+          "btts": {
+            "pick": "no",
+            "probability": 0.734060942399047,
+            "actual": "yes",
+            "won": false
+          },
+          "over_under": {
+            "1.5": {
+              "pick": "over_1_5",
+              "probability": 0.725070829209263,
+              "actual": "over",
+              "won": false
+            },
+            "2.5": {
+              "pick": "under_2_5",
+              "probability": 0.5381057279810149,
+              "actual": "over",
+              "won": false
+            },
+            "3.5": {
+              "pick": "under_3_5",
+              "probability": 0.7528042163837954,
+              "actual": "under",
+              "won": false
+            },
+            "4.5": {
+              "pick": "under_4_5",
+              "probability": 0.8881897579622928,
+              "actual": "under",
+              "won": false
+            },
+            "5.5": {
+              "pick": "under_5_5",
+              "probability": 0.9564873785179322,
+              "actual": "under",
+              "won": false
+            }
+          },
+          "team_goals": {
+            "home_0_5": {
+              "pick": "home_under_0_5",
+              "probability": 0.7089213200726731,
+              "actual": "over",
+              "won": false
+            },
+            "home_1_5": {
+              "pick": "home_under_1_5",
+              "probability": 0.9527978621137905,
+              "actual": "under",
+              "won": false
+            },
+            "home_2_5": {
+              "pick": "home_under_2_5",
+              "probability": 0.994745935950698,
+              "actual": "under",
+              "won": false
+            },
+            "away_0_5": {
+              "pick": "away_over_0_5",
+              "probability": 0.8867671792472279,
+              "actual": "over",
+              "won": false
+            },
+            "away_1_5": {
+              "pick": "away_over_1_5",
+              "probability": 0.6401090326122157,
+              "actual": "over",
+              "won": false
+            },
+            "away_2_5": {
+              "pick": "away_under_2_5",
+              "probability": 0.6285420567846272,
+              "actual": "under",
+              "won": false
+            }
+          },
+          "scoreline": {
+            "pick": "0-2",
+            "probability": 0.19045248493417202,
+            "actual": "1-2",
+            "won": false
+          }
+        },
+        "outcomes": {
+          "match_result": {
+            "outcome": "away_win",
+            "won": true
+          },
+          "double_chance": {
+            "home_or_draw": {
+              "outcome": "home_or_draw",
+              "won": false
+            },
+            "away_or_draw": {
+              "outcome": "away_or_draw",
+              "won": true
+            },
+            "home_or_away": {
+              "outcome": "home_or_away",
+              "won": true
+            }
+          },
+          "btts": {
+            "yes": {
+              "outcome": "yes",
+              "won": true
+            },
+            "no": {
+              "outcome": "no",
+              "won": false
+            }
+          },
+          "over_under": {
+            "over_1_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "under_1_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "over_2_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "under_2_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "over_3_5": {
+              "outcome": "under",
+              "won": false
+            },
+            "under_3_5": {
+              "outcome": "under",
+              "won": true
+            },
+            "over_4_5": {
+              "outcome": "under",
+              "won": false
+            },
+            "under_4_5": {
+              "outcome": "under",
+              "won": true
+            },
+            "over_5_5": {
+              "outcome": "under",
+              "won": false
+            },
+            "under_5_5": {
+              "outcome": "under",
+              "won": true
+            }
+          },
+          "team_goals": {
+            "home_over_0_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "home_under_0_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "away_over_0_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "away_under_0_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "home_over_1_5": {
+              "outcome": "under",
+              "won": false
+            },
+            "home_under_1_5": {
+              "outcome": "under",
+              "won": true
+            },
+            "away_over_1_5": {
+              "outcome": "over",
+              "won": true
+            },
+            "away_under_1_5": {
+              "outcome": "over",
+              "won": false
+            },
+            "home_over_2_5": {
+              "outcome": "under",
+              "won": false
+            },
+            "home_under_2_5": {
+              "outcome": "under",
+              "won": true
+            },
+            "away_over_2_5": {
+              "outcome": "under",
+              "won": false
+            },
+            "away_under_2_5": {
+              "outcome": "under",
+              "won": true
+            }
+          },
+          "scoreline": {
+            "outcome": "1-2",
+            "won": true
+          }
+        },
+        "statistical_actuals": {
+          "corners": {},
+          "cards": {}
+        }
+      },
+      "prediction": {
+        "expected_goals": {
+          "home": 0.3440107317073172,
+          "away": 2.178327317073171
+        },
+        "markets": {
+          "expected_goals": {
+            "home": 0.34,
+            "away": 2.18
+          },
+          "match_result": {
+            "home_win": 0.0763402005562564,
+            "draw": 0.17558242241216995,
+            "away_win": 0.7480773770315736
+          },
+          "double_chance": {
+            "home_or_draw": 0.2519226229684264,
+            "away_or_draw": 0.9236597994437435,
+            "home_or_away": 0.82441757758783
+          },
+          "over_under": {
+            "over_1_5": 0.725070829209263,
+            "under_1_5": 0.274929170790737,
+            "over_2_5": 0.4618942720189852,
+            "under_2_5": 0.5381057279810149,
+            "over_3_5": 0.24719578361620465,
+            "under_3_5": 0.7528042163837954,
+            "over_4_5": 0.1118102420377072,
+            "under_4_5": 0.8881897579622928,
+            "over_5_5": 0.043512621482067824,
+            "under_5_5": 0.9564873785179322
+          },
+          "btts": {
+            "yes": 0.265939057600953,
+            "no": 0.734060942399047
+          },
+          "team_goals": {
+            "home_over_0_5": 0.29107867992732694,
+            "home_under_0_5": 0.7089213200726731,
+            "home_over_1_5": 0.04720213788620944,
+            "home_under_1_5": 0.9527978621137905,
+            "home_over_2_5": 0.005254064049301863,
+            "home_under_2_5": 0.994745935950698,
+            "away_over_0_5": 0.8867671792472279,
+            "away_under_0_5": 0.11323282075277159,
+            "away_over_1_5": 0.6401090326122157,
+            "away_under_1_5": 0.35989096738778387,
+            "away_over_2_5": 0.3714579432153729,
+            "away_under_2_5": 0.6285420567846272
+          },
+          "top_scorelines": [
+            {
+              "score": "0-2",
+              "probability": 0.19045248493417202
+            },
+            {
+              "score": "0-1",
+              "probability": 0.16704118125638154
+            },
+            {
+              "score": "0-3",
+              "probability": 0.13828928351219114
+            },
+            {
+              "score": "0-0",
+              "probability": 0.08809319842639751
+            },
+            {
+              "score": "0-4",
+              "probability": 0.07530983098327064
+            }
+          ]
+        },
+        "features": {
+          "home_attack": 0.7060975609756099,
+          "home_defence": 1.5268292682926832,
+          "away_attack": 1.5817073170731708,
+          "away_defence": 0.42439024390243907,
+          "league_avg_goals": 1.025,
+          "h2h_available": true
+        },
+        "elo_probabilities": {
+          "home": 0.29199315795420333,
+          "draw": 0.21673396964869496,
+          "away": 0.4912728723971017
+        },
+        "elo_weight": 0.15
+      },
+      "historical_features": {
+        "historical_snapshot": {
+          "cutoff": "2025-01-21T15:00:00+00:00",
+          "home": {
+            "matches": 10,
+            "goals_for": 0.7,
+            "goals_against": 1.6
+          },
+          "away": {
+            "matches": 10,
+            "goals_for": 1.6,
+            "goals_against": 0.4
+          },
+          "source_match_count": 20
+        },
+        "recent_snapshot": {
+          "cutoff": "2025-01-21T15:00:00+00:00",
+          "window": 8,
+          "home": {
+            "matches": 8,
+            "window": 8,
+            "goals_for": 0.875,
+            "goals_against": 1.5,
+            "wins": 0,
+            "draws": 3,
+            "losses": 5,
+            "points": 3,
+            "points_per_match": 0.375,
+            "form_sequence": [
+              "L",
+              "D",
+              "L",
+              "D",
+              "D",
+              "L",
+              "L",
+              "L"
+            ],
+            "source_dates": [
+              "2025-01-06T15:00:00+00:00",
+              "2025-01-08T15:00:00+00:00",
+              "2025-01-09T15:00:00+00:00",
+              "2025-01-12T15:00:00+00:00",
+              "2025-01-14T15:00:00+00:00",
+              "2025-01-16T15:00:00+00:00",
+              "2025-01-18T15:00:00+00:00",
+              "2025-01-19T15:00:00+00:00"
+            ]
+          },
+          "away": {
+            "matches": 8,
+            "window": 8,
+            "goals_for": 1.625,
+            "goals_against": 0.5,
+            "wins": 7,
+            "draws": 1,
+            "losses": 0,
+            "points": 22,
+            "points_per_match": 2.75,
+            "form_sequence": [
+              "W",
+              "W",
+              "W",
+              "W",
+              "W",
+              "W",
+              "D",
+              "W"
+            ],
+            "source_dates": [
+              "2025-01-05T15:00:00+00:00",
+              "2025-01-07T15:00:00+00:00",
+              "2025-01-09T15:00:00+00:00",
+              "2025-01-11T15:00:00+00:00",
+              "2025-01-13T15:00:00+00:00",
+              "2025-01-15T15:00:00+00:00",
+              "2025-01-17T15:00:00+00:00",
+              "2025-01-19T15:00:00+00:00"
+            ]
+          }
+        },
+        "h2h_snapshot": {
+          "cutoff": "2025-01-21T15:00:00+00:00",
+          "window": 6,
+          "meetings": 3,
+          "available_meetings": 3,
+          "wins": 0,
+          "draws": 0,
+          "losses": 3,
+          "goals_for": 0.3333333333333333,
+          "goals_against": 1.6666666666666667,
+          "btts_rate": 0.3333333333333333,
+          "over_1_5_rate": 0.6666666666666666,
+          "over_2_5_rate": 0.3333333333333333,
+          "over_3_5_rate": 0.0,
+          "form_sequence": [
+            "L",
+            "L",
+            "L"
+          ],
+          "source_dates": [
+            "2025-01-01T15:00:00+00:00",
+            "2025-01-09T15:00:00+00:00",
+            "2025-01-19T15:00:00+00:00"
+          ]
+        },
+        "elo_snapshot": {
+          "cutoff": "2025-01-21T15:00:00+00:00",
+          "home_team_id": 2,
+          "away_team_id": 1,
+          "home_rating": 1432.5030249203774,
+          "away_rating": 1582.8830682793846
+        },
+        "league_avg_goals": 1.025
+      }
+    }
+  ]
+}
