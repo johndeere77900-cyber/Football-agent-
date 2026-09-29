@@ -22,6 +22,19 @@ import config
 
 
 # ============================================================================
+# API ERRORS
+# ============================================================================
+
+
+class APIFootballError(RuntimeError):
+    """Expected API-Football/network-service failure.
+
+    This exception is deliberately distinct from ordinary RuntimeError so
+    callers can handle external API failures without hiding programming bugs.
+    """
+
+
+# ============================================================================
 # API / CACHE CONFIGURATION
 # ============================================================================
 
@@ -34,6 +47,7 @@ FIXTURE_BATCH_SIZE = 20
 # ============================================================================
 # VALIDATION
 # ============================================================================
+
 
 def _validate_positive_int(
     value,
@@ -135,6 +149,7 @@ def _validate_nonempty_text(
 # API HEADERS
 # ============================================================================
 
+
 def _headers():
     api_key = getattr(
         config,
@@ -143,7 +158,7 @@ def _headers():
     )
 
     if not api_key:
-        raise RuntimeError(
+        raise APIFootballError(
             "API_FOOTBALL_KEY is not configured."
         )
 
@@ -155,6 +170,7 @@ def _headers():
 # ============================================================================
 # CACHE
 # ============================================================================
+
 
 def _cache_path(key):
     cache_dir = getattr(
@@ -305,6 +321,7 @@ def _cache_key(
 # CORE HTTP REQUEST
 # ============================================================================
 
+
 def _get(
     endpoint,
     params,
@@ -365,7 +382,7 @@ def _get(
 
         except requests.RequestException as exc:
             if attempt >= MAX_RETRIES:
-                raise RuntimeError(
+                raise APIFootballError(
                     "API-Football request failed after "
                     f"{MAX_RETRIES} attempts: {exc}"
                 ) from exc
@@ -391,7 +408,7 @@ def _get(
         # because every actual API request matters to the daily budget.
         if status == 429:
             if attempt >= MAX_RETRIES:
-                raise RuntimeError(
+                raise APIFootballError(
                     "API-Football rate limit reached "
                     f"after {MAX_RETRIES} attempts."
                 )
@@ -437,7 +454,7 @@ def _get(
             504,
         }:
             if attempt >= MAX_RETRIES:
-                raise RuntimeError(
+                raise APIFootballError(
                     "API-Football server error after "
                     f"{MAX_RETRIES} attempts: HTTP {status}"
                 )
@@ -461,7 +478,7 @@ def _get(
             data = response.json()
 
         except ValueError as exc:
-            raise RuntimeError(
+            raise APIFootballError(
                 "API-Football returned invalid JSON "
                 f"for /{endpoint} "
                 f"(HTTP {status})."
@@ -471,7 +488,7 @@ def _get(
             data,
             dict,
         ):
-            raise RuntimeError(
+            raise APIFootballError(
                 "API-Football returned a non-object JSON "
                 f"response for /{endpoint}."
             )
@@ -481,7 +498,7 @@ def _get(
                 "errors"
             )
 
-            raise RuntimeError(
+            raise APIFootballError(
                 "API-Football HTTP error: "
                 f"{status}; errors={errors!r}"
             )
@@ -491,7 +508,7 @@ def _get(
         )
 
         if api_errors:
-            raise RuntimeError(
+            raise APIFootballError(
                 "API-Football API error: "
                 f"{api_errors!r}"
             )
@@ -508,7 +525,7 @@ def _get(
 
         return data
 
-    raise RuntimeError(
+    raise APIFootballError(
         f"API-Football request failed: /{endpoint}"
     )
 
@@ -516,6 +533,7 @@ def _get(
 # ============================================================================
 # FIXTURES
 # ============================================================================
+
 
 def get_fixtures_by_date(
     date_str,
@@ -729,9 +747,11 @@ def get_recent_form(
 
     return response
 
+
 # ============================================================================
 # SINGLE FIXTURE / SEASON DATA
 # ============================================================================
+
 
 def get_fixture_result(
     fixture_id,
@@ -931,10 +951,10 @@ def get_enriched_fixtures(
 
     return enriched
 
-
 # ============================================================================
 # STANDINGS / LEAGUES
 # ============================================================================
+
 
 def get_league_standings(
     league_id,
@@ -1096,6 +1116,7 @@ def get_league_coverage(
 # RAW DEBUG
 # ============================================================================
 
+
 def raw_debug_call(
     endpoint,
     params,
@@ -1137,12 +1158,12 @@ def raw_debug_call(
     try:
         data = response.json()
     except ValueError as exc:
-        raise RuntimeError(
+        raise APIFootballError(
             "API-Football debug request returned invalid JSON."
         ) from exc
 
     if not response.ok:
-        raise RuntimeError(
+        raise APIFootballError(
             "API-Football debug request failed: "
             f"HTTP {response.status_code}; "
             f"errors={data.get('errors')!r}"
