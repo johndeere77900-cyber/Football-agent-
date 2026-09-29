@@ -2254,7 +2254,9 @@ def run_grading_basketball():
         game_date,
         home_team,
         away_team,
-    ) in pending:
+    ) 
+    
+    in pending:
 
         if quota_hit:
             break
@@ -2274,9 +2276,9 @@ def run_grading_basketball():
                 result
                 .get("status", {})
                 .get("short")
-             ) 
+            ) 
             
-           if status_short not in {
+         if status_short not in {
                 "FT",
                 "AOT",
              }:
