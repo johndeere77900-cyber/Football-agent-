@@ -1908,7 +1908,7 @@ def run_accuracy_report():
 def run_backtest_command(
     league_id,
     season,
-    sample_size=20,
+    sample_size=380,
 ):
     validate_positive_int(
         sample_size,
@@ -2497,7 +2497,7 @@ def build_parser():
     parser.add_argument(
         "--sample",
         type=int,
-        default=20,
+        default=380,
         help="Number of matches to sample.",
     )
 
