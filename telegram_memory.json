@@ -28,6 +28,16 @@
       "role": "user",
       "text": "Today’s football predictions",
       "timestamp": "2026-09-28T22:53:19.639823+00:00"
+    },
+    {
+      "role": "user",
+      "text": "I’m on it — I’ll research that and send you the result.",
+      "timestamp": "2026-09-29T00:34:54.652389+00:00"
+    },
+    {
+      "role": "assistant",
+      "text": "I can make predictions for football or basketball. Tell me which sport you want.",
+      "timestamp": "2026-09-29T00:34:54.653199+00:00"
     }
   ]
 }
