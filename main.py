@@ -2278,7 +2278,7 @@ def run_grading_basketball():
                 .get("short")
             ) 
             
-         if status_short not in {
+     if status_short not in {
                 "FT",
                 "AOT",
              }:
