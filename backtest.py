@@ -771,13 +771,16 @@ def _grade_prediction_markets(
                 total,
                 line,
             )
+            key_suffix = str(line).replace(".", "_")
+            actual_key = f"{actual}_{key_suffix}" if actual in {"over", "under"} else None
 
             picked = _pick_and_grade(
                 distribution,
-                actual,
+                actual_key,
             )
 
             if picked is not None:
+                picked["actual"] = actual
                 over_under_selected[
                     line_key
                 ] = picked
@@ -851,13 +854,16 @@ def _grade_prediction_markets(
                 actual_goals,
                 line,
             )
+            key_suffix = str(line).replace(".", "_")
+            actual_key = f"{team}_{actual}_{key_suffix}" if actual in {"over", "under"} else None
 
             picked = _pick_and_grade(
                 distribution,
-                actual,
+                actual_key,
             )
 
             if picked is not None:
+                picked["actual"] = actual
                 team_selected[
                     line_key
                 ] = picked
