@@ -2269,11 +2269,12 @@ def run_grading_basketball():
             if not result:
                 skipped_count += 1
                 continue
-         status_short = (
+           status_short = (
                result
                 .get("status", {})
                 .get("short")
-    )            if status_short not in {
+           )            
+         if status_short not in {
                 "FT",
                 "AOT",
             }
