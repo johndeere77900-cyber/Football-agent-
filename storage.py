@@ -160,6 +160,47 @@ def _ensure_column(conn, table, column, coltype):
         )
 
 
+def _normalise_result_pick(value):
+    """
+    Normalize a stored prediction label to the canonical result key.
+
+    Canonical football/basketball result keys:
+        home_win
+        draw
+        away_win
+
+    The prediction engine normally already stores canonical keys, but
+    older records/tests may contain human-readable labels such as
+    "Home Win". Supporting both formats keeps grading deterministic
+    without rewriting the original prediction.
+    """
+    if not isinstance(value, str):
+        return value
+
+    normalized = value.strip().lower()
+
+    aliases = {
+        "home_win": "home_win",
+        "home win": "home_win",
+        "home": "home_win",
+        "h": "home_win",
+
+        "draw": "draw",
+        "tie": "draw",
+        "x": "draw",
+
+        "away_win": "away_win",
+        "away win": "away_win",
+        "away": "away_win",
+        "a": "away_win",
+    }
+
+    return aliases.get(
+        normalized,
+        normalized.replace("-", "_").replace(" ", "_"),
+    )
+
+
 # ----------------------------------------------------------------------
 # Initialization
 # ----------------------------------------------------------------------
@@ -196,7 +237,6 @@ def init_db():
             """
         )
 
-        # Migration support for databases created by older versions.
         _ensure_column(
             conn,
             "predictions",
@@ -313,12 +353,7 @@ def save_prediction(
     """
     Save a football prediction exactly once.
 
-    IMPORTANT:
     The first saved prediction is authoritative.
-
-    If the same fixture_id is saved again, the existing row is left
-    completely unchanged. This prevents a later model/API run from
-    rewriting historical prediction data.
 
     Returns:
         True  -> a new prediction was inserted
@@ -419,11 +454,6 @@ def save_prediction(
     conn = _connect()
 
     try:
-        # INSERT OR IGNORE is deliberate.
-        #
-        # The fixture_id UNIQUE constraint makes the first prediction
-        # authoritative. A later attempt to save the same fixture is
-        # ignored rather than updating the prediction.
         cursor = conn.execute(
             """
             INSERT OR IGNORE INTO predictions (
@@ -542,7 +572,6 @@ def record_result(
             recorded_away_goals,
         ) = row
 
-        # A result has already been recorded.
         if (
             recorded_home_goals is not None
             or recorded_away_goals is not None
@@ -568,7 +597,7 @@ def record_result(
 
         correct = (
             1
-            if top_pick == actual
+            if _normalise_result_pick(top_pick) == actual
             else 0
         )
 
@@ -589,7 +618,6 @@ def record_result(
             ),
         )
 
-        # Elo and result are committed atomically.
         if (
             home_id is not None
             and away_id is not None
@@ -884,7 +912,7 @@ def get_pending_fixtures():
 
 # ----------------------------------------------------------------------------
 # Football cleanup
-# ----------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 
 def cleanup_non_target_leagues(
@@ -980,8 +1008,7 @@ def cleanup_non_target_leagues(
     finally:
         conn.close()
 
-
-# ----------------------------------------------------------------------
+  # ----------------------------------------------------------------------
 # Basketball prediction storage
 # ----------------------------------------------------------------------
 
@@ -1201,7 +1228,7 @@ def record_basketball_result(
 
         correct = (
             1
-            if top_pick == actual
+            if _normalise_result_pick(top_pick) == actual
             else 0
         )
 
@@ -1231,6 +1258,7 @@ def record_basketball_result(
 
     finally:
         conn.close()
+
 
 # ----------------------------------------------------------------------
 # Basketball reporting
