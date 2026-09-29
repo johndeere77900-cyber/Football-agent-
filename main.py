@@ -1,4 +1,4 @@
-"""
+to"""
 Main entry point for the football and basketball prediction agent.
 
 Production football prediction uses prediction_engine as the
@@ -2269,9 +2269,8 @@ def run_grading_basketball():
             if not result:
                 skipped_count += 1
                 continue
-
-            status_short = (
-                result
+         status_short = (
+               result
                 .get("status", {})
                 .get("short")
     )            if status_short not in {
