@@ -15,7 +15,7 @@ import math
 import random
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import api_football
 import config
@@ -32,6 +32,64 @@ BACKTEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
+# Legacy helper-name compatibility
+# ---------------------------------------------------------------------------
+#
+# These names intentionally have no production role.
+# Older tests verify that main.predict_fixture() does NOT use the historical
+# backtest prediction implementation. The names therefore remain available
+# only so those tests can monkeypatch them and fail loudly if production ever
+# starts calling them again.
+#
+# Do not implement prediction logic here.
+# ---------------------------------------------------------------------------
+
+
+def estimate_expected_goals_from_stats(
+    *args: Any,
+    **kwargs: Any,
+) -> None:
+    raise RuntimeError(
+        "Legacy backtest prediction helper is disabled. "
+        "Use prediction_engine.predict_from_features() "
+        "or predict_historical_fixture()."
+    )
+
+
+def estimate_recent_form_goals(
+    *args: Any,
+    **kwargs: Any,
+) -> None:
+    raise RuntimeError(
+        "Legacy backtest prediction helper is disabled. "
+        "Use prediction_engine.predict_from_features() "
+        "or predict_historical_fixture()."
+    )
+
+
+def estimate_head_to_head_goals(
+    *args: Any,
+    **kwargs: Any,
+) -> None:
+    raise RuntimeError(
+        "Legacy backtest prediction helper is disabled. "
+        "Use prediction_engine.predict_from_features() "
+        "or predict_historical_fixture()."
+    )
+
+
+def blend_three(
+    *args: Any,
+    **kwargs: Any,
+) -> None:
+    raise RuntimeError(
+        "Legacy backtest prediction helper is disabled. "
+        "Use prediction_engine.predict_from_features() "
+        "or predict_historical_fixture()."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Basic validation / extraction
 # ---------------------------------------------------------------------------
 
@@ -41,8 +99,10 @@ def _safe_float(value: Any) -> Optional[float]:
         result = float(value)
     except (TypeError, ValueError):
         return None
+
     if not math.isfinite(result):
         return None
+
     return result
 
 
@@ -54,11 +114,17 @@ def _valid_goal(value: Any) -> bool:
     )
 
 
-def _fixture_date(fixture: Dict[str, Any]) -> str:
-    return str(fixture.get("fixture", {}).get("date", ""))
+def _fixture_date(
+    fixture: Dict[str, Any],
+) -> str:
+    return str(
+        fixture.get("fixture", {}).get("date", "")
+    )
 
 
-def _fixture_id(fixture: Dict[str, Any]) -> Optional[Any]:
+def _fixture_id(
+    fixture: Dict[str, Any],
+) -> Optional[Any]:
     """
     Return the fixture ID without coercing it to int.
 
@@ -69,26 +135,35 @@ def _fixture_id(fixture: Dict[str, Any]) -> Optional[Any]:
     return fixture.get("fixture", {}).get("id")
 
 
-def _fixture_lookup_key(value: Any) -> str:
+def _fixture_lookup_key(
+    value: Any,
+) -> str:
     """
     Produce a stable lookup key for numeric or opaque fixture IDs.
 
     This intentionally uses str(value) rather than int(value), because a
     backtest fixture ID may be an opaque identifier such as:
+
         2-4-2025-01-12T15:00:00+00:00
     """
     return str(value)
 
 
-def _home_id(fixture: Dict[str, Any]) -> Optional[Any]:
+def _home_id(
+    fixture: Dict[str, Any],
+) -> Optional[Any]:
     return fixture.get("teams", {}).get("home", {}).get("id")
 
 
-def _away_id(fixture: Dict[str, Any]) -> Optional[Any]:
+def _away_id(
+    fixture: Dict[str, Any],
+) -> Optional[Any]:
     return fixture.get("teams", {}).get("away", {}).get("id")
 
 
-def _home_name(fixture: Dict[str, Any]) -> str:
+def _home_name(
+    fixture: Dict[str, Any],
+) -> str:
     return str(
         fixture.get("teams", {})
         .get("home", {})
@@ -96,7 +171,9 @@ def _home_name(fixture: Dict[str, Any]) -> str:
     )
 
 
-def _away_name(fixture: Dict[str, Any]) -> str:
+def _away_name(
+    fixture: Dict[str, Any],
+) -> str:
     return str(
         fixture.get("teams", {})
         .get("away", {})
@@ -108,6 +185,7 @@ def _goals(
     fixture: Dict[str, Any],
 ) -> Tuple[Optional[int], Optional[int]]:
     goals = fixture.get("goals", {})
+
     home = goals.get("home")
     away = goals.get("away")
 
@@ -117,7 +195,9 @@ def _goals(
     return int(home), int(away)
 
 
-def _is_finished(fixture: Dict[str, Any]) -> bool:
+def _is_finished(
+    fixture: Dict[str, Any],
+) -> bool:
     return (
         fixture.get("fixture", {})
         .get("status", {})
@@ -126,9 +206,15 @@ def _is_finished(fixture: Dict[str, Any]) -> bool:
     )
 
 
-def _fixture_is_gradeable(fixture: Dict[str, Any]) -> bool:
+def _fixture_is_gradeable(
+    fixture: Dict[str, Any],
+) -> bool:
     home, away = _goals(fixture)
-    return home is not None and away is not None
+
+    return (
+        home is not None
+        and away is not None
+    )
 
 
 def _normalise_probability_distribution(
@@ -313,7 +399,11 @@ def _historical_prediction_for_fixture(
     away_id = _away_id(fixture)
     cutoff = _fixture_date(fixture)
 
-    if home_id is None or away_id is None or not cutoff:
+    if (
+        home_id is None
+        or away_id is None
+        or not cutoff
+    ):
         return None
 
     historical_snapshot = (
@@ -548,8 +638,7 @@ def _parse_goal_market_key(
         team,
         threshold,
         key_text,
-    )
-
+)
 
 def _grade_prediction_markets(
     prediction_markets: Dict[str, Any],
@@ -856,7 +945,8 @@ def _grade_prediction_markets(
     return {
         "selected": selected,
         "outcomes": outcomes,
-}
+    }
+
 
 # ---------------------------------------------------------------------------
 # Statistical enrichment
@@ -1211,8 +1301,7 @@ def _print_backtest_report(
 
     print(
         "=== END FULL MARKET BACKTEST REPORT ===\n"
-    )
-
+        )
 
 # ---------------------------------------------------------------------------
 # Main backtest
@@ -1411,7 +1500,7 @@ def run_real_backtest(
             {},
         )
 
-        market_grading = (
+        market_result = (
             _grade_prediction_markets(
                 prediction_markets,
                 candidate,
@@ -1419,7 +1508,7 @@ def run_real_backtest(
         )
 
         selected_markets = (
-            market_grading["selected"]
+            market_result["selected"]
         )
 
         primary = selected_markets.get(
@@ -1504,7 +1593,7 @@ def run_real_backtest(
             "market_grading": {
                 "selected": selected_markets,
                 "outcomes": (
-                    market_grading[
+                    market_result[
                         "outcomes"
                     ]
                 ),
@@ -1623,7 +1712,9 @@ def run_real_backtest(
     return result
 
 
-# Compatibility aliases.
+# ---------------------------------------------------------------------------
+# Compatibility aliases
+# ---------------------------------------------------------------------------
 
 
 def run_backtest(
