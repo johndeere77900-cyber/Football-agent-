@@ -1,14 +1,25 @@
 """
-Thin wrapper around the API-Basketball v1 API (api-sports.io).
+Basketball API wrapper for API-Sports.
 
-Uses the same API key as api_football.py. Provides file-based caching and
-automatic retry with backoff for rate-limit responses.
+This module is deliberately thin.
 
-The module validates identifiers and dates, treats malformed API responses
-as errors, and avoids allowing a corrupted cache file to break API access.
+Responsibilities:
+- validate API inputs;
+- call API-Sports Basketball;
+- cache successful responses;
+- cache valid empty responses;
+- retry only transient failures;
+- expose the public functions used by the prediction agent;
+- fail closed when the provider returns malformed data.
+
+Prediction integrity rule:
+This module never fabricates basketball statistics or results.
+If the provider cannot supply valid data, the caller receives an error
+or an empty result and must decide whether a prediction is possible.
 """
 
 import datetime
+import hashlib
 import json
 import os
 import time
@@ -18,11 +29,30 @@ import requests
 import config
 
 
-MAX_RETRIES = 3
-RETRY_BACKOFF_SECONDS = 5
+# ---------------------------------------------------------------------------
+# Request / retry configuration
+# ---------------------------------------------------------------------------
+
+MAX_RETRIES = 2
+RETRY_BACKOFF_SECONDS = 3
+REQUEST_TIMEOUT_SECONDS = 15
+
+RETRYABLE_STATUS_CODES = {
+    429,
+    500,
+    502,
+    503,
+    504,
+}
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------------------------
 
 
 def _validate_positive_int(value, name):
+    """Require a real positive integer."""
     if (
         isinstance(value, bool)
         or not isinstance(value, int)
@@ -36,6 +66,7 @@ def _validate_positive_int(value, name):
 
 
 def _validate_date(date_str):
+    """Require an exact YYYY-MM-DD date."""
     if not isinstance(date_str, str):
         raise ValueError(
             "date_str must be a string in YYYY-MM-DD format."
@@ -58,7 +89,50 @@ def _validate_date(date_str):
     return parsed
 
 
-def _headers():
+def _validate_endpoint(endpoint):
+    """Require a safe non-empty API endpoint."""
+    if not isinstance(endpoint, str):
+        raise ValueError(
+            "endpoint must be a string."
+        )
+
+    endpoint = endpoint.strip().strip("/")
+
+    if not endpoint:
+        raise ValueError(
+            "endpoint must be a non-empty string."
+        )
+
+    if "/" in endpoint:
+        raise ValueError(
+            "endpoint must contain a single API endpoint name."
+        )
+
+    return endpoint
+
+
+def _validate_params(params):
+    """Require a dictionary suitable for a GET query."""
+    if not isinstance(params, dict):
+        raise ValueError(
+            "params must be a dictionary."
+        )
+
+    return params
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+
+def _api_key():
+    """
+    Return the configured API-Sports key.
+
+    The project intentionally uses the same API-Sports key for the
+    football and basketball APIs.
+    """
     key = getattr(
         config,
         "API_FOOTBALL_KEY",
@@ -70,62 +144,149 @@ def _headers():
             "API_FOOTBALL_KEY is not configured."
         )
 
+    return key.strip()
+
+
+def _base_url():
+    """Return the configured Basketball API base URL."""
+    base_url = getattr(
+        config,
+        "API_BASKETBALL_BASE_URL",
+        None,
+    )
+
+    if not isinstance(base_url, str):
+        raise ValueError(
+            "API_BASKETBALL_BASE_URL is not configured."
+        )
+
+    base_url = base_url.strip().rstrip("/")
+
+    if not base_url:
+        raise ValueError(
+            "API_BASKETBALL_BASE_URL is empty."
+        )
+
+    return base_url
+
+
+def _headers():
+    """Build API-Sports authentication headers."""
     return {
-        "x-apisports-key": key,
+        "x-apisports-key": _api_key(),
     }
 
 
-def _cache_path(key):
-    if not isinstance(key, str) or not key:
+# ---------------------------------------------------------------------------
+# Cache
+# ---------------------------------------------------------------------------
+
+
+def _cache_key(endpoint, params):
+    """
+    Build a deterministic cache key.
+
+    Hashing the complete endpoint + parameter set avoids path-length and
+    unsafe-filename problems while ensuring different API queries do not
+    collide.
+    """
+    payload = {
+        "endpoint": endpoint,
+        "params": params,
+    }
+
+    serialized = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+    digest = hashlib.sha256(
+        serialized.encode("utf-8")
+    ).hexdigest()
+
+    return f"basketball_{digest}"
+
+
+def _cache_path(endpoint, params):
+    """Return the cache file path for an API request."""
+    cache_dir = getattr(
+        config,
+        "CACHE_DIR",
+        ".api_cache",
+    )
+
+    if not isinstance(cache_dir, str) or not cache_dir.strip():
         raise ValueError(
-            "Cache key must be a non-empty string."
+            "CACHE_DIR must be a non-empty string."
         )
 
     os.makedirs(
-        config.CACHE_DIR,
+        cache_dir,
         exist_ok=True,
     )
 
-    safe_key = (
-        "basketball_"
-        + key.replace("/", "_")
-        .replace("?", "_")
-        .replace("&", "_")
-        .replace("\\", "_")
-    )
-
     return os.path.join(
-        config.CACHE_DIR,
-        safe_key + ".json",
+        cache_dir,
+        _cache_key(
+            endpoint,
+            params,
+        ) + ".json",
     )
 
 
-def _cache_get(key):
-    path = _cache_path(key)
+def _cache_get(endpoint, params):
+    """
+    Read a cached API response.
+
+    Returns:
+        dict: cached response when fresh and valid.
+        None: when no usable cache entry exists.
+    """
+    path = _cache_path(
+        endpoint,
+        params,
+    )
 
     if not os.path.exists(path):
         return None
 
     try:
-        age_hours = (
+        ttl_hours = float(
+            getattr(
+                config,
+                "CACHE_TTL_HOURS",
+                20,
+            )
+        )
+
+        if ttl_hours < 0:
+            return None
+
+        age_seconds = (
             time.time()
             - os.path.getmtime(path)
-        ) / 3600
+        )
 
-        if (
-            age_hours < 0
-            or age_hours > config.CACHE_TTL_HOURS
-        ):
+        if age_seconds < 0:
+            return None
+
+        if age_seconds > ttl_hours * 3600:
             return None
 
         with open(
             path,
             "r",
             encoding="utf-8",
-        ) as f:
-            data = json.load(f)
+        ) as file:
+            data = json.load(file)
 
         if not isinstance(data, dict):
+            return None
+
+        # A cache entry must itself look like an API response.
+        if "response" not in data:
             return None
 
         return data
@@ -133,31 +294,48 @@ def _cache_get(key):
     except (
         OSError,
         ValueError,
+        TypeError,
         json.JSONDecodeError,
     ):
-        # A broken cache must never prevent a fresh API request.
+        # Corrupt cache must never block a fresh API request.
         return None
 
 
-def _cache_set(key, data):
+def _cache_set(endpoint, params, data):
+    """
+    Atomically store an API response.
+
+    Important:
+    Empty but valid API responses are cached too. This prevents repeated
+    queries for a date with no games from unnecessarily consuming API quota.
+    """
     if not isinstance(data, dict):
         raise ValueError(
             "Cached API data must be a dictionary."
         )
 
-    path = _cache_path(key)
-    temp_path = path + ".tmp"
+    path = _cache_path(
+        endpoint,
+        params,
+    )
+
+    temp_path = (
+        path
+        + ".tmp"
+        + f".{os.getpid()}"
+    )
 
     try:
         with open(
             temp_path,
             "w",
             encoding="utf-8",
-        ) as f:
+        ) as file:
             json.dump(
                 data,
-                f,
+                file,
                 ensure_ascii=False,
+                separators=(",", ":"),
             )
 
         os.replace(
@@ -173,140 +351,283 @@ def _cache_set(key, data):
                 pass
 
 
+# ---------------------------------------------------------------------------
+# API response validation
+# ---------------------------------------------------------------------------
+
+
 def _validate_api_response(data):
+    """
+    Validate the basic API-Sports response envelope.
+
+    This does not validate every endpoint-specific field. Individual public
+    functions perform that validation after this function succeeds.
+    """
     if not isinstance(data, dict):
         raise ValueError(
-            "API response must be a JSON object."
+            "API-Basketball response must be a JSON object."
         )
 
-    errors = data.get("errors")
+    if "response" not in data:
+        raise ValueError(
+            "API-Basketball response is missing the response field."
+        )
+
+    errors = data.get(
+        "errors"
+    )
 
     if errors:
         raise RuntimeError(
-            f"API-Basketball returned errors: {errors}"
-        )
-
-    response = data.get("response")
-
-    if response is None:
-        raise ValueError(
-            "API response is missing the response field."
+            "API-Basketball returned errors: "
+            f"{errors}"
         )
 
     return data
 
 
-def _get(endpoint, params):
-    """
-    Make a GET request to API-Basketball, using the on-disk cache first.
-
-    Retries automatically on HTTP 429 responses with increasing backoff.
-    """
-    if not isinstance(endpoint, str) or not endpoint.strip():
+def _parse_json_response(response):
+    """Decode and validate the provider's JSON response."""
+    try:
+        data = response.json()
+    except ValueError as exc:
         raise ValueError(
-            "endpoint must be a non-empty string."
-        )
+            "API-Basketball returned invalid JSON."
+        ) from exc
 
-    if not isinstance(params, dict):
-        raise ValueError(
-            "params must be a dictionary."
-        )
-
-    cache_key = (
-        endpoint
-        + "_"
-        + json.dumps(
-            params,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+    return _validate_api_response(
+        data
     )
 
-    cached = _cache_get(cache_key)
+
+# ---------------------------------------------------------------------------
+# Retry helpers
+# ---------------------------------------------------------------------------
+
+
+def _retry_after_seconds(response, default):
+    """
+    Read Retry-After when supplied by the provider.
+
+    The value is deliberately capped so a malformed provider response cannot
+    make a GitHub Actions worker sleep indefinitely.
+    """
+    raw = response.headers.get(
+        "Retry-After"
+    )
+
+    if raw is not None:
+        try:
+            seconds = float(raw)
+
+            if seconds >= 0:
+                return min(
+                    seconds,
+                    60.0,
+                )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            pass
+
+    return min(
+        float(default),
+        60.0,
+    )
+
+
+def _sleep_before_retry(seconds):
+    """Sleep for a bounded retry delay."""
+    seconds = max(
+        0.0,
+        min(
+            float(seconds),
+            60.0,
+        ),
+    )
+
+    time.sleep(
+        seconds
+    )
+
+
+# ---------------------------------------------------------------------------
+# Core GET operation
+# ---------------------------------------------------------------------------
+
+
+def _get(endpoint, params):
+    """
+    Perform a cache-first GET request to API-Sports Basketball.
+
+    Cache behavior:
+    - fresh cached responses are returned without an API request;
+    - valid empty responses are cached;
+    - corrupt/expired cache is ignored.
+
+    Retry behavior:
+    - network errors are retried;
+    - HTTP 429 is retried;
+    - transient 5xx responses are retried;
+    - permanent 4xx responses are not repeatedly requested.
+    """
+    endpoint = _validate_endpoint(
+        endpoint
+    )
+
+    params = _validate_params(
+        params
+    )
+
+    cached = _cache_get(
+        endpoint,
+        params,
+    )
 
     if cached is not None:
         return cached
 
     url = (
-        f"{config.API_BASKETBALL_BASE_URL}"
-        f"/{endpoint}"
+        f"{_base_url()}/{endpoint}"
     )
 
-    backoff = RETRY_BACKOFF_SECONDS
-    last_response = None
+    backoff = (
+        RETRY_BACKOFF_SECONDS
+    )
+
+    last_exception = None
 
     for attempt in range(
         1,
         MAX_RETRIES + 1,
     ):
         try:
-            resp = requests.get(
+            response = requests.get(
                 url,
                 headers=_headers(),
                 params=params,
-                timeout=15,
+                timeout=REQUEST_TIMEOUT_SECONDS,
             )
-        except requests.RequestException:
+
+        except requests.RequestException as exc:
+            last_exception = exc
+
             if attempt >= MAX_RETRIES:
                 raise
 
-            time.sleep(backoff)
-            backoff *= 2
-            continue
-
-        last_response = resp
-
-        if (
-            resp.status_code == 429
-            and attempt < MAX_RETRIES
-        ):
             print(
-                "  Rate limited (429), "
+                "  Basketball API network error; "
                 f"retrying in {backoff}s "
                 f"(attempt {attempt}/{MAX_RETRIES})..."
             )
-            time.sleep(backoff)
+
+            _sleep_before_retry(
+                backoff
+            )
+
             backoff *= 2
             continue
 
-        resp.raise_for_status()
+        status = response.status_code
 
-        try:
-            data = resp.json()
-        except ValueError as exc:
-            raise ValueError(
-                "API-Basketball returned invalid JSON."
-            ) from exc
+        if status in RETRYABLE_STATUS_CODES:
+            if attempt >= MAX_RETRIES:
+                response.raise_for_status()
 
-        data = _validate_api_response(
-            data
+            if status == 429:
+                delay = _retry_after_seconds(
+                    response,
+                    backoff,
+                )
+
+                print(
+                    "  Basketball API rate limited (429); "
+                    f"retrying in {delay:g}s "
+                    f"(attempt {attempt}/{MAX_RETRIES})..."
+                )
+
+            else:
+                delay = min(
+                    float(backoff),
+                    60.0,
+                )
+
+                print(
+                    "  Basketball API temporary "
+                    f"HTTP {status}; "
+                    f"retrying in {delay:g}s "
+                    f"(attempt {attempt}/{MAX_RETRIES})..."
+                )
+
+            _sleep_before_retry(
+                delay
+            )
+
+            backoff *= 2
+            continue
+
+        # Permanent HTTP failure.
+        response.raise_for_status()
+
+        data = _parse_json_response(
+            response
         )
 
-        if data.get("response"):
-            _cache_set(
-                cache_key,
-                data,
-            )
+        # Cache every valid response, including response=[].
+        _cache_set(
+            endpoint,
+            params,
+            data,
+        )
 
         return data
 
-    if last_response is not None:
-        last_response.raise_for_status()
+    if last_exception is not None:
+        raise last_exception
 
     raise RuntimeError(
-        "API-Basketball request failed without a response."
-)
-    
+        "API-Basketball request failed."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Games
+# ---------------------------------------------------------------------------
+
+
+def _season_for_date(parsed_date):
+    """
+    Derive the season year used by API-Sports basketball schedule queries.
+
+    For the NBA-style season used by this project:
+    August-December belongs to the season beginning that calendar year;
+    January-July belongs to the season that began the previous year.
+    """
+    year = parsed_date.year
+
+    if parsed_date.month >= 8:
+        season = year
+    else:
+        season = year - 1
+
+    if season <= 0:
+        raise ValueError(
+            "Unable to derive a valid basketball season."
+        )
+
+    return season
+
+
 def get_games_by_date(
     date_str,
     league_id,
 ):
     """
-    Return games for a specific date and league.
+    Return basketball games for one date and configured league.
 
-    NBA seasons span two calendar years. Games from August onward are
-    assigned to that calendar year's season; earlier games are assigned
-    to the previous season.
+    This is the canonical schedule function used by main.py and
+    telegram_bot.py.
     """
     parsed_date = _validate_date(
         date_str
@@ -317,19 +638,9 @@ def get_games_by_date(
         "league_id",
     )
 
-    year = parsed_date.year
-    month = parsed_date.month
-
-    season = (
-        year
-        if month >= 8
-        else year - 1
+    season = _season_for_date(
+        parsed_date
     )
-
-    if season <= 0:
-        raise ValueError(
-            "Unable to derive a valid season."
-        )
 
     params = {
         "date": date_str,
@@ -343,8 +654,7 @@ def get_games_by_date(
     )
 
     response = data.get(
-        "response",
-        [],
+        "response"
     )
 
     if not isinstance(
@@ -352,10 +662,92 @@ def get_games_by_date(
         list,
     ):
         raise ValueError(
-            "API games response must be a list."
+            "API-Basketball games response must be a list."
         )
 
     return response
+
+
+def get_live_games():
+    """
+    Return currently live basketball games.
+
+    The API-Sports live-games query is intentionally separate from
+    get_games_by_date() because live games must not depend on the caller
+    guessing the correct season/date parameters.
+    """
+    data = _get(
+        "games",
+        {
+            "live": "all",
+        },
+    )
+
+    response = data.get(
+        "response"
+    )
+
+    if not isinstance(
+        response,
+        list,
+    ):
+        raise ValueError(
+            "API-Basketball live-games response must be a list."
+        )
+
+    return response
+
+
+def get_game_result(
+    game_id,
+):
+    """
+    Return one basketball game record by ID.
+
+    Returns None when the provider has no matching record.
+    """
+    game_id = _validate_positive_int(
+        game_id,
+        "game_id",
+    )
+
+    data = _get(
+        "games",
+        {
+            "id": game_id,
+        },
+    )
+
+    response = data.get(
+        "response"
+    )
+
+    if not isinstance(
+        response,
+        list,
+    ):
+        raise ValueError(
+            "API-Basketball game-result response must be a list."
+        )
+
+    if not response:
+        return None
+
+    game = response[0]
+
+    if not isinstance(
+        game,
+        dict,
+    ):
+        raise ValueError(
+            "API-Basketball game-result item must be a dictionary."
+        )
+
+    return game
+
+# ---------------------------------------------------------------------------
+# Team statistics
+# ---------------------------------------------------------------------------
 
 
 def get_team_statistics(
@@ -363,7 +755,22 @@ def get_team_statistics(
     league_id,
     season,
 ):
-    """Return season-aggregate statistics for one basketball team."""
+    """
+    Return season-level statistics for one basketball team.
+
+    basketball_model.py expects the API response to contain:
+
+        points
+          for
+            average
+              all
+          against
+            average
+              all
+
+    This wrapper does not transform those statistics because the model
+    owns the interpretation of the provider's statistical schema.
+    """
     team_id = _validate_positive_int(
         team_id,
         "team_id",
@@ -391,8 +798,7 @@ def get_team_statistics(
     )
 
     response = data.get(
-        "response",
-        {},
+        "response"
     )
 
     if not isinstance(
@@ -400,44 +806,125 @@ def get_team_statistics(
         dict,
     ):
         raise ValueError(
-            "API statistics response must be a dictionary."
+            "API-Basketball statistics response must be a dictionary."
         )
 
     return response
 
 
-def get_game_result(
-    game_id,
+# ---------------------------------------------------------------------------
+# Compatibility helpers
+# ---------------------------------------------------------------------------
+
+
+def get_games_for_date(
+    date_str,
+    league_id,
 ):
-    """Return the result record for a single basketball game."""
-    game_id = _validate_positive_int(
-        game_id,
-        "game_id",
+    """
+    Backward-compatible alias for get_games_by_date().
+
+    The canonical name is get_games_by_date(). Keeping this alias prevents
+    older callers or tests from breaking while the rest of the application
+    migrates to the canonical function.
+    """
+    return get_games_by_date(
+        date_str,
+        league_id,
     )
 
-    params = {
-        "id": game_id,
-    }
 
-    data = _get(
-        "games",
-        params,
-    )
+# ---------------------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------------------
 
-    response = data.get(
-        "response",
-        [],
+
+def clear_expired_cache():
+    """
+    Remove expired basketball cache files.
+
+    This is maintenance only and is not called during prediction.
+
+    Returns:
+        int: number of files removed.
+    """
+    cache_dir = getattr(
+        config,
+        "CACHE_DIR",
+        ".api_cache",
     )
 
     if not isinstance(
-        response,
-        list,
+        cache_dir,
+        str,
+    ) or not cache_dir.strip():
+        return 0
+
+    if not os.path.isdir(
+        cache_dir
     ):
-        raise ValueError(
-            "API game-result response must be a list."
+        return 0
+
+    try:
+        ttl_hours = float(
+            getattr(
+                config,
+                "CACHE_TTL_HOURS",
+                20,
+            )
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 0
+
+    if ttl_hours < 0:
+        return 0
+
+    now = time.time()
+    removed = 0
+
+    try:
+        filenames = os.listdir(
+            cache_dir
+        )
+    except OSError:
+        return 0
+
+    for filename in filenames:
+        if not filename.startswith(
+            "basketball_"
+        ):
+            continue
+
+        if not filename.endswith(
+            ".json"
+        ):
+            continue
+
+        path = os.path.join(
+            cache_dir,
+            filename,
         )
 
-    if not response:
-        return None
+        try:
+            age_seconds = (
+                now
+                - os.path.getmtime(path)
+            )
 
-    return response[0]
+            if (
+                age_seconds >= 0
+                and age_seconds
+                > ttl_hours * 3600
+            ):
+                os.remove(
+                    path
+                )
+                removed += 1
+
+        except OSError:
+            continue
+
+    return removed
