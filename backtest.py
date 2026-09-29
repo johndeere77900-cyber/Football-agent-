@@ -1037,6 +1037,32 @@ def _merge_enriched_fixture(
 # ---------------------------------------------------------------------------
 
 
+def compute_binary_accuracy(
+    predictions: Sequence[Dict[str, float]],
+    actuals: Sequence[str],
+) -> Optional[float]:
+    """Compute accuracy where top pick = argmax(probabilities) compared to actual."""
+    if not predictions or len(predictions) != len(actuals):
+        return None
+
+    correct = 0
+    count = 0
+
+    for pred, actual in zip(predictions, actuals):
+        if not isinstance(pred, dict) or actual is None or not pred:
+            continue
+
+        pick = max(pred, key=lambda k: pred[k])
+        if pick == actual:
+            correct += 1
+        count += 1
+
+    if count == 0:
+        return None
+
+    return correct / count
+
+
 def compute_brier_score(
     predictions: Sequence[Dict[str, float]],
     actuals: Sequence[str],
@@ -2086,11 +2112,15 @@ def run_real_backtest(
             },
         },
         "over_under_2_5": {
+            "sample_count": len(preds_ou25),
+            "accuracy": compute_binary_accuracy(preds_ou25, acts_ou25),
             "brier_score": compute_brier_score(preds_ou25, acts_ou25, outcomes=("over", "under")),
             "log_loss": compute_log_loss(preds_ou25, acts_ou25, outcomes=("over", "under")),
             "calibration": compute_market_calibration(preds_ou25, acts_ou25, outcomes=("over", "under")),
         },
         "btts": {
+            "sample_count": len(preds_btts),
+            "accuracy": compute_binary_accuracy(preds_btts, acts_btts),
             "brier_score": compute_brier_score(preds_btts, acts_btts, outcomes=("yes", "no")),
             "log_loss": compute_log_loss(preds_btts, acts_btts, outcomes=("yes", "no")),
             "calibration": compute_market_calibration(preds_btts, acts_btts, outcomes=("yes", "no")),
@@ -2366,19 +2396,15 @@ def run_multi_season_backtest(
             },
         },
         "over_under_2_5": {
-            "accuracy": (
-                combined_market_summary.get("over_under", {}).get("2.5", {}).get("accuracy")
-                if combined_market_summary.get("over_under", {}).get("2.5", {}).get("accuracy") is not None
-                else combined_market_summary.get("over_under", {}).get("2_5", {}).get("accuracy", 0.0)
-            ),
+            "sample_count": len(preds_ou25),
+            "accuracy": compute_binary_accuracy(preds_ou25, acts_ou25),
             "brier_score": compute_brier_score(preds_ou25, acts_ou25, outcomes=("over", "under")),
             "log_loss": compute_log_loss(preds_ou25, acts_ou25, outcomes=("over", "under")),
             "calibration": compute_market_calibration(preds_ou25, acts_ou25, outcomes=("over", "under")),
         },
         "btts": {
-            "accuracy": (
-                combined_market_summary.get("btts", {}).get("accuracy", 0.0)
-            ),
+            "sample_count": len(preds_btts),
+            "accuracy": compute_binary_accuracy(preds_btts, acts_btts),
             "brier_score": compute_brier_score(preds_btts, acts_btts, outcomes=("yes", "no")),
             "log_loss": compute_log_loss(preds_btts, acts_btts, outcomes=("yes", "no")),
             "calibration": compute_market_calibration(preds_btts, acts_btts, outcomes=("yes", "no")),

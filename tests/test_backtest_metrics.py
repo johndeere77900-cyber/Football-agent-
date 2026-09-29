@@ -209,6 +209,10 @@ def test_over_under_2_5_evaluation_consistency():
     # -ln(0.45) = 0.798507696
     assert abs(log_loss - (-math.log(0.45))) < 1e-6
 
+    accuracy = backtest.compute_binary_accuracy(preds, acts)
+    # Top pick = "under" (0.55), actual = "over" -> accuracy = 0.0
+    assert accuracy == 0.0
+
 
 def test_run_multi_season_backtest(monkeypatch):
     from tests.test_backtest_prediction_engine_integration import historical_dataset
