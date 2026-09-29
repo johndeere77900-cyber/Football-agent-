@@ -1,0 +1,428 @@
+import json
+import os
+
+import pytest
+import requests
+
+import basketball_api
+import config
+
+
+class FakeResponse:
+    def __init__(
+        self,
+        status_code=200,
+        payload=None,
+        headers=None,
+    ):
+        self.status_code = status_code
+        self._payload = (
+            payload
+            if payload is not None
+            else {"response": []}
+        )
+        self.headers = headers or {}
+        self.ok = 200 <= status_code < 400
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if not self.ok:
+            raise requests.HTTPError(
+                f"HTTP {self.status_code}"
+            )
+
+
+@pytest.fixture
+def isolated_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        config,
+        "CACHE_DIR",
+        str(tmp_path),
+    )
+    monkeypatch.setattr(
+        config,
+        "CACHE_TTL_HOURS",
+        20,
+    )
+    monkeypatch.setattr(
+        config,
+        "API_FOOTBALL_KEY",
+        "test-key",
+    )
+
+
+def test_get_games_by_date_builds_expected_request(
+    isolated_cache,
+    monkeypatch,
+):
+    calls = []
+
+    def fake_get(
+        url,
+        headers,
+        params,
+        timeout,
+    ):
+        calls.append(
+            {
+                "url": url,
+                "headers": headers,
+                "params": params,
+                "timeout": timeout,
+            }
+        )
+
+        return FakeResponse(
+            payload={
+                "response": [
+                    {
+                        "id": 1,
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(
+        basketball_api.requests,
+        "get",
+        fake_get,
+    )
+
+    result = basketball_api.get_games_by_date(
+        "2026-09-28",
+        12,
+    )
+
+    assert result == [{"id": 1}]
+    assert len(calls) == 1
+    assert calls[0]["params"] == {
+        "date": "2026-09-28",
+        "league": 12,
+        "season": 2026,
+    }
+
+
+def test_basketball_season_rolls_back_before_august():
+    assert (
+        basketball_api._season_for_date(
+            __import__("datetime").date(
+                2026,
+                7,
+                31,
+            )
+        )
+        == 2025
+    )
+
+    assert (
+        basketball_api._season_for_date(
+            __import__("datetime").date(
+                2026,
+                8,
+                1,
+            )
+        )
+        == 2026
+    )
+
+
+def test_empty_successful_response_is_cached(
+    isolated_cache,
+    monkeypatch,
+):
+    calls = []
+
+    def fake_get(
+        url,
+        headers,
+        params,
+        timeout,
+    ):
+        calls.append(1)
+
+        return FakeResponse(
+            payload={
+                "response": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        basketball_api.requests,
+        "get",
+        fake_get,
+    )
+
+    first = basketball_api.get_games_by_date(
+        "2026-09-28",
+        12,
+    )
+
+    second = basketball_api.get_games_by_date(
+        "2026-09-28",
+        12,
+    )
+
+    assert first == []
+    assert second == []
+
+    # The second identical request must come from cache.
+    assert len(calls) == 1
+
+
+def test_network_failure_is_retried(
+    isolated_cache,
+    monkeypatch,
+):
+    calls = []
+
+    def fake_get(
+        url,
+        headers,
+        params,
+        timeout,
+    ):
+        calls.append(1)
+
+        if len(calls) == 1:
+            raise requests.ConnectionError(
+                "temporary network failure"
+            )
+
+        return FakeResponse(
+            payload={
+                "response": [
+                    {
+                        "id": 123,
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(
+        basketball_api.requests,
+        "get",
+        fake_get,
+    )
+
+    monkeypatch.setattr(
+        basketball_api,
+        "_sleep_before_retry",
+        lambda seconds: None,
+    )
+
+    result = basketball_api.get_games_by_date(
+        "2026-09-28",
+        12,
+    )
+
+    assert result == [{"id": 123}]
+    assert len(calls) == 2
+
+
+def test_429_uses_retry_after(
+    isolated_cache,
+    monkeypatch,
+):
+    calls = []
+    delays = []
+
+    def fake_get(
+        url,
+        headers,
+        params,
+        timeout,
+    ):
+        calls.append(1)
+
+        if len(calls) == 1:
+            return FakeResponse(
+                status_code=429,
+                payload={
+                    "response": [],
+                },
+                headers={
+                    "Retry-After": "7",
+                },
+            )
+
+        return FakeResponse(
+            payload={
+                "response": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        basketball_api.requests,
+        "get",
+        fake_get,
+    )
+
+    monkeypatch.setattr(
+        basketball_api,
+        "_sleep_before_retry",
+        lambda seconds: delays.append(
+            seconds
+        ),
+    )
+
+    result = basketball_api.get_games_by_date(
+        "2026-09-28",
+        12,
+    )
+
+    assert result == []
+    assert calls == [1, 1]
+    assert delays == [7.0]
+
+
+def test_invalid_api_envelope_is_rejected(
+    isolated_cache,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        basketball_api.requests,
+        "get",
+        lambda *args, **kwargs: FakeResponse(
+            payload={
+                "unexpected": [],
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError):
+        basketball_api.get_games_by_date(
+            "2026-09-28",
+            12,
+        )
+
+
+def test_api_error_envelope_is_rejected(
+    isolated_cache,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        basketball_api.requests,
+        "get",
+        lambda *args, **kwargs: FakeResponse(
+            payload={
+                "response": [],
+                "errors": {
+                    "token": "invalid",
+                },
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError):
+        basketball_api.get_games_by_date(
+            "2026-09-28",
+            12,
+        )
+
+
+def test_live_games_uses_live_all(
+    isolated_cache,
+    monkeypatch,
+):
+    calls = []
+
+    def fake_get(
+        url,
+        headers,
+        params,
+        timeout,
+    ):
+        calls.append(params)
+
+        return FakeResponse(
+            payload={
+                "response": [
+                    {
+                        "id": 55,
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(
+        basketball_api.requests,
+        "get",
+        fake_get,
+    )
+
+    result = basketball_api.get_live_games()
+
+    assert result == [{"id": 55}]
+    assert calls == [{"live": "all"}]
+
+
+def test_get_games_for_date_alias_matches_primary_function(
+    monkeypatch,
+):
+    called = []
+
+    monkeypatch.setattr(
+        basketball_api,
+        "get_games_by_date",
+        lambda date_str, league_id: called.append(
+            (date_str, league_id)
+        )
+        or ["game"],
+    )
+
+    result = basketball_api.get_games_for_date(
+        "2026-09-28",
+        12,
+    )
+
+    assert result == ["game"]
+    assert called == [
+        ("2026-09-28", 12)
+    ]
+
+
+def test_get_game_result_returns_first_game(
+    isolated_cache,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        basketball_api.requests,
+        "get",
+        lambda *args, **kwargs: FakeResponse(
+            payload={
+                "response": [
+                    {
+                        "id": 77,
+                    }
+                ]
+            }
+        ),
+    )
+
+    result = basketball_api.get_game_result(77)
+
+    assert result == {
+        "id": 77,
+    }
+
+
+@pytest.mark.parametrize(
+    "date_str",
+    [
+        "",
+        "2026-9-28",
+        "28-09-2026",
+        "2026-02-30",
+    ],
+)
+def test_invalid_date_is_rejected(
+    isolated_cache,
+    date_str,
+):
+    with pytest.raises(ValueError):
+        basketball_api.get_games_by_date(
+            date_str,
+            12,
+      )
