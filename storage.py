@@ -1523,8 +1523,10 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit):
 
     try:
         if db_type == "postgres":
+            lock_key = f"{provider}:{date_pattern}"
             with conn.transaction():
                 with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
                     if "%" in date_pattern:
                         cur.execute(
                             """

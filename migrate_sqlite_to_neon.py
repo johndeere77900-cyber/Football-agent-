@@ -105,18 +105,35 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
         # -------------------------------------------------------------
         # 1. Migrate Football Predictions
         # -------------------------------------------------------------
-        f_rows = source_cursor.execute(
-            """
-            SELECT
-                fixture_id, match_date, home_team, away_team, league,
-                markets_json, confidence_label, top_pick, top_probability,
-                odds_comparison_json, actual_home_goals, actual_away_goals,
-                top_pick_correct, home_team_id, away_team_id,
-                created_at
-            FROM predictions
-            ORDER BY id ASC
-            """
-        ).fetchall()
+        f_cols = {row[1] for row in source_cursor.execute("PRAGMA table_info(predictions)").fetchall()}
+        has_f_context = "prediction_context" in f_cols
+
+        if has_f_context:
+            f_rows = source_cursor.execute(
+                """
+                SELECT
+                    fixture_id, match_date, home_team, away_team, league,
+                    markets_json, confidence_label, top_pick, top_probability,
+                    odds_comparison_json, actual_home_goals, actual_away_goals,
+                    top_pick_correct, home_team_id, away_team_id,
+                    prediction_context, created_at
+                FROM predictions
+                ORDER BY id ASC
+                """
+            ).fetchall()
+        else:
+            f_rows = source_cursor.execute(
+                """
+                SELECT
+                    fixture_id, match_date, home_team, away_team, league,
+                    markets_json, confidence_label, top_pick, top_probability,
+                    odds_comparison_json, actual_home_goals, actual_away_goals,
+                    top_pick_correct, home_team_id, away_team_id,
+                    'PRE_MATCH' AS prediction_context, created_at
+                FROM predictions
+                ORDER BY id ASC
+                """
+            ).fetchall()
 
         report["predictions"]["source"] = len(f_rows)
 
@@ -128,8 +145,12 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                             fid, mdate, hteam, ateam, league,
                             mjson, clabel, tpick, tprob,
                             ojson, hgoals, agoals,
-                            tcorrect, hid, aid, cat
+                            tcorrect, hid, aid, pcontext, cat
                         ) = row
+
+                        pcontext = (pcontext or "PRE_MATCH").upper()
+                        if pcontext not in ("PRE_MATCH", "LIVE"):
+                            pcontext = "PRE_MATCH"
 
                         mjson_data = storage._json_loads(mjson) if mjson else {}
                         ojson_data = storage._json_loads(ojson) if ojson else None
@@ -150,14 +171,15 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                             ON CONFLICT (fixture_id) DO UPDATE SET
                                 actual_home_goals = COALESCE(EXCLUDED.actual_home_goals, predictions.actual_home_goals),
                                 actual_away_goals = COALESCE(EXCLUDED.actual_away_goals, predictions.actual_away_goals),
-                                top_pick_correct = COALESCE(EXCLUDED.top_pick_correct, predictions.top_pick_correct)
+                                top_pick_correct = COALESCE(EXCLUDED.top_pick_correct, predictions.top_pick_correct),
+                                prediction_context = EXCLUDED.prediction_context
                             """,
                             (
                                 fid, mdate, hteam, ateam, league,
                                 mjson_str, clabel, tpick, tprob,
                                 ojson_str, hgoals, agoals,
                                 tcorrect, hid, aid,
-                                "PRE_MATCH", cat or datetime.now(timezone.utc).isoformat(),
+                                pcontext, cat or datetime.now(timezone.utc).isoformat(),
                             ),
                         )
                         if cur.rowcount >= 1:
@@ -167,17 +189,33 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
         # 2. Migrate Basketball Predictions
         # -------------------------------------------------------------
         try:
-            b_rows = source_cursor.execute(
-                """
-                SELECT
-                    game_id, game_date, home_team, away_team, league,
-                    markets_json, confidence_label, top_pick, top_probability,
-                    actual_home_points, actual_away_points, top_pick_correct,
-                    created_at
-                FROM basketball_predictions
-                ORDER BY id ASC
-                """
-            ).fetchall()
+            b_cols = {row[1] for row in source_cursor.execute("PRAGMA table_info(basketball_predictions)").fetchall()}
+            has_b_context = "prediction_context" in b_cols
+
+            if has_b_context:
+                b_rows = source_cursor.execute(
+                    """
+                    SELECT
+                        game_id, game_date, home_team, away_team, league,
+                        markets_json, confidence_label, top_pick, top_probability,
+                        actual_home_points, actual_away_points, top_pick_correct,
+                        prediction_context, created_at
+                    FROM basketball_predictions
+                    ORDER BY id ASC
+                    """
+                ).fetchall()
+            else:
+                b_rows = source_cursor.execute(
+                    """
+                    SELECT
+                        game_id, game_date, home_team, away_team, league,
+                        markets_json, confidence_label, top_pick, top_probability,
+                        actual_home_points, actual_away_points, top_pick_correct,
+                        'PRE_MATCH' AS prediction_context, created_at
+                    FROM basketball_predictions
+                    ORDER BY id ASC
+                    """
+                ).fetchall()
         except sqlite3.OperationalError:
             b_rows = []
 
@@ -190,8 +228,12 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                         (
                             gid, gdate, hteam, ateam, league,
                             mjson, clabel, tpick, tprob,
-                            hpts, apts, tcorrect, cat
+                            hpts, apts, tcorrect, bpcontext, cat
                         ) = row
+
+                        bpcontext = (bpcontext or "PRE_MATCH").upper()
+                        if bpcontext not in ("PRE_MATCH", "LIVE"):
+                            bpcontext = "PRE_MATCH"
 
                         mjson_data = storage._json_loads(mjson) if mjson else {}
                         mjson_str = storage._json_dumps(mjson_data, "markets") if mjson_data else None
@@ -208,13 +250,14 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                             ON CONFLICT (game_id) DO UPDATE SET
                                 actual_home_points = COALESCE(EXCLUDED.actual_home_points, basketball_predictions.actual_home_points),
                                 actual_away_points = COALESCE(EXCLUDED.actual_away_points, basketball_predictions.actual_away_points),
-                                top_pick_correct = COALESCE(EXCLUDED.top_pick_correct, basketball_predictions.top_pick_correct)
+                                top_pick_correct = COALESCE(EXCLUDED.top_pick_correct, basketball_predictions.top_pick_correct),
+                                prediction_context = EXCLUDED.prediction_context
                             """,
                             (
                                 gid, gdate, hteam, ateam, league,
                                 mjson_str, clabel, tpick, tprob,
                                 hpts, apts, tcorrect,
-                                "PRE_MATCH", cat or datetime.now(timezone.utc).isoformat(),
+                                bpcontext, cat or datetime.now(timezone.utc).isoformat(),
                             ),
                         )
                         if cur.rowcount >= 1:

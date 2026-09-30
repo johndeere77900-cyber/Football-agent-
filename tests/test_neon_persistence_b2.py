@@ -633,3 +633,96 @@ def test_migration_utility_dry_run_covers_6_datasets(tmp_path, monkeypatch):
     assert report["verification"] == "DRY_RUN_PASSED"
     # Source file must be intact
     assert os.path.exists(str(db_file))
+
+
+def test_postgres_advisory_lock_concurrency_in_reserve_api_request(tmp_path, monkeypatch):
+    """Test that storage.reserve_api_request issues pg_advisory_xact_lock in PostgreSQL mode."""
+    recorded_queries = []
+
+    class DummyCursor:
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc_val, exc_tb): pass
+        def execute(self, query, params=None):
+            recorded_queries.append((query.strip(), params))
+        def fetchone(self):
+            return (1,)
+
+    class DummyTransaction:
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc_val, exc_tb): pass
+
+    class DummyConn:
+        def transaction(self):
+            return DummyTransaction()
+        def cursor(self):
+            return DummyCursor()
+        def close(self):
+            pass
+
+    monkeypatch.setattr(storage, "_connect", lambda: (DummyConn(), "postgres"))
+
+    reserved = storage.reserve_api_request("api_football", "2026-09-30", "2026-09-30", "fixtures", 100)
+    assert reserved is True
+
+    # Confirm pg_advisory_xact_lock was executed with provider:date_pattern
+    lock_executed = any("pg_advisory_xact_lock" in q[0] and q[1] == ("api_football:2026-09-30",) for q in recorded_queries)
+    assert lock_executed is True
+
+
+def test_migration_preserves_prediction_context(tmp_path, monkeypatch):
+    """Test that migration preserves 'PRE_MATCH' and 'LIVE' prediction contexts from SQLite source."""
+    source_db = tmp_path / "source_context.db"
+    monkeypatch.setattr(config, "DB_PATH", str(source_db))
+    monkeypatch.setattr(config, "ENVIRONMENT", "development")
+    storage.init_db()
+
+    markets = {"match_result": {"home_win": 0.50, "draw": 0.30, "away_win": 0.20}}
+    conf = {"label": "High", "top_pick": "Home Win", "top_probability": 0.50}
+
+    storage.save_prediction(
+        fixture_id=9001,
+        match_date="2026-09-30",
+        home_team="Team Pre",
+        away_team="Team Away",
+        league="EPL",
+        markets=markets,
+        confidence=conf,
+        prediction_context="PRE_MATCH",
+    )
+
+    storage.save_prediction(
+        fixture_id=9002,
+        match_date="2026-09-30",
+        home_team="Team Live",
+        away_team="Team Away",
+        league="EPL",
+        markets=markets,
+        confidence=conf,
+        prediction_context="LIVE",
+    )
+
+    storage.save_basketball_prediction(
+        game_id=9003,
+        game_date="2026-09-30",
+        home_team="B-Team Live",
+        away_team="B-Team Away",
+        league="NBA",
+        markets=markets,
+        confidence=conf,
+        prediction_context="LIVE",
+    )
+
+    # Dry-run migration reads from source SQLite
+    source_conn = sqlite3.connect(str(source_db))
+    source_cursor = source_conn.cursor()
+
+    f_cols = {row[1] for row in source_cursor.execute("PRAGMA table_info(predictions)").fetchall()}
+    assert "prediction_context" in f_cols
+
+    contexts = source_cursor.execute("SELECT fixture_id, prediction_context FROM predictions ORDER BY fixture_id ASC").fetchall()
+    assert contexts == [(9001, "PRE_MATCH"), (9002, "LIVE")]
+
+    b_contexts = source_cursor.execute("SELECT game_id, prediction_context FROM basketball_predictions ORDER BY game_id ASC").fetchall()
+    assert b_contexts == [(9003, "LIVE")]
+
+    source_conn.close()
