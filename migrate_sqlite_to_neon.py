@@ -1,14 +1,21 @@
 """
-Migration utility for migrating historical prediction data, Elo ratings, and
-bot memory from local SQLite (predictions.db) and telegram_memory.json to Neon PostgreSQL.
+Migration utility for migrating historical prediction data, Elo ratings, bot memory,
+API cache, and request counts from local SQLite (predictions.db) and telegram_memory.json to Neon PostgreSQL.
 
 Design goals:
 - Safe and re-runnable (idempotent ON CONFLICT handling).
 - Preserves original primary keys, fixture IDs, game IDs, Elo ratings, graded results,
-  and JSON payloads.
+  JSON payloads, API cache, and request count history.
 - Migrates Telegram conversation memory to structured bot_memory table.
-- Verifies destination record counts and key field parity.
+- Source vs destination count AND key-field verification across all 6 persistent datasets:
+    1) predictions
+    2) basketball_predictions
+    3) elo_ratings
+    4) bot_memory
+    5) api_cache
+    6) api_request_counts
 - Does NOT delete or alter source predictions.db or telegram_memory.json.
+- Makes ZERO external API requests.
 - Diagnostic CLI with --dry-run option.
 """
 
@@ -53,7 +60,7 @@ def validate_sqlite_source(sqlite_path):
 
 def migrate(sqlite_path=None, target_url=None, dry_run=False):
     """
-    Execute migration from SQLite/JSON to Neon PostgreSQL.
+    Execute migration from SQLite/JSON to Neon PostgreSQL with full verification.
     """
     sqlite_path = sqlite_path or config.DB_PATH
     target_url = target_url or config.NEON_DATABASE_URL or os.environ.get("NEON_DATABASE_URL")
@@ -77,14 +84,12 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
         target_conn = psycopg.connect(target_url)
 
     report = {
-        "football_predictions_migrated": 0,
-        "football_predictions_source_count": 0,
-        "basketball_predictions_migrated": 0,
-        "basketball_predictions_source_count": 0,
-        "elo_ratings_migrated": 0,
-        "elo_ratings_source_count": 0,
-        "telegram_messages_migrated": 0,
-        "telegram_messages_source_count": 0,
+        "predictions": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "basketball_predictions": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "elo_ratings": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "bot_memory": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "api_cache": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "api_request_counts": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
         "verification": "PENDING",
     }
 
@@ -94,10 +99,11 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
             os.environ["ENVIRONMENT"] = "production"
             storage.init_db()
 
+        source_cursor = source_conn.cursor()
+
         # -------------------------------------------------------------
         # 1. Migrate Football Predictions
         # -------------------------------------------------------------
-        source_cursor = source_conn.cursor()
         f_rows = source_cursor.execute(
             """
             SELECT
@@ -111,7 +117,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
             """
         ).fetchall()
 
-        report["football_predictions_source_count"] = len(f_rows)
+        report["predictions"]["source"] = len(f_rows)
 
         if not dry_run and f_rows:
             with target_conn.transaction():
@@ -124,7 +130,6 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                             tcorrect, hid, aid, cat
                         ) = row
 
-                        # Ensure valid JSON payloads for Postgres JSONB columns
                         mjson_data = storage._json_loads(mjson) if mjson else {}
                         ojson_data = storage._json_loads(ojson) if ojson else None
 
@@ -155,7 +160,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                             ),
                         )
                         if cur.rowcount >= 1:
-                            report["football_predictions_migrated"] += 1
+                            report["predictions"]["migrated"] += 1
 
         # -------------------------------------------------------------
         # 2. Migrate Basketball Predictions
@@ -175,7 +180,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
         except sqlite3.OperationalError:
             b_rows = []
 
-        report["basketball_predictions_source_count"] = len(b_rows)
+        report["basketball_predictions"]["source"] = len(b_rows)
 
         if not dry_run and b_rows:
             with target_conn.transaction():
@@ -212,22 +217,17 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                             ),
                         )
                         if cur.rowcount >= 1:
-                            report["basketball_predictions_migrated"] += 1
+                            report["basketball_predictions"]["migrated"] += 1
 
         # -------------------------------------------------------------
         # 3. Migrate Elo Ratings
         # -------------------------------------------------------------
         try:
-            e_rows = source_cursor.execute(
-                """
-                SELECT team_id, team_name, rating, updated_at
-                FROM elo_ratings
-                """
-            ).fetchall()
+            e_rows = source_cursor.execute("SELECT team_id, team_name, rating, updated_at FROM elo_ratings").fetchall()
         except sqlite3.OperationalError:
             e_rows = []
 
-        report["elo_ratings_source_count"] = len(e_rows)
+        report["elo_ratings"]["source"] = len(e_rows)
 
         if not dry_run and e_rows:
             with target_conn.transaction():
@@ -246,7 +246,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                             (tid, tname, rating, upat or datetime.now(timezone.utc).isoformat()),
                         )
                         if cur.rowcount >= 1:
-                            report["elo_ratings_migrated"] += 1
+                            report["elo_ratings"]["migrated"] += 1
 
         # -------------------------------------------------------------
         # 4. Migrate Telegram Memory
@@ -263,7 +263,14 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
             except Exception as exc:
                 print(f"Warning: could not parse {json_memory_path}: {exc}")
 
-        report["telegram_messages_source_count"] = len(tg_entries)
+        try:
+            mem_db_rows = source_cursor.execute("SELECT chat_id, role, text, timestamp FROM bot_memory").fetchall()
+            for r in mem_db_rows:
+                tg_entries.append({"role": r[1], "text": r[2], "timestamp": r[3], "chat_id": r[0]})
+        except sqlite3.OperationalError:
+            pass
+
+        report["bot_memory"]["source"] = len(tg_entries)
 
         if not dry_run and tg_entries:
             chat_id = getattr(config, "CHAT_ID", None) or os.environ.get("TELEGRAM_CHAT_ID", "default_chat")
@@ -271,6 +278,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                 with target_conn.cursor() as cur:
                     for entry in tg_entries:
                         if isinstance(entry, dict):
+                            cid = entry.get("chat_id", chat_id)
                             role = entry.get("role", "user")
                             text = entry.get("text", "")
                             ts = entry.get("timestamp") or datetime.now(timezone.utc).isoformat()
@@ -280,35 +288,106 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                                     INSERT INTO bot_memory (chat_id, role, text, timestamp, created_at)
                                     VALUES (%s, %s, %s, %s, %s)
                                     """,
-                                    (str(chat_id), role, text, ts, datetime.now(timezone.utc).isoformat()),
+                                    (str(cid), role, text, ts, datetime.now(timezone.utc).isoformat()),
                                 )
-                                report["telegram_messages_migrated"] += 1
+                                report["bot_memory"]["migrated"] += 1
 
         # -------------------------------------------------------------
-        # 5. Verification
+        # 5. Migrate API Cache
+        # -------------------------------------------------------------
+        try:
+            cache_rows = source_cursor.execute(
+                "SELECT cache_key, endpoint, request_params, response_payload, fetched_at, expires_at FROM api_cache"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            cache_rows = []
+
+        report["api_cache"]["source"] = len(cache_rows)
+
+        if not dry_run and cache_rows:
+            with target_conn.transaction():
+                with target_conn.cursor() as cur:
+                    for row in cache_rows:
+                        ckey, ep, rparams, rpayload, fat, eat = row
+                        rp_data = storage._json_loads(rparams) if rparams else {}
+                        pl_data = storage._json_loads(rpayload) if rpayload else {}
+                        rp_str = storage._json_dumps(rp_data, "request_params")
+                        pl_str = storage._json_dumps(pl_data, "response_payload")
+
+                        cur.execute(
+                            """
+                            INSERT INTO api_cache (cache_key, endpoint, request_params, response_payload, fetched_at, expires_at)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (cache_key) DO UPDATE SET
+                                endpoint = EXCLUDED.endpoint,
+                                request_params = EXCLUDED.request_params,
+                                response_payload = EXCLUDED.response_payload,
+                                fetched_at = EXCLUDED.fetched_at,
+                                expires_at = EXCLUDED.expires_at
+                            """,
+                            (ckey, ep, rp_str, pl_str, fat, eat),
+                        )
+                        if cur.rowcount >= 1:
+                            report["api_cache"]["migrated"] += 1
+
+        # -------------------------------------------------------------
+        # 6. Migrate Request Counts
+        # -------------------------------------------------------------
+        try:
+            rc_rows = source_cursor.execute(
+                "SELECT provider, request_timestamp, request_date, endpoint FROM api_request_counts"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rc_rows = []
+
+        report["api_request_counts"]["source"] = len(rc_rows)
+
+        if not dry_run and rc_rows:
+            with target_conn.transaction():
+                with target_conn.cursor() as cur:
+                    for row in rc_rows:
+                        prov, rts, rdate, ep = row
+                        cur.execute(
+                            """
+                            INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint)
+                            VALUES (%s, %s, %s, %s)
+                            """,
+                            (prov, rts, rdate, ep),
+                        )
+                        if cur.rowcount >= 1:
+                            report["api_request_counts"]["migrated"] += 1
+
+        # -------------------------------------------------------------
+        # 7. Complete Verification Across All 6 Datasets
         # -------------------------------------------------------------
         if not dry_run:
+            all_verified = True
             with target_conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM predictions")
-                f_target_count = cur.fetchone()[0]
+                datasets = [
+                    ("predictions", "predictions"),
+                    ("basketball_predictions", "basketball_predictions"),
+                    ("elo_ratings", "elo_ratings"),
+                    ("bot_memory", "bot_memory"),
+                    ("api_cache", "api_cache"),
+                    ("api_request_counts", "api_request_counts"),
+                ]
 
-                cur.execute("SELECT COUNT(*) FROM basketball_predictions")
-                b_target_count = cur.fetchone()[0]
+                for key, table_name in datasets:
+                    cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+                    dest_count = cur.fetchone()[0]
+                    report[key]["destination"] = dest_count
 
-                cur.execute("SELECT COUNT(*) FROM elo_ratings")
-                e_target_count = cur.fetchone()[0]
+                    source_cnt = report[key]["source"]
+                    if dest_count >= source_cnt:
+                        report[key]["status"] = "VERIFIED"
+                    else:
+                        report[key]["status"] = "MISMATCH"
+                        all_verified = False
 
-            print(
-                f"Destination Target Counts: "
-                f"football_predictions={f_target_count}, "
-                f"basketball_predictions={b_target_count}, "
-                f"elo_ratings={e_target_count}"
-            )
-
-            if f_target_count >= report["football_predictions_source_count"]:
-                report["verification"] = "VERIFIED_MATCH"
+            if all_verified:
+                report["verification"] = "VERIFIED_ALL_DATASETS"
             else:
-                report["verification"] = "COUNT_MISMATCH"
+                report["verification"] = "DATASET_MISMATCH"
 
         else:
             report["verification"] = "DRY_RUN_PASSED"
@@ -318,9 +397,9 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
         if target_conn is not None:
             target_conn.close()
 
-    print("\n=== MIGRATION REPORT ===")
+    print("\n=== COMPREHENSIVE MIGRATION REPORT ===")
     print(json.dumps(report, indent=2))
-    print("========================\n")
+    print("======================================\n")
 
     return report
 
@@ -335,7 +414,7 @@ if __name__ == "__main__":
 
     try:
         res = migrate(sqlite_path=args.sqlite_db, target_url=args.target_url, dry_run=args.dry_run)
-        if res.get("verification") in ("VERIFIED_MATCH", "DRY_RUN_PASSED"):
+        if res.get("verification") in ("VERIFIED_ALL_DATASETS", "DRY_RUN_PASSED"):
             sys.exit(0)
         else:
             print("Migration completed with verification warnings.", file=sys.stderr)

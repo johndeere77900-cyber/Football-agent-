@@ -231,7 +231,8 @@ def _check_and_consume_odds_quota():
     """
     Check monthly request limit and record usage.
 
-    Returns True if request is allowed, False if monthly limit exhausted.
+    Fails closed: if quota storage cannot be queried or updated, returns False
+    so the system does not make untracked Odds API calls.
     """
     limit = int(getattr(config, "ODDS_API_MONTHLY_REQUEST_LIMIT", 500))
     current_month_pattern = time.strftime("%Y-%m", time.gmtime()) + "%"
@@ -239,8 +240,9 @@ def _check_and_consume_odds_quota():
 
     try:
         current_count = storage.get_api_request_count("odds_api", current_month_pattern)
-    except Exception:
-        current_count = 0
+    except Exception as exc:
+        print(f"Odds API quota storage read error ({exc}); failing closed.")
+        return False
 
     if current_count >= limit:
         print(
@@ -251,8 +253,9 @@ def _check_and_consume_odds_quota():
 
     try:
         storage.record_api_request("odds_api", "sports/odds", current_month_str)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"Odds API quota storage write error ({exc}); failing closed.")
+        return False
 
     return True
 
