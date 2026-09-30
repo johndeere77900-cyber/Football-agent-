@@ -289,9 +289,15 @@ def append_memory(entry):
     text = entry.get("text", "")
     timestamp = entry.get("timestamp")
 
+    is_prod = storage.is_neon() or (os.environ.get("ENVIRONMENT", "").lower() == "production")
+
     try:
         storage.save_telegram_message(chat_id, role, text, timestamp)
     except Exception as exc:
+        if is_prod:
+            raise RuntimeError(
+                f"Failed to persist Telegram memory in Neon PostgreSQL database in production: {exc}"
+            ) from exc
         print(f"Failed to persist telegram memory in storage: {exc}")
 
 

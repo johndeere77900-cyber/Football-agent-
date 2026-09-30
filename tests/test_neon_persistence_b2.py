@@ -902,6 +902,25 @@ def test_raw_debug_call_enforces_quota_reservation_and_fails_closed(tmp_path, mo
         api_football.raw_debug_call("status", {})
 
 
+def test_telegram_append_memory_production_failure_raises_exception(tmp_path, monkeypatch):
+    """
+    Test that in production mode with Neon configured, database memory write errors
+    raise a RuntimeError immediately rather than silently printing the exception.
+    """
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setattr(config, "ENVIRONMENT", "production")
+
+    def bad_save_telegram_message(chat_id, role, text, timestamp=None):
+        raise RuntimeError("Neon database connection dropped during write")
+
+    monkeypatch.setattr(storage, "save_telegram_message", bad_save_telegram_message)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        telegram_bot.append_memory({"role": "user", "text": "test message"})
+
+    assert "Failed to persist Telegram memory in Neon PostgreSQL" in str(exc_info.value)
+
+
 def test_telegram_load_memory_production_failure_does_not_read_json(tmp_path, monkeypatch):
     """
     Test that in production mode with Neon configured, database memory read errors
