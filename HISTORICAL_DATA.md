@@ -18,12 +18,20 @@ The historical backtesting pipeline is decoupled from live API acquisition to pr
     prediction / reconstruction / evaluation
 ```
 
-## Dataset Completion States & Rules
+## Dataset Completion States & Integrity Invariants
 
-1. **COMPLETE dataset**: When `status == 'COMPLETE'`, `historical_sync.py` **skips API acquisition entirely (0 API requests made)** unless `--refresh` is explicitly passed.
-2. **INCOMPLETE dataset**: Acquisition may be safely resumed. `historical_sync.py` fetches missing fixtures while strictly enforcing historical daily request budgets.
-3. **Explicit Refresh**: Passing `--refresh` explicitly re-fetches fixtures according to quota protections without deleting pre-existing data until successful completion.
-4. **Normal Backtest**: `backtest.py` strictly reads historical fixtures from storage. Normal backtests make **ZERO calls** to API-Football. If the requested dataset is missing or has `INCOMPLETE` status, the backtest refuses to run and fails clearly with an actionable message.
+1. **Strict Pagination Completion Criteria**: A dataset is marked `COMPLETE` in `historical_datasets` ONLY IF:
+   - All expected pagination pages (`expected_pages`) have been successfully retrieved (`pages_completed == expected_pages`);
+   - Pagination metadata is valid and `acquisition_complete` is `True`;
+   - Valid fixture records have been persisted;
+   - No quota exhaustion occurred;
+   - No API/network/acquisition errors occurred.
+2. **Zero-API Acquisition on COMPLETE Datasets**: When `status == 'COMPLETE'`, `historical_sync.py` **skips API acquisition entirely (0 API requests made)** unless `--refresh` is explicitly passed.
+3. **Backtest Integrity Check**: Before executing a backtest, `backtest.py` verifies both:
+   - `dataset_status["status"] == "COMPLETE"`
+   - `dataset_status["fixture_count"] == actual_stored_count`
+   If the manifest count differs from actual stored database rows, `backtest.py` fails closed with a clear `"historical dataset integrity mismatch"` error.
+4. **Explicit Refresh**: Passing `--refresh` explicitly re-fetches fixtures according to quota protections without deleting pre-existing data until successful completion.
 
 ## Quota Protections & Header Fail-Safes
 

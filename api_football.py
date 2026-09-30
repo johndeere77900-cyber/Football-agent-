@@ -481,12 +481,17 @@ def get_fixture_result(fixture_id):
     return None
 
 
-def get_league_fixtures(league_id, season, max_budget=None):
+def get_league_fixtures_with_metadata(league_id, season, max_budget=None):
     """
-    Retrieve all fixtures for a league season with pagination support.
+    Retrieve all fixtures for a league season with pagination support and explicit completion metadata.
 
-    Handles multi-page responses securely using `paging.current` and `paging.total`.
-    Deduplicates fixtures and checks cache for each page.
+    Returns dict:
+        {
+            "fixtures": list_of_fixtures,
+            "expected_pages": int,
+            "pages_completed": int,
+            "acquisition_complete": bool
+        }
     """
     league_id = _validate_positive_int_like(league_id, "league_id")
     season = _validate_positive_int_like(season, "season")
@@ -518,11 +523,13 @@ def get_league_fixtures(league_id, season, max_budget=None):
         current, total = 1, 1
 
     all_pages = [page_1_data]
+    pages_completed = 1
 
     if total > 1:
         for page_num in range(2, total + 1):
             page_data = _get("fixtures", {"league": league_id, "season": season, "page": page_num}, **kwargs)
             all_pages.append(page_data)
+            pages_completed += 1
 
     fixtures = []
     seen_fixture_ids = set()
@@ -551,7 +558,22 @@ def get_league_fixtures(league_id, season, max_budget=None):
 
             fixtures.append(item)
 
-    return fixtures
+    acquisition_complete = (pages_completed == total)
+
+    return {
+        "fixtures": fixtures,
+        "expected_pages": total,
+        "pages_completed": pages_completed,
+        "acquisition_complete": acquisition_complete,
+    }
+
+
+def get_league_fixtures(league_id, season, max_budget=None):
+    """
+    Retrieve all fixtures for a league season with pagination support (compatibility wrapper).
+    """
+    res = get_league_fixtures_with_metadata(league_id, season, max_budget=max_budget)
+    return res.get("fixtures", [])
 
 
 def get_enriched_fixtures(fixture_ids, batch_size=FIXTURE_BATCH_SIZE, max_budget=None):

@@ -1750,6 +1750,16 @@ def run_real_backtest(
             f"Run the historical sync job first."
         )
 
+    actual_stored_count = storage.get_historical_fixture_count(league_id, season)
+    manifest_count = dataset_status.get("fixture_count", 0)
+
+    if manifest_count != actual_stored_count:
+        raise RuntimeError(
+            f"Historical dataset integrity mismatch for league {league_id} season {season}: "
+            f"manifest count ({manifest_count}) != actual stored count ({actual_stored_count}). "
+            f"Re-run the historical sync job."
+        )
+
     # Fetch fixtures database-first from persistent historical dataset
     fixtures = storage.get_historical_fixtures(
         league_id,

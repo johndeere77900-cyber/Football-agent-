@@ -35,7 +35,14 @@ def test_historical_sync_saves_fixtures(temp_db, monkeypatch):
         },
     ]
 
-    with patch("api_football.get_league_fixtures", return_value=fixtures_sample):
+    meta_return = {
+        "fixtures": fixtures_sample,
+        "expected_pages": 1,
+        "pages_completed": 1,
+        "acquisition_complete": True,
+    }
+
+    with patch("api_football.get_league_fixtures_with_metadata", return_value=meta_return):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report["league_id"] == 39
@@ -44,6 +51,7 @@ def test_historical_sync_saves_fixtures(temp_db, monkeypatch):
     assert report["fixtures_received"] == 2
     assert report["newly_stored"] == 2
     assert report["final_stored_count"] == 2
+    assert report["status"] == "COMPLETE"
 
     # Verify database contents
     stored = storage.get_historical_fixtures(39, 2024)
@@ -60,10 +68,17 @@ def test_historical_sync_repeated_runs_are_idempotent(temp_db):
         }
     ]
 
-    with patch("api_football.get_league_fixtures", return_value=fixtures_sample) as mock_get:
+    meta_return = {
+        "fixtures": fixtures_sample,
+        "expected_pages": 1,
+        "pages_completed": 1,
+        "acquisition_complete": True,
+    }
+
+    with patch("api_football.get_league_fixtures_with_metadata", return_value=meta_return) as mock_get:
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
-        # Second run on COMPLETE dataset must NOT call get_league_fixtures
+        # Second run on COMPLETE dataset must NOT call get_league_fixtures_with_metadata
         mock_get.assert_called_once()
 
     assert report1["newly_stored"] == 1
@@ -83,7 +98,14 @@ def test_historical_sync_refresh_forces_reacquisition(temp_db):
         }
     ]
 
-    with patch("api_football.get_league_fixtures", return_value=fixtures_sample) as mock_get:
+    meta_return = {
+        "fixtures": fixtures_sample,
+        "expected_pages": 1,
+        "pages_completed": 1,
+        "acquisition_complete": True,
+    }
+
+    with patch("api_football.get_league_fixtures_with_metadata", return_value=meta_return) as mock_get:
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024, refresh=True)
         assert mock_get.call_count == 2

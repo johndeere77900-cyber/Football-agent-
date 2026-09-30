@@ -89,10 +89,18 @@ def sync_historical_fixtures(
         }
 
     fixtures_received = []
+    expected_pages = 0
+    pages_completed = 0
+    acquisition_complete = False
+
     try:
-        fixtures_received = api_football.get_league_fixtures(
+        fetch_meta = api_football.get_league_fixtures_with_metadata(
             league_id, season, max_budget=historical_budget
         )
+        fixtures_received = fetch_meta.get("fixtures", [])
+        expected_pages = fetch_meta.get("expected_pages", 0)
+        pages_completed = fetch_meta.get("pages_completed", 0)
+        acquisition_complete = fetch_meta.get("acquisition_complete", False)
     except api_football.APIFootballQuotaExhaustedError as exc:
         quota_budget_stopped = True
         print(f"API Quota exhausted during fixture fetch: {exc}", flush=True)
@@ -182,7 +190,18 @@ def sync_historical_fixtures(
     final_stored_count = storage.get_historical_fixture_count(league_id, season)
 
     # Update dataset manifest completion status strictly
-    if not quota_budget_stopped and not acquisition_failed and valid_fixtures and final_stored_count > 0:
+    # Requires: pages_completed == expected_pages AND acquisition_complete is True AND no quota/api errors
+    is_fully_complete = (
+        not quota_budget_stopped
+        and not acquisition_failed
+        and acquisition_complete
+        and expected_pages > 0
+        and pages_completed == expected_pages
+        and valid_fixtures
+        and final_stored_count > 0
+    )
+
+    if is_fully_complete:
         storage.mark_historical_dataset_complete(league_id, season, fixture_count=final_stored_count)
         final_status = "COMPLETE"
     else:
@@ -199,6 +218,9 @@ def sync_historical_fixtures(
         "duplicates_skipped": duplicates_skipped,
         "newly_stored": newly_stored,
         "already_existing_skipped": already_existing_skipped,
+        "expected_pages": expected_pages,
+        "pages_completed": pages_completed,
+        "acquisition_complete": acquisition_complete,
         "api_requests_consumed": total_consumed,
         "historical_budget": historical_budget,
         "quota_budget_stopped": quota_budget_stopped,
