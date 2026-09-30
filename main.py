@@ -1583,6 +1583,7 @@ def run_daily(
 
             print_prediction(prediction)
 
+            prediction_context = "LIVE" if prediction.get("is_live") else "PRE_MATCH"
             storage.save_prediction(
                 fixture_id=prediction["fixture_id"],
                 match_date=prediction["date"],
@@ -1596,6 +1597,7 @@ def run_daily(
                 odds_comparison=prediction.get(
                     "odds_comparison"
                 ),
+                prediction_context=prediction_context,
             )
 
             predicted_count += 1
@@ -2176,6 +2178,7 @@ def run_daily_basketball(
                 prediction
             )
 
+            prediction_context = "LIVE" if prediction.get("is_live") else "PRE_MATCH"
             storage.save_basketball_prediction(
                 game_id=prediction["game_id"],
                 game_date=prediction["date"],
@@ -2184,6 +2187,7 @@ def run_daily_basketball(
                 league=prediction["league"],
                 markets=prediction["markets"],
                 confidence=prediction["confidence"],
+                prediction_context=prediction_context,
             )
 
             predicted_count += 1

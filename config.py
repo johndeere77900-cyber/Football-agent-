@@ -15,7 +15,15 @@ API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io"
 API_BASKETBALL_BASE_URL = "https://v1.basketball.api-sports.io"
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 
+# --- API Quotas & Limits -----------------------------------------------------
+API_FOOTBALL_DAILY_CREDIT_LIMIT = 100
+ODDS_API_MONTHLY_REQUEST_LIMIT = 500
+
+# --- Cache TTL Settings -----------------------------------------------------
+CACHE_TTL_HOURS = 20
 ODDS_CACHE_TTL_MINUTES = 15
+FIXTURE_RESULT_CACHE_TTL_MINUTES = 6
+CACHE_DIR = ".api_cache"
 # --- Model settings (football) ----------------------------------------------
 RECENT_FORM_MATCHES = 8
 HEAD_TO_HEAD_MATCHES = 6
@@ -54,10 +62,9 @@ CONFIDENCE_MODERATE_GAP = 0.08
 
 # --- Storage ------------------------------------------------------------
 DB_PATH = os.environ.get("FOOTBALL_AGENT_DB", "predictions.db")
-
-# --- Caching --------------------------------------------------------------
-CACHE_TTL_HOURS = 20
-CACHE_DIR = ".api_cache"
+NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+REQUIRE_NEON = os.environ.get("REQUIRE_NEON", "false").lower() in ("true", "1", "yes")
 
 # --- League restriction (football) -----------------------------------------
 ALLOWED_LEAGUE_IDS = [39, 140, 135, 78, 61, 2, 3, 5, 1, 4]

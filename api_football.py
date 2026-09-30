@@ -3,13 +3,14 @@ Thin, defensive wrapper around the API-Football v3 API.
 
 Design goals:
 - Prediction-first reliability.
-- Aggressive reuse of the local cache to protect the API credit budget.
+- Aggressive reuse of persistent storage cache and local cache to protect API credit budget.
+- Strict quota enforcement (100 daily API credits hard limit).
+- Robust pagination for historical league fixtures.
+- Dedicated fixture result TTL strategy (6 minutes).
 - No fabricated data.
 - Validate identifiers before making requests.
 - Cache successful responses, including valid empty responses.
-- Retry only transient failures.
-- Provide the live-fixtures endpoint used by Telegram.
-- Keep all public functions used elsewhere in the repository.
+- Retry only transient failures with bounded limits.
 """
 
 import json
@@ -19,6 +20,7 @@ import time
 import requests
 
 import config
+import storage
 
 
 # ============================================================================
@@ -27,11 +29,11 @@ import config
 
 
 class APIFootballError(RuntimeError):
-    """Expected API-Football/network-service failure.
+    """Expected API-Football/network-service failure."""
 
-    This exception is deliberately distinct from ordinary RuntimeError so
-    callers can handle external API failures without hiding programming bugs.
-    """
+
+class APIFootballQuotaExhaustedError(APIFootballError):
+    """Raised when API-Football daily request quota is exhausted."""
 
 
 # ============================================================================
@@ -49,99 +51,44 @@ FIXTURE_BATCH_SIZE = 20
 # ============================================================================
 
 
-def _validate_positive_int(
-    value,
-    name,
-):
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or value <= 0
-    ):
-        raise ValueError(
-            f"{name} must be a positive integer."
-        )
-
+def _validate_positive_int(value, name):
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer.")
     return value
 
 
-def _validate_positive_int_like(
-    value,
-    name,
-):
+def _validate_positive_int_like(value, name):
     try:
         value = int(value)
-    except (
-        TypeError,
-        ValueError,
-    ) as exc:
-        raise ValueError(
-            f"{name} must be a positive integer."
-        ) from exc
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer.") from exc
 
     if value <= 0:
-        raise ValueError(
-            f"{name} must be a positive integer."
-        )
-
+        raise ValueError(f"{name} must be a positive integer.")
     return value
 
 
-def _validate_date(
-    date_str,
-):
-    if not isinstance(
-        date_str,
-        str,
-    ):
-        raise ValueError(
-            "date_str must be a string in YYYY-MM-DD format."
-        )
+def _validate_date(date_str):
+    if not isinstance(date_str, str):
+        raise ValueError("date_str must be a string in YYYY-MM-DD format.")
 
     try:
-        parsed = time.strptime(
-            date_str,
-            "%Y-%m-%d",
-        )
+        parsed = time.strptime(date_str, "%Y-%m-%d")
     except ValueError as exc:
-        raise ValueError(
-            "date_str must use YYYY-MM-DD format."
-        ) from exc
+        raise ValueError("date_str must use YYYY-MM-DD format.") from exc
 
-    # strptime accepts some odd inputs on some platforms, so round-trip
-    # validation keeps the API request deterministic.
-    normalized = time.strftime(
-        "%Y-%m-%d",
-        parsed,
-    )
-
+    normalized = time.strftime("%Y-%m-%d", parsed)
     if normalized != date_str:
-        raise ValueError(
-            "date_str must use YYYY-MM-DD format."
-        )
-
+        raise ValueError("date_str must use YYYY-MM-DD format.")
     return date_str
 
 
-def _validate_nonempty_text(
-    value,
-    name,
-):
-    if not isinstance(
-        value,
-        str,
-    ):
-        raise ValueError(
-            f"{name} must be a string."
-        )
-
+def _validate_nonempty_text(value, name):
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string.")
     value = value.strip()
-
     if not value:
-        raise ValueError(
-            f"{name} cannot be empty."
-        )
-
+        raise ValueError(f"{name} cannot be empty.")
     return value
 
 
@@ -151,39 +98,20 @@ def _validate_nonempty_text(
 
 
 def _headers():
-    api_key = getattr(
-        config,
-        "API_FOOTBALL_KEY",
-        None,
-    )
-
+    api_key = getattr(config, "API_FOOTBALL_KEY", None)
     if not api_key:
-        raise APIFootballError(
-            "API_FOOTBALL_KEY is not configured."
-        )
-
-    return {
-        "x-apisports-key": api_key
-    }
+        raise APIFootballError("API_FOOTBALL_KEY is not configured.")
+    return {"x-apisports-key": api_key}
 
 
 # ============================================================================
-# CACHE
+# CACHE HELPERS
 # ============================================================================
 
 
 def _cache_path(key):
-    cache_dir = getattr(
-        config,
-        "CACHE_DIR",
-        ".api_cache",
-    )
-
-    os.makedirs(
-        cache_dir,
-        exist_ok=True,
-    )
-
+    cache_dir = getattr(config, "CACHE_DIR", ".api_cache")
+    os.makedirs(cache_dir, exist_ok=True)
     safe_key = (
         str(key)
         .replace("/", "_")
@@ -193,128 +121,117 @@ def _cache_path(key):
         .replace(":", "_")
         .replace(" ", "_")
     )
-
-    return os.path.join(
-        cache_dir,
-        safe_key + ".json",
-    )
+    return os.path.join(cache_dir, safe_key + ".json")
 
 
-def _cache_get(key):
-    path = _cache_path(
-        key
-    )
+def _get_ttl_seconds(endpoint, params, data=None):
+    """Determine cache TTL based on endpoint and response content."""
+    # Fixture result endpoint
+    if endpoint == "fixtures" and ("id" in params or "ids" in params):
+        # If response contains a finished match, cache standard TTL, else short result TTL (6 min)
+        if data and isinstance(data.get("response"), list) and data["response"]:
+            first_fixture = data["response"][0]
+            if isinstance(first_fixture, dict):
+                status_short = (
+                    first_fixture.get("fixture", {})
+                    .get("status", {})
+                    .get("short", "")
+                )
+                if status_short in {"FT", "AET", "PEN", "CANC", "ABD"}:
+                    return int(getattr(config, "CACHE_TTL_HOURS", 20) * 3600)
 
+        return int(getattr(config, "FIXTURE_RESULT_CACHE_TTL_MINUTES", 6) * 60)
+
+    return int(getattr(config, "CACHE_TTL_HOURS", 20) * 3600)
+
+
+def _cache_key(endpoint, params):
+    return endpoint + "_" + json.dumps(params, sort_keys=True, separators=(",", ":"))
+
+
+def _cache_get(cache_key, endpoint, params):
+    """Check persistent database cache first, then local disk fallback."""
+    try:
+        persistent = storage.get_api_cache(cache_key)
+        if persistent is not None:
+            return persistent
+    except Exception:
+        pass
+
+    path = _cache_path(cache_key)
     if not os.path.exists(path):
         return None
 
     try:
-        modified = os.path.getmtime(
-            path
-        )
+        modified = os.path.getmtime(path)
+        age_seconds = time.time() - modified
+        ttl_seconds = _get_ttl_seconds(endpoint, params)
 
-        age_hours = (
-            time.time()
-            - modified
-        ) / 3600
-
-        ttl_hours = float(
-            getattr(
-                config,
-                "CACHE_TTL_HOURS",
-                20,
-            )
-        )
-
-        if age_hours > ttl_hours:
+        if age_seconds > ttl_seconds:
             return None
 
-        with open(
-            path,
-            "r",
-            encoding="utf-8",
-        ) as handle:
-            data = json.load(
-                handle
-            )
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
 
-        if not isinstance(
-            data,
-            dict,
-        ):
-            return None
+        if isinstance(data, dict):
+            return data
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
 
-        return data
-
-    except (
-        OSError,
-        ValueError,
-        TypeError,
-        json.JSONDecodeError,
-    ):
-        # A damaged cache entry must never break the prediction engine.
-        return None
+    return None
 
 
-def _cache_set(
-    key,
-    data,
-):
-    path = _cache_path(
-        key
-    )
-
-    temp_path = (
-        path
-        + ".tmp"
-    )
+def _cache_set(cache_key, endpoint, params, data):
+    """Save response payload to persistent storage cache and local disk cache."""
+    ttl_seconds = _get_ttl_seconds(endpoint, params, data)
 
     try:
-        with open(
-            temp_path,
-            "w",
-            encoding="utf-8",
-        ) as handle:
-            json.dump(
-                data,
-                handle,
-                ensure_ascii=False,
-            )
+        storage.set_api_cache(cache_key, endpoint, params, data, ttl_seconds)
+    except Exception:
+        pass
 
-        os.replace(
-            temp_path,
-            path,
-        )
-
+    path = _cache_path(cache_key)
+    temp_path = path + ".tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False)
+        os.replace(temp_path, path)
     except OSError:
-        # Cache failure must never destroy an otherwise valid API response.
-        try:
-            if os.path.exists(
-                temp_path
-            ):
-                os.remove(
-                    temp_path
-                )
-        except OSError:
-            pass
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
-def _cache_key(
-    endpoint,
-    params,
-):
-    return (
-        endpoint
-        + "_"
-        + json.dumps(
-            params,
-            sort_keys=True,
-            separators=(
-                ",",
-                ":",
-            ),
+# ============================================================================
+# QUOTA MANAGEMENT
+# ============================================================================
+
+
+def _check_and_consume_quota(endpoint):
+    """
+    Verify daily credit limit and record request.
+
+    Raises APIFootballQuotaExhaustedError if daily limit is reached.
+    """
+    limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
+    today_str = time.strftime("%Y-%m-%d", time.gmtime())
+
+    try:
+        current_count = storage.get_api_request_count("api_football", today_str)
+    except Exception:
+        current_count = 0
+
+    if current_count >= limit:
+        raise APIFootballQuotaExhaustedError(
+            f"API-Football daily credit limit reached ({current_count}/{limit})."
         )
-    )
+
+    try:
+        storage.record_api_request("api_football", endpoint, today_str)
+    except Exception:
+        pass
 
 
 # ============================================================================
@@ -322,56 +239,26 @@ def _cache_key(
 # ============================================================================
 
 
-def _get(
-    endpoint,
-    params,
-):
+def _get(endpoint, params):
     """
-    Perform a GET request with cache-first behavior.
-
-    Important credit protection:
-    - Cached responses never call the API.
-    - Successful empty responses are cached too.
-    - Only transient failures are retried.
-    - Permanent HTTP/API errors are raised immediately.
+    Perform a GET request with persistent cache-first behavior and hard quota enforcement.
     """
+    endpoint = _validate_nonempty_text(endpoint, "endpoint")
+    if not isinstance(params, dict):
+        raise ValueError("params must be a dictionary.")
 
-    endpoint = _validate_nonempty_text(
-        endpoint,
-        "endpoint",
-    )
-
-    if not isinstance(
-        params,
-        dict,
-    ):
-        raise ValueError(
-            "params must be a dictionary."
-        )
-
-    cache_key = _cache_key(
-        endpoint,
-        params,
-    )
-
-    cached = _cache_get(
-        cache_key
-    )
-
+    cache_key = _cache_key(endpoint, params)
+    cached = _cache_get(cache_key, endpoint, params)
     if cached is not None:
         return cached
 
-    url = (
-        f"{config.API_FOOTBALL_BASE_URL}"
-        f"/{endpoint.lstrip('/')}"
-    )
-
+    url = f"{config.API_FOOTBALL_BASE_URL}/{endpoint.lstrip('/')}"
     backoff = RETRY_BACKOFF_SECONDS
 
-    for attempt in range(
-        1,
-        MAX_RETRIES + 1,
-    ):
+    for attempt in range(1, MAX_RETRIES + 1):
+        # Quota check before every actual network attempt
+        _check_and_consume_quota(endpoint)
+
         try:
             response = requests.get(
                 url,
@@ -379,155 +266,82 @@ def _get(
                 params=params,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
-
         except requests.RequestException as exc:
             if attempt >= MAX_RETRIES:
                 raise APIFootballError(
-                    "API-Football request failed after "
-                    f"{MAX_RETRIES} attempts: {exc}"
+                    f"API-Football request failed after {MAX_RETRIES} attempts: {exc}"
                 ) from exc
 
             print(
-                "API-Football network error; "
-                f"retrying in {backoff}s "
-                f"(attempt {attempt}/{MAX_RETRIES})",
+                f"API-Football network error; retrying in {backoff}s (attempt {attempt}/{MAX_RETRIES})",
                 flush=True,
             )
-
-            time.sleep(
-                backoff
-            )
-
+            time.sleep(backoff)
             backoff *= 2
-
             continue
 
         status = response.status_code
 
-        # Rate limiting is transient. Retry, but keep the retry count low
-        # because every actual API request matters to the daily budget.
         if status == 429:
             if attempt >= MAX_RETRIES:
                 raise APIFootballError(
-                    "API-Football rate limit reached "
-                    f"after {MAX_RETRIES} attempts."
+                    f"API-Football rate limit reached after {MAX_RETRIES} attempts."
                 )
 
-            retry_after = response.headers.get(
-                "Retry-After"
-            )
-
+            retry_after = response.headers.get("Retry-After")
             try:
-                wait_seconds = max(
-                    1,
-                    min(
-                        int(retry_after),
-                        60,
-                    ),
-                )
-            except (
-                TypeError,
-                ValueError,
-            ):
+                wait_seconds = max(1, min(int(retry_after), 60))
+            except (TypeError, ValueError):
                 wait_seconds = backoff
 
             print(
-                "API-Football rate limited (429); "
-                f"retrying in {wait_seconds}s "
-                f"(attempt {attempt}/{MAX_RETRIES})",
+                f"API-Football rate limited (429); retrying in {wait_seconds}s (attempt {attempt}/{MAX_RETRIES})",
                 flush=True,
             )
-
-            time.sleep(
-                wait_seconds
-            )
-
+            time.sleep(wait_seconds)
             backoff *= 2
-
             continue
 
-        # Server-side failures can be transient.
-        if status in {
-            500,
-            502,
-            503,
-            504,
-        }:
+        if status in {500, 502, 503, 504}:
             if attempt >= MAX_RETRIES:
                 raise APIFootballError(
-                    "API-Football server error after "
-                    f"{MAX_RETRIES} attempts: HTTP {status}"
+                    f"API-Football server error after {MAX_RETRIES} attempts: HTTP {status}"
                 )
 
             print(
-                "API-Football server error "
-                f"({status}); retrying in {backoff}s "
-                f"(attempt {attempt}/{MAX_RETRIES})",
+                f"API-Football server error ({status}); retrying in {backoff}s (attempt {attempt}/{MAX_RETRIES})",
                 flush=True,
             )
-
-            time.sleep(
-                backoff
-            )
-
+            time.sleep(backoff)
             backoff *= 2
-
             continue
 
         try:
             data = response.json()
-
         except ValueError as exc:
             raise APIFootballError(
-                "API-Football returned invalid JSON "
-                f"for /{endpoint} "
-                f"(HTTP {status})."
+                f"API-Football returned invalid JSON for /{endpoint} (HTTP {status})."
             ) from exc
 
-        if not isinstance(
-            data,
-            dict,
-        ):
+        if not isinstance(data, dict):
             raise APIFootballError(
-                "API-Football returned a non-object JSON "
-                f"response for /{endpoint}."
+                f"API-Football returned a non-object JSON response for /{endpoint}."
             )
 
         if not response.ok:
-            errors = data.get(
-                "errors"
-            )
-
+            errors = data.get("errors")
             raise APIFootballError(
-                "API-Football HTTP error: "
-                f"{status}; errors={errors!r}"
+                f"API-Football HTTP error: {status}; errors={errors!r}"
             )
 
-        api_errors = data.get(
-            "errors"
-        )
-
+        api_errors = data.get("errors")
         if api_errors:
-            raise APIFootballError(
-                "API-Football API error: "
-                f"{api_errors!r}"
-            )
+            raise APIFootballError(f"API-Football API error: {api_errors!r}")
 
-        # Cache every successful API response, including:
-        # {"response": []}
-        #
-        # This is important. Not caching empty results causes repeated
-        # identical requests and unnecessary API-credit consumption.
-        _cache_set(
-            cache_key,
-            data,
-        )
-
+        _cache_set(cache_key, endpoint, params, data)
         return data
 
-    raise APIFootballError(
-        f"API-Football request failed: /{endpoint}"
-    )
+    raise APIFootballError(f"API-Football request failed: /{endpoint}")
 
 
 # ============================================================================
@@ -535,100 +349,35 @@ def _get(
 # ============================================================================
 
 
-def get_fixtures_by_date(
-    date_str,
-    league_id=None,
-):
-    """
-    Return fixtures for a calendar date.
-
-    A league filter is included when supplied.
-    """
-
-    date_str = _validate_date(
-        date_str
-    )
-
-    params = {
-        "date": date_str
-    }
+def get_fixtures_by_date(date_str, league_id=None):
+    """Return fixtures for a calendar date."""
+    date_str = _validate_date(date_str)
+    params = {"date": date_str}
 
     if league_id is not None:
-        league_id = (
-            _validate_positive_int_like(
-                league_id,
-                "league_id",
-            )
-        )
-
+        league_id = _validate_positive_int_like(league_id, "league_id")
         params["league"] = league_id
 
-    data = _get(
-        "fixtures",
-        params,
-    )
-
-    response = data.get(
-        "response",
-        [],
-    )
-
-    if not isinstance(
-        response,
-        list,
-    ):
+    data = _get("fixtures", params)
+    response = data.get("response", [])
+    if not isinstance(response, list):
         return []
-
     return response
 
 
 def get_live_fixtures():
-    """
-    Return currently live football fixtures.
-
-    API-Football uses `live=all` for the live fixtures endpoint.
-    """
-
-    data = _get(
-        "fixtures",
-        {
-            "live": "all"
-        },
-    )
-
-    response = data.get(
-        "response",
-        [],
-    )
-
-    if not isinstance(
-        response,
-        list,
-    ):
+    """Return currently live football fixtures."""
+    data = _get("fixtures", {"live": "all"})
+    response = data.get("response", [])
+    if not isinstance(response, list):
         return []
-
     return response
 
 
-def get_team_statistics(
-    team_id,
-    league_id,
-    season,
-):
-    team_id = _validate_positive_int_like(
-        team_id,
-        "team_id",
-    )
-
-    league_id = _validate_positive_int_like(
-        league_id,
-        "league_id",
-    )
-
-    season = _validate_positive_int_like(
-        season,
-        "season",
-    )
+def get_team_statistics(team_id, league_id, season):
+    team_id = _validate_positive_int_like(team_id, "team_id")
+    league_id = _validate_positive_int_like(league_id, "league_id")
+    season = _validate_positive_int_like(season, "season")
 
     params = {
         "team": team_id,
@@ -636,92 +385,37 @@ def get_team_statistics(
         "season": season,
     }
 
-    data = _get(
-        "teams/statistics",
-        params,
-    )
-
-    response = data.get(
-        "response",
-        {},
-    )
-
-    if not isinstance(
-        response,
-        dict,
-    ):
+    data = _get("teams/statistics", params)
+    response = data.get("response", {})
+    if not isinstance(response, dict):
         return {}
-
     return response
 
 
-def get_head_to_head(
-    team_a_id,
-    team_b_id,
-    last=10,
-):
-    team_a_id = _validate_positive_int_like(
-        team_a_id,
-        "team_a_id",
-    )
+def get_head_to_head(team_a_id, team_b_id, last=10):
+    team_a_id = _validate_positive_int_like(team_a_id, "team_a_id")
+    team_b_id = _validate_positive_int_like(team_b_id, "team_b_id")
 
-    team_b_id = _validate_positive_int_like(
-        team_b_id,
-        "team_b_id",
-    )
-
-    if (
-        isinstance(last, bool)
-        or not isinstance(last, int)
-        or last <= 0
-    ):
-        raise ValueError(
-            "last must be a positive integer."
-        )
+    if isinstance(last, bool) or not isinstance(last, int) or last <= 0:
+        raise ValueError("last must be a positive integer.")
 
     params = {
-        "h2h": (
-            f"{team_a_id}-{team_b_id}"
-        ),
+        "h2h": f"{team_a_id}-{team_b_id}",
         "last": last,
     }
 
-    data = _get(
-        "fixtures/headtohead",
-        params,
-    )
-
-    response = data.get(
-        "response",
-        [],
-    )
-
-    if not isinstance(
-        response,
-        list,
-    ):
+    data = _get("fixtures/headtohead", params)
+    response = data.get("response", [])
+    if not isinstance(response, list):
         return []
-
     return response
 
 
-def get_recent_form(
-    team_id,
-    last=8,
-):
-    team_id = _validate_positive_int_like(
-        team_id,
-        "team_id",
-    )
+def get_recent_form(team_id, last=8):
+    team_id = _validate_positive_int_like(team_id, "team_id")
 
-    if (
-        isinstance(last, bool)
-        or not isinstance(last, int)
-        or last <= 0
-    ):
-        raise ValueError(
-            "last must be a positive integer."
-        )
+    if isinstance(last, bool) or not isinstance(last, int) or last <= 0:
+        raise ValueError("last must be a positive integer.")
 
     params = {
         "team": team_id,
@@ -729,387 +423,213 @@ def get_recent_form(
         "status": "FT",
     }
 
-    data = _get(
-        "fixtures",
-        params,
-    )
-
-    response = data.get(
-        "response",
-        [],
-    )
-
-    if not isinstance(
-        response,
-        list,
-    ):
+    data = _get("fixtures", params)
+    response = data.get("response", [])
+    if not isinstance(response, list):
         return []
-
     return response
 
 
 # ============================================================================
-# SINGLE FIXTURE / SEASON DATA
+# SINGLE FIXTURE / SEASON DATA & PAGINATION
 # ============================================================================
 
 
-def get_fixture_result(
-    fixture_id,
-):
-    fixture_id = _validate_positive_int_like(
-        fixture_id,
-        "fixture_id",
-    )
+def get_fixture_result(fixture_id):
+    """Retrieve result for a single fixture using result TTL cache."""
+    fixture_id = _validate_positive_int_like(fixture_id, "fixture_id")
 
-    data = _get(
-        "fixtures",
-        {
-            "id": fixture_id
-        },
-    )
+    data = _get("fixtures", {"id": fixture_id})
+    response = data.get("response", [])
 
-    response = data.get(
-        "response",
-        [],
-    )
-
-    if (
-        isinstance(response, list)
-        and response
-        and isinstance(
-            response[0],
-            dict,
-        )
-    ):
+    if isinstance(response, list) and response and isinstance(response[0], dict):
         return response[0]
 
     return None
 
 
-def get_league_fixtures(
-    league_id,
-    season,
-):
+def get_league_fixtures(league_id, season):
     """
-    Retrieve all fixtures for a league season.
+    Retrieve all fixtures for a league season with pagination support.
 
-    The normal cache layer prevents identical repeated requests.
+    Handles multi-page responses securely using `paging.current` and `paging.total`.
+    Deduplicates fixtures and checks cache for each page.
     """
+    league_id = _validate_positive_int_like(league_id, "league_id")
+    season = _validate_positive_int_like(season, "season")
 
-    league_id = _validate_positive_int_like(
-        league_id,
-        "league_id",
-    )
+    page_1_data = _get("fixtures", {"league": league_id, "season": season, "page": 1})
 
-    season = _validate_positive_int_like(
-        season,
-        "season",
-    )
+    paging = page_1_data.get("paging")
+    if paging is not None:
+        if not isinstance(paging, dict):
+            raise APIFootballError("Malformed pagination metadata from API-Football: paging is not an object.")
 
-    data = _get(
-        "fixtures",
-        {
-            "league": league_id,
-            "season": season,
-        },
-    )
+        current = paging.get("current")
+        total = paging.get("total")
 
-    response = data.get(
-        "response",
-        [],
-    )
+        if (
+            isinstance(current, bool)
+            or not isinstance(current, int)
+            or current < 1
+            or isinstance(total, bool)
+            or not isinstance(total, int)
+            or total < 1
+            or current > total
+        ):
+            raise APIFootballError(
+                f"Malformed pagination metadata from API-Football: current={current!r}, total={total!r}"
+            )
+    else:
+        current, total = 1, 1
 
-    if not isinstance(
-        response,
-        list,
-    ):
-        return []
+    all_pages = [page_1_data]
 
-    return response
+    if total > 1:
+        for page_num in range(2, total + 1):
+            page_data = _get("fixtures", {"league": league_id, "season": season, "page": page_num})
+            all_pages.append(page_data)
+
+    fixtures = []
+    seen_fixture_ids = set()
+
+    for page_data in all_pages:
+        response = page_data.get("response", [])
+        if not isinstance(response, list):
+            continue
+
+        for item in response:
+            if not isinstance(item, dict):
+                continue
+
+            fid = item.get("fixture", {}).get("id")
+            if fid is not None:
+                try:
+                    fid = int(fid)
+                except (TypeError, ValueError):
+                    pass
+
+            if fid and fid in seen_fixture_ids:
+                continue
+
+            if fid:
+                seen_fixture_ids.add(fid)
+
+            fixtures.append(item)
+
+    return fixtures
 
 
-def get_enriched_fixtures(
-    fixture_ids,
-    batch_size=FIXTURE_BATCH_SIZE,
-):
-    """
-    Retrieve enriched fixture records in batches.
+def get_enriched_fixtures(fixture_ids, batch_size=FIXTURE_BATCH_SIZE):
+    """Retrieve enriched fixture records in batches."""
+    if not isinstance(fixture_ids, (list, tuple, set)):
+        raise ValueError("fixture_ids must be a list, tuple, or set.")
 
-    Multiple fixture IDs are sent in one request where supported.
-    The result is keyed by fixture ID.
-    """
-
-    if not isinstance(
-        fixture_ids,
-        (list, tuple, set),
-    ):
-        raise ValueError(
-            "fixture_ids must be a list, tuple, or set."
-        )
-
-    if (
-        isinstance(batch_size, bool)
-        or not isinstance(batch_size, int)
-        or batch_size <= 0
-    ):
-        raise ValueError(
-            "batch_size must be a positive integer."
-        )
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer.")
 
     clean_ids = []
-
     for fixture_id in fixture_ids:
-        if fixture_id in (
-            None,
-            "",
-        ):
+        if fixture_id in (None, ""):
             continue
-
         try:
-            numeric_id = int(
-                fixture_id
-            )
-        except (
-            TypeError,
-            ValueError,
-        ):
+            numeric_id = int(fixture_id)
+        except (TypeError, ValueError):
             continue
-
         if numeric_id > 0:
-            clean_ids.append(
-                numeric_id
-            )
+            clean_ids.append(numeric_id)
 
-    clean_ids = sorted(
-        set(clean_ids)
-    )
-
+    clean_ids = sorted(set(clean_ids))
     if not clean_ids:
         return {}
 
     enriched = {}
+    for start in range(0, len(clean_ids), batch_size):
+        batch = clean_ids[start : start + batch_size]
+        ids = "-".join(str(value) for value in batch)
 
-    for start in range(
-        0,
-        len(clean_ids),
-        batch_size,
-    ):
-        batch = clean_ids[
-            start:start + batch_size
-        ]
+        data = _get("fixtures", {"ids": ids})
+        response = data.get("response", [])
 
-        ids = "-".join(
-            str(value)
-            for value in batch
-        )
-
-        data = _get(
-            "fixtures",
-            {
-                "ids": ids
-            },
-        )
-
-        response = data.get(
-            "response",
-            [],
-        )
-
-        if not isinstance(
-            response,
-            list,
-        ):
+        if not isinstance(response, list):
             continue
 
         for fixture in response:
-            if not isinstance(
-                fixture,
-                dict,
-            ):
+            if not isinstance(fixture, dict):
                 continue
 
-            fixture_id = (
-                fixture
-                .get("fixture", {})
-                .get("id")
-            )
-
+            fixture_id = fixture.get("fixture", {}).get("id")
             try:
-                fixture_id = int(
-                    fixture_id
-                )
-            except (
-                TypeError,
-                ValueError,
-            ):
+                fixture_id = int(fixture_id)
+            except (TypeError, ValueError):
                 continue
 
             if fixture_id > 0:
-                enriched[
-                    fixture_id
-                ] = fixture
+                enriched[fixture_id] = fixture
 
     return enriched
+
 
 # ============================================================================
 # STANDINGS / LEAGUES
 # ============================================================================
 
 
-def get_league_standings(
-    league_id,
-    season,
-):
-    """
-    Return flattened league standings.
-    """
+def get_league_standings(league_id, season):
+    """Return flattened league standings."""
+    league_id = _validate_positive_int_like(league_id, "league_id")
+    season = _validate_positive_int_like(season, "season")
 
-    league_id = _validate_positive_int_like(
-        league_id,
-        "league_id",
-    )
+    data = _get("standings", {"league": league_id, "season": season})
+    response = data.get("response", [])
 
-    season = _validate_positive_int_like(
-        season,
-        "season",
-    )
-
-    data = _get(
-        "standings",
-        {
-            "league": league_id,
-            "season": season,
-        },
-    )
-
-    response = data.get(
-        "response",
-        [],
-    )
-
-    if not isinstance(
-        response,
-        list,
-    ) or not response:
+    if not isinstance(response, list) or not response:
         return []
 
     try:
-        groups = (
-            response[0]
-            .get("league", {})
-            .get("standings", [])
-        )
-
-    except (
-        AttributeError,
-        IndexError,
-        TypeError,
-    ):
+        groups = response[0].get("league", {}).get("standings", [])
+    except (AttributeError, IndexError, TypeError):
         return []
 
-    if not isinstance(
-        groups,
-        list,
-    ):
+    if not isinstance(groups, list):
         return []
 
     flattened = []
-
     for group in groups:
-        if not isinstance(
-            group,
-            list,
-        ):
+        if not isinstance(group, list):
             continue
-
         for team in group:
-            if isinstance(
-                team,
-                dict,
-            ):
-                flattened.append(
-                    team
-                )
+            if isinstance(team, dict):
+                flattened.append(team)
 
     return flattened
 
 
-def search_leagues(
-    name,
-):
-    name = _validate_nonempty_text(
-        name,
-        "name",
-    )
+def search_leagues(name):
+    name = _validate_nonempty_text(name, "name")
+    data = _get("leagues", {"search": name})
+    response = data.get("response", [])
 
-    data = _get(
-        "leagues",
-        {
-            "search": name
-        },
-    )
-
-    response = data.get(
-        "response",
-        [],
-    )
-
-    if not isinstance(
-        response,
-        list,
-    ):
+    if not isinstance(response, list):
         return []
 
     return response
 
 
-def get_league_coverage(
-    league_id,
-):
-    league_id = _validate_positive_int_like(
-        league_id,
-        "league_id",
-    )
+def get_league_coverage(league_id):
+    league_id = _validate_positive_int_like(league_id, "league_id")
+    data = _get("leagues", {"id": league_id})
+    response = data.get("response", [])
 
-    data = _get(
-        "leagues",
-        {
-            "id": league_id
-        },
-    )
-
-    response = data.get(
-        "response",
-        [],
-    )
-
-    if not isinstance(
-        response,
-        list,
-    ) or not response:
+    if not isinstance(response, list) or not response:
         return []
 
     first = response[0]
-
-    if not isinstance(
-        first,
-        dict,
-    ):
+    if not isinstance(first, dict):
         return []
 
-    seasons = first.get(
-        "seasons",
-        [],
-    )
-
-    return (
-        seasons
-        if isinstance(
-            seasons,
-            list,
-        )
-        else []
-    )
+    seasons = first.get("seasons", [])
+    return seasons if isinstance(seasons, list) else []
 
 
 # ============================================================================
@@ -1117,36 +637,16 @@ def get_league_coverage(
 # ============================================================================
 
 
-def raw_debug_call(
-    endpoint,
-    params,
-):
+def raw_debug_call(endpoint, params):
     """
     Diagnostic-only API call.
-
-    This intentionally bypasses normal caching.
-
-    It should not be used by the production prediction path because
-    bypassing the cache can consume additional API credits.
+    Bypasses normal caching and persistent storage.
     """
+    endpoint = _validate_nonempty_text(endpoint, "endpoint")
+    if not isinstance(params, dict):
+        raise ValueError("params must be a dictionary.")
 
-    endpoint = _validate_nonempty_text(
-        endpoint,
-        "endpoint",
-    )
-
-    if not isinstance(
-        params,
-        dict,
-    ):
-        raise ValueError(
-            "params must be a dictionary."
-        )
-
-    url = (
-        f"{config.API_FOOTBALL_BASE_URL}"
-        f"/{endpoint.lstrip('/')}"
-    )
+    url = f"{config.API_FOOTBALL_BASE_URL}/{endpoint.lstrip('/')}"
 
     response = requests.get(
         url,
@@ -1158,15 +658,11 @@ def raw_debug_call(
     try:
         data = response.json()
     except ValueError as exc:
-        raise APIFootballError(
-            "API-Football debug request returned invalid JSON."
-        ) from exc
+        raise APIFootballError("API-Football debug request returned invalid JSON.") from exc
 
     if not response.ok:
         raise APIFootballError(
-            "API-Football debug request failed: "
-            f"HTTP {response.status_code}; "
-            f"errors={data.get('errors')!r}"
+            f"API-Football debug request failed: HTTP {response.status_code}; errors={data.get('errors')!r}"
         )
 
     return data

@@ -234,90 +234,56 @@ def _default_memory():
 
 
 def load_memory():
-    """Load lightweight conversation state from the repository."""
+    """Load conversation history from database (fallback to json file if empty)."""
+    chat_id = CHAT_ID or "default_chat"
+    try:
+        messages = storage.get_recent_telegram_messages(chat_id, limit=50)
+        if messages:
+            return {
+                "recent": messages,
+                "preference_counts": {"football": 0, "basketball": 0},
+            }
+    except Exception:
+        pass
 
     default = _default_memory()
-
     if not os.path.exists(MEMORY_FILE):
         return default
 
     try:
-        with open(
-            MEMORY_FILE,
-            "r",
-            encoding="utf-8",
-        ) as handle:
+        with open(MEMORY_FILE, "r", encoding="utf-8") as handle:
             memory = json.load(handle)
-    except (
-        OSError,
-        ValueError,
-        TypeError,
-        json.JSONDecodeError,
-    ):
-        return default
+        if isinstance(memory, dict) and isinstance(memory.get("recent"), list):
+            return memory
+    except Exception:
+        pass
 
-    if not isinstance(memory, dict):
-        return default
-
-    if not isinstance(memory.get("recent"), list):
-        memory["recent"] = []
-
-    if not isinstance(
-        memory.get("preference_counts"),
-        dict,
-    ):
-        memory["preference_counts"] = {
-            "football": 0,
-            "basketball": 0,
-        }
-
-    return memory
+    return default
 
 
 def save_memory(memory):
-    """Persist Telegram state safely."""
+    """
+    Memory persistence is handled through storage.save_telegram_message.
 
-    if not isinstance(memory, dict):
-        raise ValueError("memory must be a dictionary.")
-
-    temp_file = MEMORY_FILE + ".tmp"
-
-    with open(
-        temp_file,
-        "w",
-        encoding="utf-8",
-    ) as handle:
-        json.dump(
-            memory,
-            handle,
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    os.replace(
-        temp_file,
-        MEMORY_FILE,
-    )
+    Historical telegram_memory.json is kept intact on disk and not overwritten at runtime.
+    """
+    pass
 
 
 def append_memory(entry):
-    """Append one conversation entry and persist it."""
-
+    """Append one conversation entry to database storage."""
     if not isinstance(entry, dict):
         raise ValueError("Memory entry must be a dictionary.")
 
-    memory = load_memory()
+    chat_id = CHAT_ID or "default_chat"
+    role = entry.get("role", "user")
+    text = entry.get("text", "")
+    timestamp = entry.get("timestamp")
 
-    recent = memory.setdefault(
-        "recent",
-        [],
-    )
-
-    recent.append(entry)
-
-    memory["recent"] = recent[-50:]
-
-    save_memory(memory)
+    try:
+        storage.save_telegram_message(chat_id, role, text, timestamp)
+    except Exception as exc:
+        print(f"Failed to persist telegram memory in storage: {exc}")
 
 
 # ============================================================================
@@ -1207,6 +1173,7 @@ def _save_football_prediction(item):
             "Football prediction is missing fixture_id."
         )
 
+    prediction_context = "LIVE" if prediction.get("is_live") else "PRE_MATCH"
     inserted = storage.save_prediction(
         fixture_id=int(fixture_id),
         match_date=str(
@@ -1262,6 +1229,7 @@ def _save_football_prediction(item):
         odds_comparison=prediction.get(
             "odds_comparison"
         ),
+        prediction_context=prediction_context,
     )
 
     return bool(inserted)
@@ -1309,6 +1277,7 @@ def _save_basketball_prediction(item):
             "Basketball prediction is missing game_id."
         )
 
+    prediction_context = "LIVE" if prediction.get("is_live") else "PRE_MATCH"
     inserted = storage.save_basketball_prediction(
         game_id=int(game_id),
         game_date=str(
@@ -1346,6 +1315,7 @@ def _save_basketball_prediction(item):
             "confidence",
             {},
         ),
+        prediction_context=prediction_context,
     )
 
     return bool(inserted)
