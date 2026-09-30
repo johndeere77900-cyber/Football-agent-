@@ -825,6 +825,9 @@ def test_run_daily_rejects_non_positive_limit(
 def test_run_daily_does_not_hide_programming_errors(
     monkeypatch,
 ):
+    from datetime import datetime, timezone
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
     monkeypatch.setattr(
         main.storage,
         "init_db",
@@ -879,7 +882,7 @@ def test_run_daily_does_not_hide_programming_errors(
 
     with pytest.raises(RuntimeError):
         main.run_daily(
-            "2026-09-28"
+            today_str
         )
 
 

@@ -200,7 +200,7 @@ def _cache_path(key):
     )
 
 
-def _cache_get(key):
+def _cache_get(key, ttl_hours=None):
     path = _cache_path(
         key
     )
@@ -218,13 +218,14 @@ def _cache_get(key):
             - modified
         ) / 3600
 
-        ttl_hours = float(
-            getattr(
-                config,
-                "CACHE_TTL_HOURS",
-                20,
+        if ttl_hours is None:
+            ttl_hours = float(
+                getattr(
+                    config,
+                    "CACHE_TTL_HOURS",
+                    20,
+                )
             )
-        )
 
         if age_hours > ttl_hours:
             return None
@@ -325,6 +326,7 @@ def _cache_key(
 def _get(
     endpoint,
     params,
+    ttl_hours=None,
 ):
     """
     Perform a GET request with cache-first behavior.
@@ -355,7 +357,8 @@ def _get(
     )
 
     cached = _cache_get(
-        cache_key
+        cache_key,
+        ttl_hours=ttl_hours,
     )
 
     if cached is not None:
@@ -584,7 +587,7 @@ def get_fixtures_by_date(
 
 def get_live_fixtures():
     """
-    Return currently live football fixtures.
+    Return currently live football fixtures using a short cache TTL (0.1 hours / 6 mins).
 
     API-Football uses `live=all` for the live fixtures endpoint.
     """
@@ -594,6 +597,7 @@ def get_live_fixtures():
         {
             "live": "all"
         },
+        ttl_hours=getattr(config, "RESULT_CACHE_TTL_HOURS", 0.1),
     )
 
     response = data.get(
@@ -766,6 +770,7 @@ def get_fixture_result(
         {
             "id": fixture_id
         },
+        ttl_hours=getattr(config, "RESULT_CACHE_TTL_HOURS", 0.1),
     )
 
     response = data.get(
@@ -791,9 +796,9 @@ def get_league_fixtures(
     season,
 ):
     """
-    Retrieve all fixtures for a league season.
+    Retrieve all fixtures for a league season following API pagination (`paging.current` / `paging.total`).
 
-    The normal cache layer prevents identical repeated requests.
+    Combines all pages, prevents duplicate fixture records, and raises APIFootballError on partial pagination failure.
     """
 
     league_id = _validate_positive_int_like(
@@ -806,26 +811,74 @@ def get_league_fixtures(
         "season",
     )
 
-    data = _get(
-        "fixtures",
-        {
+    all_fixtures = []
+    seen_fixture_ids = set()
+
+    current_page = 1
+    total_pages = 1
+    pages_requested = 0
+
+    while current_page <= total_pages:
+        pages_requested += 1
+        params = {
             "league": league_id,
             "season": season,
-        },
+            "page": current_page,
+        }
+
+        try:
+            data = _get(
+                "fixtures",
+                params,
+            )
+        except Exception as exc:
+            raise APIFootballError(
+                f"Failed retrieving page {current_page} of {total_pages} for league {league_id} season {season}: {exc}"
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise APIFootballError(
+                f"Invalid non-dict response for page {current_page} of league {league_id} season {season}."
+            )
+
+        paging = data.get("paging", {})
+        if isinstance(paging, dict):
+            try:
+                total_pages = int(paging.get("total", 1) or 1)
+            except (TypeError, ValueError):
+                total_pages = 1
+
+        response = data.get(
+            "response",
+            [],
+        )
+
+        if not isinstance(response, list):
+            raise APIFootballError(
+                f"Malformed response list on page {current_page} for league {league_id} season {season}."
+            )
+
+        for item in response:
+            if not isinstance(item, dict):
+                continue
+
+            fid = item.get("fixture", {}).get("id") if isinstance(item.get("fixture"), dict) else None
+            if fid is not None:
+                if fid in seen_fixture_ids:
+                    continue
+                seen_fixture_ids.add(fid)
+
+            all_fixtures.append(item)
+
+        current_page += 1
+
+    print(
+        f"[api_football] get_league_fixtures(league={league_id}, season={season}): "
+        f"pages_requested={pages_requested}, pages_retrieved={total_pages}, total_fixtures={len(all_fixtures)}",
+        flush=True,
     )
 
-    response = data.get(
-        "response",
-        [],
-    )
-
-    if not isinstance(
-        response,
-        list,
-    ):
-        return []
-
-    return response
+    return all_fixtures
 
 
 def get_enriched_fixtures(

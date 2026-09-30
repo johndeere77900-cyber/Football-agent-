@@ -223,101 +223,35 @@ def send_message(text):
 # PERSISTENT TELEGRAM MEMORY
 # ============================================================================
 
-def _default_memory():
+def load_memory(chat_id=0):
+    """Load recent structured conversation history from storage."""
+    messages = storage.get_bot_messages(chat_id, limit=50)
     return {
-        "recent": [],
-        "preference_counts": {
-            "football": 0,
-            "basketball": 0,
-        },
+        "recent": messages,
     }
 
 
-def load_memory():
-    """Load lightweight conversation state from the repository."""
-
-    default = _default_memory()
-
-    if not os.path.exists(MEMORY_FILE):
-        return default
-
-    try:
-        with open(
-            MEMORY_FILE,
-            "r",
-            encoding="utf-8",
-        ) as handle:
-            memory = json.load(handle)
-    except (
-        OSError,
-        ValueError,
-        TypeError,
-        json.JSONDecodeError,
-    ):
-        return default
-
-    if not isinstance(memory, dict):
-        return default
-
-    if not isinstance(memory.get("recent"), list):
-        memory["recent"] = []
-
-    if not isinstance(
-        memory.get("preference_counts"),
-        dict,
-    ):
-        memory["preference_counts"] = {
-            "football": 0,
-            "basketball": 0,
-        }
-
-    return memory
+def save_memory(memory, chat_id=0):
+    """No-op compatibility wrapper for save_memory."""
+    pass
 
 
-def save_memory(memory):
-    """Persist Telegram state safely."""
-
-    if not isinstance(memory, dict):
-        raise ValueError("memory must be a dictionary.")
-
-    temp_file = MEMORY_FILE + ".tmp"
-
-    with open(
-        temp_file,
-        "w",
-        encoding="utf-8",
-    ) as handle:
-        json.dump(
-            memory,
-            handle,
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    os.replace(
-        temp_file,
-        MEMORY_FILE,
-    )
-
-
-def append_memory(entry):
-    """Append one conversation entry and persist it."""
-
+def append_memory(entry, chat_id=0):
+    """Append one conversation entry to structured bot_memory storage."""
     if not isinstance(entry, dict):
         raise ValueError("Memory entry must be a dictionary.")
 
-    memory = load_memory()
+    role = entry.get("role", "user")
+    text = entry.get("text", "")
+    timestamp = entry.get("timestamp")
 
-    recent = memory.setdefault(
-        "recent",
-        [],
-    )
-
-    recent.append(entry)
-
-    memory["recent"] = recent[-50:]
-
-    save_memory(memory)
+    if text:
+        storage.append_bot_message(
+            chat_id=chat_id,
+            role=role,
+            text=text,
+            timestamp=timestamp,
+        )
 
 
 # ============================================================================

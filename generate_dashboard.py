@@ -5,66 +5,25 @@ hosting needed, and it stays completely private since it's just a file in
 your existing private repo.
 """
 
-import sqlite3
 from datetime import datetime, timezone
 
-import config
-
-
-def _connect():
-    return sqlite3.connect(config.DB_PATH)
+import storage
 
 
 def _football_today_and_recent():
-    conn = _connect()
-    rows = conn.execute("""
-        SELECT home_team, away_team, league, top_pick, top_probability,
-               confidence_label, match_date
-        FROM predictions
-        ORDER BY created_at DESC
-        LIMIT 20
-    """).fetchall()
-    conn.close()
-    return rows
+    return storage.get_recent_football_predictions(limit=20)
 
 
 def _basketball_today_and_recent():
-    conn = _connect()
-    try:
-        rows = conn.execute("""
-            SELECT home_team, away_team, league, top_pick, top_probability,
-                   confidence_label, game_date
-            FROM basketball_predictions
-            ORDER BY created_at DESC
-            LIMIT 20
-        """).fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-    conn.close()
-    return rows
+    return storage.get_recent_basketball_predictions(limit=20)
 
 
 def _football_accuracy():
-    conn = _connect()
-    rows = conn.execute("""
-        SELECT confidence_label, top_pick_correct
-        FROM predictions WHERE top_pick_correct IS NOT NULL
-    """).fetchall()
-    conn.close()
-    return rows
+    return storage.get_graded_football_rows()
 
 
 def _basketball_accuracy():
-    conn = _connect()
-    try:
-        rows = conn.execute("""
-            SELECT confidence_label, top_pick_correct
-            FROM basketball_predictions WHERE top_pick_correct IS NOT NULL
-        """).fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-    conn.close()
-    return rows
+    return storage.get_graded_basketball_rows()
 
 
 def _accuracy_block(rows, title):
@@ -72,14 +31,14 @@ def _accuracy_block(rows, title):
         return f"### {title}\n\n_No graded predictions yet._\n"
 
     total = len(rows)
-    correct = sum(r[1] for r in rows)
-    overall = correct / total
+    correct = sum(r[1] for r in rows if r[1] is not None)
+    overall = correct / total if total > 0 else 0.0
 
     lines = [f"### {title}\n", f"**Overall accuracy:** {overall:.0%} ({correct}/{total} graded)\n"]
     lines.append("| Confidence | Accuracy | Count |")
     lines.append("|---|---|---|")
     for label, emoji in [("High", "🟢"), ("Moderate", "🟡"), ("Toss-up", "🔴")]:
-        subset = [r[1] for r in rows if r[0] == label]
+        subset = [r[1] for r in rows if r[0] == label and r[1] is not None]
         if subset:
             acc = sum(subset) / len(subset)
             lines.append(f"| {emoji} {label} | {acc:.0%} | {len(subset)} |")
@@ -94,11 +53,13 @@ def _predictions_table(rows, emoji):
     lines = ["| Match | League | Pick | Confidence |", "|---|---|---|---|"]
     for home, away, league, pick, prob, conf, date in rows:
         c_emoji = conf_emoji.get(conf, "")
-        lines.append(f"| {home} vs {away} | {league} | {pick} ({prob:.0%}) | {c_emoji} {conf} |")
+        prob_val = float(prob or 0.0)
+        lines.append(f"| {home} vs {away} | {league} | {pick} ({prob_val:.0%}) | {c_emoji} {conf} |")
     return "\n".join(lines) + "\n"
 
 
 def generate():
+    storage.init_db()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     football_rows = _football_today_and_recent()

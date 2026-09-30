@@ -1,4 +1,4 @@
 __pycache__/
 *.pyc
-data/backtests/*.json
+data/
 .pytest_cache/

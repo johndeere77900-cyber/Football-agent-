@@ -944,6 +944,8 @@ def _insufficient_prediction(
         league,
     ) = _fixture_identity(fixture)
 
+    prediction_context = "LIVE" if is_live else "PRE_MATCH"
+
     return {
         "fixture_id": fixture_data["id"],
         "date": fixture_data["date"],
@@ -1122,6 +1124,8 @@ def predict_fixture(
             "prediction_engine returned an invalid result."
         )
 
+    prediction_context = "LIVE" if is_live else "PRE_MATCH"
+
     if is_live:
         current_home_goals = (
             fixture.get("goals", {})
@@ -1246,6 +1250,7 @@ def predict_fixture(
         "confidence": conf,
         "safest": safest,
         "is_live": is_live,
+        "prediction_context": prediction_context,
         "insufficient_data": False,
         "odds_comparison": odds_comparison,
         "elo_cross_check": elo_probabilities,
@@ -1467,10 +1472,19 @@ def run_daily(
 
     Only configured leagues are allowed. Finished fixtures are excluded.
     Predictions with insufficient validated data are not persisted.
+    Past dates are rejected to enforce point-in-time date integrity.
     """
     validate_date_string(date_str)
     validate_positive_int(limit, "limit")
     validate_allowed_league(league_id)
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if date_str < today_str:
+        print(
+            f"Unsupported historical prediction date '{date_str}'. "
+            f"Production predictions cannot be generated for past dates. Use --backtest instead."
+        )
+        return
 
     storage.init_db()
 
@@ -1595,6 +1609,10 @@ def run_daily(
                 away_team_id=prediction["away_team_id"],
                 odds_comparison=prediction.get(
                     "odds_comparison"
+                ),
+                prediction_context=prediction.get(
+                    "prediction_context",
+                    "PRE_MATCH",
                 ),
             )
 

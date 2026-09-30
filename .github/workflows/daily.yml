@@ -16,12 +16,6 @@ on:
         required: false
         default: ''
 
-# IMPORTANT:
-# This MUST be the same concurrency group used by telegram_webhook.yml.
-#
-# Both workflows modify predictions.db.
-# Serializing them prevents a stale checkout from overwriting newer
-# prediction or grading records.
 concurrency:
   group: prediction-repo-state
   cancel-in-progress: false
@@ -65,8 +59,8 @@ jobs:
       # -------------------------------------------------------------------
 
       - name: Grade yesterday's football predictions
-        continue-on-error: true
         env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
@@ -79,8 +73,8 @@ jobs:
 
       - name: Run football predictions
         if: github.event_name == 'schedule' || github.event.inputs.football_games != ''
-        continue-on-error: true
         env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
@@ -99,9 +93,9 @@ jobs:
       # -------------------------------------------------------------------
 
       - name: Show football accuracy report
-        continue-on-error: true
         if: always()
         env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
@@ -113,9 +107,9 @@ jobs:
       # -------------------------------------------------------------------
 
       - name: Grade yesterday's basketball predictions
-        continue-on-error: true
         if: always()
         env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
           set -euo pipefail
@@ -127,8 +121,8 @@ jobs:
 
       - name: Run basketball predictions
         if: github.event_name == 'schedule' || github.event.inputs.basketball_games != ''
-        continue-on-error: true
         env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
           set -euo pipefail
@@ -148,9 +142,9 @@ jobs:
       # -------------------------------------------------------------------
 
       - name: Show basketball accuracy report
-        continue-on-error: true
         if: always()
         env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
           set -euo pipefail
@@ -162,15 +156,17 @@ jobs:
 
       - name: Generate dashboard
         if: always()
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
           set -euo pipefail
           python3 generate_dashboard.py
 
       # -------------------------------------------------------------------
-      # Persist database + dashboard
+      # Persist generated documentation
       # -------------------------------------------------------------------
 
-      - name: Save results back to the repo
+      - name: Save generated dashboard to repo
         if: always()
         run: |
           set -euo pipefail
@@ -178,15 +174,14 @@ jobs:
           git config user.name "sports-agent-bot"
           git config user.email "actions@github.com"
 
-          # Both the prediction database and dashboard are generated state.
-          git add predictions.db DASHBOARD.md 2>/dev/null || true
+          git add DASHBOARD.md 2>/dev/null || true
 
           if git diff --staged --quiet; then
-            echo "No prediction-state changes to commit."
+            echo "No dashboard changes to commit."
             exit 0
           fi
 
           git commit \
-            -m "Prediction update $(date -u +%Y-%m-%d)"
+            -m "Dashboard update $(date -u +%Y-%m-%d)"
 
           git push origin HEAD:${GITHUB_REF_NAME}
