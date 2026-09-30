@@ -58,7 +58,7 @@ def validate_sqlite_source(sqlite_path):
         conn.close()
 
 
-def migrate(sqlite_path=None, target_url=None, dry_run=False):
+def migrate(sqlite_path=None, target_url=None, dry_run=False, verify_only=False):
     """
     Execute migration from SQLite/JSON to Neon PostgreSQL with exact verification and idempotency.
     """
@@ -137,7 +137,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
 
         report["predictions"]["source"] = len(f_rows)
 
-        if not dry_run and f_rows:
+        if not dry_run and not verify_only and f_rows:
             with target_conn.transaction():
                 with target_conn.cursor() as cur:
                     for row in f_rows:
@@ -221,7 +221,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
 
         report["basketball_predictions"]["source"] = len(b_rows)
 
-        if not dry_run and b_rows:
+        if not dry_run and not verify_only and b_rows:
             with target_conn.transaction():
                 with target_conn.cursor() as cur:
                     for row in b_rows:
@@ -273,7 +273,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
 
         report["elo_ratings"]["source"] = len(e_rows)
 
-        if not dry_run and e_rows:
+        if not dry_run and not verify_only and e_rows:
             with target_conn.transaction():
                 with target_conn.cursor() as cur:
                     for row in e_rows:
@@ -332,7 +332,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
 
         report["bot_memory"]["source"] = len(tg_entries)
 
-        if not dry_run and tg_entries:
+        if not dry_run and not verify_only and tg_entries:
             with target_conn.transaction():
                 with target_conn.cursor() as cur:
                     for cid, role, text, ts in tg_entries:
@@ -362,7 +362,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
 
         report["api_cache"]["source"] = len(cache_rows)
 
-        if not dry_run and cache_rows:
+        if not dry_run and not verify_only and cache_rows:
             with target_conn.transaction():
                 with target_conn.cursor() as cur:
                     for row in cache_rows:
@@ -406,9 +406,24 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                 seen_rc.add(key)
                 rc_rows.append(r)
 
-        report["api_request_counts"]["source"] = len(rc_rows)
+        raw_rc_count = len(rc_raw_rows)
+        dedup_rc_count = len(rc_rows)
 
-        if not dry_run and rc_rows:
+        report["api_request_counts"] = {
+            "raw_sqlite_rows": raw_rc_count,
+            "deduplicated_source_rows": dedup_rc_count,
+            "source": dedup_rc_count,
+            "migrated": 0,
+            "destination": 0,
+            "deduplication_reason": (
+                "Exact duplicate request log entries collapsed to establish deterministic request identity."
+                if raw_rc_count != dedup_rc_count
+                else "None (all source request logs distinct)"
+            ),
+            "status": "PENDING",
+        }
+
+        if not dry_run and not verify_only and rc_rows:
             with target_conn.transaction():
                 with target_conn.cursor() as cur:
                     for row in rc_rows:
@@ -428,73 +443,351 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False):
                             report["api_request_counts"]["migrated"] += 1
 
         # -------------------------------------------------------------
-        # 7. Exact Count & Key-Field Verification Across All 6 Datasets
+        # 7. Exact Source-vs-Destination Deterministic Verification
         # -------------------------------------------------------------
         if not dry_run:
-            all_verified = True
-            key_fields_verified = True
+            errors = []
+
+            def norm_json(val):
+                if val is None:
+                    return None
+                if isinstance(val, (dict, list)):
+                    return val
+                if isinstance(val, str):
+                    try:
+                        return json.loads(val)
+                    except Exception:
+                        return val
+                return val
+
+            def norm_val(val):
+                if isinstance(val, float):
+                    return round(val, 6)
+                return val
 
             with target_conn.cursor() as cur:
-                # Count Verification (Exact Equality Required: source == destination)
-                datasets = [
-                    ("predictions", "predictions"),
-                    ("basketball_predictions", "basketball_predictions"),
-                    ("elo_ratings", "elo_ratings"),
-                    ("bot_memory", "bot_memory"),
-                    ("api_cache", "api_cache"),
-                    ("api_request_counts", "api_request_counts"),
-                ]
+                # -----------------------------------------------------
+                # A. Predictions Verification
+                # -----------------------------------------------------
+                src_p = {}
+                for r in f_rows:
+                    fid = r[0]
+                    pctx = (r[15] or "PRE_MATCH").upper()
+                    if pctx not in ("PRE_MATCH", "LIVE"):
+                        pctx = "PRE_MATCH"
+                    src_p[fid] = {
+                        "fixture_id": fid,
+                        "home_team": r[2],
+                        "away_team": r[3],
+                        "league": r[4],
+                        "top_pick": r[7],
+                        "top_probability": norm_val(r[8]),
+                        "prediction_context": pctx,
+                        "actual_home_goals": r[10],
+                        "actual_away_goals": r[11],
+                        "top_pick_correct": r[12],
+                        "created_at": r[16],
+                    }
 
-                for key, table_name in datasets:
-                    cur.execute(f"SELECT COUNT(*) FROM {table_name}")
-                    dest_count = cur.fetchone()[0]
-                    report[key]["destination"] = dest_count
+                cur.execute(
+                    """
+                    SELECT fixture_id, home_team, away_team, league, top_pick, top_probability,
+                           prediction_context, actual_home_goals, actual_away_goals, top_pick_correct, created_at
+                    FROM predictions
+                    """
+                )
+                dest_p_rows = cur.fetchall()
+                dest_p = {}
+                for r in dest_p_rows:
+                    fid = r[0]
+                    dest_p[fid] = {
+                        "fixture_id": fid,
+                        "home_team": r[1],
+                        "away_team": r[2],
+                        "league": r[3],
+                        "top_pick": r[4],
+                        "top_probability": norm_val(r[5]),
+                        "prediction_context": r[6],
+                        "actual_home_goals": r[7],
+                        "actual_away_goals": r[8],
+                        "top_pick_correct": r[9],
+                        "created_at": r[10],
+                    }
 
-                    source_cnt = report[key]["source"]
-                    if dest_count == source_cnt:
-                        report[key]["status"] = "EXACT_MATCH"
-                    else:
-                        report[key]["status"] = f"COUNT_MISMATCH (source={source_cnt}, dest={dest_count})"
-                        all_verified = False
+                report["predictions"]["destination"] = len(dest_p)
+                if len(src_p) != len(dest_p):
+                    errors.append(f"predictions count mismatch: source={len(src_p)}, dest={len(dest_p)}")
 
-                # Key-Field Verification
-                # 1. Predictions
-                if f_rows:
-                    cur.execute(
-                        """
-                        SELECT fixture_id, home_team, away_team, league, top_pick, top_probability, prediction_context
-                        FROM predictions ORDER BY fixture_id ASC LIMIT 5
-                        """
-                    )
-                    dest_f_sample = cur.fetchall()
-                    if not dest_f_sample:
-                        key_fields_verified = False
+                for fid, src_rec in src_p.items():
+                    if fid not in dest_p:
+                        errors.append(f"predictions missing destination record: fixture_id={fid}")
+                        continue
+                    dest_rec = dest_p[fid]
+                    for k, src_v in src_rec.items():
+                        dest_v = dest_rec.get(k)
+                        if k == "created_at" and src_v is None and dest_v is not None:
+                            continue
+                        if src_v != dest_v:
+                            errors.append(f"predictions mismatch fixture_id={fid} field '{k}': source={src_v!r}, dest={dest_v!r}")
 
-                # 2. Basketball
-                if b_rows:
-                    cur.execute(
-                        """
-                        SELECT game_id, home_team, away_team, league, top_pick, top_probability, prediction_context
-                        FROM basketball_predictions ORDER BY game_id ASC LIMIT 5
-                        """
-                    )
-                    dest_b_sample = cur.fetchall()
-                    if not dest_b_sample:
-                        key_fields_verified = False
+                for fid in dest_p:
+                    if fid not in src_p:
+                        errors.append(f"predictions unexpected destination record: fixture_id={fid}")
 
-                # 3. Elo
-                if e_rows:
-                    cur.execute("SELECT team_id, team_name, rating FROM elo_ratings ORDER BY team_id ASC LIMIT 5")
-                    dest_e_sample = cur.fetchall()
-                    if not dest_e_sample:
-                        key_fields_verified = False
+                report["predictions"]["status"] = "EXACT_MATCH" if len(src_p) == len(dest_p) else f"COUNT_MISMATCH (source={len(src_p)}, dest={len(dest_p)})"
 
-            report["key_field_verification"] = "VERIFIED_PASSED" if key_fields_verified else "FIELD_MISMATCH"
+                # -----------------------------------------------------
+                # B. Basketball Verification
+                # -----------------------------------------------------
+                src_bp = {}
+                for r in b_rows:
+                    gid = r[0]
+                    bpctx = (r[12] or "PRE_MATCH").upper()
+                    if bpctx not in ("PRE_MATCH", "LIVE"):
+                        bpctx = "PRE_MATCH"
+                    src_bp[gid] = {
+                        "game_id": gid,
+                        "home_team": r[2],
+                        "away_team": r[3],
+                        "league": r[4],
+                        "top_pick": r[7],
+                        "top_probability": norm_val(r[8]),
+                        "prediction_context": bpctx,
+                        "actual_home_points": r[9],
+                        "actual_away_points": r[10],
+                        "top_pick_correct": r[11],
+                        "created_at": r[13],
+                    }
 
-            if all_verified and key_fields_verified:
-                report["verification"] = "VERIFIED_ALL_DATASETS"
-            else:
+                cur.execute(
+                    """
+                    SELECT game_id, home_team, away_team, league, top_pick, top_probability,
+                           prediction_context, actual_home_points, actual_away_points, top_pick_correct, created_at
+                    FROM basketball_predictions
+                    """
+                )
+                dest_bp_rows = cur.fetchall()
+                dest_bp = {}
+                for r in dest_bp_rows:
+                    gid = r[0]
+                    dest_bp[gid] = {
+                        "game_id": gid,
+                        "home_team": r[1],
+                        "away_team": r[2],
+                        "league": r[3],
+                        "top_pick": r[4],
+                        "top_probability": norm_val(r[5]),
+                        "prediction_context": r[6],
+                        "actual_home_points": r[7],
+                        "actual_away_points": r[8],
+                        "top_pick_correct": r[9],
+                        "created_at": r[10],
+                    }
+
+                report["basketball_predictions"]["destination"] = len(dest_bp)
+                if len(src_bp) != len(dest_bp):
+                    errors.append(f"basketball_predictions count mismatch: source={len(src_bp)}, dest={len(dest_bp)}")
+
+                for gid, src_rec in src_bp.items():
+                    if gid not in dest_bp:
+                        errors.append(f"basketball_predictions missing destination record: game_id={gid}")
+                        continue
+                    dest_rec = dest_bp[gid]
+                    for k, src_v in src_rec.items():
+                        dest_v = dest_rec.get(k)
+                        if k == "created_at" and src_v is None and dest_v is not None:
+                            continue
+                        if src_v != dest_v:
+                            errors.append(f"basketball_predictions mismatch game_id={gid} field '{k}': source={src_v!r}, dest={dest_v!r}")
+
+                for gid in dest_bp:
+                    if gid not in src_bp:
+                        errors.append(f"basketball_predictions unexpected destination record: game_id={gid}")
+
+                report["basketball_predictions"]["status"] = "EXACT_MATCH" if len(src_bp) == len(dest_bp) else f"COUNT_MISMATCH (source={len(src_bp)}, dest={len(dest_bp)})"
+
+                # -----------------------------------------------------
+                # C. Elo Ratings Verification
+                # -----------------------------------------------------
+                src_e = {}
+                for r in e_rows:
+                    tid = r[0]
+                    src_e[tid] = {
+                        "team_id": tid,
+                        "team_name": r[1],
+                        "rating": norm_val(r[2]),
+                        "updated_at": r[3],
+                    }
+
+                cur.execute("SELECT team_id, team_name, rating, updated_at FROM elo_ratings")
+                dest_e_rows = cur.fetchall()
+                dest_e = {}
+                for r in dest_e_rows:
+                    tid = r[0]
+                    dest_e[tid] = {
+                        "team_id": tid,
+                        "team_name": r[1],
+                        "rating": norm_val(r[2]),
+                        "updated_at": r[3],
+                    }
+
+                report["elo_ratings"]["destination"] = len(dest_e)
+                if len(src_e) != len(dest_e):
+                    errors.append(f"elo_ratings count mismatch: source={len(src_e)}, dest={len(dest_e)}")
+
+                for tid, src_rec in src_e.items():
+                    if tid not in dest_e:
+                        errors.append(f"elo_ratings missing destination record: team_id={tid}")
+                        continue
+                    dest_rec = dest_e[tid]
+                    for k, src_v in src_rec.items():
+                        dest_v = dest_rec.get(k)
+                        if k == "updated_at" and src_v is None and dest_v is not None:
+                            continue
+                        if src_v != dest_v:
+                            errors.append(f"elo_ratings mismatch team_id={tid} field '{k}': source={src_v!r}, dest={dest_v!r}")
+
+                for tid in dest_e:
+                    if tid not in src_e:
+                        errors.append(f"elo_ratings unexpected destination record: team_id={tid}")
+
+                report["elo_ratings"]["status"] = "EXACT_MATCH" if len(src_e) == len(dest_e) else f"COUNT_MISMATCH (source={len(src_e)}, dest={len(dest_e)})"
+
+                # -----------------------------------------------------
+                # D. Bot Memory Verification
+                # -----------------------------------------------------
+                src_tg = {}
+                for cid, role, text, ts in tg_entries:
+                    key = (cid, role, text, ts)
+                    src_tg[key] = {"chat_id": cid, "role": role, "text": text, "timestamp": ts}
+
+                cur.execute("SELECT chat_id, role, text, timestamp FROM bot_memory")
+                dest_tg_rows = cur.fetchall()
+                dest_tg = {}
+                for cid, role, text, ts in dest_tg_rows:
+                    key = (cid, role, text, ts)
+                    dest_tg[key] = {"chat_id": cid, "role": role, "text": text, "timestamp": ts}
+
+                report["bot_memory"]["destination"] = len(dest_tg)
+                if len(src_tg) != len(dest_tg):
+                    errors.append(f"bot_memory count mismatch: source={len(src_tg)}, dest={len(dest_tg)}")
+
+                for key, src_rec in src_tg.items():
+                    if key not in dest_tg:
+                        errors.append(f"bot_memory missing destination record: {key}")
+                        continue
+                    dest_rec = dest_tg[key]
+                    for k, src_v in src_rec.items():
+                        dest_v = dest_rec.get(k)
+                        if src_v != dest_v:
+                            errors.append(f"bot_memory mismatch {key} field '{k}': source={src_v!r}, dest={dest_v!r}")
+
+                for key in dest_tg:
+                    if key not in src_tg:
+                        errors.append(f"bot_memory unexpected destination record: {key}")
+
+                report["bot_memory"]["status"] = "EXACT_MATCH" if len(src_tg) == len(dest_tg) else f"COUNT_MISMATCH (source={len(src_tg)}, dest={len(dest_tg)})"
+
+                # -----------------------------------------------------
+                # E. API Cache Verification
+                # -----------------------------------------------------
+                src_c = {}
+                for r in cache_rows:
+                    ckey = r[0]
+                    src_c[ckey] = {
+                        "cache_key": ckey,
+                        "endpoint": r[1],
+                        "request_params": norm_json(r[2]),
+                        "response_payload": norm_json(r[3]),
+                        "fetched_at": r[4],
+                        "expires_at": r[5],
+                    }
+
+                cur.execute("SELECT cache_key, endpoint, request_params, response_payload, fetched_at, expires_at FROM api_cache")
+                dest_c_rows = cur.fetchall()
+                dest_c = {}
+                for r in dest_c_rows:
+                    ckey = r[0]
+                    dest_c[ckey] = {
+                        "cache_key": ckey,
+                        "endpoint": r[1],
+                        "request_params": norm_json(r[2]),
+                        "response_payload": norm_json(r[3]),
+                        "fetched_at": r[4],
+                        "expires_at": r[5],
+                    }
+
+                report["api_cache"]["destination"] = len(dest_c)
+                if len(src_c) != len(dest_c):
+                    errors.append(f"api_cache count mismatch: source={len(src_c)}, dest={len(dest_c)}")
+
+                for ckey, src_rec in src_c.items():
+                    if ckey not in dest_c:
+                        errors.append(f"api_cache missing destination record: cache_key={ckey}")
+                        continue
+                    dest_rec = dest_c[ckey]
+                    for k, src_v in src_rec.items():
+                        dest_v = dest_rec.get(k)
+                        if src_v != dest_v:
+                            errors.append(f"api_cache mismatch cache_key={ckey} field '{k}': source={src_v!r}, dest={dest_v!r}")
+
+                for ckey in dest_c:
+                    if ckey not in src_c:
+                        errors.append(f"api_cache unexpected destination record: cache_key={ckey}")
+
+                report["api_cache"]["status"] = "EXACT_MATCH" if len(src_c) == len(dest_c) else f"COUNT_MISMATCH (source={len(src_c)}, dest={len(dest_c)})"
+
+                # -----------------------------------------------------
+                # F. API Request Counts Verification
+                # -----------------------------------------------------
+                src_rc = {}
+                for r in rc_rows:
+                    key = (r[0], r[1], r[3]) # (provider, request_timestamp, endpoint)
+                    src_rc[key] = {
+                        "provider": r[0],
+                        "request_timestamp": r[1],
+                        "request_date": r[2],
+                        "endpoint": r[3],
+                    }
+
+                cur.execute("SELECT provider, request_timestamp, request_date, endpoint FROM api_request_counts")
+                dest_rc_rows = cur.fetchall()
+                dest_rc = {}
+                for r in dest_rc_rows:
+                    key = (r[0], r[1], r[3])
+                    dest_rc[key] = {
+                        "provider": r[0],
+                        "request_timestamp": r[1],
+                        "request_date": r[2],
+                        "endpoint": r[3],
+                    }
+
+                report["api_request_counts"]["destination"] = len(dest_rc)
+                if len(src_rc) != len(dest_rc):
+                    errors.append(f"api_request_counts count mismatch: source={len(src_rc)}, dest={len(dest_rc)}")
+
+                for key, src_rec in src_rc.items():
+                    if key not in dest_rc:
+                        errors.append(f"api_request_counts missing destination record: {key}")
+                        continue
+                    dest_rec = dest_rc[key]
+                    for k, src_v in src_rec.items():
+                        dest_v = dest_rec.get(k)
+                        if src_v != dest_v:
+                            errors.append(f"api_request_counts mismatch {key} field '{k}': source={src_v!r}, dest={dest_v!r}")
+
+                for key in dest_rc:
+                    if key not in src_rc:
+                        errors.append(f"api_request_counts unexpected destination record: {key}")
+
+                report["api_request_counts"]["status"] = "EXACT_MATCH" if len(src_rc) == len(dest_rc) else f"COUNT_MISMATCH (source={len(src_rc)}, dest={len(dest_rc)})"
+
+            if errors:
+                report["key_field_verification"] = f"VERIFICATION_FAILED ({len(errors)} mismatches: {errors[:3]})"
                 report["verification"] = "VERIFICATION_FAILED"
+            else:
+                report["key_field_verification"] = "VERIFIED_PASSED"
+                report["verification"] = "VERIFIED_ALL_DATASETS"
 
         else:
             report["key_field_verification"] = "DRY_RUN_PASSED"
@@ -517,11 +810,17 @@ if __name__ == "__main__":
     parser.add_argument("--sqlite-db", help="Path to source SQLite database file.", default="predictions.db")
     parser.add_argument("--target-url", help="Target Neon PostgreSQL connection URL.")
     parser.add_argument("--dry-run", action="store_true", help="Validate source data without writing to target database.")
+    parser.add_argument("--verify-only", action="store_true", help="Verify target database contents against source SQLite without writing.")
 
     args = parser.parse_args()
 
     try:
-        res = migrate(sqlite_path=args.sqlite_db, target_url=args.target_url, dry_run=args.dry_run)
+        res = migrate(
+            sqlite_path=args.sqlite_db,
+            target_url=args.target_url,
+            dry_run=args.dry_run,
+            verify_only=args.verify_only,
+        )
         if res.get("verification") in ("VERIFIED_ALL_DATASETS", "DRY_RUN_PASSED"):
             sys.exit(0)
         else:

@@ -726,3 +726,312 @@ def test_migration_preserves_prediction_context(tmp_path, monkeypatch):
     assert b_contexts == [(9003, "LIVE")]
 
     source_conn.close()
+
+
+# ============================================================================
+# COMPREHENSIVE MIGRATION VERIFICATION SCENARIOS A - K
+# ============================================================================
+
+
+class MockPostgresConn:
+    """Mock psycopg PostgreSQL connection wrapping a target SQLite database for testing."""
+
+    def __init__(self, sqlite_path):
+        self.sqlite_path = sqlite_path
+        self.conn = sqlite3.connect(sqlite_path)
+        self.conn.execute("PRAGMA foreign_keys = ON")
+
+    def transaction(self):
+        class Trans:
+            def __enter__(s): return s
+            def __exit__(s, exc_type, exc_val, exc_tb):
+                if exc_type:
+                    self.conn.rollback()
+                else:
+                    self.conn.commit()
+        return Trans()
+
+    def cursor(self):
+        class Cur:
+            def __init__(s, sqlite_conn):
+                s.sqlite_conn = sqlite_conn
+                s.cursor = sqlite_conn.cursor()
+                s.rowcount = 0
+
+            def __enter__(s): return s
+
+            def __exit__(s, exc_type, exc_val, exc_tb): pass
+
+            def execute(s, query, params=()):
+                q = query.replace("%s", "?")
+                q = q.replace("DOUBLE PRECISION", "REAL")
+                q = q.replace("JSONB", "TEXT")
+                q = q.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
+                q = q.replace("EXCLUDED.", "excluded.")
+                q = q.replace("ON CONFLICT (fixture_id) DO UPDATE SET", "ON CONFLICT(fixture_id) DO UPDATE SET")
+                q = q.replace("ON CONFLICT (game_id) DO UPDATE SET", "ON CONFLICT(game_id) DO UPDATE SET")
+                q = q.replace("ON CONFLICT (team_id) DO UPDATE SET", "ON CONFLICT(team_id) DO UPDATE SET")
+                q = q.replace("ON CONFLICT (cache_key) DO UPDATE SET", "ON CONFLICT(cache_key) DO UPDATE SET")
+                s.cursor.execute(q, params)
+                s.rowcount = s.cursor.rowcount
+
+            def fetchall(s):
+                return s.cursor.fetchall()
+
+            def fetchone(s):
+                return s.cursor.fetchone()
+
+        return Cur(self.conn)
+
+    def close(self):
+        self.conn.close()
+
+
+def _setup_migration_source_db(source_db_path):
+    monkeypatch_config_db = str(source_db_path)
+    monkeypatch_env = "development"
+    monkeypatch_neon_url = ""
+
+    os.environ["ENVIRONMENT"] = monkeypatch_env
+    if "NEON_DATABASE_URL" in os.environ:
+        del os.environ["NEON_DATABASE_URL"]
+
+    config.DB_PATH = monkeypatch_config_db
+    storage.init_db()
+
+    markets = {"match_result": {"home_win": 0.50, "draw": 0.30, "away_win": 0.20}}
+    conf = {"label": "High", "top_pick": "Home Win", "top_probability": 0.50}
+
+    storage.save_prediction(
+        fixture_id=1001, match_date="2026-09-30", home_team="Arsenal", away_team="Chelsea",
+        league="EPL", markets=markets, confidence=conf, prediction_context="PRE_MATCH",
+    )
+    storage.save_basketball_prediction(
+        game_id=2001, game_date="2026-09-30", home_team="Lakers", away_team="Celtics",
+        league="NBA", markets=markets, confidence=conf, prediction_context="PRE_MATCH",
+    )
+    storage.update_elo_ratings(101, "Arsenal", 102, "Chelsea", 2, 1)
+    storage.save_telegram_message("chat_1", "user", "Hello bot")
+    storage.set_api_cache("key_1", "fixtures", {"d": 1}, {"res": 1}, 3600)
+    storage.record_api_request("api_football", "fixtures", "2026-09-30")
+
+
+def _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch, verify_only=False):
+    monkeypatch.setattr(migrate_sqlite_to_neon.psycopg, "connect", lambda url: MockPostgresConn(str(dest_db)))
+    monkeypatch.setattr(storage, "init_db", lambda: None)
+
+    try:
+        report = migrate_sqlite_to_neon.migrate(
+            sqlite_path=str(source_db),
+            target_url="postgresql://mock:mock@mock.neon.tech/mockdb",
+            dry_run=False,
+            verify_only=verify_only,
+        )
+        return report
+    finally:
+        os.environ["ENVIRONMENT"] = "development"
+        if "NEON_DATABASE_URL" in os.environ:
+            del os.environ["NEON_DATABASE_URL"]
+
+
+def test_migration_scenario_a_and_k_correct_and_idempotent(tmp_path, monkeypatch):
+    source_db = tmp_path / "src.db"
+    dest_db = tmp_path / "dest.db"
+    _setup_migration_source_db(source_db)
+
+    config.DB_PATH = str(dest_db)
+    storage.init_db()
+
+    # Scenario A: Initial Migration
+    report1 = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+    assert report1["verification"] == "VERIFIED_ALL_DATASETS"
+    assert report1["predictions"]["destination"] == 1
+    assert report1["basketball_predictions"]["destination"] == 1
+
+    # Scenario K: Idempotent Rerun
+    report2 = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+    assert report2["verification"] == "VERIFIED_ALL_DATASETS"
+    assert report2["predictions"]["destination"] == 1
+    assert report2["basketball_predictions"]["destination"] == 1
+
+
+def test_migration_scenario_b_wrong_prediction_field(tmp_path, monkeypatch):
+    source_db = tmp_path / "src.db"
+    dest_db = tmp_path / "dest.db"
+    _setup_migration_source_db(source_db)
+
+    config.DB_PATH = str(dest_db)
+    storage.init_db()
+
+    _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+
+    # Tamper home_team in destination
+    conn = sqlite3.connect(str(dest_db))
+    conn.execute("UPDATE predictions SET home_team = 'Liverpool' WHERE fixture_id = 1001")
+    conn.commit()
+    conn.close()
+
+    report = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch, verify_only=True)
+    assert report["verification"] == "VERIFICATION_FAILED"
+
+
+def test_migration_scenario_c_wrong_probability(tmp_path, monkeypatch):
+    source_db = tmp_path / "src.db"
+    dest_db = tmp_path / "dest.db"
+    _setup_migration_source_db(source_db)
+
+    config.DB_PATH = str(dest_db)
+    storage.init_db()
+
+    _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+
+    # Tamper top_probability in destination
+    conn = sqlite3.connect(str(dest_db))
+    conn.execute("UPDATE predictions SET top_probability = 0.99 WHERE fixture_id = 1001")
+    conn.commit()
+    conn.close()
+
+    report = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch, verify_only=True)
+    assert report["verification"] == "VERIFICATION_FAILED"
+
+
+def test_migration_scenario_d_missing_record(tmp_path, monkeypatch):
+    source_db = tmp_path / "src.db"
+    dest_db = tmp_path / "dest.db"
+    _setup_migration_source_db(source_db)
+
+    config.DB_PATH = str(dest_db)
+    storage.init_db()
+
+    _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+
+    # Delete row from destination
+    conn = sqlite3.connect(str(dest_db))
+    conn.execute("DELETE FROM predictions WHERE fixture_id = 1001")
+    conn.commit()
+    conn.close()
+
+    report = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch, verify_only=True)
+    assert report["verification"] == "VERIFICATION_FAILED"
+
+
+def test_migration_scenario_e_unexpected_record(tmp_path, monkeypatch):
+    source_db = tmp_path / "src.db"
+    dest_db = tmp_path / "dest.db"
+    _setup_migration_source_db(source_db)
+
+    config.DB_PATH = str(dest_db)
+    storage.init_db()
+
+    _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+
+    # Insert unexpected row in destination
+    conn = sqlite3.connect(str(dest_db))
+    conn.execute(
+        "INSERT INTO predictions (fixture_id, match_date, home_team, away_team, league) VALUES (9999, '2026-09-30', 'X', 'Y', 'Z')"
+    )
+    conn.commit()
+    conn.close()
+
+    report = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch, verify_only=True)
+    assert report["verification"] == "VERIFICATION_FAILED"
+
+
+def test_migration_scenario_f_basketball_mismatch(tmp_path, monkeypatch):
+    source_db = tmp_path / "src.db"
+    dest_db = tmp_path / "dest.db"
+    _setup_migration_source_db(source_db)
+
+    config.DB_PATH = str(dest_db)
+    storage.init_db()
+
+    _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+
+    # Tamper actual score in basketball destination
+    conn = sqlite3.connect(str(dest_db))
+    conn.execute("UPDATE basketball_predictions SET actual_home_points = 100 WHERE game_id = 2001")
+    conn.commit()
+    conn.close()
+
+    report = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch, verify_only=True)
+    assert report["verification"] == "VERIFICATION_FAILED"
+
+
+def test_migration_scenario_g_elo_mismatch(tmp_path, monkeypatch):
+    source_db = tmp_path / "src.db"
+    dest_db = tmp_path / "dest.db"
+    _setup_migration_source_db(source_db)
+
+    config.DB_PATH = str(dest_db)
+    storage.init_db()
+
+    _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+
+    # Tamper rating in elo destination
+    conn = sqlite3.connect(str(dest_db))
+    conn.execute("UPDATE elo_ratings SET rating = 2000.0 WHERE team_id = 101")
+    conn.commit()
+    conn.close()
+
+    report = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch, verify_only=True)
+    assert report["verification"] == "VERIFICATION_FAILED"
+
+
+def test_migration_scenario_h_bot_memory_mismatch(tmp_path, monkeypatch):
+    source_db = tmp_path / "src.db"
+    dest_db = tmp_path / "dest.db"
+    _setup_migration_source_db(source_db)
+
+    config.DB_PATH = str(dest_db)
+    storage.init_db()
+
+    _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+
+    # Tamper message text in bot_memory destination
+    conn = sqlite3.connect(str(dest_db))
+    conn.execute("UPDATE bot_memory SET text = 'Tampered text' WHERE chat_id = 'chat_1'")
+    conn.commit()
+    conn.close()
+
+    report = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch, verify_only=True)
+    assert report["verification"] == "VERIFICATION_FAILED"
+
+
+def test_migration_scenario_i_api_cache_mismatch(tmp_path, monkeypatch):
+    source_db = tmp_path / "src.db"
+    dest_db = tmp_path / "dest.db"
+    _setup_migration_source_db(source_db)
+
+    config.DB_PATH = str(dest_db)
+    storage.init_db()
+
+    _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+
+    # Tamper payload in api_cache destination
+    conn = sqlite3.connect(str(dest_db))
+    conn.execute("UPDATE api_cache SET response_payload = '{\"tampered\": true}' WHERE cache_key = 'key_1'")
+    conn.commit()
+    conn.close()
+
+    report = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch, verify_only=True)
+    assert report["verification"] == "VERIFICATION_FAILED"
+
+
+def test_migration_scenario_j_request_history_mismatch(tmp_path, monkeypatch):
+    source_db = tmp_path / "src.db"
+    dest_db = tmp_path / "dest.db"
+    _setup_migration_source_db(source_db)
+
+    config.DB_PATH = str(dest_db)
+    storage.init_db()
+
+    _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch)
+
+    # Tamper endpoint in api_request_counts destination
+    conn = sqlite3.connect(str(dest_db))
+    conn.execute("UPDATE api_request_counts SET endpoint = 'tampered_endpoint' WHERE provider = 'api_football'")
+    conn.commit()
+    conn.close()
+
+    report = _run_migration_with_env_cleanup(source_db, dest_db, monkeypatch, verify_only=True)
+    assert report["verification"] == "VERIFICATION_FAILED"
