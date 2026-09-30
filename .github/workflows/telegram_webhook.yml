@@ -139,6 +139,22 @@ jobs:
           echo "API-Football credential is accepted."
 
       # -------------------------------------------------------------------
+      # Restore persistent state from private S3 storage
+      # -------------------------------------------------------------------
+
+      - name: Restore persistent state
+        continue-on-error: true
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET || secrets.STATE_S3_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+        run: |
+          set -euo pipefail
+          python3 storage_sync.py download
+
+      # -------------------------------------------------------------------
       # Process exactly one Telegram message
       # -------------------------------------------------------------------
 
@@ -154,35 +170,21 @@ jobs:
           python3 telegram_bot.py
 
       # -------------------------------------------------------------------
-      # Persist state
-      #
-      # This runs even when prediction processing fails because conversation
-      # memory and any successfully written prediction state should survive.
+      # Persist state to S3
       # -------------------------------------------------------------------
 
-      - name: Save bot state
+      - name: Sync persistent state to S3
         if: always()
+        continue-on-error: true
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET || secrets.STATE_S3_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
         run: |
           set -euo pipefail
-
-          git config user.name "football-agent-bot"
-          git config user.email "actions@github.com"
-
-          # The shared concurrency group means the repository cannot be
-          # modified simultaneously by the daily workflow.
-          #
-          # Ignore missing files because a failed/early run may not have
-          # created one of them.
-          git add telegram_memory.json predictions.db 2>/dev/null || true
-
-          if git diff --staged --quiet; then
-            echo "No persistent state changes to commit."
-            exit 0
-          fi
-
-          git commit -m "Persist Telegram bot state"
-
-          git push origin HEAD:${GITHUB_REF_NAME}
+          python3 storage_sync.py upload
 
       # -------------------------------------------------------------------
       # Failure notification
