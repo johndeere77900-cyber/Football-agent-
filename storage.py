@@ -1903,12 +1903,201 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit):
 # ----------------------------------------------------------------------
 
 
+def validate_historical_fixture(item, target_league_id=None, target_season=None):
+    """
+    Validate a raw historical fixture item against ingestion integrity rules.
+
+    Checks:
+    - Fixture ID: present, positive int, non-boolean.
+    - Kickoff Timestamp: present, valid ISO-8601 string, normalized to UTC ISO-8601.
+    - Team Structure: home & away team IDs present, positive int, home_id != away_id, names non-empty strings.
+    - Dataset Identity: if payload contains league.id or league.season, matches target_league_id / target_season.
+      (Note: Missing league metadata in payload is accepted as non-conflicting, as top-level params identify target).
+    - Results: non-negative integer goals (no booleans/negatives/missing goals for completed FT/AET/PEN fixtures).
+
+    Returns:
+        (is_valid: bool, reason: str, normalized_item: dict or None)
+    """
+    if not isinstance(item, dict):
+        return False, "fixture_item_not_dict", None
+
+    fixture_obj = item.get("fixture")
+    if not isinstance(fixture_obj, dict):
+        return False, "missing_or_invalid_fixture_object", None
+
+    # A. FIXTURE ID
+    raw_fid = fixture_obj.get("id")
+    if raw_fid is None or isinstance(raw_fid, bool):
+        return False, "missing_or_boolean_fixture_id", None
+
+    try:
+        fid = int(raw_fid)
+        if fid <= 0:
+            return False, "non_positive_fixture_id", None
+    except (TypeError, ValueError):
+        return False, "invalid_fixture_id", None
+
+    # B. KICKOFF TIMESTAMP
+    date_str = fixture_obj.get("date")
+    if not date_str or not isinstance(date_str, str):
+        return False, "missing_kickoff_timestamp", None
+
+    try:
+        iso_str = date_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        norm_kickoff = dt.isoformat()
+    except (ValueError, TypeError):
+        return False, "malformed_kickoff_timestamp", None
+
+    # C. TEAM STRUCTURE
+    teams_obj = item.get("teams")
+    if not isinstance(teams_obj, dict):
+        return False, "missing_or_invalid_teams_object", None
+
+    home_obj = teams_obj.get("home")
+    away_obj = teams_obj.get("away")
+    if not isinstance(home_obj, dict) or not isinstance(away_obj, dict):
+        return False, "missing_home_or_away_team_object", None
+
+    raw_h_id = home_obj.get("id")
+    raw_a_id = away_obj.get("id")
+
+    if raw_h_id is None or isinstance(raw_h_id, bool):
+        return False, "missing_or_boolean_home_team_id", None
+    if raw_a_id is None or isinstance(raw_a_id, bool):
+        return False, "missing_or_boolean_away_team_id", None
+
+    try:
+        h_id = int(raw_h_id)
+        if h_id <= 0:
+            return False, "non_positive_home_team_id", None
+    except (TypeError, ValueError):
+        return False, "invalid_home_team_id", None
+
+    try:
+        a_id = int(raw_a_id)
+        if a_id <= 0:
+            return False, "non_positive_away_team_id", None
+    except (TypeError, ValueError):
+        return False, "invalid_away_team_id", None
+
+    if h_id == a_id:
+        return False, "identical_home_and_away_team_ids", None
+
+    h_name = home_obj.get("name")
+    away_name = away_obj.get("name")
+    if not isinstance(h_name, str) or not h_name.strip():
+        return False, "missing_or_empty_home_team_name", None
+    if not isinstance(away_name, str) or not away_name.strip():
+        return False, "missing_or_empty_away_team_name", None
+
+    # D. DATASET IDENTITY
+    league_obj = item.get("league")
+    if isinstance(league_obj, dict):
+        p_league_id = league_obj.get("id")
+        if p_league_id is not None:
+            if isinstance(p_league_id, bool):
+                return False, "boolean_payload_league_id", None
+            try:
+                p_league_id = int(p_league_id)
+            except (TypeError, ValueError):
+                return False, "invalid_payload_league_id", None
+
+            if target_league_id is not None and p_league_id != target_league_id:
+                return False, f"conflicting_league_id ({p_league_id} != {target_league_id})", None
+
+        p_season = league_obj.get("season")
+        if p_season is not None:
+            if isinstance(p_season, bool):
+                return False, "boolean_payload_season", None
+            try:
+                p_season = int(p_season)
+            except (TypeError, ValueError):
+                return False, "invalid_payload_season", None
+
+            if target_season is not None and p_season != target_season:
+                return False, f"conflicting_season ({p_season} != {target_season})", None
+
+    # E. VALIDATE RESULTS
+    status_short = fixture_obj.get("status", {}).get("short") if isinstance(fixture_obj.get("status"), dict) else None
+    goals_obj = item.get("goals")
+
+    h_goals = None
+    a_goals = None
+    if isinstance(goals_obj, dict):
+        raw_h_goals = goals_obj.get("home")
+        raw_a_goals = goals_obj.get("away")
+
+        if raw_h_goals is not None:
+            if isinstance(raw_h_goals, bool):
+                return False, "boolean_home_goals", None
+            try:
+                h_goals = int(raw_h_goals)
+                if h_goals < 0:
+                    return False, "negative_home_goals", None
+            except (TypeError, ValueError):
+                return False, "invalid_home_goals", None
+
+        if raw_a_goals is not None:
+            if isinstance(raw_a_goals, bool):
+                return False, "boolean_away_goals", None
+            try:
+                a_goals = int(raw_a_goals)
+                if a_goals < 0:
+                    return False, "negative_away_goals", None
+            except (TypeError, ValueError):
+                return False, "invalid_away_goals", None
+
+    is_completed = status_short in ("FT", "AET", "PEN")
+    if is_completed:
+        if h_goals is None or a_goals is None:
+            return False, f"completed_fixture_missing_goals (status={status_short})", None
+
+    # Build normalized fixture copy
+    normalized = dict(item)
+
+    norm_fixture = dict(fixture_obj)
+    norm_fixture["id"] = fid
+    norm_fixture["date"] = norm_kickoff
+    normalized["fixture"] = norm_fixture
+
+    norm_teams = dict(teams_obj)
+    norm_home = dict(home_obj)
+    norm_home["id"] = h_id
+    norm_home["name"] = h_name.strip()
+    norm_away = dict(away_obj)
+    norm_away["id"] = a_id
+    norm_away["name"] = away_name.strip()
+    norm_teams["home"] = norm_home
+    norm_teams["away"] = norm_away
+    normalized["teams"] = norm_teams
+
+    if isinstance(goals_obj, dict):
+        norm_goals = dict(goals_obj)
+        norm_goals["home"] = h_goals
+        norm_goals["away"] = a_goals
+        normalized["goals"] = norm_goals
+
+    return True, "valid", normalized
+
+
 def save_historical_fixtures(fixtures, league_id, season, source="api_football"):
     """
     Save historical API-Football fixtures into persistent storage.
 
     Idempotent: skips fixtures that already exist in the database (ON CONFLICT DO NOTHING).
-    Returns dict: {"total": total_input, "valid": valid_count, "inserted": inserted_count, "duplicates_skipped": dup_count}
+    Returns dict: {
+        "total": total_input,
+        "valid": valid_count,
+        "inserted": inserted_count,
+        "duplicates_skipped": dup_count,
+        "rejected_count": rejected_count,
+        "rejection_reasons": rejection_reasons_dict,
+    }
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
@@ -1919,29 +2108,35 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football")
     valid_fixtures = []
     seen_ids = set()
     dup_count = 0
+    rejected_count = 0
+    rejection_reasons = {}
 
     for item in fixtures:
-        if not isinstance(item, dict):
+        is_valid, reason, norm_item = validate_historical_fixture(
+            item, target_league_id=league_id, target_season=season
+        )
+        if not is_valid:
+            rejected_count += 1
+            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
             continue
 
-        fid = item.get("fixture", {}).get("id")
-        if fid is None:
-            continue
-
-        try:
-            fid = int(fid)
-        except (TypeError, ValueError):
-            continue
-
+        fid = norm_item["fixture"]["id"]
         if fid in seen_ids:
             dup_count += 1
             continue
 
         seen_ids.add(fid)
-        valid_fixtures.append((fid, item))
+        valid_fixtures.append((fid, norm_item))
 
     if not valid_fixtures:
-        return {"total": len(fixtures), "valid": 0, "inserted": 0, "duplicates_skipped": dup_count}
+        return {
+            "total": len(fixtures),
+            "valid": 0,
+            "inserted": 0,
+            "duplicates_skipped": dup_count,
+            "rejected_count": rejected_count,
+            "rejection_reasons": rejection_reasons,
+        }
 
     conn, db_type = _connect()
     now_str = _utc_now()
@@ -1959,11 +2154,6 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football")
                     a_name = item.get("teams", {}).get("away", {}).get("name", "")
                     h_goals = item.get("goals", {}).get("home")
                     a_goals = item.get("goals", {}).get("away")
-
-                    h_id = int(h_id) if h_id is not None and str(h_id).isdigit() else None
-                    a_id = int(a_id) if a_id is not None and str(a_id).isdigit() else None
-                    h_goals = int(h_goals) if h_goals is not None and not isinstance(h_goals, bool) else None
-                    a_goals = int(a_goals) if a_goals is not None and not isinstance(a_goals, bool) else None
 
                     raw_json_str = _json_dumps(item, "raw_json")
 
@@ -1998,11 +2188,6 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football")
                 h_goals = item.get("goals", {}).get("home")
                 a_goals = item.get("goals", {}).get("away")
 
-                h_id = int(h_id) if h_id is not None and str(h_id).isdigit() else None
-                a_id = int(a_id) if a_id is not None and str(a_id).isdigit() else None
-                h_goals = int(h_goals) if h_goals is not None and not isinstance(h_goals, bool) else None
-                a_goals = int(a_goals) if a_goals is not None and not isinstance(a_goals, bool) else None
-
                 raw_json_str = _json_dumps(item, "raw_json")
 
                 cursor = conn.execute(
@@ -2029,6 +2214,8 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football")
             "valid": len(valid_fixtures),
             "inserted": inserted_count,
             "duplicates_skipped": dup_count,
+            "rejected_count": rejected_count,
+            "rejection_reasons": rejection_reasons,
         }
 
     except Exception:

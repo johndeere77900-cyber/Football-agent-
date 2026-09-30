@@ -114,35 +114,14 @@ def sync_historical_fixtures(
     if not isinstance(fixtures_received, list):
         fixtures_received = []
 
-    # Filter & deduplicate received fixtures
-    valid_fixtures = []
-    seen_ids = set()
-    duplicates_skipped = 0
-
-    for item in fixtures_received:
-        if not isinstance(item, dict):
-            continue
-
-        fid = item.get("fixture", {}).get("id")
-        if fid is None:
-            continue
-
-        try:
-            fid = int(fid)
-        except (TypeError, ValueError):
-            continue
-
-        if fid in seen_ids:
-            duplicates_skipped += 1
-            continue
-
-        seen_ids.add(fid)
-        valid_fixtures.append(item)
-
-    # Save fixtures
-    save_result = storage.save_historical_fixtures(valid_fixtures, league_id, season)
+    # Save fixtures (storage performs validation and deduplication)
+    save_result = storage.save_historical_fixtures(fixtures_received, league_id, season)
+    valid_fixtures_count = save_result.get("valid", 0)
     newly_stored = save_result.get("inserted", 0)
-    already_existing_skipped = save_result.get("valid", 0) - newly_stored
+    duplicates_skipped = save_result.get("duplicates_skipped", 0)
+    rejected_count = save_result.get("rejected_count", 0)
+    rejection_reasons = save_result.get("rejection_reasons", {})
+    already_existing_skipped = valid_fixtures_count - newly_stored
 
     enrichment_stored = 0
 
@@ -190,14 +169,15 @@ def sync_historical_fixtures(
     final_stored_count = storage.get_historical_fixture_count(league_id, season)
 
     # Update dataset manifest completion status strictly
-    # Requires: pages_completed == expected_pages AND acquisition_complete is True AND no quota/api errors
+    # Requires: pages_completed == expected_pages AND acquisition_complete is True AND no quota/api errors AND no rejected malformed records
     is_fully_complete = (
         not quota_budget_stopped
         and not acquisition_failed
         and acquisition_complete
         and expected_pages > 0
         and pages_completed == expected_pages
-        and valid_fixtures
+        and rejected_count == 0
+        and valid_fixtures_count > 0
         and final_stored_count > 0
     )
 
@@ -214,8 +194,10 @@ def sync_historical_fixtures(
         "status": final_status,
         "existing_before": existing_before,
         "fixtures_received": len(fixtures_received),
-        "valid_fixtures": len(valid_fixtures),
+        "valid_fixtures": valid_fixtures_count,
         "duplicates_skipped": duplicates_skipped,
+        "rejected_count": rejected_count,
+        "rejection_reasons": rejection_reasons,
         "newly_stored": newly_stored,
         "already_existing_skipped": already_existing_skipped,
         "expected_pages": expected_pages,
@@ -241,6 +223,9 @@ def _print_sync_report(report: dict) -> None:
     print(f"Fixtures received from API: {report['fixtures_received']}")
     print(f"Valid fixtures: {report['valid_fixtures']}")
     print(f"Duplicates skipped: {report['duplicates_skipped']}")
+    print(f"Rejected fixtures: {report.get('rejected_count', 0)}")
+    if report.get("rejection_reasons"):
+        print(f"Rejection reasons: {report['rejection_reasons']}")
     print(f"Newly stored fixtures: {report['newly_stored']}")
     print(f"Already-existing fixtures skipped: {report['already_existing_skipped']}")
     print(f"API requests consumed: {report['api_requests_consumed']}")
