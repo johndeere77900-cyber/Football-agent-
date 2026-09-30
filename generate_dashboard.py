@@ -51,6 +51,18 @@ def generate():
     football_acc = storage.accuracy_summary()
     basketball_acc = storage.basketball_accuracy_summary()
 
+    backtest_runs = storage.get_latest_backtest_runs(limit=5)
+    backtest_table_lines = ["| Run ID | Sport | League | Season | Graded | Accuracy | Date |", "|---|---|---|---|---|---|---|"]
+    if backtest_runs:
+        for r in backtest_runs:
+            rid, sp, lid, ssn, dfc, ss, gc, acc, bs, ll, cat = r
+            acc_str = f"{acc:.1%}" if acc is not None else "N/A"
+            backtest_table_lines.append(f"| {rid[:20]}... | {sp} | {lid} | {ssn} | {gc} | {acc_str} | {cat[:10]} |")
+    else:
+        backtest_table_lines = ["_No recorded backtest runs yet._\n"]
+
+    backtest_block = "\n".join(backtest_table_lines) + "\n"
+
     content = f"""# 📊 Sports Prediction Dashboard
 
 _Last updated: {now}_
@@ -70,6 +82,10 @@ _Last updated: {now}_
 ## 📈 Basketball Accuracy
 
 {_accuracy_block(basketball_acc, "Basketball Track Record")}
+
+## 🧪 Historical & Backtest Experiment Health
+
+{backtest_block}
 
 ---
 _This file updates automatically after each prediction run._

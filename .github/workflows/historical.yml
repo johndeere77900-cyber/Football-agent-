@@ -1,0 +1,85 @@
+name: Historical Data Acquisition
+
+on:
+  workflow_dispatch:
+    inputs:
+      sport:
+        description: 'Sport (football or basketball)'
+        required: true
+        default: 'football'
+        type: choice
+        options:
+          - football
+          - basketball
+
+      league_id:
+        description: 'League ID'
+        required: true
+        default: '39'
+
+      season:
+        description: 'Season year (e.g., 2024)'
+        required: true
+        default: '2024'
+
+      with_enrichment:
+        description: 'Fetch statistical enrichment (corners/cards)'
+        required: false
+        type: boolean
+        default: false
+
+      refresh:
+        description: 'Force dataset re-fetch even if COMPLETE'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  acquire_historical:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify credentials
+        run: |
+          if [ -z "${{ secrets.NEON_DATABASE_URL }}" ]; then
+            echo "ERROR: NEON_DATABASE_URL secret is missing."
+            exit 1
+          fi
+          if [ -z "${{ secrets.API_FOOTBALL_KEY }}" ]; then
+            echo "ERROR: API_FOOTBALL_KEY secret is missing."
+            exit 1
+          fi
+
+      - name: Historical Data Sync
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
+          ENVIRONMENT: "production"
+        run: |
+          CMD="python3 main.py --historical-sync --sport ${{ inputs.sport }} --league ${{ inputs.league_id }} --season ${{ inputs.season }}"
+          if [ "${{ inputs.with_enrichment }}" = "true" ]; then
+            CMD="$CMD --with-enrichment"
+          fi
+          if [ "${{ inputs.refresh }}" = "true" ]; then
+            CMD="$CMD --refresh"
+          fi
+          echo "Executing: $CMD"
+          $CMD
+
+      - name: Check Dataset Completion Status
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
+          ENVIRONMENT: "production"
+        run: |
+          python3 main.py --dataset-status --sport ${{ inputs.sport }} --league ${{ inputs.league_id }} --season ${{ inputs.season }}

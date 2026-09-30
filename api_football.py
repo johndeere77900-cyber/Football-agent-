@@ -481,9 +481,10 @@ def get_fixture_result(fixture_id):
     return None
 
 
-def get_league_fixtures_with_metadata(league_id, season, max_budget=None):
+def get_league_fixtures_with_metadata(league_id, season, start_page=1, max_budget=None):
     """
-    Retrieve all fixtures for a league season with pagination support and explicit completion metadata.
+    Retrieve all fixtures for a league season with pagination support, resumable start_page,
+    and explicit completion metadata.
 
     Returns dict:
         {
@@ -495,11 +496,13 @@ def get_league_fixtures_with_metadata(league_id, season, max_budget=None):
     """
     league_id = _validate_positive_int_like(league_id, "league_id")
     season = _validate_positive_int_like(season, "season")
+    if start_page < 1:
+        start_page = 1
 
     kwargs = {"max_budget": max_budget} if max_budget is not None else {}
-    page_1_data = _get("fixtures", {"league": league_id, "season": season, "page": 1}, **kwargs)
+    page_data_first = _get("fixtures", {"league": league_id, "season": season, "page": start_page}, **kwargs)
 
-    paging = page_1_data.get("paging")
+    paging = page_data_first.get("paging")
     if paging is not None:
         if not isinstance(paging, dict):
             raise APIFootballError("Malformed pagination metadata from API-Football: paging is not an object.")
@@ -520,13 +523,13 @@ def get_league_fixtures_with_metadata(league_id, season, max_budget=None):
                 f"Malformed pagination metadata from API-Football: current={current!r}, total={total!r}"
             )
     else:
-        current, total = 1, 1
+        current, total = start_page, start_page
 
-    all_pages = [page_1_data]
-    pages_completed = 1
+    all_pages = [page_data_first]
+    pages_completed = start_page
 
-    if total > 1:
-        for page_num in range(2, total + 1):
+    if total > start_page:
+        for page_num in range(start_page + 1, total + 1):
             page_data = _get("fixtures", {"league": league_id, "season": season, "page": page_num}, **kwargs)
             all_pages.append(page_data)
             pages_completed += 1

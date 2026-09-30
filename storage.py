@@ -333,16 +333,118 @@ def init_db():
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS historical_datasets (
+                        sport TEXT NOT NULL DEFAULT 'football',
                         league_id BIGINT NOT NULL,
                         season INTEGER NOT NULL,
                         status TEXT NOT NULL DEFAULT 'INCOMPLETE',
                         fixture_count INTEGER NOT NULL DEFAULT 0,
+                        expected_pages INTEGER NOT NULL DEFAULT 0,
+                        pages_completed INTEGER NOT NULL DEFAULT 0,
+                        acquisition_complete INTEGER NOT NULL DEFAULT 0,
+                        enrichment_status TEXT NOT NULL DEFAULT 'NONE',
                         completed_at TEXT,
                         updated_at TEXT NOT NULL,
                         source TEXT NOT NULL DEFAULT 'api_football',
-                        PRIMARY KEY (league_id, season)
+                        error_reason TEXT,
+                        PRIMARY KEY (sport, league_id, season)
                     )
                     """
+                )
+                cur.execute("ALTER TABLE historical_datasets ADD COLUMN IF NOT EXISTS sport TEXT NOT NULL DEFAULT 'football'")
+                cur.execute("ALTER TABLE historical_datasets ADD COLUMN IF NOT EXISTS expected_pages INTEGER NOT NULL DEFAULT 0")
+                cur.execute("ALTER TABLE historical_datasets ADD COLUMN IF NOT EXISTS pages_completed INTEGER NOT NULL DEFAULT 0")
+                cur.execute("ALTER TABLE historical_datasets ADD COLUMN IF NOT EXISTS acquisition_complete INTEGER NOT NULL DEFAULT 0")
+                cur.execute("ALTER TABLE historical_datasets ADD COLUMN IF NOT EXISTS enrichment_status TEXT NOT NULL DEFAULT 'NONE'")
+                cur.execute("ALTER TABLE historical_datasets ADD COLUMN IF NOT EXISTS error_reason TEXT")
+                cur.execute(
+                    """
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint WHERE conname = 'historical_datasets_pkey'
+                        ) AND NOT EXISTS (
+                            SELECT 1 FROM pg_constraint c
+                            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                            WHERE c.conname = 'historical_datasets_pkey' AND a.attname = 'sport'
+                        ) THEN
+                            ALTER TABLE historical_datasets DROP CONSTRAINT historical_datasets_pkey;
+                            ALTER TABLE historical_datasets ADD PRIMARY KEY (sport, league_id, season);
+                        END IF;
+                    END $$;
+                    """
+                )
+
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS historical_basketball_games (
+                        game_id BIGINT PRIMARY KEY,
+                        league_id BIGINT NOT NULL,
+                        season INTEGER NOT NULL,
+                        game_date TEXT NOT NULL,
+                        status_short TEXT,
+                        home_team_id BIGINT,
+                        away_team_id BIGINT,
+                        home_team TEXT,
+                        away_team TEXT,
+                        home_points INTEGER,
+                        away_points INTEGER,
+                        raw_json JSONB NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'api_basketball',
+                        fetched_at TEXT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_hist_basketball_league_season ON historical_basketball_games (league_id, season)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_hist_basketball_league_season_date ON historical_basketball_games (league_id, season, game_date)"
+                )
+
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS backtest_runs (
+                        run_id TEXT PRIMARY KEY,
+                        sport TEXT NOT NULL,
+                        league_id BIGINT NOT NULL,
+                        season INTEGER NOT NULL,
+                        dataset_identity TEXT,
+                        dataset_fixture_count INTEGER NOT NULL,
+                        sample_size INTEGER NOT NULL,
+                        min_prior_matches INTEGER NOT NULL,
+                        sample_seed INTEGER,
+                        selected_count INTEGER NOT NULL,
+                        graded_count INTEGER NOT NULL,
+                        accuracy DOUBLE PRECISION,
+                        brier_score DOUBLE PRECISION,
+                        log_loss DOUBLE PRECISION,
+                        ece DOUBLE PRECISION,
+                        enrichment_status TEXT DEFAULT 'NONE',
+                        started_at TEXT NOT NULL,
+                        completed_at TEXT NOT NULL,
+                        evaluation_json JSONB,
+                        code_version TEXT
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS backtest_market_metrics (
+                        id SERIAL PRIMARY KEY,
+                        run_id TEXT NOT NULL REFERENCES backtest_runs(run_id) ON DELETE CASCADE,
+                        sport TEXT NOT NULL,
+                        market_key TEXT NOT NULL,
+                        sample_count INTEGER NOT NULL,
+                        accuracy DOUBLE PRECISION,
+                        brier_score DOUBLE PRECISION,
+                        log_loss DOUBLE PRECISION,
+                        ece DOUBLE PRECISION,
+                        metrics_json JSONB
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_backtest_market_metrics_run_id ON backtest_market_metrics (run_id)"
                 )
             conn.commit()
 
@@ -482,16 +584,101 @@ def init_db():
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS historical_datasets (
+                    sport TEXT NOT NULL DEFAULT 'football',
                     league_id INTEGER NOT NULL,
                     season INTEGER NOT NULL,
                     status TEXT NOT NULL DEFAULT 'INCOMPLETE',
                     fixture_count INTEGER NOT NULL DEFAULT 0,
+                    expected_pages INTEGER NOT NULL DEFAULT 0,
+                    pages_completed INTEGER NOT NULL DEFAULT 0,
+                    acquisition_complete INTEGER NOT NULL DEFAULT 0,
+                    enrichment_status TEXT NOT NULL DEFAULT 'NONE',
                     completed_at TEXT,
                     updated_at TEXT NOT NULL,
                     source TEXT NOT NULL DEFAULT 'api_football',
-                    PRIMARY KEY (league_id, season)
+                    error_reason TEXT,
+                    PRIMARY KEY (sport, league_id, season)
                 )
                 """
+            )
+            _ensure_column_sqlite(conn, "historical_datasets", "sport", "TEXT NOT NULL DEFAULT 'football'")
+            _ensure_column_sqlite(conn, "historical_datasets", "expected_pages", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column_sqlite(conn, "historical_datasets", "pages_completed", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column_sqlite(conn, "historical_datasets", "acquisition_complete", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column_sqlite(conn, "historical_datasets", "enrichment_status", "TEXT NOT NULL DEFAULT 'NONE'")
+            _ensure_column_sqlite(conn, "historical_datasets", "error_reason", "TEXT")
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS historical_basketball_games (
+                    game_id INTEGER PRIMARY KEY,
+                    league_id INTEGER NOT NULL,
+                    season INTEGER NOT NULL,
+                    game_date TEXT NOT NULL,
+                    status_short TEXT,
+                    home_team_id INTEGER,
+                    away_team_id INTEGER,
+                    home_team TEXT,
+                    away_team TEXT,
+                    home_points INTEGER,
+                    away_points INTEGER,
+                    raw_json TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'api_basketball',
+                    fetched_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_hist_basketball_league_season ON historical_basketball_games (league_id, season)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_hist_basketball_league_season_date ON historical_basketball_games (league_id, season, game_date)"
+            )
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS backtest_runs (
+                    run_id TEXT PRIMARY KEY,
+                    sport TEXT NOT NULL,
+                    league_id INTEGER NOT NULL,
+                    season INTEGER NOT NULL,
+                    dataset_identity TEXT,
+                    dataset_fixture_count INTEGER NOT NULL,
+                    sample_size INTEGER NOT NULL,
+                    min_prior_matches INTEGER NOT NULL,
+                    sample_seed INTEGER,
+                    selected_count INTEGER NOT NULL,
+                    graded_count INTEGER NOT NULL,
+                    accuracy REAL,
+                    brier_score REAL,
+                    log_loss REAL,
+                    ece REAL,
+                    enrichment_status TEXT DEFAULT 'NONE',
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT NOT NULL,
+                    evaluation_json TEXT,
+                    code_version TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS backtest_market_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL REFERENCES backtest_runs(run_id) ON DELETE CASCADE,
+                    sport TEXT NOT NULL,
+                    market_key TEXT NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    accuracy REAL,
+                    brier_score REAL,
+                    log_loss REAL,
+                    ece REAL,
+                    metrics_json TEXT
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_backtest_market_metrics_run_id ON backtest_market_metrics (run_id)"
             )
             conn.commit()
 
@@ -506,12 +693,239 @@ def init_db():
         conn.close()
 
 
-def get_historical_dataset_status(league_id, season):
-    """
-    Get the dataset manifest status for a league and season.
+# ----------------------------------------------------------------------
+# Historical Basketball Storage Functions
+# ----------------------------------------------------------------------
 
-    Returns dict: {"league_id": league_id, "season": season, "status": status, "fixture_count": count, "completed_at": timestamp, "updated_at": timestamp}
-    Default status if missing is 'INCOMPLETE'.
+
+def validate_historical_basketball_game(item, target_league_id=None, target_season=None):
+    """
+    Validate a raw historical basketball game item against ingestion rules.
+    """
+    if not isinstance(item, dict):
+        return False, "game_item_not_dict", None
+
+    gid = _parse_strict_int(item.get("id"))
+    if gid is None or gid <= 0:
+        return False, "missing_invalid_or_non_positive_game_id", None
+
+    date_str = item.get("date")
+    if not date_str or not isinstance(date_str, str):
+        return False, "missing_game_date", None
+
+    teams_obj = item.get("teams")
+    if not isinstance(teams_obj, dict):
+        return False, "missing_or_invalid_teams_object", None
+
+    home_obj = teams_obj.get("home")
+    away_obj = teams_obj.get("away")
+    if not isinstance(home_obj, dict) or not isinstance(away_obj, dict):
+        return False, "missing_home_or_away_team_object", None
+
+    h_id = _parse_strict_int(home_obj.get("id"))
+    a_id = _parse_strict_int(away_obj.get("id"))
+
+    if h_id is None or h_id <= 0:
+        return False, "missing_invalid_or_non_positive_home_team_id", None
+    if a_id is None or a_id <= 0:
+        return False, "missing_invalid_or_non_positive_away_team_id", None
+
+    if h_id == a_id:
+        return False, "identical_home_and_away_team_ids", None
+
+    h_name = home_obj.get("name")
+    away_name = away_obj.get("name")
+    if not isinstance(h_name, str) or not h_name.strip():
+        return False, "missing_or_empty_home_team_name", None
+    if not isinstance(away_name, str) or not away_name.strip():
+        return False, "missing_or_empty_away_team_name", None
+
+    league_obj = item.get("league")
+    if isinstance(league_obj, dict):
+        raw_p_league_id = league_obj.get("id")
+        if raw_p_league_id is not None:
+            p_league_id = _parse_strict_int(raw_p_league_id)
+            if p_league_id is None:
+                return False, "invalid_payload_league_id", None
+            if target_league_id is not None and p_league_id != target_league_id:
+                return False, f"conflicting_league_id ({p_league_id} != {target_league_id})", None
+
+        raw_p_season = league_obj.get("season")
+        if raw_p_season is not None:
+            p_season = _parse_strict_int(raw_p_season)
+            if p_season is None:
+                return False, "invalid_payload_season", None
+            if target_season is not None and str(p_season) != str(target_season):
+                return False, f"conflicting_season ({p_season} != {target_season})", None
+
+    status_short = item.get("status", {}).get("short") if isinstance(item.get("status"), dict) else None
+    scores_obj = item.get("scores")
+
+    h_pts = None
+    a_pts = None
+    if isinstance(scores_obj, dict):
+        home_score = scores_obj.get("home", {})
+        away_score = scores_obj.get("away", {})
+        raw_h_pts = home_score.get("total") if isinstance(home_score, dict) else None
+        raw_a_pts = away_score.get("total") if isinstance(away_score, dict) else None
+
+        if raw_h_pts is not None:
+            h_pts = _parse_strict_int(raw_h_pts)
+            if h_pts is None or h_pts < 0:
+                return False, "invalid_or_negative_home_points", None
+
+        if raw_a_pts is not None:
+            a_pts = _parse_strict_int(raw_a_pts)
+            if a_pts is None or a_pts < 0:
+                return False, "invalid_or_negative_away_points", None
+
+    is_completed = status_short in ("FT", "AOT")
+    if is_completed:
+        if h_pts is None or a_pts is None:
+            return False, f"completed_game_missing_points (status={status_short})", None
+
+    normalized = dict(item)
+    normalized["id"] = gid
+    return True, "valid", normalized
+
+
+def save_historical_basketball_games(games, league_id, season, source="api_basketball"):
+    """
+    Save historical API-Basketball games into persistent storage.
+    """
+    league_id = _validate_positive_int(league_id, "league_id")
+    season = _validate_positive_int(season, "season")
+
+    if not isinstance(games, (list, tuple)):
+        raise ValueError("games must be a list or tuple.")
+
+    valid_games = []
+    seen_ids = set()
+    dup_count = 0
+    rejected_count = 0
+    rejection_reasons = {}
+
+    for item in games:
+        is_valid, reason, norm_item = validate_historical_basketball_game(
+            item, target_league_id=league_id, target_season=season
+        )
+        if not is_valid:
+            rejected_count += 1
+            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+            continue
+
+        gid = norm_item["id"]
+        if gid in seen_ids:
+            dup_count += 1
+            continue
+
+        seen_ids.add(gid)
+        valid_games.append((gid, norm_item))
+
+    if not valid_games:
+        return {
+            "total": len(games),
+            "valid": 0,
+            "inserted": 0,
+            "duplicates_skipped": dup_count,
+            "rejected_count": rejected_count,
+            "rejection_reasons": rejection_reasons,
+        }
+
+    conn, db_type = _connect()
+    now_str = _utc_now()
+    inserted_count = 0
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                for gid, item in valid_games:
+                    gdate = str(item.get("date", ""))
+                    status = item.get("status", {}).get("short", "") if isinstance(item.get("status"), dict) else ""
+                    teams = item.get("teams", {})
+                    h_id = teams.get("home", {}).get("id")
+                    a_id = teams.get("away", {}).get("id")
+                    h_name = teams.get("home", {}).get("name", "")
+                    a_name = teams.get("away", {}).get("name", "")
+                    scores = item.get("scores", {})
+                    h_pts = scores.get("home", {}).get("total") if isinstance(scores.get("home"), dict) else None
+                    a_pts = scores.get("away", {}).get("total") if isinstance(scores.get("away"), dict) else None
+
+                    raw_json_str = _json_dumps(item, "raw_json")
+
+                    cur.execute(
+                        """
+                        INSERT INTO historical_basketball_games (
+                            game_id, league_id, season, game_date, status_short,
+                            home_team_id, away_team_id, home_team, away_team,
+                            home_points, away_points, raw_json, source, fetched_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (game_id) DO NOTHING
+                        """,
+                        (
+                            gid, league_id, season, gdate, status,
+                            h_id, a_id, h_name, a_name,
+                            h_pts, a_pts, raw_json_str, source, now_str,
+                        ),
+                    )
+                    if cur.rowcount == 1:
+                        inserted_count += 1
+            conn.commit()
+
+        else:
+            for gid, item in valid_games:
+                gdate = str(item.get("date", ""))
+                status = item.get("status", {}).get("short", "") if isinstance(item.get("status"), dict) else ""
+                teams = item.get("teams", {})
+                h_id = teams.get("home", {}).get("id")
+                a_id = teams.get("away", {}).get("id")
+                h_name = teams.get("home", {}).get("name", "")
+                a_name = teams.get("away", {}).get("name", "")
+                scores = item.get("scores", {})
+                h_pts = scores.get("home", {}).get("total") if isinstance(scores.get("home"), dict) else None
+                a_pts = scores.get("away", {}).get("total") if isinstance(scores.get("away"), dict) else None
+
+                raw_json_str = _json_dumps(item, "raw_json")
+
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO historical_basketball_games (
+                        game_id, league_id, season, game_date, status_short,
+                        home_team_id, away_team_id, home_team, away_team,
+                        home_points, away_points, raw_json, source, fetched_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        gid, league_id, season, gdate, status,
+                        h_id, a_id, h_name, a_name,
+                        h_pts, a_pts, raw_json_str, source, now_str,
+                    ),
+                )
+                if cursor.rowcount == 1:
+                    inserted_count += 1
+            conn.commit()
+
+        return {
+            "total": len(games),
+            "valid": len(valid_games),
+            "inserted": inserted_count,
+            "duplicates_skipped": dup_count,
+            "rejected_count": rejected_count,
+            "rejection_reasons": rejection_reasons,
+        }
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_historical_basketball_games(league_id, season):
+    """
+    Retrieve stored historical basketball games for a league and season.
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
@@ -523,22 +937,326 @@ def get_historical_dataset_status(league_id, season):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT status, fixture_count, completed_at, updated_at
-                    FROM historical_datasets
+                    SELECT raw_json
+                    FROM historical_basketball_games
                     WHERE league_id = %s AND season = %s
+                    ORDER BY game_date ASC, game_id ASC
                     """,
                     (league_id, season),
+                )
+                rows = cur.fetchall()
+        else:
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT raw_json
+                    FROM historical_basketball_games
+                    WHERE league_id = ? AND season = ?
+                    ORDER BY game_date ASC, game_id ASC
+                    """,
+                    (league_id, season),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                conn.close()
+                init_db()
+                conn, _ = _connect()
+                rows = conn.execute(
+                    """
+                    SELECT raw_json
+                    FROM historical_basketball_games
+                    WHERE league_id = ? AND season = ?
+                    ORDER BY game_date ASC, game_id ASC
+                    """,
+                    (league_id, season),
+                ).fetchall()
+
+        games = []
+        for row in rows:
+            payload = _json_loads(row[0])
+            if isinstance(payload, dict):
+                games.append(payload)
+
+        return games
+
+    finally:
+        conn.close()
+
+
+def get_historical_basketball_game_count(league_id, season):
+    """Get count of stored historical basketball games for a league and season."""
+    league_id = _validate_positive_int(league_id, "league_id")
+    season = _validate_positive_int(season, "season")
+
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM historical_basketball_games WHERE league_id = %s AND season = %s",
+                    (league_id, season),
+                )
+                row = cur.fetchone()
+                return row[0] if row else 0
+        else:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM historical_basketball_games WHERE league_id = ? AND season = ?",
+                    (league_id, season),
+                ).fetchone()
+                return row[0] if row else 0
+            except sqlite3.OperationalError:
+                conn.close()
+                init_db()
+                conn, _ = _connect()
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM historical_basketball_games WHERE league_id = ? AND season = ?",
+                    (league_id, season),
+                ).fetchone()
+                return row[0] if row else 0
+    finally:
+        conn.close()
+
+
+# ----------------------------------------------------------------------
+# Backtest Persistence Storage Functions
+# ----------------------------------------------------------------------
+
+
+def save_backtest_run(run_data, market_metrics=None):
+    """
+    Save a completed backtest experiment run and its structured market metrics.
+    """
+    if not isinstance(run_data, dict):
+        raise ValueError("run_data must be a dictionary.")
+
+    run_id = _validate_text(run_data.get("run_id"), "run_id")
+    sport = _validate_text(run_data.get("sport", "football"), "sport").lower()
+    league_id = _validate_positive_int(run_data.get("league_id"), "league_id")
+    season = _validate_positive_int(run_data.get("season"), "season")
+    dataset_identity = run_data.get("dataset_identity") or f"{sport}_{league_id}_{season}"
+    dataset_fixture_count = _validate_non_negative_int(run_data.get("dataset_fixture_count", 0), "dataset_fixture_count")
+    sample_size = _validate_positive_int(run_data.get("sample_size", 1), "sample_size")
+    min_prior_matches = _validate_non_negative_int(run_data.get("min_prior_matches", 0), "min_prior_matches")
+    sample_seed = run_data.get("sample_seed")
+    selected_count = _validate_non_negative_int(run_data.get("selected_count", 0), "selected_count")
+    graded_count = _validate_non_negative_int(run_data.get("graded_count", 0), "graded_count")
+    accuracy = run_data.get("accuracy")
+    brier_score = run_data.get("brier_score")
+    log_loss = run_data.get("log_loss")
+    ece = run_data.get("ece")
+    enrichment_status = run_data.get("enrichment_status", "NONE")
+    started_at = run_data.get("started_at") or _utc_now()
+    completed_at = run_data.get("completed_at") or _utc_now()
+    eval_json_str = _json_dumps(run_data.get("evaluation_json"), "evaluation_json") if run_data.get("evaluation_json") else None
+    code_version = run_data.get("code_version")
+
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO backtest_runs (
+                            run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
+                            sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
+                            accuracy, brier_score, log_loss, ece, enrichment_status,
+                            started_at, completed_at, evaluation_json, code_version
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (run_id) DO UPDATE SET
+                            accuracy = EXCLUDED.accuracy,
+                            brier_score = EXCLUDED.brier_score,
+                            log_loss = EXCLUDED.log_loss,
+                            ece = EXCLUDED.ece,
+                            evaluation_json = EXCLUDED.evaluation_json,
+                            completed_at = EXCLUDED.completed_at
+                        """,
+                        (
+                            run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
+                            sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
+                            accuracy, brier_score, log_loss, ece, enrichment_status,
+                            started_at, completed_at, eval_json_str, code_version,
+                        ),
+                    )
+
+                    if isinstance(market_metrics, (list, tuple)):
+                        for mm in market_metrics:
+                            if not isinstance(mm, dict):
+                                continue
+                            m_key = mm.get("market_key", "unknown")
+                            s_count = mm.get("sample_count", 0)
+                            acc = mm.get("accuracy")
+                            brier = mm.get("brier_score")
+                            lloss = mm.get("log_loss")
+                            m_ece = mm.get("ece")
+                            m_json_str = _json_dumps(mm.get("metrics_json"), "metrics_json") if mm.get("metrics_json") else None
+
+                            cur.execute(
+                                """
+                                INSERT INTO backtest_market_metrics (
+                                    run_id, sport, market_key, sample_count, accuracy, brier_score, log_loss, ece, metrics_json
+                                )
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                """,
+                                (run_id, sport, m_key, s_count, acc, brier, lloss, m_ece, m_json_str),
+                            )
+
+        else:
+            conn.execute(
+                """
+                INSERT INTO backtest_runs (
+                    run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
+                    sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
+                    accuracy, brier_score, log_loss, ece, enrichment_status,
+                    started_at, completed_at, evaluation_json, code_version
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (run_id) DO UPDATE SET
+                    accuracy = excluded.accuracy,
+                    brier_score = excluded.brier_score,
+                    log_loss = excluded.log_loss,
+                    ece = excluded.ece,
+                    evaluation_json = excluded.evaluation_json,
+                    completed_at = excluded.completed_at
+                """,
+                (
+                    run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
+                    sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
+                    accuracy, brier_score, log_loss, ece, enrichment_status,
+                    started_at, completed_at, eval_json_str, code_version,
+                ),
+            )
+
+            if isinstance(market_metrics, (list, tuple)):
+                for mm in market_metrics:
+                    if not isinstance(mm, dict):
+                        continue
+                    m_key = mm.get("market_key", "unknown")
+                    s_count = mm.get("sample_count", 0)
+                    acc = mm.get("accuracy")
+                    brier = mm.get("brier_score")
+                    lloss = mm.get("log_loss")
+                    m_ece = mm.get("ece")
+                    m_json_str = _json_dumps(mm.get("metrics_json"), "metrics_json") if mm.get("metrics_json") else None
+
+                    conn.execute(
+                        """
+                        INSERT INTO backtest_market_metrics (
+                            run_id, sport, market_key, sample_count, accuracy, brier_score, log_loss, ece, metrics_json
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (run_id, sport, m_key, s_count, acc, brier, lloss, m_ece, m_json_str),
+                    )
+
+            conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_latest_backtest_runs(sport=None, limit=10):
+    """
+    Fetch recent backtest experiment runs for summary dashboard/reporting.
+    """
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                if sport:
+                    cur.execute(
+                        """
+                        SELECT run_id, sport, league_id, season, dataset_fixture_count, sample_size,
+                               graded_count, accuracy, brier_score, log_loss, completed_at
+                        FROM backtest_runs
+                        WHERE sport = %s
+                        ORDER BY completed_at DESC
+                        LIMIT %s
+                        """,
+                        (sport.lower(), limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT run_id, sport, league_id, season, dataset_fixture_count, sample_size,
+                               graded_count, accuracy, brier_score, log_loss, completed_at
+                        FROM backtest_runs
+                        ORDER BY completed_at DESC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+                return cur.fetchall()
+        else:
+            if sport:
+                return conn.execute(
+                    """
+                    SELECT run_id, sport, league_id, season, dataset_fixture_count, sample_size,
+                           graded_count, accuracy, brier_score, log_loss, completed_at
+                    FROM backtest_runs
+                    WHERE sport = ?
+                    ORDER BY completed_at DESC
+                    LIMIT ?
+                    """,
+                    (sport.lower(), limit),
+                ).fetchall()
+            else:
+                return conn.execute(
+                    """
+                    SELECT run_id, sport, league_id, season, dataset_fixture_count, sample_size,
+                           graded_count, accuracy, brier_score, log_loss, completed_at
+                    FROM backtest_runs
+                    ORDER BY completed_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def get_historical_dataset_status(league_id, season, sport="football"):
+    """
+    Get the dataset manifest status for a sport, league, and season.
+    """
+    league_id = _validate_positive_int(league_id, "league_id")
+    season = _validate_positive_int(season, "season")
+    sport = _validate_text(sport, "sport").lower()
+
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT status, fixture_count, expected_pages, pages_completed,
+                           acquisition_complete, enrichment_status, completed_at, updated_at, error_reason
+                    FROM historical_datasets
+                    WHERE sport = %s AND league_id = %s AND season = %s
+                    """,
+                    (sport, league_id, season),
                 )
                 row = cur.fetchone()
         else:
             try:
                 row = conn.execute(
                     """
-                    SELECT status, fixture_count, completed_at, updated_at
+                    SELECT status, fixture_count, expected_pages, pages_completed,
+                           acquisition_complete, enrichment_status, completed_at, updated_at, error_reason
                     FROM historical_datasets
-                    WHERE league_id = ? AND season = ?
+                    WHERE sport = ? AND league_id = ? AND season = ?
                     """,
-                    (league_id, season),
+                    (sport, league_id, season),
                 ).fetchone()
             except sqlite3.OperationalError:
                 conn.close()
@@ -546,44 +1264,71 @@ def get_historical_dataset_status(league_id, season):
                 conn, _ = _connect()
                 row = conn.execute(
                     """
-                    SELECT status, fixture_count, completed_at, updated_at
+                    SELECT status, fixture_count, expected_pages, pages_completed,
+                           acquisition_complete, enrichment_status, completed_at, updated_at, error_reason
                     FROM historical_datasets
-                    WHERE league_id = ? AND season = ?
+                    WHERE sport = ? AND league_id = ? AND season = ?
                     """,
-                    (league_id, season),
+                    (sport, league_id, season),
                 ).fetchone()
 
         if row:
             return {
+                "sport": sport,
                 "league_id": league_id,
                 "season": season,
                 "status": row[0],
                 "fixture_count": row[1],
-                "completed_at": row[2],
-                "updated_at": row[3],
+                "expected_pages": row[2] or 0,
+                "pages_completed": row[3] or 0,
+                "acquisition_complete": bool(row[4]),
+                "enrichment_status": row[5] or "NONE",
+                "completed_at": row[6],
+                "updated_at": row[7],
+                "error_reason": row[8],
             }
 
         return {
+            "sport": sport,
             "league_id": league_id,
             "season": season,
             "status": "INCOMPLETE",
             "fixture_count": 0,
+            "expected_pages": 0,
+            "pages_completed": 0,
+            "acquisition_complete": False,
+            "enrichment_status": "NONE",
             "completed_at": None,
             "updated_at": None,
+            "error_reason": None,
         }
 
     finally:
         conn.close()
 
 
-def mark_historical_dataset_complete(league_id, season, fixture_count, source="api_football"):
+def mark_historical_dataset_complete(
+    league_id,
+    season,
+    fixture_count,
+    source=None,
+    sport="football",
+    expected_pages=0,
+    pages_completed=0,
+    acquisition_complete=True,
+    enrichment_status="NONE",
+):
     """
     Mark a historical dataset as COMPLETE.
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
     fixture_count = _validate_non_negative_int(fixture_count, "fixture_count")
+    sport = _validate_text(sport, "sport").lower()
+    if source is None:
+        source = "api_basketball" if sport == "basketball" else "api_football"
 
+    acq_int = 1 if acquisition_complete else 0
     now_str = _utc_now()
     conn, db_type = _connect()
 
@@ -593,34 +1338,52 @@ def mark_historical_dataset_complete(league_id, season, fixture_count, source="a
                 cur.execute(
                     """
                     INSERT INTO historical_datasets (
-                        league_id, season, status, fixture_count, completed_at, updated_at, source
+                        sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
+                        acquisition_complete, enrichment_status, completed_at, updated_at, source, error_reason
                     )
-                    VALUES (%s, %s, 'COMPLETE', %s, %s, %s, %s)
-                    ON CONFLICT (league_id, season) DO UPDATE SET
+                    VALUES (%s, %s, %s, 'COMPLETE', %s, %s, %s, %s, %s, %s, %s, %s, NULL)
+                    ON CONFLICT (sport, league_id, season) DO UPDATE SET
                         status = 'COMPLETE',
                         fixture_count = EXCLUDED.fixture_count,
+                        expected_pages = EXCLUDED.expected_pages,
+                        pages_completed = EXCLUDED.pages_completed,
+                        acquisition_complete = EXCLUDED.acquisition_complete,
+                        enrichment_status = EXCLUDED.enrichment_status,
                         completed_at = EXCLUDED.completed_at,
                         updated_at = EXCLUDED.updated_at,
-                        source = EXCLUDED.source
+                        source = EXCLUDED.source,
+                        error_reason = NULL
                     """,
-                    (league_id, season, fixture_count, now_str, now_str, source),
+                    (
+                        sport, league_id, season, fixture_count, expected_pages, pages_completed,
+                        acq_int, enrichment_status, now_str, now_str, source,
+                    ),
                 )
             conn.commit()
         else:
             conn.execute(
                 """
                 INSERT INTO historical_datasets (
-                    league_id, season, status, fixture_count, completed_at, updated_at, source
+                    sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
+                    acquisition_complete, enrichment_status, completed_at, updated_at, source, error_reason
                 )
-                VALUES (?, ?, 'COMPLETE', ?, ?, ?, ?)
-                ON CONFLICT (league_id, season) DO UPDATE SET
+                VALUES (?, ?, ?, 'COMPLETE', ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                ON CONFLICT (sport, league_id, season) DO UPDATE SET
                     status = 'COMPLETE',
                     fixture_count = excluded.fixture_count,
+                    expected_pages = excluded.expected_pages,
+                    pages_completed = excluded.pages_completed,
+                    acquisition_complete = excluded.acquisition_complete,
+                    enrichment_status = excluded.enrichment_status,
                     completed_at = excluded.completed_at,
                     updated_at = excluded.updated_at,
-                    source = excluded.source
+                    source = excluded.source,
+                    error_reason = NULL
                 """,
-                (league_id, season, fixture_count, now_str, now_str, source),
+                (
+                    sport, league_id, season, fixture_count, expected_pages, pages_completed,
+                    acq_int, enrichment_status, now_str, now_str, source,
+                ),
             )
             conn.commit()
     except Exception:
@@ -630,18 +1393,36 @@ def mark_historical_dataset_complete(league_id, season, fixture_count, source="a
         conn.close()
 
 
-def mark_historical_dataset_incomplete(league_id, season, fixture_count=None, source="api_football"):
+def mark_historical_dataset_incomplete(
+    league_id,
+    season,
+    fixture_count=None,
+    source=None,
+    sport="football",
+    expected_pages=0,
+    pages_completed=0,
+    acquisition_complete=False,
+    enrichment_status="NONE",
+    error_reason=None,
+):
     """
     Mark or keep a historical dataset status as INCOMPLETE.
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
+    sport = _validate_text(sport, "sport").lower()
+    if source is None:
+        source = "api_basketball" if sport == "basketball" else "api_football"
 
     if fixture_count is None:
-        fixture_count = get_historical_fixture_count(league_id, season)
+        if sport == "basketball":
+            fixture_count = get_historical_basketball_game_count(league_id, season)
+        else:
+            fixture_count = get_historical_fixture_count(league_id, season)
     else:
         fixture_count = _validate_non_negative_int(fixture_count, "fixture_count")
 
+    acq_int = 1 if acquisition_complete else 0
     now_str = _utc_now()
     conn, db_type = _connect()
 
@@ -651,32 +1432,50 @@ def mark_historical_dataset_incomplete(league_id, season, fixture_count=None, so
                 cur.execute(
                     """
                     INSERT INTO historical_datasets (
-                        league_id, season, status, fixture_count, completed_at, updated_at, source
+                        sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
+                        acquisition_complete, enrichment_status, completed_at, updated_at, source, error_reason
                     )
-                    VALUES (%s, %s, 'INCOMPLETE', %s, NULL, %s, %s)
-                    ON CONFLICT (league_id, season) DO UPDATE SET
+                    VALUES (%s, %s, %s, 'INCOMPLETE', %s, %s, %s, %s, %s, NULL, %s, %s, %s)
+                    ON CONFLICT (sport, league_id, season) DO UPDATE SET
                         status = 'INCOMPLETE',
                         fixture_count = EXCLUDED.fixture_count,
+                        expected_pages = EXCLUDED.expected_pages,
+                        pages_completed = EXCLUDED.pages_completed,
+                        acquisition_complete = EXCLUDED.acquisition_complete,
+                        enrichment_status = EXCLUDED.enrichment_status,
                         updated_at = EXCLUDED.updated_at,
-                        source = EXCLUDED.source
+                        source = EXCLUDED.source,
+                        error_reason = EXCLUDED.error_reason
                     """,
-                    (league_id, season, fixture_count, now_str, source),
+                    (
+                        sport, league_id, season, fixture_count, expected_pages, pages_completed,
+                        acq_int, enrichment_status, now_str, source, error_reason,
+                    ),
                 )
             conn.commit()
         else:
             conn.execute(
                 """
                 INSERT INTO historical_datasets (
-                    league_id, season, status, fixture_count, completed_at, updated_at, source
+                    sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
+                    acquisition_complete, enrichment_status, completed_at, updated_at, source, error_reason
                 )
-                VALUES (?, ?, 'INCOMPLETE', ?, NULL, ?, ?)
-                ON CONFLICT (league_id, season) DO UPDATE SET
+                VALUES (?, ?, ?, 'INCOMPLETE', ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+                ON CONFLICT (sport, league_id, season) DO UPDATE SET
                     status = 'INCOMPLETE',
                     fixture_count = excluded.fixture_count,
+                    expected_pages = excluded.expected_pages,
+                    pages_completed = excluded.pages_completed,
+                    acquisition_complete = excluded.acquisition_complete,
+                    enrichment_status = excluded.enrichment_status,
                     updated_at = excluded.updated_at,
-                    source = excluded.source
+                    source = excluded.source,
+                    error_reason = excluded.error_reason
                 """,
-                (league_id, season, fixture_count, now_str, source),
+                (
+                    sport, league_id, season, fixture_count, expected_pages, pages_completed,
+                    acq_int, enrichment_status, now_str, source, error_reason,
+                ),
             )
             conn.commit()
     except Exception:

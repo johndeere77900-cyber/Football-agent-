@@ -274,7 +274,7 @@ def _insufficient_prediction(
     }
 
 
-def predict_game(game):
+def predict_game(game, home_stats_override=None, away_stats_override=None):
     if not isinstance(game, dict):
         raise ValueError(
             "game must be a dictionary."
@@ -380,21 +380,25 @@ def predict_game(game):
             "Invalid season."
         )
 
-    home_stats = (
-        basketball_api.get_team_statistics(
-            home_id,
-            league_id,
-            season,
+    if home_stats_override is not None and away_stats_override is not None:
+        home_stats = home_stats_override
+        away_stats = away_stats_override
+    else:
+        home_stats = (
+            basketball_api.get_team_statistics(
+                home_id,
+                league_id,
+                season,
+            )
         )
-    )
 
-    away_stats = (
-        basketball_api.get_team_statistics(
-            away_id,
-            league_id,
-            season,
+        away_stats = (
+            basketball_api.get_team_statistics(
+                away_id,
+                league_id,
+                season,
+            )
         )
-    )
 
     (
         home_for,

@@ -9,9 +9,12 @@ chronological backtests and tested deterministically.
 """
 
 
+import historical_match_policy
+
+
 def _is_finished(fixture):
     """Return True only for completed fixtures."""
-    return fixture.get("fixture", {}).get("status", {}).get("short") == "FT"
+    return historical_match_policy.is_finished_match(fixture, sport="football")
 
 
 def _fixture_date(fixture):
@@ -49,25 +52,8 @@ def prior_completed_fixtures(fixtures, cutoff):
 def _valid_goals(fixture):
     """
     Return valid numeric final goals for a completed fixture.
-
-    Boolean values are rejected because bool is a subclass of int in Python.
     """
-    home_goals = fixture.get("goals", {}).get("home")
-    away_goals = fixture.get("goals", {}).get("away")
-
-    if not isinstance(home_goals, (int, float)):
-        return None
-
-    if isinstance(home_goals, bool):
-        return None
-
-    if not isinstance(away_goals, (int, float)):
-        return None
-
-    if isinstance(away_goals, bool):
-        return None
-
-    return home_goals, away_goals
+    return historical_match_policy.get_football_match_goals(fixture)
 
 
 def historical_league_avg_goals(

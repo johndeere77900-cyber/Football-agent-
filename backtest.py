@@ -18,11 +18,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import api_football
+import basketball_model
 import config
 import storage
+import historical_basketball_features
 import historical_elo
 import historical_features
 import historical_h2h
+import historical_match_policy
 import market_grading
 import prediction_engine
 
@@ -2255,6 +2258,291 @@ def run_real_backtest(
     _print_backtest_report(
         result
     )
+
+    try:
+        run_id = f"football_{league_id}_{season}_{timestamp}"
+        run_data = {
+            "run_id": run_id,
+            "sport": "football",
+            "league_id": league_id,
+            "season": season,
+            "dataset_identity": f"football_{league_id}_{season}",
+            "dataset_fixture_count": actual_stored_count,
+            "sample_size": sample_size,
+            "min_prior_matches": min_prior_matches,
+            "sample_seed": sample_seed,
+            "selected_count": len(selected),
+            "graded_count": graded,
+            "accuracy": result["accuracy"],
+            "brier_score": brier_score,
+            "log_loss": log_loss,
+            "ece": calibration.get("ece") if isinstance(calibration, dict) else None,
+            "enrichment_status": dataset_status.get("enrichment_status", "NONE"),
+            "started_at": timestamp,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "evaluation_json": evaluation,
+            "code_version": "authoritative",
+        }
+        market_metrics = []
+        for m_key in ("match_result", "double_chance", "over_under_2_5", "btts"):
+            m_eval = evaluation.get(m_key, {})
+            if isinstance(m_eval, dict):
+                s_cnt = m_eval.get("sample_count", graded)
+                acc_val = m_eval.get("accuracy")
+                br_val = m_eval.get("brier_score")
+                ll_val = m_eval.get("log_loss")
+                ece_val = m_eval.get("calibration", {}).get("ece") if isinstance(m_eval.get("calibration"), dict) else None
+                market_metrics.append({
+                    "market_key": m_key,
+                    "sample_count": s_cnt,
+                    "accuracy": acc_val,
+                    "brier_score": br_val,
+                    "log_loss": ll_val,
+                    "ece": ece_val,
+                    "metrics_json": m_eval,
+                })
+        storage.save_backtest_run(run_data, market_metrics)
+    except Exception as exc:
+        print(f"Warning: could not save backtest run to database: {exc}", flush=True)
+
+    return result
+
+
+def run_basketball_backtest(
+    league_id: Any,
+    season: Any,
+    sample_size: int = 50,
+    min_prior_matches: int = 5,
+    sample_seed: Optional[int] = 42,
+) -> Dict[str, Any]:
+    """
+    Run a chronological, leakage-safe historical basketball backtest database-first.
+    """
+    if isinstance(league_id, bool) or not isinstance(league_id, int):
+        raise ValueError("league_id must be an integer.")
+
+    if isinstance(season, bool) or not isinstance(season, int) or season < 1900:
+        raise ValueError("season must be a valid integer year.")
+
+    if isinstance(sample_size, bool) or not isinstance(sample_size, int) or sample_size <= 0:
+        raise ValueError("sample_size must be a positive integer.")
+
+    if isinstance(min_prior_matches, bool) or not isinstance(min_prior_matches, int) or min_prior_matches < 0:
+        raise ValueError("min_prior_matches must be a non-negative integer.")
+
+    if sample_seed is not None and (isinstance(sample_seed, bool) or not isinstance(sample_seed, int)):
+        raise ValueError("sample_seed must be an integer or None.")
+
+    dataset_status = storage.get_historical_dataset_status(league_id, season, sport="basketball")
+    if dataset_status.get("status") != "COMPLETE":
+        raise RuntimeError(
+            f"Historical basketball dataset missing or incomplete for league {league_id} season {season} (status: {dataset_status.get('status')}). "
+            f"Run the historical sync job first."
+        )
+
+    actual_stored_count = storage.get_historical_basketball_game_count(league_id, season)
+    manifest_count = dataset_status.get("fixture_count", 0)
+
+    if manifest_count != actual_stored_count:
+        raise RuntimeError(
+            f"Historical basketball dataset integrity mismatch for league {league_id} season {season}: "
+            f"manifest count ({manifest_count}) != actual stored count ({actual_stored_count}). "
+            f"Re-run the historical sync job."
+        )
+
+    games = storage.get_historical_basketball_games(league_id, season)
+
+    if not games:
+        raise RuntimeError(
+            f"Historical basketball dataset missing or incomplete for league {league_id} season {season}. "
+            f"Run the historical sync job first."
+        )
+
+    games = [g for g in games if isinstance(g, dict)]
+
+    finished = [g for g in games if historical_match_policy.is_finished_match(g, sport="basketball")]
+    finished.sort(key=lambda g: str(g.get("date", "")))
+
+    eligible = [
+        g for g in finished
+        if historical_basketball_features.game_has_minimum_history(
+            games,
+            g.get("teams", {}).get("home", {}).get("id"),
+            g.get("teams", {}).get("away", {}).get("id"),
+            str(g.get("date", "")),
+            minimum_matches=min_prior_matches,
+        )
+    ]
+
+    selected = _sample_backtest_candidates(eligible, sample_size, seed=sample_seed)
+    selected.sort(key=lambda g: str(g.get("date", "")))
+
+    log: List[Dict[str, Any]] = []
+    preds_ml = []
+    acts_ml = []
+    preds_tot = []
+    acts_tot = []
+
+    correct = 0
+    graded = 0
+
+    for candidate in selected:
+        cutoff = str(candidate.get("date", ""))
+        home_id = candidate.get("teams", {}).get("home", {}).get("id")
+        away_id = candidate.get("teams", {}).get("away", {}).get("id")
+
+        if not home_id or not away_id or not cutoff:
+            continue
+
+        home_stats = historical_basketball_features.reconstruct_basketball_team_stats(games, home_id, cutoff)
+        away_stats = historical_basketball_features.reconstruct_basketball_team_stats(games, away_id, cutoff)
+
+        if home_stats is None or away_stats is None:
+            continue
+
+        pred = basketball_model.predict_game(candidate, home_stats_override=home_stats, away_stats_override=away_stats)
+        if pred.get("insufficient_data"):
+            continue
+
+        h_pts, a_pts = historical_match_policy.get_basketball_match_points(candidate)
+        if h_pts is None or a_pts is None:
+            continue
+
+        actual_outcome = "home_win" if h_pts > a_pts else ("away_win" if a_pts > h_pts else "draw")
+        ml_markets = pred["markets"]["moneyline"]
+        p_home = ml_markets["home_win"]
+        p_away = ml_markets["away_win"]
+
+        picked_ml = "home_win" if p_home >= p_away else "away_win"
+        won_ml = (picked_ml == actual_outcome)
+
+        graded += 1
+        if won_ml:
+            correct += 1
+
+        preds_ml.append({"home_win": p_home, "away_win": p_away})
+        acts_ml.append(actual_outcome)
+
+        tot_m = pred["markets"]["total_points"]
+        p_over = tot_m["over"]
+        p_under = tot_m["under"]
+        total_line = tot_m["line"]
+        actual_total_pts = h_pts + a_pts
+        actual_tot_outcome = "over" if actual_total_pts > total_line else ("under" if actual_total_pts < total_line else "push")
+
+        if actual_tot_outcome in ("over", "under"):
+            preds_tot.append({"over": p_over, "under": p_under})
+            acts_tot.append(actual_tot_outcome)
+
+        entry = {
+            "game_id": candidate.get("id"),
+            "match": f"{candidate.get('teams', {}).get('home', {}).get('name')} vs {candidate.get('teams', {}).get('away', {}).get('name')}",
+            "date": cutoff,
+            "correct": won_ml,
+            "predicted": picked_ml,
+            "actual": actual_outcome,
+            "actual_points": {"home": h_pts, "away": a_pts},
+            "prediction": pred,
+        }
+        log.append(entry)
+
+    brier_ml = compute_brier_score(preds_ml, acts_ml, outcomes=("home_win", "away_win"))
+    loss_ml = compute_log_loss(preds_ml, acts_ml, outcomes=("home_win", "away_win"))
+    cal_ml = compute_market_calibration(preds_ml, acts_ml, outcomes=("home_win", "away_win"))
+
+    brier_tot = compute_brier_score(preds_tot, acts_tot, outcomes=("over", "under"))
+    loss_tot = compute_log_loss(preds_tot, acts_tot, outcomes=("over", "under"))
+    cal_tot = compute_market_calibration(preds_tot, acts_tot, outcomes=("over", "under"))
+    acc_tot = compute_binary_accuracy(preds_tot, acts_tot)
+
+    evaluation = {
+        "moneyline": {
+            "sample_count": len(preds_ml),
+            "accuracy": correct / graded if graded else 0.0,
+            "brier_score": brier_ml,
+            "log_loss": loss_ml,
+            "calibration": cal_ml,
+        },
+        "total_points": {
+            "sample_count": len(preds_tot),
+            "accuracy": acc_tot,
+            "brier_score": brier_tot,
+            "log_loss": loss_tot,
+            "calibration": cal_tot,
+        },
+    }
+
+    start_ts = datetime.now(timezone.utc).isoformat()
+    result = {
+        "sport": "basketball",
+        "league_id": league_id,
+        "season": season,
+        "fixtures_fetched": len(games),
+        "finished_fixtures": len(finished),
+        "eligible_candidates": len(eligible),
+        "requested_sample": sample_size,
+        "selected": len(selected),
+        "graded": graded,
+        "correct": correct,
+        "accuracy": correct / graded if graded else 0.0,
+        "brier_score": brier_ml,
+        "log_loss": loss_ml,
+        "calibration": cal_ml,
+        "evaluation": evaluation,
+        "min_prior_matches": min_prior_matches,
+        "sample_seed": sample_seed,
+        "log": log,
+    }
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_id = f"basketball_{league_id}_{season}_{timestamp}"
+
+    try:
+        run_data = {
+            "run_id": run_id,
+            "sport": "basketball",
+            "league_id": league_id,
+            "season": season,
+            "dataset_identity": f"basketball_{league_id}_{season}",
+            "dataset_fixture_count": actual_stored_count,
+            "sample_size": sample_size,
+            "min_prior_matches": min_prior_matches,
+            "sample_seed": sample_seed,
+            "selected_count": len(selected),
+            "graded_count": graded,
+            "accuracy": result["accuracy"],
+            "brier_score": brier_ml,
+            "log_loss": loss_ml,
+            "ece": cal_ml.get("ece") if isinstance(cal_ml, dict) else None,
+            "enrichment_status": "NONE",
+            "started_at": start_ts,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "evaluation_json": evaluation,
+            "code_version": "authoritative",
+        }
+        market_metrics = [
+            {
+                "market_key": "moneyline",
+                "sample_count": len(preds_ml),
+                "accuracy": result["accuracy"],
+                "brier_score": brier_ml,
+                "log_loss": loss_ml,
+                "ece": cal_ml.get("ece") if isinstance(cal_ml, dict) else None,
+                "metrics_json": evaluation["moneyline"],
+            },
+            {
+                "market_key": "total_points",
+                "sample_count": len(preds_tot),
+                "accuracy": acc_tot,
+                "brier_score": brier_tot,
+                "log_loss": loss_tot,
+                "ece": cal_tot.get("ece") if isinstance(cal_tot, dict) else None,
+                "metrics_json": evaluation["total_points"],
+            },
+        ]
+        storage.save_backtest_run(run_data, market_metrics)
+    except Exception as exc:
+        print(f"Warning: could not save basketball backtest run: {exc}", flush=True)
 
     return result
 

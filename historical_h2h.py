@@ -17,9 +17,12 @@ def _fixture_date(fixture):
     return fixture.get("fixture", {}).get("date", "")
 
 
+import historical_match_policy
+
+
 def _is_finished(fixture):
     """Return True only for completed fixtures."""
-    return fixture.get("fixture", {}).get("status", {}).get("short") == "FT"
+    return historical_match_policy.is_finished_match(fixture, sport="football")
 
 
 def _is_before_cutoff(fixture, cutoff):
@@ -29,15 +32,7 @@ def _is_before_cutoff(fixture, cutoff):
 
 def _has_valid_goals(fixture):
     """Return True when both final goals are numeric and usable."""
-    home_goals = fixture.get("goals", {}).get("home")
-    away_goals = fixture.get("goals", {}).get("away")
-
-    return (
-        isinstance(home_goals, (int, float))
-        and not isinstance(home_goals, bool)
-        and isinstance(away_goals, (int, float))
-        and not isinstance(away_goals, bool)
-    )
+    return historical_match_policy.get_football_match_goals(fixture) is not None
 
 
 def historical_h2h_matches(
