@@ -2302,8 +2302,14 @@ def run_real_backtest(
                     "metrics_json": m_eval,
                 })
         storage.save_backtest_run(run_data, market_metrics)
+        result["status"] = "COMPLETED"
+        result["persisted"] = True
+        result["persistence_error"] = None
     except Exception as exc:
-        print(f"Warning: could not save backtest run to database: {exc}", flush=True)
+        result["status"] = "PERSISTENCE_FAILED"
+        result["persisted"] = False
+        result["persistence_error"] = str(exc)
+        print(f"ERROR: Could not persist backtest experiment record: {exc}", flush=True)
 
     return result
 
@@ -2541,8 +2547,14 @@ def run_basketball_backtest(
             },
         ]
         storage.save_backtest_run(run_data, market_metrics)
+        result["status"] = "COMPLETED"
+        result["persisted"] = True
+        result["persistence_error"] = None
     except Exception as exc:
-        print(f"Warning: could not save basketball backtest run: {exc}", flush=True)
+        result["status"] = "PERSISTENCE_FAILED"
+        result["persisted"] = False
+        result["persistence_error"] = str(exc)
+        print(f"ERROR: Could not persist basketball backtest experiment record: {exc}", flush=True)
 
     return result
 

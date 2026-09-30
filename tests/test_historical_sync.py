@@ -126,3 +126,58 @@ def test_historical_sync_respects_quota_budget(temp_db, monkeypatch):
 
     assert report["quota_budget_stopped"] is True
     assert report["fixtures_received"] == 0
+
+
+def test_historical_sync_page_by_page_resumability(temp_db):
+    page1_fixtures = [
+        {
+            "fixture": {"id": 6001, "date": "2025-01-01T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+            "goals": {"home": 1, "away": 0},
+        }
+    ]
+    page2_fixtures = [
+        {
+            "fixture": {"id": 6002, "date": "2025-01-08T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 2, "name": "Team B"}, "away": {"id": 3, "name": "Team C"}},
+            "goals": {"home": 2, "away": 2},
+        }
+    ]
+
+    def mock_page_fetch(league_id, season, page, max_budget=None):
+        if page == 1:
+            return {"fixtures": page1_fixtures, "page": 1, "expected_pages": 2}
+        elif page == 2:
+            raise RuntimeError("Network error on page 2")
+        raise RuntimeError("Unexpected page")
+
+    # Run 1: Page 1 succeeds, Page 2 fails
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch):
+        report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    assert report1["status"] == "INCOMPLETE"
+    assert report1["pages_completed"] == 1
+    assert report1["expected_pages"] == 2
+    assert report1["final_stored_count"] == 1
+
+    # Verify Page 1 fixtures were safely persisted in storage
+    stored_after_p1 = storage.get_historical_fixtures(39, 2024)
+    assert len(stored_after_p1) == 1
+    assert stored_after_p1[0]["fixture"]["id"] == 6001
+
+    # Run 2: Resume sync starting from page 2
+    def mock_page_fetch_resume(league_id, season, page, max_budget=None):
+        if page == 2:
+            return {"fixtures": page2_fixtures, "page": 2, "expected_pages": 2}
+        raise RuntimeError(f"Unexpected page fetch for page {page}")
+
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch_resume) as mock_resume:
+        report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    assert report2["status"] == "COMPLETE"
+    assert report2["pages_completed"] == 2
+    assert report2["final_stored_count"] == 2
+    stored_final = storage.get_historical_fixtures(39, 2024)
+    assert len(stored_final) == 2

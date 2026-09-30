@@ -565,6 +565,61 @@ def _season_for_date(parsed_date):
     return season
 
 
+def get_league_games_page(league_id, season, page=1, max_budget=None):
+    """
+    Retrieve one page of basketball games for a league season with pagination metadata.
+
+    Returns dict:
+        {
+            "games": list_of_games,
+            "page": int,
+            "expected_pages": int
+        }
+    """
+    league_id = _validate_positive_int(league_id, "league_id")
+    season = _validate_positive_int(season, "season")
+    if page < 1:
+        page = 1
+
+    params = {
+        "league": league_id,
+        "season": season,
+        "page": page,
+    }
+
+    data = _get("games", params, max_budget=max_budget)
+
+    paging = data.get("paging")
+    if isinstance(paging, dict):
+        current = paging.get("current")
+        total = paging.get("total")
+
+        if (
+            isinstance(current, bool)
+            or not isinstance(current, int)
+            or current < 1
+            or isinstance(total, bool)
+            or not isinstance(total, int)
+            or total < 1
+            or current > total
+        ):
+            raise APIBasketballError(
+                f"Malformed pagination metadata from API-Basketball: current={current!r}, total={total!r}"
+            )
+    else:
+        total = page
+
+    response = data.get("response", [])
+    if not isinstance(response, list):
+        response = []
+
+    return {
+        "games": response,
+        "page": page,
+        "expected_pages": total,
+    }
+
+
 def get_games_by_date(
     date_str,
     league_id,

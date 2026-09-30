@@ -1,0 +1,198 @@
+import os
+import pytest
+from unittest.mock import patch, MagicMock
+
+import config
+import storage
+import api_football
+import basketball_api
+import historical_sync
+import historical_match_policy
+import historical_features
+import historical_elo
+import historical_h2h
+import backtest
+
+
+@pytest.fixture
+def isolated_db(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_p0_p1.db"
+    monkeypatch.setattr(config, "DB_PATH", str(db_file))
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(config, "ENVIRONMENT", "development")
+    storage.init_db()
+    return db_file
+
+
+def sample_football_fixture(fid, date="2025-01-10T15:00:00+00:00", status="FT", home_goals=2, away_goals=1):
+    return {
+        "fixture": {"id": fid, "date": date, "status": {"short": status}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+        "goals": {"home": home_goals, "away": away_goals},
+        "score": {
+            "fulltime": {"home": 1, "away": 1},
+            "extratime": {"home": 2, "away": 1},
+            "penalty": {"home": 4, "away": 3},
+        },
+    }
+
+
+def sample_basketball_game(gid, date="2024-11-10T20:00:00+00:00", status="FT", home_pts=105, away_pts=98):
+    return {
+        "id": gid,
+        "date": date,
+        "status": {"short": status},
+        "league": {"id": 12, "season": 2024, "name": "NBA"},
+        "teams": {
+            "home": {"id": 1, "name": "Lakers"},
+            "away": {"id": 2, "name": "Celtics"},
+        },
+        "scores": {
+            "home": {"total": home_pts},
+            "away": {"total": away_pts},
+        },
+    }
+
+
+# ============================================================================
+# 1. FOOTBALL PAGINATION + RESUMABILITY (A-G)
+# ============================================================================
+
+
+def test_A_to_G_football_pagination_failure_persistence_and_resumption(isolated_db):
+    fix1 = sample_football_fixture(7001)
+    fix2 = sample_football_fixture(7002)
+
+    def mock_p1_ok_p2_fail(league_id, season, page, max_budget=None):
+        if page == 1:
+            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
+        raise api_football.APIFootballQuotaExhaustedError("Quota exhausted on page 2")
+
+    # A, B, C, G: page 1 succeeds, page 2 fails with quota exhaustion
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_p1_ok_p2_fail):
+        rep1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    assert rep1["status"] == "INCOMPLETE" # C
+    assert rep1["pages_completed"] == 1
+    assert rep1["expected_pages"] == 2
+    assert rep1["quota_budget_stopped"] is True # G
+
+    # B: page 1 fixtures remain persisted
+    stored = storage.get_historical_fixtures(39, 2024)
+    assert len(stored) == 1
+    assert stored[0]["fixture"]["id"] == 7001
+
+    # D, E, F: next run resumes from page 2 and completes dataset without duplicates
+    def mock_p2_resume(league_id, season, page, max_budget=None):
+        if page == 2:
+            return {"fixtures": [fix1, fix2], "page": 2, "expected_pages": 2} # fix1 duplicate
+        raise RuntimeError("Unexpected page")
+
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_p2_resume):
+        rep2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    assert rep2["status"] == "COMPLETE" # F
+    assert rep2["pages_completed"] == 2
+    stored_final = storage.get_historical_fixtures(39, 2024)
+    assert len(stored_final) == 2 # E: no duplicates
+
+
+# ============================================================================
+# 2. BASKETBALL PAGINATION + COMPLETENESS (H-M)
+# ============================================================================
+
+
+def test_H_to_M_basketball_pagination_deduplication_and_completeness(isolated_db):
+    bg1 = sample_basketball_game(8001)
+    bg2 = sample_basketball_game(8002)
+    bg_malformed = {"id": 8003, "date": "2024-11-12T20:00:00+00:00"} # missing teams
+
+    def mock_b_p1(league_id, season, page=1, max_budget=None):
+        if page == 1:
+            return {"games": [bg1], "page": 1, "expected_pages": 2}
+        return {"games": [bg1, bg2, bg_malformed], "page": 2, "expected_pages": 2}
+
+    with patch("basketball_api.get_league_games_page", side_effect=mock_b_p1):
+        rep = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
+
+    # L: malformed game rejected keeps dataset INCOMPLETE
+    assert rep["rejected_count"] == 1
+    assert rep["status"] == "INCOMPLETE" # M
+
+    # K: deduplicated valid games stored
+    stored = storage.get_historical_basketball_games(12, 2024)
+    assert len(stored) == 2
+
+
+# ============================================================================
+# 3. MATCH STATUS + SCORE SEMANTICS POLICY (N-T)
+# ============================================================================
+
+
+def test_N_to_T_match_policy_semantics():
+    ft = sample_football_fixture(9001, status="FT", home_goals=1, away_goals=1)
+    aet = sample_football_fixture(9002, status="AET", home_goals=2, away_goals=1)
+    pen = sample_football_fixture(9003, status="PEN", home_goals=1, away_goals=1)
+    pst = sample_football_fixture(9004, status="PST", home_goals=0, away_goals=0)
+
+    # N, O, P, Q
+    assert historical_match_policy.is_finished_match(ft) is True
+    assert historical_match_policy.is_finished_match(aet) is True
+    assert historical_match_policy.is_finished_match(pen) is True
+    assert historical_match_policy.is_finished_match(pst) is False
+    assert historical_match_policy.is_postponed_or_cancelled(pst) is True
+
+    # R, S: penalty shootout kicks excluded from regular goals
+    assert historical_match_policy.get_football_match_goals(pen) == (1, 1)
+    bd = historical_match_policy.get_score_breakdown(pen)
+    assert bd["fulltime"] == (1, 1)
+    assert bd["penalty"] == (4, 3)
+
+    # T: modules use authoritative policy
+    fixtures = [ft, aet, pen]
+    prior = historical_features.prior_completed_fixtures(fixtures, "2026-01-01")
+    assert len(prior) == 3
+
+
+# ============================================================================
+# 4. SEPARATE BASKETBALL HISTORICAL QUOTA CONFIGURATION
+# ============================================================================
+
+
+def test_separate_basketball_quota_configuration(isolated_db, monkeypatch):
+    monkeypatch.setattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 10)
+    monkeypatch.setattr(config, "API_BASKETBALL_HISTORICAL_DAILY_BUDGET", 25)
+
+    assert config.API_FOOTBALL_HISTORICAL_DAILY_BUDGET == 10
+    assert config.API_BASKETBALL_HISTORICAL_DAILY_BUDGET == 25
+
+
+# ============================================================================
+# 5. BACKTEST PERSISTENCE MACHINE-DETECTABLE STATUS (U-Y)
+# ============================================================================
+
+
+def test_U_to_Y_backtest_persistence_status_and_errors(isolated_db, monkeypatch):
+    # Setup complete dataset
+    games = [sample_basketball_game(1000 + i, date=f"2024-11-{i:02d}T20:00:00+00:00") for i in range(1, 10)]
+    storage.save_historical_basketball_games(games, league_id=12, season=2024)
+    storage.mark_historical_dataset_complete(12, 2024, fixture_count=len(games), sport="basketball")
+
+    # U: successful backtest + successful persistence
+    res_ok = backtest.run_basketball_backtest(league_id=12, season=2024, sample_size=5, min_prior_matches=2)
+    assert res_ok["status"] == "COMPLETED"
+    assert res_ok["persisted"] is True
+    assert res_ok["persistence_error"] is None
+
+    # V: successful backtest + persistence failure
+    def mock_save_error(*args, **kwargs):
+        raise RuntimeError("Database disk full error")
+
+    monkeypatch.setattr(storage, "save_backtest_run", mock_save_error)
+
+    res_fail = backtest.run_basketball_backtest(league_id=12, season=2024, sample_size=5, min_prior_matches=2)
+    assert res_fail["status"] == "PERSISTENCE_FAILED"
+    assert res_fail["persisted"] is False
+    assert "Database disk full error" in res_fail["persistence_error"]
+    assert res_fail["graded"] > 0 # computation succeeded
