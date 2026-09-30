@@ -1583,6 +1583,7 @@ def run_daily(
 
             print_prediction(prediction)
 
+            prediction_context = "LIVE" if prediction.get("is_live") else "PRE_MATCH"
             storage.save_prediction(
                 fixture_id=prediction["fixture_id"],
                 match_date=prediction["date"],
@@ -1596,6 +1597,7 @@ def run_daily(
                 odds_comparison=prediction.get(
                     "odds_comparison"
                 ),
+                prediction_context=prediction_context,
             )
 
             predicted_count += 1
@@ -1667,148 +1669,70 @@ def run_grading():
     """
     Grade all pending football predictions whose fixtures have finished.
 
-    storage.record_result() is responsible for idempotency and Elo updates.
+    Uses batched API requests (batch_size=20) via api_football.get_enriched_fixtures
+    to minimize API credit consumption.
     """
     storage.init_db()
 
     pending = storage.get_pending_fixtures()
 
     if not pending:
-        print(
-            "No pending predictions to grade."
-        )
+        print("No pending predictions to grade.")
         return
+
+    # Deduplicate pending fixture IDs while preserving fixture info
+    seen = set()
+    unique_pending = []
+    for item in pending:
+        fid = item[0]
+        if fid not in seen:
+            seen.add(fid)
+            unique_pending.append(item)
+
+    pending_ids = [item[0] for item in unique_pending]
 
     graded_count = 0
     skipped_count = 0
-    quota_hit = False
 
-    for (
-        fixture_id,
-        match_date,
-        home_team,
-        away_team,
-    ) in pending:
+    try:
+        enriched_results = api_football.get_enriched_fixtures(pending_ids, batch_size=20)
+    except api_football.APIFootballQuotaExhaustedError:
+        print("Daily API quota exhausted during grading batch fetch.")
+        enriched_results = {}
+    except Exception as exc:
+        print(f"Error fetching batch fixture results for grading: {exc}")
+        enriched_results = {}
 
-        if quota_hit:
-            break
+    for fixture_id, match_date, home_team, away_team in unique_pending:
+        result = enriched_results.get(fixture_id)
+
+        if not result or not isinstance(result, dict):
+            skipped_count += 1
+            continue
+
+        status_short = result.get("fixture", {}).get("status", {}).get("short")
+        if status_short not in {"FT", "AET", "PEN"}:
+            skipped_count += 1
+            continue
+
+        home_goals = result.get("goals", {}).get("home")
+        away_goals = result.get("goals", {}).get("away")
+
+        if not _valid_goal(home_goals) or not _valid_goal(away_goals):
+            skipped_count += 1
+            continue
 
         try:
-            result = api_football.get_fixture_result(
-                fixture_id
-            )
-
-            if not result:
-                skipped_count += 1
-                continue
-
-            status_short = (
-                result
-                .get("fixture", {})
-                .get("status", {})
-                .get("short")
-        )
-                # Only final results are graded.
-            if status_short not in {
-                "FT",
-                "AET",
-                "PEN",
-            }:
-                skipped_count += 1
-                continue
-
-            home_goals = (
-                result
-                .get("goals", {})
-                .get("home")
-            )
-
-            away_goals = (
-                result
-                .get("goals", {})
-                .get("away")
-            )
-
-            if (
-                not _valid_goal(home_goals)
-                or not _valid_goal(away_goals)
-            ):
-                skipped_count += 1
-                continue
-
-            storage.record_result(
-                fixture_id,
-                int(home_goals),
-                int(away_goals),
-            )
-
-            print(
-                f"Graded: "
-                f"{home_team} "
-                f"{int(home_goals)}-"
-                f"{int(away_goals)} "
-                f"{away_team}"
-            )
-
+            storage.record_result(fixture_id, int(home_goals), int(away_goals))
+            print(f"Graded: {home_team} {int(home_goals)}-{int(away_goals)} {away_team}")
             graded_count += 1
-
-        except requests.exceptions.HTTPError as exc:
-            if (
-                exc.response is not None
-                and exc.response.status_code == 429
-            ):
-                print(
-                    "Daily API quota exhausted "
-                    "(429)."
-                )
-                quota_hit = True
-            else:
-                print(
-                    f"Could not grade "
-                    f"{home_team} vs "
-                    f"{away_team}: {exc}"
-                )
-                skipped_count += 1
-
-        except requests.exceptions.RequestException as exc:
-            print(
-                f"Could not grade "
-                f"{home_team} vs "
-                f"{away_team}: {exc}"
-            )
+        except Exception as exc:
+            print(f"Could not grade {home_team} vs {away_team}: {exc}")
             skipped_count += 1
 
-        except api_football.APIFootballError as exc:
-            message = str(exc)
-
-            if (
-                "429" in message
-                or "rate limit" in message.lower()
-                or "quota" in message.lower()
-            ):
-                print(
-                    "Daily API quota exhausted."
-                )
-                quota_hit = True
-            else:
-                print(
-                    f"Could not grade "
-                    f"{home_team} vs "
-                    f"{away_team}: {exc}"
-                )
-
-            skipped_count += 1
-
-    print(
-        f"\nGraded {graded_count} of "
-        f"{len(pending)} pending fixture(s)."
-    )
-
+    print(f"\nGraded {graded_count} of {len(unique_pending)} pending fixture(s).")
     if skipped_count:
-        print(
-            f"Skipped {skipped_count} "
-            f"fixture(s) that were not ready or valid."
-        )
+        print(f"Skipped {skipped_count} fixture(s) that were not ready or valid.")
 
 
 # ----------------------------------------------------------------------
@@ -2176,6 +2100,7 @@ def run_daily_basketball(
                 prediction
             )
 
+            prediction_context = "LIVE" if prediction.get("is_live") else "PRE_MATCH"
             storage.save_basketball_prediction(
                 game_id=prediction["game_id"],
                 game_date=prediction["date"],
@@ -2184,6 +2109,7 @@ def run_daily_basketball(
                 league=prediction["league"],
                 markets=prediction["markets"],
                 confidence=prediction["confidence"],
+                prediction_context=prediction_context,
             )
 
             predicted_count += 1

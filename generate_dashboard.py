@@ -1,88 +1,33 @@
 """
 Generates a clean, readable dashboard as a Markdown file (DASHBOARD.md).
-GitHub renders Markdown nicely right in the repo's file view - no separate
-hosting needed, and it stays completely private since it's just a file in
-your existing private repo.
+Uses the storage abstraction layer rather than direct database engine calls.
 """
 
-import sqlite3
 from datetime import datetime, timezone
 
-import config
+import storage
 
 
-def _connect():
-    return sqlite3.connect(config.DB_PATH)
-
-
-def _football_today_and_recent():
-    conn = _connect()
-    rows = conn.execute("""
-        SELECT home_team, away_team, league, top_pick, top_probability,
-               confidence_label, match_date
-        FROM predictions
-        ORDER BY created_at DESC
-        LIMIT 20
-    """).fetchall()
-    conn.close()
-    return rows
-
-
-def _basketball_today_and_recent():
-    conn = _connect()
-    try:
-        rows = conn.execute("""
-            SELECT home_team, away_team, league, top_pick, top_probability,
-                   confidence_label, game_date
-            FROM basketball_predictions
-            ORDER BY created_at DESC
-            LIMIT 20
-        """).fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-    conn.close()
-    return rows
-
-
-def _football_accuracy():
-    conn = _connect()
-    rows = conn.execute("""
-        SELECT confidence_label, top_pick_correct
-        FROM predictions WHERE top_pick_correct IS NOT NULL
-    """).fetchall()
-    conn.close()
-    return rows
-
-
-def _basketball_accuracy():
-    conn = _connect()
-    try:
-        rows = conn.execute("""
-            SELECT confidence_label, top_pick_correct
-            FROM basketball_predictions WHERE top_pick_correct IS NOT NULL
-        """).fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-    conn.close()
-    return rows
-
-
-def _accuracy_block(rows, title):
-    if not rows:
+def _accuracy_block(summary, title):
+    if not summary or summary.get("total_graded", 0) == 0:
         return f"### {title}\n\n_No graded predictions yet._\n"
 
-    total = len(rows)
-    correct = sum(r[1] for r in rows)
-    overall = correct / total
+    total = summary.get("total_graded", 0)
+    overall = summary.get("overall_accuracy", 0.0)
+    correct = round(total * overall)
 
     lines = [f"### {title}\n", f"**Overall accuracy:** {overall:.0%} ({correct}/{total} graded)\n"]
     lines.append("| Confidence | Accuracy | Count |")
     lines.append("|---|---|---|")
+
+    by_confidence = summary.get("by_confidence", {})
     for label, emoji in [("High", "🟢"), ("Moderate", "🟡"), ("Toss-up", "🔴")]:
-        subset = [r[1] for r in rows if r[0] == label]
-        if subset:
-            acc = sum(subset) / len(subset)
-            lines.append(f"| {emoji} {label} | {acc:.0%} | {len(subset)} |")
+        if label in by_confidence:
+            stats = by_confidence[label]
+            acc = stats.get("accuracy", 0.0)
+            count = stats.get("count", 0)
+            lines.append(f"| {emoji} {label} | {acc:.0%} | {count} |")
+
     return "\n".join(lines) + "\n"
 
 
@@ -101,10 +46,10 @@ def _predictions_table(rows, emoji):
 def generate():
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    football_rows = _football_today_and_recent()
-    basketball_rows = _basketball_today_and_recent()
-    football_acc = _football_accuracy()
-    basketball_acc = _basketball_accuracy()
+    football_rows = storage.get_recent_predictions("football", limit=20)
+    basketball_rows = storage.get_recent_predictions("basketball", limit=20)
+    football_acc = storage.accuracy_summary()
+    basketball_acc = storage.basketball_accuracy_summary()
 
     content = f"""# 📊 Sports Prediction Dashboard
 

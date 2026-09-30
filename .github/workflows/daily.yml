@@ -16,12 +16,6 @@ on:
         required: false
         default: ''
 
-# IMPORTANT:
-# This MUST be the same concurrency group used by telegram_webhook.yml.
-#
-# Both workflows modify predictions.db.
-# Serializing them prevents a stale checkout from overwriting newer
-# prediction or grading records.
 concurrency:
   group: prediction-repo-state
   cancel-in-progress: false
@@ -65,10 +59,11 @@ jobs:
       # -------------------------------------------------------------------
 
       - name: Grade yesterday's football predictions
-        continue-on-error: true
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          ENVIRONMENT: production
         run: |
           set -euo pipefail
           python3 main.py --grade
@@ -79,10 +74,11 @@ jobs:
 
       - name: Run football predictions
         if: github.event_name == 'schedule' || github.event.inputs.football_games != ''
-        continue-on-error: true
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          ENVIRONMENT: production
         run: |
           set -euo pipefail
 
@@ -99,11 +95,12 @@ jobs:
       # -------------------------------------------------------------------
 
       - name: Show football accuracy report
-        continue-on-error: true
         if: always()
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          ENVIRONMENT: production
         run: |
           set -euo pipefail
           python3 main.py --accuracy
@@ -113,10 +110,11 @@ jobs:
       # -------------------------------------------------------------------
 
       - name: Grade yesterday's basketball predictions
-        continue-on-error: true
         if: always()
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          ENVIRONMENT: production
         run: |
           set -euo pipefail
           python3 main.py --sport basketball --grade
@@ -127,9 +125,10 @@ jobs:
 
       - name: Run basketball predictions
         if: github.event_name == 'schedule' || github.event.inputs.basketball_games != ''
-        continue-on-error: true
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          ENVIRONMENT: production
         run: |
           set -euo pipefail
 
@@ -148,10 +147,11 @@ jobs:
       # -------------------------------------------------------------------
 
       - name: Show basketball accuracy report
-        continue-on-error: true
         if: always()
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          ENVIRONMENT: production
         run: |
           set -euo pipefail
           python3 main.py --sport basketball --accuracy
@@ -162,12 +162,15 @@ jobs:
 
       - name: Generate dashboard
         if: always()
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          ENVIRONMENT: production
         run: |
           set -euo pipefail
           python3 generate_dashboard.py
 
       # -------------------------------------------------------------------
-      # Persist database + dashboard
+      # Persist dashboard
       # -------------------------------------------------------------------
 
       - name: Save results back to the repo
@@ -178,8 +181,8 @@ jobs:
           git config user.name "sports-agent-bot"
           git config user.email "actions@github.com"
 
-          # Both the prediction database and dashboard are generated state.
-          git add predictions.db DASHBOARD.md 2>/dev/null || true
+          # Only the dashboard is stored as a Markdown file in the repo.
+          git add DASHBOARD.md 2>/dev/null || true
 
           if git diff --staged --quiet; then
             echo "No prediction-state changes to commit."
