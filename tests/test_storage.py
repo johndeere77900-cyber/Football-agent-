@@ -415,3 +415,23 @@ def test_historical_fixture_enrichment_storage(temp_database):
     assert 3001 in fetched
     assert fetched[3001]["fixture"]["id"] == 3001
     assert 3002 not in fetched
+
+
+def test_historical_dataset_status_storage(temp_database):
+    # Initial status is INCOMPLETE
+    init_status = storage.get_historical_dataset_status(39, 2024)
+    assert init_status["status"] == "INCOMPLETE"
+    assert init_status["fixture_count"] == 0
+
+    # Mark complete
+    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380)
+    status = storage.get_historical_dataset_status(39, 2024)
+    assert status["status"] == "COMPLETE"
+    assert status["fixture_count"] == 380
+    assert status["completed_at"] is not None
+
+    # Mark incomplete
+    storage.mark_historical_dataset_incomplete(39, 2024, fixture_count=100)
+    status_inc = storage.get_historical_dataset_status(39, 2024)
+    assert status_inc["status"] == "INCOMPLETE"
+    assert status_inc["fixture_count"] == 100

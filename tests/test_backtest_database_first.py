@@ -35,6 +35,7 @@ def test_backtest_reads_from_storage_and_zero_api_calls(temp_db, monkeypatch):
         for i in range(10)
     ]
     storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    storage.mark_historical_dataset_complete(league_id=39, season=2025, fixture_count=len(fixtures))
 
     def fail_if_called(*args, **kwargs):
         raise AssertionError("api_football should NOT be called by backtest!")
@@ -70,6 +71,7 @@ def test_backtest_enrichment_uses_storage(temp_db, monkeypatch):
         for i in range(10)
     ]
     storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    storage.mark_historical_dataset_complete(league_id=39, season=2025, fixture_count=len(fixtures))
 
     enrichment_map = {
         7001: {"fixture": {"id": 7001}, "statistics": []},

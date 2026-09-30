@@ -1742,6 +1742,14 @@ def run_real_backtest(
             "sample_seed must be an integer or None."
         )
 
+    # Verify dataset completion status database-first
+    dataset_status = storage.get_historical_dataset_status(league_id, season)
+    if dataset_status.get("status") != "COMPLETE":
+        raise RuntimeError(
+            f"Historical dataset missing or incomplete for league {league_id} season {season} (status: {dataset_status.get('status')}). "
+            f"Run the historical sync job first."
+        )
+
     # Fetch fixtures database-first from persistent historical dataset
     fixtures = storage.get_historical_fixtures(
         league_id,

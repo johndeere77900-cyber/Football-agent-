@@ -393,6 +393,7 @@ def test_backtest_uses_single_league_fixture_fetch(monkeypatch, tmp_path):
     backtest.storage.init_db()
     fixtures = historical_dataset()
     backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -412,6 +413,7 @@ def test_backtest_result_contains_market_probabilities(monkeypatch, tmp_path):
     backtest.storage.init_db()
     fixtures = historical_dataset()
     backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -456,6 +458,7 @@ def test_market_grading_is_returned_by_backtest(monkeypatch, tmp_path):
     backtest.storage.init_db()
     fixtures = historical_dataset()
     backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -486,6 +489,7 @@ def test_backtest_grades_goal_markets_beyond_1x2(monkeypatch, tmp_path):
     backtest.storage.init_db()
     fixtures = historical_dataset()
     backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -509,6 +513,7 @@ def test_backtest_does_not_fabricate_statistical_markets(monkeypatch, tmp_path):
     backtest.storage.init_db()
     fixtures = historical_dataset()
     backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -542,6 +547,7 @@ def test_backtest_can_disable_statistical_enrichment(monkeypatch, tmp_path):
     backtest.storage.init_db()
     fixtures = historical_dataset()
     backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,

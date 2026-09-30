@@ -330,6 +330,20 @@ def init_db():
                     )
                     """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS historical_datasets (
+                        league_id BIGINT NOT NULL,
+                        season INTEGER NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'INCOMPLETE',
+                        fixture_count INTEGER NOT NULL DEFAULT 0,
+                        completed_at TEXT,
+                        updated_at TEXT NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'api_football',
+                        PRIMARY KEY (league_id, season)
+                    )
+                    """
+                )
             conn.commit()
 
         else:
@@ -465,6 +479,20 @@ def init_db():
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS historical_datasets (
+                    league_id INTEGER NOT NULL,
+                    season INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'INCOMPLETE',
+                    fixture_count INTEGER NOT NULL DEFAULT 0,
+                    completed_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'api_football',
+                    PRIMARY KEY (league_id, season)
+                )
+                """
+            )
             conn.commit()
 
     except Exception:
@@ -474,6 +502,186 @@ def init_db():
             conn.rollback()
         raise
 
+    finally:
+        conn.close()
+
+
+def get_historical_dataset_status(league_id, season):
+    """
+    Get the dataset manifest status for a league and season.
+
+    Returns dict: {"league_id": league_id, "season": season, "status": status, "fixture_count": count, "completed_at": timestamp, "updated_at": timestamp}
+    Default status if missing is 'INCOMPLETE'.
+    """
+    league_id = _validate_positive_int(league_id, "league_id")
+    season = _validate_positive_int(season, "season")
+
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT status, fixture_count, completed_at, updated_at
+                    FROM historical_datasets
+                    WHERE league_id = %s AND season = %s
+                    """,
+                    (league_id, season),
+                )
+                row = cur.fetchone()
+        else:
+            try:
+                row = conn.execute(
+                    """
+                    SELECT status, fixture_count, completed_at, updated_at
+                    FROM historical_datasets
+                    WHERE league_id = ? AND season = ?
+                    """,
+                    (league_id, season),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                conn.close()
+                init_db()
+                conn, _ = _connect()
+                row = conn.execute(
+                    """
+                    SELECT status, fixture_count, completed_at, updated_at
+                    FROM historical_datasets
+                    WHERE league_id = ? AND season = ?
+                    """,
+                    (league_id, season),
+                ).fetchone()
+
+        if row:
+            return {
+                "league_id": league_id,
+                "season": season,
+                "status": row[0],
+                "fixture_count": row[1],
+                "completed_at": row[2],
+                "updated_at": row[3],
+            }
+
+        return {
+            "league_id": league_id,
+            "season": season,
+            "status": "INCOMPLETE",
+            "fixture_count": 0,
+            "completed_at": None,
+            "updated_at": None,
+        }
+
+    finally:
+        conn.close()
+
+
+def mark_historical_dataset_complete(league_id, season, fixture_count, source="api_football"):
+    """
+    Mark a historical dataset as COMPLETE.
+    """
+    league_id = _validate_positive_int(league_id, "league_id")
+    season = _validate_positive_int(season, "season")
+    fixture_count = _validate_non_negative_int(fixture_count, "fixture_count")
+
+    now_str = _utc_now()
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO historical_datasets (
+                        league_id, season, status, fixture_count, completed_at, updated_at, source
+                    )
+                    VALUES (%s, %s, 'COMPLETE', %s, %s, %s, %s)
+                    ON CONFLICT (league_id, season) DO UPDATE SET
+                        status = 'COMPLETE',
+                        fixture_count = EXCLUDED.fixture_count,
+                        completed_at = EXCLUDED.completed_at,
+                        updated_at = EXCLUDED.updated_at,
+                        source = EXCLUDED.source
+                    """,
+                    (league_id, season, fixture_count, now_str, now_str, source),
+                )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                INSERT INTO historical_datasets (
+                    league_id, season, status, fixture_count, completed_at, updated_at, source
+                )
+                VALUES (?, ?, 'COMPLETE', ?, ?, ?, ?)
+                ON CONFLICT (league_id, season) DO UPDATE SET
+                    status = 'COMPLETE',
+                    fixture_count = excluded.fixture_count,
+                    completed_at = excluded.completed_at,
+                    updated_at = excluded.updated_at,
+                    source = excluded.source
+                """,
+                (league_id, season, fixture_count, now_str, now_str, source),
+            )
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def mark_historical_dataset_incomplete(league_id, season, fixture_count=None, source="api_football"):
+    """
+    Mark or keep a historical dataset status as INCOMPLETE.
+    """
+    league_id = _validate_positive_int(league_id, "league_id")
+    season = _validate_positive_int(season, "season")
+
+    if fixture_count is None:
+        fixture_count = get_historical_fixture_count(league_id, season)
+    else:
+        fixture_count = _validate_non_negative_int(fixture_count, "fixture_count")
+
+    now_str = _utc_now()
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO historical_datasets (
+                        league_id, season, status, fixture_count, completed_at, updated_at, source
+                    )
+                    VALUES (%s, %s, 'INCOMPLETE', %s, NULL, %s, %s)
+                    ON CONFLICT (league_id, season) DO UPDATE SET
+                        status = 'INCOMPLETE',
+                        fixture_count = EXCLUDED.fixture_count,
+                        updated_at = EXCLUDED.updated_at,
+                        source = EXCLUDED.source
+                    """,
+                    (league_id, season, fixture_count, now_str, source),
+                )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                INSERT INTO historical_datasets (
+                    league_id, season, status, fixture_count, completed_at, updated_at, source
+                )
+                VALUES (?, ?, 'INCOMPLETE', ?, NULL, ?, ?)
+                ON CONFLICT (league_id, season) DO UPDATE SET
+                    status = 'INCOMPLETE',
+                    fixture_count = excluded.fixture_count,
+                    updated_at = excluded.updated_at,
+                    source = excluded.source
+                """,
+                (league_id, season, fixture_count, now_str, source),
+            )
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

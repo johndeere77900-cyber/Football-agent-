@@ -60,14 +60,35 @@ def test_historical_sync_repeated_runs_are_idempotent(temp_db):
         }
     ]
 
-    with patch("api_football.get_league_fixtures", return_value=fixtures_sample):
+    with patch("api_football.get_league_fixtures", return_value=fixtures_sample) as mock_get:
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+        # Second run on COMPLETE dataset must NOT call get_league_fixtures
+        mock_get.assert_called_once()
 
     assert report1["newly_stored"] == 1
-    assert report2["newly_stored"] == 0
-    assert report2["already_existing_skipped"] == 1
+    assert report1["status"] == "COMPLETE"
+    assert report2["status"] == "COMPLETE"
+    assert report2["api_requests_consumed"] == 0
     assert report2["final_stored_count"] == 1
+
+
+def test_historical_sync_refresh_forces_reacquisition(temp_db):
+    fixtures_sample = [
+        {
+            "fixture": {"id": 5001, "date": "2025-01-10T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+            "goals": {"home": 2, "away": 1},
+        }
+    ]
+
+    with patch("api_football.get_league_fixtures", return_value=fixtures_sample) as mock_get:
+        report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+        report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024, refresh=True)
+        assert mock_get.call_count == 2
+
+    assert report2["already_existing_skipped"] == 1
 
 
 def test_historical_sync_respects_quota_budget(temp_db, monkeypatch):
