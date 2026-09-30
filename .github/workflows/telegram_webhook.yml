@@ -107,32 +107,6 @@ jobs:
 
           echo "Telegram token is valid."
 
-          # ---------------------------------------------------------------
-          # API-Football
-          # ---------------------------------------------------------------
-
-          echo "Checking API-Football token..."
-
-          football_response="$(
-            curl -sS \
-              --max-time 15 \
-              -H "x-apisports-key: ${API_FOOTBALL_KEY}" \
-              "https://v3.football.api-sports.io/status"
-          )"
-
-          if ! echo "$football_response" \
-            | jq -e '.response.account' >/dev/null; then
-
-            echo "::error::API-Football credential/status validation failed."
-
-            echo "$football_response" \
-              | jq '{get,errors,response}' || true
-
-            exit 1
-          fi
-
-          echo "API-Football credential is accepted."
-
       # -------------------------------------------------------------------
       # Process exactly one Telegram message
       # -------------------------------------------------------------------

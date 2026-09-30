@@ -639,29 +639,50 @@ def get_league_coverage(league_id):
 def raw_debug_call(endpoint, params):
     """
     Diagnostic-only API call.
-    Bypasses normal caching and persistent storage.
+    Bypasses caching, but strictly enforces atomic quota reservation, retry accounting,
+    and fail-closed behavior for every network attempt.
     """
     endpoint = _validate_nonempty_text(endpoint, "endpoint")
     if not isinstance(params, dict):
         raise ValueError("params must be a dictionary.")
 
     url = f"{config.API_FOOTBALL_BASE_URL}/{endpoint.lstrip('/')}"
+    backoff = RETRY_BACKOFF_SECONDS
 
-    response = requests.get(
-        url,
-        headers=_headers(),
-        params=params,
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
+    for attempt in range(1, MAX_RETRIES + 1):
+        _check_and_consume_quota(endpoint)
 
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise APIFootballError("API-Football debug request returned invalid JSON.") from exc
+        try:
+            response = requests.get(
+                url,
+                headers=_headers(),
+                params=params,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as exc:
+            if attempt >= MAX_RETRIES:
+                raise APIFootballError(
+                    f"API-Football debug request failed after {MAX_RETRIES} attempts: {exc}"
+                ) from exc
 
-    if not response.ok:
-        raise APIFootballError(
-            f"API-Football debug request failed: HTTP {response.status_code}; errors={data.get('errors')!r}"
-        )
+            print(
+                f"API-Football debug request network error; retrying in {backoff}s (attempt {attempt}/{MAX_RETRIES})",
+                flush=True,
+            )
+            time.sleep(backoff)
+            backoff *= 2
+            continue
 
-    return data
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise APIFootballError("API-Football debug request returned invalid JSON.") from exc
+
+        if not response.ok:
+            raise APIFootballError(
+                f"API-Football debug request failed: HTTP {response.status_code}; errors={data.get('errors')!r}"
+            )
+
+        return data
+
+    raise APIFootballError(f"API-Football debug request failed: /{endpoint}")

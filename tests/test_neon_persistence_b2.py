@@ -875,6 +875,53 @@ def test_migration_scenario_b_wrong_prediction_field(tmp_path, monkeypatch):
     assert report["verification"] == "VERIFICATION_FAILED"
 
 
+# ============================================================================
+# RAW DEBUG CALL QUOTA HARDENING TESTS
+# ============================================================================
+
+
+def test_raw_debug_call_enforces_quota_reservation_and_fails_closed(tmp_path, monkeypatch):
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(config, "DB_PATH", str(db_file))
+    monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test-key")
+    monkeypatch.setattr(config, "ENVIRONMENT", "development")
+    storage.init_db()
+
+    # Fail closed quota check
+    def bad_reserve(provider, date_pattern, request_date, endpoint, limit):
+        raise RuntimeError("Quota DB connection unavailable")
+
+    monkeypatch.setattr(storage, "reserve_api_request", bad_reserve)
+
+    def fake_get(url, headers, params, timeout):
+        raise AssertionError("Network must not be called when raw_debug_call fails closed on quota!")
+
+    monkeypatch.setattr(api_football.requests, "get", fake_get)
+
+    with pytest.raises(api_football.APIFootballQuotaExhaustedError):
+        api_football.raw_debug_call("status", {})
+
+
+def test_raw_debug_call_exhausted_quota_blocks_network(tmp_path, monkeypatch):
+    db_file = tmp_path / "test.db"
+    monkeypatch.setattr(config, "DB_PATH", str(db_file))
+    monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test-key")
+    monkeypatch.setattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 1)
+    monkeypatch.setattr(config, "ENVIRONMENT", "development")
+    storage.init_db()
+
+    today_str = api_football.time.strftime("%Y-%m-%d", api_football.time.gmtime())
+    storage.record_api_request("api_football", "status", today_str)
+
+    def fake_get(url, headers, params, timeout):
+        raise AssertionError("Network must not be called when raw_debug_call quota is exhausted!")
+
+    monkeypatch.setattr(api_football.requests, "get", fake_get)
+
+    with pytest.raises(api_football.APIFootballQuotaExhaustedError):
+        api_football.raw_debug_call("status", {})
+
+
 def test_migration_scenario_c_wrong_probability(tmp_path, monkeypatch):
     source_db = tmp_path / "src.db"
     dest_db = tmp_path / "dest.db"
