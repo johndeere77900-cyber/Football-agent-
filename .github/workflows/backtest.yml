@@ -59,6 +59,8 @@ jobs:
         if: github.event.inputs.mode == 'backtest'
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
         run: |
           python3 main.py --backtest --league-name "${{ github.event.inputs.league_name }}" --season ${{ github.event.inputs.season }} --sample ${{ github.event.inputs.sample }}
 
@@ -66,6 +68,8 @@ jobs:
         if: github.event.inputs.mode == 'check-coverage'
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
         run: |
           python3 main.py --check-coverage ${{ github.event.inputs.league_id }}
 
@@ -73,6 +77,8 @@ jobs:
         if: github.event.inputs.mode == 'find-league'
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
         run: |
           python3 main.py --find-league "${{ github.event.inputs.league_name }}"
 
@@ -80,5 +86,7 @@ jobs:
         if: github.event.inputs.mode == 'raw-debug'
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
         run: |
           python3 main.py --raw-debug --league ${{ github.event.inputs.league_id }} --season ${{ github.event.inputs.season }}
