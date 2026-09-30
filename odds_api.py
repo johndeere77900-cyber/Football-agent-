@@ -24,11 +24,11 @@ A failure in this module must never become a reason to discard an
 otherwise valid football prediction.
 """
 
-import datetime
 import hashlib
 import json
 import os
 import time
+from datetime import datetime, timezone
 
 import requests
 
@@ -229,32 +229,23 @@ def _cache_set(sport_key, home_team, away_team, regions, data):
 
 def _check_and_consume_odds_quota():
     """
-    Check monthly request limit and record usage.
+    Atomically check and reserve monthly request quota.
 
     Fails closed: if quota storage cannot be queried or updated, returns False
     so the system does not make untracked Odds API calls.
     """
     limit = int(getattr(config, "ODDS_API_MONTHLY_REQUEST_LIMIT", 500))
-    current_month_pattern = time.strftime("%Y-%m", time.gmtime()) + "%"
-    current_month_str = time.strftime("%Y-%m", time.gmtime())
+    current_month_pattern = datetime.now(timezone.utc).strftime("%Y-%m") + "%"
+    current_month_str = datetime.now(timezone.utc).strftime("%Y-%m")
 
     try:
-        current_count = storage.get_api_request_count("odds_api", current_month_pattern)
+        reserved = storage.reserve_api_request("odds_api", current_month_pattern, current_month_str, "sports/odds", limit)
     except Exception as exc:
-        print(f"Odds API quota storage read error ({exc}); failing closed.")
+        print(f"Odds API quota storage error ({exc}); failing closed.")
         return False
 
-    if current_count >= limit:
-        print(
-            f"Odds API monthly limit reached ({current_count}/{limit}). "
-            "Continuing prediction without odds."
-        )
-        return False
-
-    try:
-        storage.record_api_request("odds_api", "sports/odds", current_month_str)
-    except Exception as exc:
-        print(f"Odds API quota storage write error ({exc}); failing closed.")
+    if not reserved:
+        print(f"Odds API monthly limit reached ({limit}/{limit}). Continuing prediction without odds.")
         return False
 
     return True
@@ -307,13 +298,10 @@ def _get_events(sport_key, home_team, away_team, regions):
     away_team = _validate_text(away_team, "away_team")
     regions = _validate_regions(regions)
 
+    # 1. Check cache FIRST
     cached = _cache_get(sport_key, home_team, away_team, regions)
     if cached is not None:
         return cached
-
-    # Quota check before network call
-    if not _check_and_consume_odds_quota():
-        return {"events": []}
 
     api_key = _api_key()
     url = f"{_base_url()}/sports/{sport_key}/odds"
@@ -326,7 +314,12 @@ def _get_events(sport_key, home_team, away_team, regions):
 
     backoff = RETRY_BACKOFF_SECONDS
 
+    # 2. HTTP attempt loop
     for attempt in range(1, MAX_RETRIES + 1):
+        # Quota reservation BEFORE EVERY ACTUAL NETWORK ATTEMPT
+        if not _check_and_consume_odds_quota():
+            return {"events": []}
+
         try:
             response = requests.get(
                 url,

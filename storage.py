@@ -14,7 +14,7 @@ Integrity rules:
 - Football result grading and Elo updates occur in one transaction.
 - Database/schema initialization is safe for existing databases.
 - Bounded Telegram memory (max 50 messages per chat).
-- Persistent API response caching and request-budget tracking.
+- Persistent API response caching and atomic request-budget tracking.
 """
 
 import json
@@ -1477,18 +1477,140 @@ def get_api_request_count(provider, date_pattern):
                 row = cur.fetchone()
                 return row[0] if row else 0
         else:
-            if "%" in date_pattern:
-                row = conn.execute(
-                    "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
-                    (provider, date_pattern),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
-                    (provider, date_pattern),
-                ).fetchone()
-            return row[0] if row else 0
+            try:
+                if "%" in date_pattern:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
+                        (provider, date_pattern),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
+                        (provider, date_pattern),
+                    ).fetchone()
+                return row[0] if row else 0
+            except sqlite3.OperationalError:
+                # Table missing -> init db and retry
+                conn.close()
+                init_db()
+                conn, _ = _connect()
+                if "%" in date_pattern:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
+                        (provider, date_pattern),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
+                        (provider, date_pattern),
+                    ).fetchone()
+                return row[0] if row else 0
     except Exception:
         return 0
+    finally:
+        conn.close()
+
+
+def reserve_api_request(provider, date_pattern, request_date, endpoint, limit):
+    """
+    Atomically reserve one API request credit if current usage is below limit.
+
+    Returns True if reserved successfully, False if quota exhausted.
+    Fails closed by raising RuntimeError on database connection/query failures.
+    """
+    timestamp = _utc_now()
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    if "%" in date_pattern:
+                        cur.execute(
+                            """
+                            INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint)
+                            SELECT %s, %s, %s, %s
+                            WHERE (
+                                SELECT COUNT(*) FROM api_request_counts
+                                WHERE provider = %s AND request_date LIKE %s
+                            ) < %s
+                            RETURNING id
+                            """,
+                            (provider, timestamp, request_date, endpoint, provider, date_pattern, limit),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint)
+                            SELECT %s, %s, %s, %s
+                            WHERE (
+                                SELECT COUNT(*) FROM api_request_counts
+                                WHERE provider = %s AND request_date = %s
+                            ) < %s
+                            RETURNING id
+                            """,
+                            (provider, timestamp, request_date, endpoint, provider, date_pattern, limit),
+                        )
+                    row = cur.fetchone()
+                    return row is not None
+
+        else:
+            try:
+                with conn:
+                    if "%" in date_pattern:
+                        row = conn.execute(
+                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
+                            (provider, date_pattern),
+                        ).fetchone()
+                    else:
+                        row = conn.execute(
+                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
+                            (provider, date_pattern),
+                        ).fetchone()
+
+                    count = row[0] if row else 0
+                    if count >= limit:
+                        return False
+
+                    conn.execute(
+                        """
+                        INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (provider, timestamp, request_date, endpoint),
+                    )
+                    return True
+            except sqlite3.OperationalError:
+                # Table missing -> initialize schema and retry
+                conn.close()
+                init_db()
+                conn, _ = _connect()
+                with conn:
+                    if "%" in date_pattern:
+                        row = conn.execute(
+                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
+                            (provider, date_pattern),
+                        ).fetchone()
+                    else:
+                        row = conn.execute(
+                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
+                            (provider, date_pattern),
+                        ).fetchone()
+
+                    count = row[0] if row else 0
+                    if count >= limit:
+                        return False
+
+                    conn.execute(
+                        """
+                        INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (provider, timestamp, request_date, endpoint),
+                    )
+                    return True
+
+    except Exception as exc:
+        raise RuntimeError(f"Database quota reservation error; failing closed: {exc}") from exc
     finally:
         conn.close()

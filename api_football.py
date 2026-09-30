@@ -16,6 +16,7 @@ Design goals:
 import json
 import os
 import time
+from datetime import datetime, timezone
 
 import requests
 
@@ -211,32 +212,25 @@ def _cache_set(cache_key, endpoint, params, data):
 
 def _check_and_consume_quota(endpoint):
     """
-    Verify daily credit limit and record request.
+    Atomically verify and reserve daily credit quota.
 
     Fails closed: if quota storage cannot be queried or updated, raises
     APIFootballQuotaExhaustedError to prevent unauthorized/untracked external API requests.
     """
     limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
-    today_str = time.strftime("%Y-%m-%d", time.gmtime())
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
-        current_count = storage.get_api_request_count("api_football", today_str)
+        reserved = storage.reserve_api_request("api_football", today_str, today_str, endpoint, limit)
     except Exception as exc:
         raise APIFootballQuotaExhaustedError(
-            f"Quota storage read error; failing closed: {exc}"
+            f"Quota storage error; failing closed: {exc}"
         ) from exc
 
-    if current_count >= limit:
+    if not reserved:
         raise APIFootballQuotaExhaustedError(
-            f"API-Football daily credit limit reached ({current_count}/{limit})."
+            f"API-Football daily credit limit reached ({limit}/{limit})."
         )
-
-    try:
-        storage.record_api_request("api_football", endpoint, today_str)
-    except Exception as exc:
-        raise APIFootballQuotaExhaustedError(
-            f"Quota storage write error; failing closed: {exc}"
-        ) from exc
 
 
 # ============================================================================
