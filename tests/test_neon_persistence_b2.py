@@ -902,6 +902,30 @@ def test_raw_debug_call_enforces_quota_reservation_and_fails_closed(tmp_path, mo
         api_football.raw_debug_call("status", {})
 
 
+def test_telegram_load_memory_production_failure_does_not_read_json(tmp_path, monkeypatch):
+    """
+    Test that in production mode with Neon configured, database memory read errors
+    propagate immediately and do NOT fall back to telegram_memory.json on disk.
+    """
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setattr(config, "ENVIRONMENT", "production")
+
+    # Create a dummy telegram_memory.json on disk that should NOT be read
+    dummy_json = tmp_path / "telegram_memory.json"
+    dummy_json.write_text(json.dumps({"recent": [{"role": "user", "text": "stale message"}]}))
+    monkeypatch.setattr(telegram_bot, "MEMORY_FILE", str(dummy_json))
+
+    def bad_get_recent_messages(chat_id, limit=50):
+        raise RuntimeError("Database connection reset during memory fetch")
+
+    monkeypatch.setattr(storage, "get_recent_telegram_messages", bad_get_recent_messages)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        telegram_bot.load_memory()
+
+    assert "Failed to read Telegram memory from Neon PostgreSQL" in str(exc_info.value)
+
+
 def test_raw_debug_call_exhausted_quota_blocks_network(tmp_path, monkeypatch):
     db_file = tmp_path / "test.db"
     monkeypatch.setattr(config, "DB_PATH", str(db_file))

@@ -234,8 +234,10 @@ def _default_memory():
 
 
 def load_memory():
-    """Load conversation history from database (fallback to json file if empty)."""
+    """Load conversation history from database (fail-closed in production; no silent JSON fallback)."""
     chat_id = CHAT_ID or "default_chat"
+    is_prod = storage.is_neon() or (os.environ.get("ENVIRONMENT", "").lower() == "production")
+
     try:
         messages = storage.get_recent_telegram_messages(chat_id, limit=50)
         if messages:
@@ -243,8 +245,15 @@ def load_memory():
                 "recent": messages,
                 "preference_counts": {"football": 0, "basketball": 0},
             }
-    except Exception:
-        pass
+    except Exception as exc:
+        if is_prod:
+            raise RuntimeError(
+                f"Failed to read Telegram memory from Neon PostgreSQL database in production: {exc}"
+            ) from exc
+
+    if is_prod:
+        # In production/Neon mode, do NOT fall back to historical telegram_memory.json
+        return _default_memory()
 
     default = _default_memory()
     if not os.path.exists(MEMORY_FILE):
