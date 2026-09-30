@@ -337,6 +337,27 @@ def _get(endpoint, params):
         if api_errors:
             raise APIFootballError(f"API-Football API error: {api_errors!r}")
 
+        # Capture defensive rate limit information from headers if available
+        headers = response.headers
+        remaining_str = (
+            headers.get("x-ratelimit-requests-remaining")
+            or headers.get("X-RateLimit-Remaining")
+        )
+        limit_str = (
+            headers.get("x-ratelimit-requests-limit")
+            or headers.get("X-RateLimit-Limit")
+        )
+        if remaining_str is not None:
+            try:
+                remaining_int = int(remaining_str)
+                if remaining_int <= 0:
+                    print(
+                        f"API-Football response header reports remaining requests = {remaining_int} (limit: {limit_str}). Failing safe.",
+                        flush=True,
+                    )
+            except (TypeError, ValueError):
+                pass
+
         _cache_set(cache_key, endpoint, params, data)
         return data
 

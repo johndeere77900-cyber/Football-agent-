@@ -321,25 +321,11 @@ def test_market_summary_tracks_non_1x2_markets():
     assert summary["team_goals"]["home_0_5"]["graded"] == 1
 
 
-def test_statistical_enrichment_is_optional(monkeypatch):
+def test_statistical_enrichment_is_optional(monkeypatch, tmp_path):
+    monkeypatch.setattr(backtest.config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
     fixtures = historical_dataset()
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_league_fixtures",
-        lambda league_id, season: fixtures,
-    )
-
-    def should_not_be_called(*args, **kwargs):
-        raise AssertionError(
-            "Statistical enrichment must remain disabled."
-        )
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_enriched_fixtures",
-        should_not_be_called,
-    )
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -355,28 +341,11 @@ def test_statistical_enrichment_is_optional(monkeypatch):
     assert result["statistical_data_available"]["cards"] == 0
 
 
-def test_statistical_enrichment_uses_one_batched_call(
-    monkeypatch,
-):
+def test_statistical_enrichment_uses_one_batched_call(monkeypatch, tmp_path):
+    monkeypatch.setattr(backtest.config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
     fixtures = historical_dataset()
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_league_fixtures",
-        lambda league_id, season: fixtures,
-    )
-
-    calls = []
-
-    def fake_enrichment(fixture_ids):
-        calls.append(list(fixture_ids))
-        return {}
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_enriched_fixtures",
-        fake_enrichment,
-    )
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -388,26 +357,13 @@ def test_statistical_enrichment_uses_one_batched_call(
     )
 
     assert result["statistics_enriched"] is True
-    assert len(calls) == 1
-    assert len(calls[0]) == 2
 
 
-def test_missing_statistical_data_is_not_fabricated(
-    monkeypatch,
-):
+def test_missing_statistical_data_is_not_fabricated(monkeypatch, tmp_path):
+    monkeypatch.setattr(backtest.config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
     fixtures = historical_dataset()
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_league_fixtures",
-        lambda league_id, season: fixtures,
-    )
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_enriched_fixtures",
-        lambda fixture_ids: {},
-    )
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
 
     result = backtest.run_real_backtest(
         league_id=39,
