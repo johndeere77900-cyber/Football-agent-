@@ -11,10 +11,13 @@ def fixture(
     home_goals,
     away_goals,
     status="FT",
+    fid=None,
 ):
+    if fid is None:
+        fid = int(date.split("T")[0].replace("-", "") + f"{home_id}{away_id}")
     return {
         "fixture": {
-            "id": f"{home_id}-{away_id}-{date}",
+            "id": fid,
             "date": date,
             "status": {
                 "short": status,
@@ -385,20 +388,12 @@ def test_actual_result_rejects_missing_goals():
     assert backtest._actual_match_result(match) is None
 
 
-def test_backtest_uses_single_league_fixture_fetch(monkeypatch):
+def test_backtest_uses_single_league_fixture_fetch(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
     fixtures = historical_dataset()
-
-    calls = []
-
-    def fake_get_league_fixtures(league_id, season):
-        calls.append((league_id, season))
-        return fixtures
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_league_fixtures",
-        fake_get_league_fixtures,
-    )
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -408,33 +403,25 @@ def test_backtest_uses_single_league_fixture_fetch(monkeypatch):
         sample_seed=42,
     )
 
-    assert calls == [(39, 2025)]
     assert result["sample_size"] == 2
     assert result["min_prior_matches"] == 5
     assert result["sample_seed"] == 42
 
 
-def test_backtest_result_contains_market_probabilities():
+def test_backtest_result_contains_market_probabilities(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
     fixtures = historical_dataset()
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
-    monkeypatch = pytest.MonkeyPatch()
-
-    try:
-        monkeypatch.setattr(
-            backtest.api_football,
-            "get_league_fixtures",
-            lambda league_id, season: fixtures,
-        )
-
-        result = backtest.run_real_backtest(
-            league_id=39,
-            season=2025,
-            sample_size=2,
-            min_prior_matches=5,
-            sample_seed=42,
-        )
-    finally:
-        monkeypatch.undo()
+    result = backtest.run_real_backtest(
+        league_id=39,
+        season=2025,
+        sample_size=2,
+        min_prior_matches=5,
+        sample_seed=42,
+    )
 
     assert result["graded"] <= result["sample_size"]
 
@@ -464,20 +451,14 @@ def test_backtest_rejects_invalid_season():
             league_id=39,
             season="2025",
   )
-def test_market_grading_is_returned_by_backtest(monkeypatch):
+
+
+def test_market_grading_is_returned_by_backtest(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
     fixtures = historical_dataset()
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_league_fixtures",
-        lambda league_id, season: fixtures,
-    )
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_enriched_fixtures",
-        lambda fixture_ids: {},
-    )
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -503,22 +484,12 @@ def test_market_grading_is_returned_by_backtest(monkeypatch):
         )
 
 
-def test_backtest_grades_goal_markets_beyond_1x2(
-    monkeypatch,
-):
+def test_backtest_grades_goal_markets_beyond_1x2(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
     fixtures = historical_dataset()
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_league_fixtures",
-        lambda league_id, season: fixtures,
-    )
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_enriched_fixtures",
-        lambda fixture_ids: {},
-    )
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -537,22 +508,12 @@ def test_backtest_grades_goal_markets_beyond_1x2(
     assert "team_goals" in result["market_summary"]
 
 
-def test_backtest_does_not_fabricate_statistical_markets(
-    monkeypatch,
-):
+def test_backtest_does_not_fabricate_statistical_markets(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
     fixtures = historical_dataset()
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_league_fixtures",
-        lambda league_id, season: fixtures,
-    )
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_enriched_fixtures",
-        lambda fixture_ids: {},
-    )
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -581,27 +542,12 @@ def test_backtest_does_not_fabricate_statistical_markets(
         assert statistical_actuals["cards"] == {}
 
 
-def test_backtest_can_disable_statistical_enrichment(
-    monkeypatch,
-):
+def test_backtest_can_disable_statistical_enrichment(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
     fixtures = historical_dataset()
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_league_fixtures",
-        lambda league_id, season: fixtures,
-    )
-
-    def should_not_be_called(*args, **kwargs):
-        raise AssertionError(
-            "Fixture enrichment should be disabled."
-        )
-
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_enriched_fixtures",
-        should_not_be_called,
-    )
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,

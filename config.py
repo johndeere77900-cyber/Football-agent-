@@ -17,6 +17,9 @@ ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 
 # --- API Quotas & Limits -----------------------------------------------------
 API_FOOTBALL_DAILY_CREDIT_LIMIT = 100
+API_FOOTBALL_HISTORICAL_DAILY_BUDGET = int(
+    os.environ.get("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50)
+)
 ODDS_API_MONTHLY_REQUEST_LIMIT = 500
 
 # --- Cache TTL Settings -----------------------------------------------------

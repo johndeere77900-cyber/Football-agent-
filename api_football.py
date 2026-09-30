@@ -210,14 +210,23 @@ def _cache_set(cache_key, endpoint, params, data):
 # ============================================================================
 
 
-def _check_and_consume_quota(endpoint):
+def _check_and_consume_quota(endpoint, max_budget=None):
     """
     Atomically verify and reserve daily credit quota.
 
     Fails closed: if quota storage cannot be queried or updated, raises
     APIFootballQuotaExhaustedError to prevent unauthorized/untracked external API requests.
     """
-    limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
+    global_limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
+    limit = global_limit
+    if max_budget is not None:
+        try:
+            budget_val = int(max_budget)
+            if budget_val > 0:
+                limit = min(limit, budget_val)
+        except (TypeError, ValueError):
+            pass
+
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
@@ -229,7 +238,7 @@ def _check_and_consume_quota(endpoint):
 
     if not reserved:
         raise APIFootballQuotaExhaustedError(
-            f"API-Football daily credit limit reached ({limit}/{limit})."
+            f"API-Football credit limit reached ({limit})."
         )
 
 
@@ -238,7 +247,7 @@ def _check_and_consume_quota(endpoint):
 # ============================================================================
 
 
-def _get(endpoint, params):
+def _get(endpoint, params, max_budget=None):
     """
     Perform a GET request with persistent cache-first behavior and hard quota enforcement.
     """
@@ -256,7 +265,7 @@ def _get(endpoint, params):
 
     for attempt in range(1, MAX_RETRIES + 1):
         # Quota check before every actual network attempt
-        _check_and_consume_quota(endpoint)
+        _check_and_consume_quota(endpoint, max_budget=max_budget)
 
         try:
             response = requests.get(
@@ -336,6 +345,31 @@ def _get(endpoint, params):
         api_errors = data.get("errors")
         if api_errors:
             raise APIFootballError(f"API-Football API error: {api_errors!r}")
+
+        # Capture defensive rate limit information from headers if available
+        headers = response.headers
+        remaining_str = (
+            headers.get("x-ratelimit-requests-remaining")
+            or headers.get("X-RateLimit-Remaining")
+        )
+        limit_str = (
+            headers.get("x-ratelimit-requests-limit")
+            or headers.get("X-RateLimit-Limit")
+        )
+        if remaining_str is not None:
+            try:
+                remaining_int = int(remaining_str)
+                if remaining_int <= 0:
+                    print(
+                        f"API-Football response header reports remaining requests = {remaining_int} (limit: {limit_str}). Failing safe.",
+                        flush=True,
+                    )
+                    _cache_set(cache_key, endpoint, params, data)
+                    raise APIFootballQuotaExhaustedError(
+                        f"API-Football header reported remaining quota exhausted ({remaining_int})."
+                    )
+            except (TypeError, ValueError):
+                pass
 
         _cache_set(cache_key, endpoint, params, data)
         return data
@@ -447,17 +481,23 @@ def get_fixture_result(fixture_id):
     return None
 
 
-def get_league_fixtures(league_id, season):
+def get_league_fixtures_with_metadata(league_id, season, max_budget=None):
     """
-    Retrieve all fixtures for a league season with pagination support.
+    Retrieve all fixtures for a league season with pagination support and explicit completion metadata.
 
-    Handles multi-page responses securely using `paging.current` and `paging.total`.
-    Deduplicates fixtures and checks cache for each page.
+    Returns dict:
+        {
+            "fixtures": list_of_fixtures,
+            "expected_pages": int,
+            "pages_completed": int,
+            "acquisition_complete": bool
+        }
     """
     league_id = _validate_positive_int_like(league_id, "league_id")
     season = _validate_positive_int_like(season, "season")
 
-    page_1_data = _get("fixtures", {"league": league_id, "season": season, "page": 1})
+    kwargs = {"max_budget": max_budget} if max_budget is not None else {}
+    page_1_data = _get("fixtures", {"league": league_id, "season": season, "page": 1}, **kwargs)
 
     paging = page_1_data.get("paging")
     if paging is not None:
@@ -483,11 +523,13 @@ def get_league_fixtures(league_id, season):
         current, total = 1, 1
 
     all_pages = [page_1_data]
+    pages_completed = 1
 
     if total > 1:
         for page_num in range(2, total + 1):
-            page_data = _get("fixtures", {"league": league_id, "season": season, "page": page_num})
+            page_data = _get("fixtures", {"league": league_id, "season": season, "page": page_num}, **kwargs)
             all_pages.append(page_data)
+            pages_completed += 1
 
     fixtures = []
     seen_fixture_ids = set()
@@ -516,10 +558,25 @@ def get_league_fixtures(league_id, season):
 
             fixtures.append(item)
 
-    return fixtures
+    acquisition_complete = (pages_completed == total)
+
+    return {
+        "fixtures": fixtures,
+        "expected_pages": total,
+        "pages_completed": pages_completed,
+        "acquisition_complete": acquisition_complete,
+    }
 
 
-def get_enriched_fixtures(fixture_ids, batch_size=FIXTURE_BATCH_SIZE):
+def get_league_fixtures(league_id, season, max_budget=None):
+    """
+    Retrieve all fixtures for a league season with pagination support (compatibility wrapper).
+    """
+    res = get_league_fixtures_with_metadata(league_id, season, max_budget=max_budget)
+    return res.get("fixtures", [])
+
+
+def get_enriched_fixtures(fixture_ids, batch_size=FIXTURE_BATCH_SIZE, max_budget=None):
     """Retrieve enriched fixture records in batches."""
     if not isinstance(fixture_ids, (list, tuple, set)):
         raise ValueError("fixture_ids must be a list, tuple, or set.")
@@ -542,12 +599,13 @@ def get_enriched_fixtures(fixture_ids, batch_size=FIXTURE_BATCH_SIZE):
     if not clean_ids:
         return {}
 
+    kwargs = {"max_budget": max_budget} if max_budget is not None else {}
     enriched = {}
     for start in range(0, len(clean_ids), batch_size):
         batch = clean_ids[start : start + batch_size]
         ids = "-".join(str(value) for value in batch)
 
-        data = _get("fixtures", {"ids": ids})
+        data = _get("fixtures", {"ids": ids}, **kwargs)
         response = data.get("response", [])
 
         if not isinstance(response, list):

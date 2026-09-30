@@ -351,3 +351,87 @@ def test_basketball_result_rejects_conflict(
             home_points=100,
             away_points=110,
       )
+
+
+def test_historical_fixtures_storage(temp_database):
+    sample_fixtures = [
+        {
+            "fixture": {"id": 3002, "date": "2025-02-01T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {
+                "home": {"id": 101, "name": "Team B"},
+                "away": {"id": 102, "name": "Team C"},
+            },
+            "goals": {"home": 1, "away": 0},
+        },
+        {
+            "fixture": {"id": 3001, "date": "2025-01-01T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {
+                "home": {"id": 100, "name": "Team A"},
+                "away": {"id": 101, "name": "Team B"},
+            },
+            "goals": {"home": 2, "away": 1},
+        },
+    ]
+
+    # Test saving fixtures
+    save_res = storage.save_historical_fixtures(sample_fixtures, league_id=39, season=2024)
+    assert save_res["total"] == 2
+    assert save_res["valid"] == 2
+    assert save_res["inserted"] == 2
+
+    # Idempotent insert test
+    save_res_dup = storage.save_historical_fixtures(sample_fixtures, league_id=39, season=2024)
+    assert save_res_dup["inserted"] == 0
+
+    # Count test
+    assert storage.get_historical_fixture_count(39, 2024) == 2
+    assert storage.get_historical_fixture_count(39, 2025) == 0
+
+    # Deterministic ordering test (kickoff_at ASC, fixture_id ASC)
+    fetched = storage.get_historical_fixtures(39, 2024)
+    assert len(fetched) == 2
+    assert fetched[0]["fixture"]["id"] == 3001
+    assert fetched[1]["fixture"]["id"] == 3002
+
+
+def test_historical_fixture_enrichment_storage(temp_database):
+    enriched_sample = {
+        3001: {
+            "fixture": {"id": 3001},
+            "statistics": [{"team": {"id": 100}, "statistics": [{"type": "Corner Kicks", "value": 5}]}],
+        }
+    }
+
+    inserted = storage.save_historical_enrichment(enriched_sample)
+    assert inserted == 1
+
+    # Idempotence
+    inserted_dup = storage.save_historical_enrichment(enriched_sample)
+    assert inserted_dup == 0
+
+    fetched = storage.get_historical_enrichment([3001, 3002])
+    assert 3001 in fetched
+    assert fetched[3001]["fixture"]["id"] == 3001
+    assert 3002 not in fetched
+
+
+def test_historical_dataset_status_storage(temp_database):
+    # Initial status is INCOMPLETE
+    init_status = storage.get_historical_dataset_status(39, 2024)
+    assert init_status["status"] == "INCOMPLETE"
+    assert init_status["fixture_count"] == 0
+
+    # Mark complete
+    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380)
+    status = storage.get_historical_dataset_status(39, 2024)
+    assert status["status"] == "COMPLETE"
+    assert status["fixture_count"] == 380
+    assert status["completed_at"] is not None
+
+    # Mark incomplete
+    storage.mark_historical_dataset_incomplete(39, 2024, fixture_count=100)
+    status_inc = storage.get_historical_dataset_status(39, 2024)
+    assert status_inc["status"] == "INCOMPLETE"
+    assert status_inc["fixture_count"] == 100

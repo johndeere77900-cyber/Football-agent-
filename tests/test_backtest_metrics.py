@@ -136,15 +136,14 @@ def test_market_calibration_multiclass():
     assert res["total_samples"] == 3  # 3 outcomes evaluated
 
 
-def test_over_under_and_all_markets_evaluated_in_backtest(monkeypatch):
+def test_over_under_and_all_markets_evaluated_in_backtest(monkeypatch, tmp_path):
     from tests.test_backtest_prediction_engine_integration import historical_dataset
 
+    monkeypatch.setattr(backtest.config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
     fixtures = historical_dataset()
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_league_fixtures",
-        lambda l, s: fixtures,
-    )
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
 
     res = backtest.run_real_backtest(
         league_id=39,
@@ -214,15 +213,25 @@ def test_over_under_2_5_evaluation_consistency():
     assert accuracy == 0.0
 
 
-def test_run_multi_season_backtest(monkeypatch):
+def test_run_multi_season_backtest(monkeypatch, tmp_path):
     from tests.test_backtest_prediction_engine_integration import historical_dataset
 
-    fixtures = historical_dataset()
-    monkeypatch.setattr(
-        backtest.api_football,
-        "get_league_fixtures",
-        lambda l, s: fixtures,
-    )
+    monkeypatch.setattr(backtest.config, "DB_PATH", str(tmp_path / "predictions.db"))
+    backtest.storage.init_db()
+    fixtures_2024 = historical_dataset()
+
+    # Create 2025 fixtures with distinct IDs
+    fixtures_2025 = []
+    for item in historical_dataset():
+        item_copy = dict(item)
+        item_copy["fixture"] = dict(item["fixture"])
+        item_copy["fixture"]["id"] = item["fixture"]["id"] + 100000
+        fixtures_2025.append(item_copy)
+
+    backtest.storage.save_historical_fixtures(fixtures_2024, league_id=39, season=2024)
+    backtest.storage.mark_historical_dataset_complete(39, 2024, len(fixtures_2024))
+    backtest.storage.save_historical_fixtures(fixtures_2025, league_id=39, season=2025)
+    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures_2025))
 
     res = backtest.run_multi_season_backtest(
         league_id=39,

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import api_football
 import config
+import storage
 import historical_elo
 import historical_features
 import historical_h2h
@@ -1577,6 +1578,10 @@ def _print_backtest_report(
     )
 
     print(
+        "Fixture Source: Neon historical dataset"
+    )
+
+    print(
         f"League ID: {result.get('league_id')}, "
         f"Season: {result.get('season')}"
     )
@@ -1737,11 +1742,35 @@ def run_real_backtest(
             "sample_seed must be an integer or None."
         )
 
-    # Exactly one league/season fixture fetch.
-    fixtures = api_football.get_league_fixtures(
+    # Verify dataset completion status database-first
+    dataset_status = storage.get_historical_dataset_status(league_id, season)
+    if dataset_status.get("status") != "COMPLETE":
+        raise RuntimeError(
+            f"Historical dataset missing or incomplete for league {league_id} season {season} (status: {dataset_status.get('status')}). "
+            f"Run the historical sync job first."
+        )
+
+    actual_stored_count = storage.get_historical_fixture_count(league_id, season)
+    manifest_count = dataset_status.get("fixture_count", 0)
+
+    if manifest_count != actual_stored_count:
+        raise RuntimeError(
+            f"Historical dataset integrity mismatch for league {league_id} season {season}: "
+            f"manifest count ({manifest_count}) != actual stored count ({actual_stored_count}). "
+            f"Re-run the historical sync job."
+        )
+
+    # Fetch fixtures database-first from persistent historical dataset
+    fixtures = storage.get_historical_fixtures(
         league_id,
         season,
     )
+
+    if not fixtures:
+        raise RuntimeError(
+            f"Historical dataset missing or incomplete for league {league_id} season {season}. "
+            f"Run the historical sync job first."
+        )
 
     if not isinstance(fixtures, list):
         fixtures = []
@@ -1804,10 +1833,8 @@ def run_real_backtest(
             if _fixture_id(fixture) is not None
         ]
 
-        enriched = (
-            api_football.get_enriched_fixtures(
-                fixture_ids
-            )
+        enriched = storage.get_historical_enrichment(
+            fixture_ids
         )
 
         if isinstance(enriched, dict):
