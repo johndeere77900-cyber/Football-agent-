@@ -2254,8 +2254,8 @@ def run_grading_basketball():
         game_date,
         home_team,
         away_team,
-    ) 
-    
+    )
+
     in pending:
 
         if quota_hit:

@@ -771,13 +771,16 @@ def _grade_prediction_markets(
                 total,
                 line,
             )
+            key_suffix = str(line).replace(".", "_")
+            actual_key = f"{actual}_{key_suffix}" if actual in {"over", "under"} else None
 
             picked = _pick_and_grade(
                 distribution,
-                actual,
+                actual_key,
             )
 
             if picked is not None:
+                picked["actual"] = actual
                 over_under_selected[
                     line_key
                 ] = picked
@@ -851,13 +854,16 @@ def _grade_prediction_markets(
                 actual_goals,
                 line,
             )
+            key_suffix = str(line).replace(".", "_")
+            actual_key = f"{team}_{actual}_{key_suffix}" if actual in {"over", "under"} else None
 
             picked = _pick_and_grade(
                 distribution,
-                actual,
+                actual_key,
             )
 
             if picked is not None:
+                picked["actual"] = actual
                 team_selected[
                     line_key
                 ] = picked
@@ -1024,6 +1030,253 @@ def _merge_enriched_fixture(
     merged.update(enriched)
 
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Evaluation metrics (Baseline V1)
+# ---------------------------------------------------------------------------
+
+
+def compute_binary_accuracy(
+    predictions: Sequence[Dict[str, float]],
+    actuals: Sequence[str],
+) -> Optional[float]:
+    """Compute accuracy where top pick = argmax(probabilities) compared to actual."""
+    if not predictions or len(predictions) != len(actuals):
+        return None
+
+    correct = 0
+    count = 0
+
+    for pred, actual in zip(predictions, actuals):
+        if not isinstance(pred, dict) or actual is None or not pred:
+            continue
+
+        pick = max(pred, key=lambda k: pred[k])
+        if pick == actual:
+            correct += 1
+        count += 1
+
+    if count == 0:
+        return None
+
+    return correct / count
+
+
+def compute_brier_score(
+    predictions: Sequence[Dict[str, float]],
+    actuals: Sequence[str],
+    outcomes: Optional[Sequence[str]] = None,
+    target_outcome: Optional[str] = None,
+) -> Optional[float]:
+    """
+    Compute Brier score over all predictions.
+
+    For binary events (2 complementary outcomes), computes standard binary
+    Brier score (p_event - y)^2. For multi-class events (3+ outcomes), computes
+    multiclass Brier score sum_k (p_k - y_k)^2.
+    """
+    if not predictions or len(predictions) != len(actuals):
+        return None
+
+    total_squared_error = 0.0
+    count = 0
+
+    for pred, actual in zip(predictions, actuals):
+        if not isinstance(pred, dict) or actual is None:
+            continue
+
+        possible_outcomes = outcomes if outcomes is not None else list(pred.keys())
+        if actual not in possible_outcomes:
+            continue
+
+        if target_outcome is not None:
+            prob = _safe_float(pred.get(target_outcome, 0.0)) or 0.0
+            target = 1.0 if actual == target_outcome else 0.0
+            sample_error = (prob - target) ** 2
+        elif len(possible_outcomes) == 2:
+            event_outcome = possible_outcomes[0]
+            prob = _safe_float(pred.get(event_outcome, 0.0)) or 0.0
+            target = 1.0 if actual == event_outcome else 0.0
+            sample_error = (prob - target) ** 2
+        else:
+            sample_error = 0.0
+            for outcome in possible_outcomes:
+                prob = _safe_float(pred.get(outcome, 0.0)) or 0.0
+                target = 1.0 if actual == outcome else 0.0
+                sample_error += (prob - target) ** 2
+
+        total_squared_error += sample_error
+        count += 1
+
+    if count == 0:
+        return None
+
+    return total_squared_error / count
+
+
+def compute_log_loss(
+    predictions: Sequence[Dict[str, float]],
+    actuals: Sequence[str],
+    outcomes: Optional[Sequence[str]] = None,
+    eps: float = 1e-15,
+) -> Optional[float]:
+    """Compute multi-class or binary log loss (cross-entropy) over predictions."""
+    if not predictions or len(predictions) != len(actuals):
+        return None
+
+    total_loss = 0.0
+    count = 0
+
+    for pred, actual in zip(predictions, actuals):
+        if not isinstance(pred, dict) or actual is None:
+            continue
+
+        possible_outcomes = outcomes if outcomes is not None else list(pred.keys())
+        if actual not in possible_outcomes:
+            continue
+
+        prob = _safe_float(pred.get(actual, 0.0)) or 0.0
+        clipped_prob = max(eps, min(1.0 - eps, prob))
+        total_loss += -math.log(clipped_prob)
+        count += 1
+
+    if count == 0:
+        return None
+
+    return total_loss / count
+
+
+CALIBRATION_BIN_RANGES = [
+    ("<50%", 0.0, 0.50),
+    ("50–55%", 0.50, 0.55),
+    ("55–60%", 0.55, 0.60),
+    ("60–65%", 0.60, 0.65),
+    ("65–70%", 0.65, 0.70),
+    ("70–75%", 0.70, 0.75),
+    ("75–80%", 0.75, 0.80),
+    ("80%+", 0.80, 1.000001),
+]
+
+
+def compute_calibration_bins(
+    samples: Sequence[Tuple[float, bool]],
+) -> Dict[str, Any]:
+    """
+    Compute calibration bin statistics and Expected Calibration Error (ECE)
+    for a list of (predicted_probability, outcome_occurred) pairs.
+    """
+    cleaned_samples: List[Tuple[float, int]] = []
+    for prob, occurred in samples:
+        p_val = _safe_float(prob)
+        if p_val is None:
+            continue
+        p_val = max(0.0, min(1.0, p_val))
+        y_val = 1 if bool(occurred) else 0
+        cleaned_samples.append((p_val, y_val))
+
+    total_samples = len(cleaned_samples)
+
+    if total_samples == 0:
+        return {
+            "ece": None,
+            "bins": [
+                {
+                    "label": label,
+                    "number_of_predictions": 0,
+                    "mean_predicted_probability": None,
+                    "actual_empirical_success_rate": None,
+                    "calibration_gap": None,
+                }
+                for label, _, _ in CALIBRATION_BIN_RANGES
+            ],
+            "total_samples": 0,
+        }
+
+    bins_data: List[Dict[str, Any]] = []
+    weighted_ece_sum = 0.0
+
+    for label, lower, upper in CALIBRATION_BIN_RANGES:
+        bin_samples = [
+            (p, y)
+            for p, y in cleaned_samples
+            if lower <= p < upper
+        ]
+
+        count = len(bin_samples)
+
+        if count > 0:
+            mean_prob = sum(p for p, _ in bin_samples) / count
+            empirical_rate = sum(y for _, y in bin_samples) / count
+            gap = abs(mean_prob - empirical_rate)
+            weighted_ece_sum += (count / total_samples) * gap
+
+            bin_entry = {
+                "label": label,
+                "number_of_predictions": count,
+                "mean_predicted_probability": round(mean_prob, 4),
+                "actual_empirical_success_rate": round(empirical_rate, 4),
+                "calibration_gap": round(gap, 4),
+            }
+        else:
+            bin_entry = {
+                "label": label,
+                "number_of_predictions": 0,
+                "mean_predicted_probability": None,
+                "actual_empirical_success_rate": None,
+                "calibration_gap": None,
+            }
+
+        bins_data.append(bin_entry)
+
+    return {
+        "ece": round(weighted_ece_sum, 4),
+        "bins": bins_data,
+        "total_samples": total_samples,
+    }
+
+
+def compute_market_calibration(
+    predictions: Sequence[Dict[str, float]],
+    actuals: Sequence[str],
+    outcomes: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Compute calibration metrics across all outcomes for a market."""
+    samples: List[Tuple[float, bool]] = []
+
+    for pred, actual in zip(predictions, actuals):
+        if not isinstance(pred, dict) or actual is None:
+            continue
+
+        possible_outcomes = outcomes if outcomes is not None else list(pred.keys())
+        if actual not in possible_outcomes:
+            continue
+
+        for outcome in possible_outcomes:
+            prob = _safe_float(pred.get(outcome, 0.0)) or 0.0
+            occurred = (actual == outcome)
+            samples.append((prob, occurred))
+
+    return compute_calibration_bins(samples)
+
+
+def compute_picked_calibration(
+    picked_items: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Compute calibration metrics for top-picked market choices."""
+    samples: List[Tuple[float, bool]] = []
+
+    for item in picked_items:
+        if not isinstance(item, dict):
+            continue
+
+        prob = item.get("probability")
+        won = item.get("won")
+
+        if prob is not None and won is not None:
+            samples.append((prob, bool(won)))
+
+    return compute_calibration_bins(samples)
 
 
 # ---------------------------------------------------------------------------
@@ -1217,11 +1470,120 @@ def _print_market_summary(
     print("-" * 72)
 
 
+def _print_market_metrics_summary(
+    evaluation: Dict[str, Any],
+) -> None:
+    print("\nMARKET EVALUATION METRICS")
+    print("-" * 72)
+    print(
+        f"{'Market':20}"
+        f"{'Brier Score':>15}"
+        f"{'Log Loss':>15}"
+        f"{'ECE':>15}"
+    )
+    print("-" * 72)
+
+    for market_key, name in (
+        ("match_result", "1X2"),
+        ("double_chance", "Double Chance (Pooled)"),
+        ("over_under_2_5", "Over/Under 2.5"),
+        ("btts", "BTTS"),
+    ):
+        m_eval = evaluation.get(market_key, {})
+        if not isinstance(m_eval, dict):
+            continue
+
+        brier = m_eval.get("brier_score")
+        loss = m_eval.get("log_loss")
+        ece = m_eval.get("calibration", {}).get("ece")
+
+        brier_str = f"{brier:.4f}" if brier is not None else "N/A"
+        loss_str = f"{loss:.4f}" if loss is not None else "N/A"
+        ece_str = f"{ece:.4f}" if ece is not None else "N/A"
+
+        print(
+            f"{name:25}"
+            f"{brier_str:>15}"
+            f"{loss_str:>15}"
+            f"{ece_str:>15}"
+        )
+
+        if market_key == "double_chance":
+            for sub_key, sub_name in (
+                ("home_or_draw", "  DC: Home/Draw"),
+                ("away_or_draw", "  DC: Away/Draw"),
+                ("home_or_away", "  DC: Home/Away"),
+            ):
+                sub_eval = m_eval.get(sub_key, {})
+                if isinstance(sub_eval, dict):
+                    sb = sub_eval.get("brier_score")
+                    sl = sub_eval.get("log_loss")
+                    se = sub_eval.get("calibration", {}).get("ece")
+
+                    sb_str = f"{sb:.4f}" if sb is not None else "N/A"
+                    sl_str = f"{sl:.4f}" if sl is not None else "N/A"
+                    se_str = f"{se:.4f}" if se is not None else "N/A"
+
+                    print(
+                        f"{sub_name:25}"
+                        f"{sb_str:>15}"
+                        f"{sl_str:>15}"
+                        f"{se_str:>15}"
+                    )
+
+    print("-" * 72)
+
+    # Print 1X2 Calibration Bin Details
+    match_cal = evaluation.get("match_result", {}).get("calibration", {})
+    bins = match_cal.get("bins", [])
+    if bins:
+        print("\nPROBABILITY CALIBRATION BINS (1X2 Market)")
+        print("-" * 78)
+        print(
+            f"{'Bin Range':12}"
+            f"{'Count':>10}"
+            f"{'Mean Prob':>16}"
+            f"{'Actual Rate':>18}"
+            f"{'Calib Gap':>16}"
+        )
+        print("-" * 78)
+
+        for b in bins:
+            label = b.get("label", "")
+            count = b.get("number_of_predictions", 0)
+            p_mean = b.get("mean_predicted_probability")
+            p_str = f"{p_mean:.1%}" if p_mean is not None else "N/A"
+            r_act = b.get("actual_empirical_success_rate")
+            r_str = f"{r_act:.1%}" if r_act is not None else "N/A"
+            gap = b.get("calibration_gap")
+            g_str = f"{gap:.4f}" if gap is not None else "N/A"
+
+            print(
+                f"{label:12}"
+                f"{count:>10}"
+                f"{p_str:>16}"
+                f"{r_str:>18}"
+                f"{g_str:>16}"
+            )
+
+        print("-" * 78)
+
+
 def _print_backtest_report(
     result: Dict[str, Any],
 ) -> None:
     print(
         "\n=== FULL MARKET BACKTEST REPORT ==="
+    )
+
+    print(
+        f"League ID: {result.get('league_id')}, "
+        f"Season: {result.get('season')}"
+    )
+
+    print(
+        f"Minimum prior matches requirement: "
+        f"{result.get('min_prior_matches')}"
     )
 
     print(
@@ -1298,6 +1660,9 @@ def _print_backtest_report(
     _print_market_summary(
         result["market_summary"]
     )
+
+    if result.get("evaluation"):
+        _print_market_metrics_summary(result["evaluation"])
 
     print(
         "=== END FULL MARKET BACKTEST REPORT ===\n"
@@ -1633,6 +1998,157 @@ def run_real_backtest(
 
         log.append(entry)
 
+    # -----------------------------------------------------------------------
+    # Comprehensive baseline evaluation across distinct markets
+    # -----------------------------------------------------------------------
+    # 1. 1X2 market (multiclass)
+    preds_1x2 = []
+    acts_1x2 = []
+
+    # 2. Double Chance market (3 independent binary events)
+    preds_dc, acts_dc = [], []
+    preds_dc_hd, acts_dc_hd = [], []
+    preds_dc_ad, acts_dc_ad = [], []
+    preds_dc_ha, acts_dc_ha = [], []
+
+    # 3. Over/Under 2.5 market (binary)
+    preds_ou25 = []
+    acts_ou25 = []
+
+    # 4. BTTS market (binary)
+    preds_btts = []
+    acts_btts = []
+
+    # Top-pick items across markets for picked calibration
+    top_picks_1x2 = []
+
+    for entry in log:
+        p_markets = entry.get("prediction", {}).get("markets", {})
+        m_grading = entry.get("market_grading", {})
+        outcomes = m_grading.get("outcomes", {})
+        selected = m_grading.get("selected", {})
+
+        # 1X2
+        act_1x2 = entry.get("actual")
+        m_dist_1x2 = p_markets.get("match_result")
+        if isinstance(act_1x2, str) and act_1x2 in {"home_win", "draw", "away_win"} and isinstance(m_dist_1x2, dict):
+            preds_1x2.append(m_dist_1x2)
+            acts_1x2.append(act_1x2)
+
+        sel_1x2 = selected.get("match_result")
+        if isinstance(sel_1x2, dict):
+            top_picks_1x2.append(sel_1x2)
+
+        # Double Chance - 3 independent binary events (overlapping probabilities)
+        m_dist_dc = p_markets.get("double_chance")
+        out_dc = outcomes.get("double_chance", {})
+        if isinstance(m_dist_dc, dict) and isinstance(out_dc, dict):
+            p_hd = _safe_float(m_dist_dc.get("home_or_draw"))
+            p_ad = _safe_float(m_dist_dc.get("away_or_draw"))
+            p_ha = _safe_float(m_dist_dc.get("home_or_away"))
+
+            won_hd = out_dc.get("home_or_draw", {}).get("won")
+            won_ad = out_dc.get("away_or_draw", {}).get("won")
+            won_ha = out_dc.get("home_or_away", {}).get("won")
+
+            if p_hd is not None and won_hd is not None:
+                preds_dc.append({"yes": p_hd, "no": 1.0 - p_hd})
+                acts_dc.append("yes" if won_hd else "no")
+
+                preds_dc_hd.append({"yes": p_hd, "no": 1.0 - p_hd})
+                acts_dc_hd.append("yes" if won_hd else "no")
+
+            if p_ad is not None and won_ad is not None:
+                preds_dc.append({"yes": p_ad, "no": 1.0 - p_ad})
+                acts_dc.append("yes" if won_ad else "no")
+
+                preds_dc_ad.append({"yes": p_ad, "no": 1.0 - p_ad})
+                acts_dc_ad.append("yes" if won_ad else "no")
+
+            if p_ha is not None and won_ha is not None:
+                preds_dc.append({"yes": p_ha, "no": 1.0 - p_ha})
+                acts_dc.append("yes" if won_ha else "no")
+
+                preds_dc_ha.append({"yes": p_ha, "no": 1.0 - p_ha})
+                acts_dc_ha.append("yes" if won_ha else "no")
+
+        # Over / Under 2.5 - check both "2.5" and "2_5" in market grading/selected
+        sel_ou = selected.get("over_under", {})
+        if isinstance(sel_ou, dict):
+            sel_ou25 = sel_ou.get("2.5") or sel_ou.get("2_5")
+            if isinstance(sel_ou25, dict) and sel_ou25.get("actual") in {"over", "under"}:
+                act_ou25 = sel_ou25["actual"]
+                m_dist_ou = p_markets.get("over_under")
+                if isinstance(m_dist_ou, dict):
+                    p_over = _safe_float(m_dist_ou.get("over_2_5"))
+                    p_under = _safe_float(m_dist_ou.get("under_2_5"))
+                    if p_over is not None and p_under is not None:
+                        preds_ou25.append({"over": p_over, "under": p_under})
+                        acts_ou25.append(act_ou25)
+
+        # BTTS
+        sel_btts = selected.get("btts")
+        m_dist_btts = p_markets.get("btts")
+        if isinstance(sel_btts, dict) and sel_btts.get("actual") in {"yes", "no"} and isinstance(m_dist_btts, dict):
+            act_btts = sel_btts["actual"]
+            p_yes = _safe_float(m_dist_btts.get("yes"))
+            p_no = _safe_float(m_dist_btts.get("no"))
+            if p_yes is not None and p_no is not None:
+                preds_btts.append({"yes": p_yes, "no": p_no})
+                acts_btts.append(act_btts)
+
+    evaluation = {
+        "match_result": {
+            "brier_score": compute_brier_score(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+            "log_loss": compute_log_loss(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+            "calibration": compute_market_calibration(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+            "top_pick_calibration": compute_picked_calibration(top_picks_1x2),
+        },
+        "double_chance": {
+            "sample_count": len(preds_dc),
+            "brier_score": compute_brier_score(preds_dc, acts_dc, outcomes=("yes", "no")),
+            "log_loss": compute_log_loss(preds_dc, acts_dc, outcomes=("yes", "no")),
+            "calibration": compute_market_calibration(preds_dc, acts_dc, outcomes=("yes", "no")),
+            "home_or_draw": {
+                "sample_count": len(preds_dc_hd),
+                "brier_score": compute_brier_score(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+            },
+            "away_or_draw": {
+                "sample_count": len(preds_dc_ad),
+                "brier_score": compute_brier_score(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+            },
+            "home_or_away": {
+                "sample_count": len(preds_dc_ha),
+                "brier_score": compute_brier_score(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+            },
+        },
+        "over_under_2_5": {
+            "sample_count": len(preds_ou25),
+            "accuracy": compute_binary_accuracy(preds_ou25, acts_ou25),
+            "brier_score": compute_brier_score(preds_ou25, acts_ou25, outcomes=("over", "under")),
+            "log_loss": compute_log_loss(preds_ou25, acts_ou25, outcomes=("over", "under")),
+            "calibration": compute_market_calibration(preds_ou25, acts_ou25, outcomes=("over", "under")),
+        },
+        "btts": {
+            "sample_count": len(preds_btts),
+            "accuracy": compute_binary_accuracy(preds_btts, acts_btts),
+            "brier_score": compute_brier_score(preds_btts, acts_btts, outcomes=("yes", "no")),
+            "log_loss": compute_log_loss(preds_btts, acts_btts, outcomes=("yes", "no")),
+            "calibration": compute_market_calibration(preds_btts, acts_btts, outcomes=("yes", "no")),
+        },
+    }
+
+    # Extract top-level backward-compatible metrics for 1X2 match result
+    brier_score = evaluation["match_result"]["brier_score"]
+    log_loss = evaluation["match_result"]["log_loss"]
+    calibration = evaluation["match_result"]["calibration"]
+
     result = {
         "fixtures_fetched": len(
             fixtures
@@ -1645,7 +2161,7 @@ def run_real_backtest(
         ),
         "requested_sample": sample_size,
         "selected": len(selected),
-        "sample_size": len(selected),
+        "sample_size": min(sample_size, len(selected)),
         "graded": graded,
         "correct": correct,
         "accuracy": (
@@ -1653,6 +2169,10 @@ def run_real_backtest(
             if graded
             else 0.0
         ),
+        "brier_score": brier_score,
+        "log_loss": log_loss,
+        "calibration": calibration,
+        "evaluation": evaluation,
         "league_id": league_id,
         "season": season,
         "min_prior_matches": (
@@ -1710,6 +2230,220 @@ def run_real_backtest(
     )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Multi-season backtest runner
+# ---------------------------------------------------------------------------
+
+
+def run_multi_season_backtest(
+    league_id: Any,
+    seasons: Sequence[int],
+    sample_size_per_season: int = 380,
+    min_prior_matches: int = 5,
+    sample_seed: Optional[int] = 42,
+    enrich_statistics: bool = False,
+) -> Dict[str, Any]:
+    """
+    Run point-in-time historical backtests across multiple seasons and aggregate results.
+    """
+    all_log: List[Dict[str, Any]] = []
+    season_reports: Dict[int, Dict[str, Any]] = {}
+    season_limitations: Dict[int, str] = {}
+
+    total_fixtures_fetched = 0
+    total_finished_fixtures = 0
+    total_eligible_candidates = 0
+    total_selected = 0
+    total_graded = 0
+    total_correct = 0
+
+    combined_market_summary = _new_market_summary()
+
+    for s in seasons:
+        try:
+            res = run_real_backtest(
+                league_id=league_id,
+                season=s,
+                sample_size=sample_size_per_season,
+                min_prior_matches=min_prior_matches,
+                sample_seed=sample_seed,
+                enrich_statistics=enrich_statistics,
+            )
+
+            season_reports[s] = res
+            total_fixtures_fetched += res.get("fixtures_fetched", 0)
+            total_finished_fixtures += res.get("finished_fixtures", 0)
+            total_eligible_candidates += res.get("eligible_candidates", 0)
+            total_selected += res.get("selected", 0)
+            total_graded += res.get("graded", 0)
+            total_correct += res.get("correct", 0)
+
+            all_log.extend(res.get("log", []))
+
+            if res.get("graded", 0) == 0:
+                season_limitations[s] = (
+                    f"Season {s} returned 0 graded fixtures "
+                    f"(fetched {res.get('fixtures_fetched', 0)}, eligible {res.get('eligible_candidates', 0)})."
+                )
+
+        except Exception as exc:
+            season_limitations[s] = f"Season {s} failed with error: {exc}"
+
+    # Evaluate combined log across seasons
+    preds_1x2, acts_1x2, top_picks_1x2 = [], [], []
+    preds_dc, acts_dc = [], []
+    preds_dc_hd, acts_dc_hd = [], []
+    preds_dc_ad, acts_dc_ad = [], []
+    preds_dc_ha, acts_dc_ha = [], []
+    preds_ou25, acts_ou25 = [], []
+    preds_btts, acts_btts = [], []
+
+    for entry in all_log:
+        p_markets = entry.get("prediction", {}).get("markets", {})
+        m_grading = entry.get("market_grading", {})
+        outcomes = m_grading.get("outcomes", {})
+        selected = m_grading.get("selected", {})
+
+        _update_market_summary(combined_market_summary, selected)
+
+        # 1X2
+        act_1x2 = entry.get("actual")
+        m_dist_1x2 = p_markets.get("match_result")
+        if isinstance(act_1x2, str) and act_1x2 in {"home_win", "draw", "away_win"} and isinstance(m_dist_1x2, dict):
+            preds_1x2.append(m_dist_1x2)
+            acts_1x2.append(act_1x2)
+
+        sel_1x2 = selected.get("match_result")
+        if isinstance(sel_1x2, dict):
+            top_picks_1x2.append(sel_1x2)
+
+        # Double Chance - 3 independent binary events (overlapping probabilities)
+        m_dist_dc = p_markets.get("double_chance")
+        out_dc = outcomes.get("double_chance", {})
+        if isinstance(m_dist_dc, dict) and isinstance(out_dc, dict):
+            p_hd = _safe_float(m_dist_dc.get("home_or_draw"))
+            p_ad = _safe_float(m_dist_dc.get("away_or_draw"))
+            p_ha = _safe_float(m_dist_dc.get("home_or_away"))
+
+            won_hd = out_dc.get("home_or_draw", {}).get("won")
+            won_ad = out_dc.get("away_or_draw", {}).get("won")
+            won_ha = out_dc.get("home_or_away", {}).get("won")
+
+            if p_hd is not None and won_hd is not None:
+                preds_dc.append({"yes": p_hd, "no": 1.0 - p_hd})
+                acts_dc.append("yes" if won_hd else "no")
+
+                preds_dc_hd.append({"yes": p_hd, "no": 1.0 - p_hd})
+                acts_dc_hd.append("yes" if won_hd else "no")
+
+            if p_ad is not None and won_ad is not None:
+                preds_dc.append({"yes": p_ad, "no": 1.0 - p_ad})
+                acts_dc.append("yes" if won_ad else "no")
+
+                preds_dc_ad.append({"yes": p_ad, "no": 1.0 - p_ad})
+                acts_dc_ad.append("yes" if won_ad else "no")
+
+            if p_ha is not None and won_ha is not None:
+                preds_dc.append({"yes": p_ha, "no": 1.0 - p_ha})
+                acts_dc.append("yes" if won_ha else "no")
+
+                preds_dc_ha.append({"yes": p_ha, "no": 1.0 - p_ha})
+                acts_dc_ha.append("yes" if won_ha else "no")
+
+        # Over / Under 2.5
+        sel_ou = selected.get("over_under", {})
+        if isinstance(sel_ou, dict):
+            sel_ou25 = sel_ou.get("2.5") or sel_ou.get("2_5")
+            if isinstance(sel_ou25, dict) and sel_ou25.get("actual") in {"over", "under"}:
+                act_ou25 = sel_ou25["actual"]
+                m_dist_ou = p_markets.get("over_under")
+                if isinstance(m_dist_ou, dict):
+                    p_over = _safe_float(m_dist_ou.get("over_2_5"))
+                    p_under = _safe_float(m_dist_ou.get("under_2_5"))
+                    if p_over is not None and p_under is not None:
+                        preds_ou25.append({"over": p_over, "under": p_under})
+                        acts_ou25.append(act_ou25)
+
+        # BTTS
+        sel_btts = selected.get("btts")
+        m_dist_btts = p_markets.get("btts")
+        if isinstance(sel_btts, dict) and sel_btts.get("actual") in {"yes", "no"} and isinstance(m_dist_btts, dict):
+            act_btts = sel_btts["actual"]
+            p_yes = _safe_float(m_dist_btts.get("yes"))
+            p_no = _safe_float(m_dist_btts.get("no"))
+            if p_yes is not None and p_no is not None:
+                preds_btts.append({"yes": p_yes, "no": p_no})
+                acts_btts.append(act_btts)
+
+    evaluation = {
+        "match_result": {
+            "accuracy": total_correct / total_graded if total_graded else 0.0,
+            "brier_score": compute_brier_score(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+            "log_loss": compute_log_loss(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+            "calibration": compute_market_calibration(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+            "top_pick_calibration": compute_picked_calibration(top_picks_1x2),
+        },
+        "double_chance": {
+            "accuracy": (
+                combined_market_summary.get("double_chance", {}).get("accuracy", 0.0)
+            ),
+            "sample_count": len(preds_dc),
+            "brier_score": compute_brier_score(preds_dc, acts_dc, outcomes=("yes", "no")),
+            "log_loss": compute_log_loss(preds_dc, acts_dc, outcomes=("yes", "no")),
+            "calibration": compute_market_calibration(preds_dc, acts_dc, outcomes=("yes", "no")),
+            "home_or_draw": {
+                "sample_count": len(preds_dc_hd),
+                "brier_score": compute_brier_score(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+            },
+            "away_or_draw": {
+                "sample_count": len(preds_dc_ad),
+                "brier_score": compute_brier_score(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+            },
+            "home_or_away": {
+                "sample_count": len(preds_dc_ha),
+                "brier_score": compute_brier_score(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+                "log_loss": compute_log_loss(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+                "calibration": compute_market_calibration(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+            },
+        },
+        "over_under_2_5": {
+            "sample_count": len(preds_ou25),
+            "accuracy": compute_binary_accuracy(preds_ou25, acts_ou25),
+            "brier_score": compute_brier_score(preds_ou25, acts_ou25, outcomes=("over", "under")),
+            "log_loss": compute_log_loss(preds_ou25, acts_ou25, outcomes=("over", "under")),
+            "calibration": compute_market_calibration(preds_ou25, acts_ou25, outcomes=("over", "under")),
+        },
+        "btts": {
+            "sample_count": len(preds_btts),
+            "accuracy": compute_binary_accuracy(preds_btts, acts_btts),
+            "brier_score": compute_brier_score(preds_btts, acts_btts, outcomes=("yes", "no")),
+            "log_loss": compute_log_loss(preds_btts, acts_btts, outcomes=("yes", "no")),
+            "calibration": compute_market_calibration(preds_btts, acts_btts, outcomes=("yes", "no")),
+        },
+    }
+
+    return {
+        "league_id": league_id,
+        "seasons_evaluated": list(seasons),
+        "fixtures_fetched": total_fixtures_fetched,
+        "finished_fixtures": total_finished_fixtures,
+        "eligible_candidates": total_eligible_candidates,
+        "selected": total_selected,
+        "graded": total_graded,
+        "correct": total_correct,
+        "accuracy": total_correct / total_graded if total_graded else 0.0,
+        "evaluation": evaluation,
+        "market_summary": combined_market_summary,
+        "season_reports": season_reports,
+        "season_limitations": season_limitations,
+        "log": all_log,
+    }
 
 
 # ---------------------------------------------------------------------------
