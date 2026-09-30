@@ -1,9 +1,4 @@
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-.pytest_cache/
 data/backtests/*.json
-predictions.db
-telegram_memory.json
-*.tmp
+.pytest_cache/

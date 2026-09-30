@@ -61,22 +61,6 @@ jobs:
           python3 -m pip install -r requirements.txt
 
       # -------------------------------------------------------------------
-      # Restore persistent state from private S3 storage
-      # -------------------------------------------------------------------
-
-      - name: Restore persistent state
-        continue-on-error: true
-        env:
-          S3_BUCKET: ${{ secrets.S3_BUCKET || secrets.STATE_S3_BUCKET }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
-          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
-        run: |
-          set -euo pipefail
-          python3 storage_sync.py download
-
-      # -------------------------------------------------------------------
       # Football grading
       # -------------------------------------------------------------------
 
@@ -183,23 +167,10 @@ jobs:
           python3 generate_dashboard.py
 
       # -------------------------------------------------------------------
-      # Persist state to S3 & update DASHBOARD.md in repository
+      # Persist database + dashboard
       # -------------------------------------------------------------------
 
-      - name: Sync persistent state to S3
-        if: always()
-        continue-on-error: true
-        env:
-          S3_BUCKET: ${{ secrets.S3_BUCKET || secrets.STATE_S3_BUCKET }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
-          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
-        run: |
-          set -euo pipefail
-          python3 storage_sync.py upload
-
-      - name: Save public DASHBOARD.md back to the repo
+      - name: Save results back to the repo
         if: always()
         run: |
           set -euo pipefail
@@ -207,17 +178,15 @@ jobs:
           git config user.name "sports-agent-bot"
           git config user.email "actions@github.com"
 
-          # Only DASHBOARD.md is public presentation state. predictions.db and
-          # telegram_memory.json are stored in private persistent S3 storage
-          # and ignored in git.
-          git add DASHBOARD.md 2>/dev/null || true
+          # Both the prediction database and dashboard are generated state.
+          git add predictions.db DASHBOARD.md 2>/dev/null || true
 
           if git diff --staged --quiet; then
-            echo "No dashboard changes to commit."
+            echo "No prediction-state changes to commit."
             exit 0
           fi
 
           git commit \
-            -m "Dashboard update $(date -u +%Y-%m-%d)"
+            -m "Prediction update $(date -u +%Y-%m-%d)"
 
           git push origin HEAD:${GITHUB_REF_NAME}
