@@ -1142,7 +1142,8 @@ def predict_fixture(
             current_away_goals
         ):
             current_away_goals = 0
-            markets = (
+
+        markets = (
             live_model.live_market_probabilities(
                 prediction[
                     "expected_goals"
@@ -2254,9 +2255,7 @@ def run_grading_basketball():
         game_date,
         home_team,
         away_team,
-    )
-
-    in pending:
+    ) in pending:
 
         if quota_hit:
             break
