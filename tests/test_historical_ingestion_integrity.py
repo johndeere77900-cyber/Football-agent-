@@ -65,17 +65,38 @@ def test_req2_missing_fixture_id_rejected(temp_db):
     assert storage.get_historical_fixture_count(39, 2024) == 0
 
 
-# 3. Invalid/non-positive fixture ID is rejected
+# 3. Invalid/non-positive/float fixture ID is rejected
 def test_req3_invalid_non_positive_fixture_id_rejected(temp_db):
     fix_zero = make_fixture(fid=0)
     fix_neg = make_fixture(fid=-5)
     fix_str = make_fixture(fid="invalid_id")
     fix_bool = make_fixture(fid=True)
+    fix_float = make_fixture(fid=1.9)
+    fix_float_str = make_fixture(fid="1.9")
 
-    res = storage.save_historical_fixtures([fix_zero, fix_neg, fix_str, fix_bool], league_id=39, season=2024)
+    res = storage.save_historical_fixtures(
+        [fix_zero, fix_neg, fix_str, fix_bool, fix_float, fix_float_str],
+        league_id=39,
+        season=2024,
+    )
+    assert res["valid"] == 0
+    assert res["rejected_count"] == 6
+    assert storage.get_historical_fixture_count(39, 2024) == 0
+
+
+def test_strict_integer_validation_floats_nan_infinity_rejected(temp_db):
+    fix_float_goals = make_fixture(fid=102, home_goals=1.9)
+    fix_float_str_goals = make_fixture(fid=103, home_goals="1.9")
+    fix_nan_goals = make_fixture(fid=104, home_goals=float("nan"))
+    fix_inf_goals = make_fixture(fid=105, home_goals=float("inf"))
+
+    res = storage.save_historical_fixtures(
+        [fix_float_goals, fix_float_str_goals, fix_nan_goals, fix_inf_goals],
+        league_id=39,
+        season=2024,
+    )
     assert res["valid"] == 0
     assert res["rejected_count"] == 4
-    assert storage.get_historical_fixture_count(39, 2024) == 0
 
 
 # 4. Malformed kickoff timestamp is rejected
@@ -85,6 +106,26 @@ def test_req4_malformed_kickoff_timestamp_rejected(temp_db):
     res = storage.save_historical_fixtures([fix_bad_date, fix_empty_date], league_id=39, season=2024)
     assert res["valid"] == 0
     assert res["rejected_count"] == 2
+
+
+def test_strict_kickoff_timezone_awareness(temp_db):
+    # Valid UTC ISO timestamp
+    fix_utc = make_fixture(fid=501, date="2025-01-10T15:00:00+00:00")
+    # Valid trailing Z
+    fix_z = make_fixture(fid=502, date="2025-01-10T15:00:00Z")
+    # Valid offset (+01:00)
+    fix_offset = make_fixture(fid=503, date="2025-01-10T16:00:00+01:00")
+    # Timezone-naive timestamp (must be rejected)
+    fix_naive = make_fixture(fid=504, date="2025-01-10T15:00:00")
+
+    res = storage.save_historical_fixtures([fix_utc, fix_z, fix_offset, fix_naive], league_id=39, season=2024)
+    assert res["valid"] == 3
+    assert res["rejected_count"] == 1
+
+    stored = storage.get_historical_fixtures(39, 2024)
+    dates = [f["fixture"]["date"] for f in stored]
+    # Check deterministic normalization to UTC
+    assert all(d == "2025-01-10T15:00:00+00:00" for d in dates)
 
 
 # 5. Missing home team ID is rejected
@@ -255,9 +296,3 @@ def test_req19_quota_tests_pass(temp_db, monkeypatch):
 
     assert report["quota_budget_stopped"] is True
     assert report["status"] == "INCOMPLETE"
-
-
-# 20. Full regression suite passes
-def test_req20_full_suite_runs():
-    # Meta test verifying test runner succeeds
-    assert True
