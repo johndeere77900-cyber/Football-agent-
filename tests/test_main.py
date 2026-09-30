@@ -472,6 +472,85 @@ def test_live_path_remains_separate(
     assert "cards" not in result["markets"]
 
 
+def test_main_imports_successfully():
+    import main as test_import
+    assert hasattr(test_import, "predict_fixture")
+    assert hasattr(test_import, "run_grading_basketball")
+
+
+def test_run_grading_basketball_loop_executes(monkeypatch):
+    monkeypatch.setattr(
+        main.storage,
+        "init_basketball_db",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        main.storage,
+        "get_pending_basketball_games",
+        lambda: [(101, "2026-09-28", "Home", "Away")],
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        main.basketball_api,
+        "get_game_result",
+        lambda game_id: calls.append(game_id) or None,
+    )
+
+    main.run_grading_basketball()
+    assert calls == [101]
+
+
+def test_predict_fixture_live_with_valid_scores(monkeypatch, football_fixture):
+    live_fixture = dict(football_fixture)
+    live_fixture["fixture"] = dict(football_fixture["fixture"])
+    live_fixture["fixture"]["status"] = {"short": "1H", "elapsed": 30}
+    live_fixture["goals"] = {"home": 2, "away": 1}
+
+    patch_prediction_dependencies(monkeypatch)
+
+    called_args = {}
+    def fake_live(home_xg, away_xg, elapsed, status, home_goals, away_goals):
+        called_args["home_goals"] = home_goals
+        called_args["away_goals"] = away_goals
+        return {
+            "is_live": True,
+            "match_result": {"home_win": 0.7, "draw": 0.2, "away_win": 0.1},
+        }
+
+    monkeypatch.setattr(main.live_model, "live_market_probabilities", fake_live)
+
+    result = main.predict_fixture(live_fixture, 1.35)
+    assert result["is_live"] is True
+    assert called_args["home_goals"] == 2
+    assert called_args["away_goals"] == 1
+
+
+def test_predict_fixture_live_with_invalid_scores_defaults_to_zero(monkeypatch, football_fixture):
+    live_fixture = dict(football_fixture)
+    live_fixture["fixture"] = dict(football_fixture["fixture"])
+    live_fixture["fixture"]["status"] = {"short": "1H", "elapsed": 30}
+    live_fixture["goals"] = {"home": None, "away": "invalid"}
+
+    patch_prediction_dependencies(monkeypatch)
+
+    called_args = {}
+    def fake_live(home_xg, away_xg, elapsed, status, home_goals, away_goals):
+        called_args["home_goals"] = home_goals
+        called_args["away_goals"] = away_goals
+        return {
+            "is_live": True,
+            "match_result": {"home_win": 0.5, "draw": 0.3, "away_win": 0.2},
+        }
+
+    monkeypatch.setattr(main.live_model, "live_market_probabilities", fake_live)
+
+    result = main.predict_fixture(live_fixture, 1.35)
+    assert result["is_live"] is True
+    assert called_args["home_goals"] == 0
+    assert called_args["away_goals"] == 0
+
+
 def test_odds_are_only_fetched_when_requested(
     monkeypatch,
     football_fixture,
