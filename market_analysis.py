@@ -1,0 +1,171 @@
+"""
+Market analysis layer for Football and Basketball.
+
+Calculates bookmaker implied probabilities, market normalized probabilities, edge, and EV.
+Enforces strict validity and freshness rules. Never invents odds or substitutes arbitrary values.
+"""
+
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+import config
+from probability_validation import validate_single_probability, ProbabilityValidationError
+
+
+def is_odds_stale(odds_timestamp: Optional[str], cutoff_timestamp: Optional[str] = None) -> bool:
+    """
+    Check if odds are stale according to configured data policy (MAX_ODDS_AGE_HOURS).
+    """
+    if not odds_timestamp:
+        return True
+
+    try:
+        iso_str = odds_timestamp.replace("Z", "+00:00")
+        dt_odds = datetime.fromisoformat(iso_str)
+
+        if cutoff_timestamp:
+            iso_cut = cutoff_timestamp.replace("Z", "+00:00")
+            dt_ref = datetime.fromisoformat(iso_cut)
+        else:
+            dt_ref = datetime.now(timezone.utc)
+
+        diff_hours = abs((dt_ref - dt_odds).total_seconds()) / 3600.0
+        max_age = float(getattr(config, "MAX_ODDS_AGE_HOURS", 24.0))
+
+        return diff_hours > max_age
+
+    except (ValueError, TypeError):
+        return True
+
+
+def calculate_outcome_market_analysis(
+    calibrated_prob: float,
+    decimal_odds: Optional[float],
+    odds_timestamp: Optional[str] = None,
+    raw_prob: Optional[float] = None,
+    cutoff_timestamp: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Calculate bookmaker implied probability, edge, and EV for a single outcome.
+
+    Formula:
+      implied_prob = 1.0 / decimal_odds
+      edge = calibrated_prob - implied_prob
+      EV = (calibrated_prob * decimal_odds) - 1.0
+    """
+    # Validate calibrated probability
+    try:
+        c_prob = validate_single_probability(calibrated_prob, name="calibrated_prob")
+    except ProbabilityValidationError:
+        return {
+            "odds": None,
+            "implied_probability": None,
+            "edge": None,
+            "ev": None,
+            "odds_timestamp": odds_timestamp,
+            "odds_status": "INVALID_PROBABILITY",
+        }
+
+    # Validate decimal odds
+    if decimal_odds is None or isinstance(decimal_odds, bool):
+        return {
+            "odds": None,
+            "implied_probability": None,
+            "edge": None,
+            "ev": None,
+            "odds_timestamp": odds_timestamp,
+            "odds_status": "MISSING",
+        }
+
+    try:
+        odds_val = float(decimal_odds)
+    except (TypeError, ValueError):
+        return {
+            "odds": None,
+            "implied_probability": None,
+            "edge": None,
+            "ev": None,
+            "odds_timestamp": odds_timestamp,
+            "odds_status": "INVALID_ODDS",
+        }
+
+    if odds_val <= 1.0:
+        return {
+            "odds": odds_val,
+            "implied_probability": None,
+            "edge": None,
+            "ev": None,
+            "odds_timestamp": odds_timestamp,
+            "odds_status": "INVALID_ODDS",
+        }
+
+    if is_odds_stale(odds_timestamp, cutoff_timestamp):
+        return {
+            "odds": odds_val,
+            "implied_probability": 1.0 / odds_val,
+            "edge": None,
+            "ev": None,
+            "odds_timestamp": odds_timestamp,
+            "odds_status": "STALE",
+        }
+
+    implied_p = 1.0 / odds_val
+    edge = c_prob - implied_p
+    ev = (c_prob * odds_val) - 1.0
+
+    return {
+        "odds": odds_val,
+        "implied_probability": implied_p,
+        "edge": edge,
+        "ev": ev,
+        "odds_timestamp": odds_timestamp,
+        "odds_status": "AVAILABLE",
+    }
+
+
+def analyze_market_odds(
+    calibrated_markets: Dict[str, Any],
+    odds_data: Optional[Dict[str, Any]],
+    raw_markets: Optional[Dict[str, Any]] = None,
+    odds_timestamp: Optional[str] = None,
+    cutoff_timestamp: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Analyze odds across all supported market choices.
+
+    Returns dict mapping outcome key -> market analysis dict.
+    """
+    analysis: Dict[str, Any] = {}
+
+    if not isinstance(calibrated_markets, dict):
+        return analysis
+
+    if not isinstance(odds_data, dict):
+        odds_data = {}
+
+    for market_key, market_val in calibrated_markets.items():
+        if isinstance(market_val, dict):
+            m_odds = odds_data.get(market_key, {})
+            if not isinstance(m_odds, dict):
+                m_odds = {}
+
+            analysis[market_key] = {}
+            for outcome_key, prob in market_val.items():
+                if isinstance(prob, (int, float)) and not isinstance(prob, bool):
+                    d_odds = m_odds.get(outcome_key) or m_odds.get(f"implied_{outcome_key}")
+                    # If odds_data was from odds_api.get_odds_for_match which gives implied probabilities directly:
+                    if d_odds is not None and 0.0 < float(d_odds) < 1.0 and "implied" in str(m_odds.keys()):
+                        # Convert implied prob back to decimal odds for EV calc:
+                        d_odds = 1.0 / float(d_odds)
+
+                    raw_p = raw_markets.get(market_key, {}).get(outcome_key) if isinstance(raw_markets, dict) else None
+
+                    analysis[market_key][outcome_key] = calculate_outcome_market_analysis(
+                        calibrated_prob=float(prob),
+                        decimal_odds=d_odds,
+                        odds_timestamp=odds_timestamp,
+                        raw_prob=raw_p,
+                        cutoff_timestamp=cutoff_timestamp,
+                    )
+
+    return analysis
