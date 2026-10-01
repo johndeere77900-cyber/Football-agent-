@@ -1698,6 +1698,7 @@ def run_real_backtest(
                     prev_act = _actual_match_result(prev_f)
                     if prev_act in ("home_win", "draw", "away_win") and isinstance(prev_pred, dict):
                         prior_raw_predictions_by_id[prev_id] = {
+                            "fixture_id": prev_id,
                             "raw_probabilities": prev_pred.get("raw_probabilities", {}),
                             "actual": prev_act,
                             "timestamp": prev_date,
@@ -2284,6 +2285,8 @@ def run_basketball_backtest(
                                 p_act = "home_win" if p_h_pts > p_a_pts else ("away_win" if p_a_pts > p_h_pts else "draw")
                                 if p_act in ("home_win", "away_win"):
                                     prior_raw_predictions_by_id[prev_id] = {
+                                        "fixture_id": prev_id,
+                                        "game_id": prev_id,
                                         "raw_probabilities": prev_pred.get("raw_probabilities", {}),
                                         "actual": p_act,
                                         "timestamp": prev_date,

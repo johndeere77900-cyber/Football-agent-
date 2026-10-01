@@ -53,7 +53,7 @@ def test_calibration_fail_closed_on_error():
             raise RuntimeError("Calibrator execution failure")
 
     res = calibration.apply_calibration_layer(raw_markets, calibrator=RaisingCalibrator(), sport="football")
-    assert res["calibration_metadata"]["calibration_status"] == "ERROR_FALLBACK_RAW"
+    assert res["calibration_metadata"]["calibration_status"] == "ERROR"
 
     # Verify prediction_engine pipeline handles ERROR_FALLBACK_RAW properly
     features = {
@@ -109,17 +109,17 @@ def test_basketball_calibration_missing_moneyline():
     # Missing away_win
     raw_missing_away = {"moneyline": {"home_win": 0.6}}
     res1 = calibration.apply_calibration_layer(raw_missing_away, calibrator=calibration.PlattCalibrator(), sport="basketball")
-    assert res1["calibration_metadata"]["calibration_status"] == "ERROR_FALLBACK_RAW"
+    assert res1["calibration_metadata"]["calibration_status"] == "ERROR"
 
     # Missing home_win
     raw_missing_home = {"moneyline": {"away_win": 0.4}}
     res2 = calibration.apply_calibration_layer(raw_missing_home, calibrator=calibration.PlattCalibrator(), sport="basketball")
-    assert res2["calibration_metadata"]["calibration_status"] == "ERROR_FALLBACK_RAW"
+    assert res2["calibration_metadata"]["calibration_status"] == "ERROR"
 
     # Non-numeric moneyline
     raw_invalid = {"moneyline": {"home_win": "invalid", "away_win": 0.4}}
     res3 = calibration.apply_calibration_layer(raw_invalid, calibrator=calibration.PlattCalibrator(), sport="basketball")
-    assert res3["calibration_metadata"]["calibration_status"] == "ERROR_FALLBACK_RAW"
+    assert res3["calibration_metadata"]["calibration_status"] == "ERROR"
 
     # Valid complete moneyline
     raw_valid = {"moneyline": {"home_win": 0.60, "away_win": 0.40}}

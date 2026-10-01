@@ -2111,7 +2111,7 @@ def run_daily_basketball(
             prediction_context = "LIVE" if prediction.get("is_live") else "PRE_MATCH"
             storage.save_basketball_prediction(
                 game_id=prediction["game_id"],
-                game_date=prediction["date"],
+                game_date=prediction.get("date") or prediction.get("data_cutoff_timestamp") or game.get("date"),
                 home_team=prediction["home_team"],
                 away_team=prediction["away_team"],
                 league=prediction["league"],

@@ -356,13 +356,14 @@ def predict_game(
             contract["insufficient_data"] = True
             contract["reason"] = f"Calibrated probability validation error: {exc}"
             return contract
-    elif calib_meta["calibration_status"] == "ERROR_FALLBACK_RAW":
+    elif calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
         calibrated_markets = {}
 
-    calibrated_markets["expected_points"] = raw_markets["expected_points"]
-    if "total_points" in calibrated_markets and isinstance(calibrated_markets["total_points"], dict):
-        calibrated_markets["total_points"]["line"] = TOTAL_LINE
-        calibrated_markets["total_points"]["expected_total"] = round(total_expected, 1)
+    if calibrated_markets:
+        calibrated_markets["expected_points"] = raw_markets["expected_points"]
+        if "total_points" in calibrated_markets and isinstance(calibrated_markets["total_points"], dict):
+            calibrated_markets["total_points"]["line"] = TOTAL_LINE
+            calibrated_markets["total_points"]["expected_total"] = round(total_expected, 1)
 
     # 4. MARKET ANALYSIS
     m_analysis = market_analysis.analyze_market_odds(
@@ -373,7 +374,7 @@ def predict_game(
         cutoff_timestamp=cutoff_ts,
     )
 
-    if calib_meta["calibration_status"] == "ERROR_FALLBACK_RAW":
+    if calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
         for m_key, m_val in m_analysis.items():
             if isinstance(m_val, dict):
                 for o_key, o_val in m_val.items():
@@ -392,8 +393,8 @@ def predict_game(
     else:
         samples = home_matches or away_matches or 0
 
-    ml = calibrated_markets["moneyline"]
-    top_p = max(ml.values())
+    ml = calibrated_markets.get("moneyline") or raw_markets.get("moneyline", {})
+    top_p = max(ml.values()) if isinstance(ml, dict) and ml else 0.0
     unc_info = uncertainty.calculate_uncertainty(
         feature_coverage=1.0 if samples >= 5 else (samples / 5.0),
         sample_count=samples,
@@ -443,7 +444,7 @@ def predict_game(
         },
     )
 
-    if calib_meta["calibration_status"] == "ERROR_FALLBACK_RAW":
+    if calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
         contract["status"] = "CALIBRATION_ERROR"
 
     return contract

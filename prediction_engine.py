@@ -538,7 +538,7 @@ def predict_from_features(
             contract["insufficient_data"] = True
             contract["reason"] = f"Calibrated probability validation error: {exc}"
             return contract
-    elif calib_meta["calibration_status"] == "ERROR_FALLBACK_RAW":
+    elif calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
         calibrated_markets = {}
 
     # 4. MARKET ANALYSIS (ODDS / IMPLIED / EDGE / EV)
@@ -550,7 +550,7 @@ def predict_from_features(
         cutoff_timestamp=data_cutoff_timestamp,
     )
 
-    if calib_meta["calibration_status"] == "ERROR_FALLBACK_RAW":
+    if calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
         for m_key, m_val in m_analysis.items():
             if isinstance(m_val, dict):
                 for o_key, o_val in m_val.items():
@@ -625,7 +625,7 @@ def predict_from_features(
         },
     )
 
-    if calib_meta["calibration_status"] == "ERROR_FALLBACK_RAW":
+    if calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
         res["status"] = "CALIBRATION_ERROR"
 
     return res

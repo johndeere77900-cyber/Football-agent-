@@ -50,7 +50,7 @@ def evaluate_quality_gate(
         if "insufficient_data" not in reasons and "insufficient_history" not in reasons:
             reasons.append("high_uncertainty")
 
-    if calibration_status == "ERROR_FALLBACK_RAW":
+    if calibration_status in ("ERROR", "ERROR_FALLBACK_RAW"):
         reasons.append("calibration_error")
     elif calibration_status != "APPLIED":
         reasons.append("calibration_unavailable")
