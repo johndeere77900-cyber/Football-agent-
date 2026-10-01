@@ -1462,16 +1462,28 @@ def compute_stability_diagnostics(
         sc = ls_bucket["sample_count"]
         ls_bucket["accuracy"] = round(ls_bucket["correct_count"] / sc, 4) if sc > 0 else 0.0
 
+    cal_statuses = [e.get("calibration_status") for e in log_entries if e.get("calibration_status")]
+    if not cal_statuses:
+        primary_cal_status = "UNAVAILABLE"
+    elif all(s == "APPLIED" for s in cal_statuses):
+        primary_cal_status = "CALIBRATED"
+    elif all(s == "ERROR" for s in cal_statuses):
+        primary_cal_status = "ERROR"
+    elif all(s == "UNAVAILABLE" for s in cal_statuses):
+        primary_cal_status = "UNAVAILABLE"
+    else:
+        primary_cal_status = "PARTIALLY_CALIBRATED"
+
     if sport == "football":
         market_calib_status = {
-            "match_result": "CALIBRATED" if any(e.get("calibration_status") == "APPLIED" for e in log_entries) else "RAW_UNCALIBRATED",
+            "match_result": primary_cal_status,
             "double_chance": "RAW_UNCALIBRATED",
             "over_under_2_5": "RAW_UNCALIBRATED",
             "btts": "RAW_UNCALIBRATED",
         }
     else:
         market_calib_status = {
-            "moneyline": "CALIBRATED" if any(e.get("calibration_status") == "APPLIED" for e in log_entries) else "RAW_UNCALIBRATED",
+            "moneyline": primary_cal_status,
             "total_points": "RAW_UNCALIBRATED",
         }
 

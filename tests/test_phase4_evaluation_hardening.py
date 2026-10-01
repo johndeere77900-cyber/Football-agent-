@@ -264,6 +264,9 @@ def test_mixed_calibration_status_labeling():
     assert eval_res["match_result"]["calibration_status"] == "PARTIALLY_CALIBRATED"
     assert eval_res["btts"]["calibration_status"] == "RAW_UNCALIBRATED"
 
+    diag = backtest.compute_stability_diagnostics(log_entries, sport="football")
+    assert diag["calibration_by_market"]["match_result"] == "PARTIALLY_CALIBRATED"
+
 
 # ==============================================================================
 # 7. ODDS BASELINE STRICT CHRONOLOGY & VALIDITY
