@@ -260,6 +260,19 @@ def test_rejected_count_survives_resumed_sync_football_and_basketball(isolated_d
     assert st["status"] == "INCOMPLETE"
 
 
+def test_empty_api_response_remains_incomplete(isolated_db):
+    # An API response that returns no valid fixtures/games must leave the dataset INCOMPLETE
+    def mock_empty_p1(league_id, season, page=1, max_budget=None):
+        return {"fixtures": [], "page": 1, "expected_pages": 1}
+
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_p1):
+        rep = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    assert rep["status"] == "INCOMPLETE"
+    st = storage.get_historical_dataset_status(39, 2024, sport="football")
+    assert st["status"] == "INCOMPLETE"
+
+
 def test_changing_pagination_totals_fails_closed(isolated_db):
     fix1 = sample_football_fixture(1201)
 

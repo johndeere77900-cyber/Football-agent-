@@ -188,26 +188,16 @@ def _away_name(
 def _goals(
     fixture: Dict[str, Any],
 ) -> Tuple[Optional[int], Optional[int]]:
-    goals = fixture.get("goals", {})
-
-    home = goals.get("home")
-    away = goals.get("away")
-
-    if not _valid_goal(home) or not _valid_goal(away):
+    goals = historical_match_policy.get_football_match_goals(fixture)
+    if goals is None:
         return None, None
-
-    return int(home), int(away)
+    return goals
 
 
 def _is_finished(
     fixture: Dict[str, Any],
 ) -> bool:
-    return (
-        fixture.get("fixture", {})
-        .get("status", {})
-        .get("short")
-        == "FT"
-    )
+    return historical_match_policy.is_finished_match(fixture, sport="football")
 
 
 def _fixture_is_gradeable(
@@ -500,18 +490,7 @@ def _historical_prediction_for_fixture(
 def _actual_match_result(
     fixture: Dict[str, Any],
 ) -> Optional[str]:
-    home, away = _goals(fixture)
-
-    if home is None or away is None:
-        return None
-
-    if home > away:
-        return "home_win"
-
-    if home < away:
-        return "away_win"
-
-    return "draw"
+    return historical_match_policy.get_1x2_regulation_outcome(fixture)
 
 
 def _actual_double_chance(

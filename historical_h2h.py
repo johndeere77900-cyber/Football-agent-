@@ -90,10 +90,11 @@ def _requested_team_result(
         "W", "D", or "L"
     """
     fixture_home_id = fixture["teams"]["home"]["id"]
-    fixture_away_id = fixture["teams"]["away"]["id"]
 
-    fixture_home_goals = fixture["goals"]["home"]
-    fixture_away_goals = fixture["goals"]["away"]
+    goals = historical_match_policy.get_h2h_form_goals(fixture)
+    if goals is None:
+        raise ValueError("Fixture has missing or invalid goals.")
+    fixture_home_goals, fixture_away_goals = goals
 
     if fixture_home_id == requested_home_team_id:
         requested_home_goals = fixture_home_goals
@@ -128,8 +129,10 @@ def _requested_team_goals(
     """
     fixture_home_id = fixture["teams"]["home"]["id"]
 
-    fixture_home_goals = fixture["goals"]["home"]
-    fixture_away_goals = fixture["goals"]["away"]
+    goals = historical_match_policy.get_h2h_form_goals(fixture)
+    if goals is None:
+        raise ValueError("Fixture has missing or invalid goals.")
+    fixture_home_goals, fixture_away_goals = goals
 
     if fixture_home_id == requested_home_team_id:
         return fixture_home_goals, fixture_away_goals
