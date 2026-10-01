@@ -98,7 +98,7 @@ def sync_historical_fixtures(
     total_newly_stored = 0
     total_duplicates_skipped = 0
     total_rejected_count = dataset_info.get("rejected_count", 0) if not refresh else 0
-    empty_pages_encountered = 0
+    total_empty_pages_count = dataset_info.get("empty_pages_count", 0) if not refresh else 0
     all_rejection_reasons = {}
 
     current_page = start_p
@@ -121,7 +121,7 @@ def sync_historical_fixtures(
                 break
 
             if not page_fixtures:
-                empty_pages_encountered += 1
+                total_empty_pages_count += 1
 
             fixtures_received.extend(page_fixtures)
 
@@ -141,7 +141,7 @@ def sync_historical_fixtures(
             if current_page >= expected_pages:
                 acquisition_complete = True
 
-            # Update progress in manifest immediately with cumulative rejected_count
+            # Update progress in manifest immediately with cumulative rejected_count and empty_pages_count
             storage.mark_historical_dataset_incomplete(
                 league_id,
                 season,
@@ -151,6 +151,7 @@ def sync_historical_fixtures(
                 pages_completed=pages_completed,
                 acquisition_complete=acquisition_complete,
                 rejected_count=total_rejected_count,
+                empty_pages_count=total_empty_pages_count,
             )
             if acquisition_complete or current_page >= expected_pages:
                 break
@@ -243,7 +244,7 @@ def sync_historical_fixtures(
         and expected_pages > 0
         and pages_completed == expected_pages
         and rejected_count == 0
-        and empty_pages_encountered == 0
+        and total_empty_pages_count == 0
         and valid_fixtures_count > 0
         and final_stored_count > 0
     )
@@ -259,6 +260,7 @@ def sync_historical_fixtures(
             acquisition_complete=acquisition_complete,
             enrichment_status=enrichment_status,
             rejected_count=rejected_count,
+            empty_pages_count=total_empty_pages_count,
         )
         final_status = "COMPLETE"
     else:
@@ -272,6 +274,7 @@ def sync_historical_fixtures(
             acquisition_complete=acquisition_complete,
             enrichment_status=enrichment_status,
             rejected_count=rejected_count,
+            empty_pages_count=total_empty_pages_count,
         )
         final_status = "INCOMPLETE"
 
@@ -403,7 +406,7 @@ def sync_historical_basketball_games(
     total_newly_stored = 0
     total_duplicates_skipped = 0
     total_rejected_count = dataset_info.get("rejected_count", 0) if not refresh else 0
-    empty_pages_encountered = 0
+    total_empty_pages_count = dataset_info.get("empty_pages_count", 0) if not refresh else 0
     all_rejection_reasons = {}
 
     current_page = start_p
@@ -426,7 +429,7 @@ def sync_historical_basketball_games(
                 break
 
             if not page_games:
-                empty_pages_encountered += 1
+                total_empty_pages_count += 1
 
             games_received.extend(page_games)
 
@@ -454,6 +457,7 @@ def sync_historical_basketball_games(
                 pages_completed=pages_completed,
                 acquisition_complete=acquisition_complete,
                 rejected_count=total_rejected_count,
+                empty_pages_count=total_empty_pages_count,
             )
             if acquisition_complete or current_page >= expected_pages:
                 break
@@ -487,7 +491,7 @@ def sync_historical_basketball_games(
         and expected_pages > 0
         and pages_completed == expected_pages
         and rejected_count == 0
-        and empty_pages_encountered == 0
+        and total_empty_pages_count == 0
         and valid_count > 0
         and final_stored_count > 0
     )
@@ -502,6 +506,7 @@ def sync_historical_basketball_games(
             pages_completed=pages_completed,
             acquisition_complete=acquisition_complete,
             rejected_count=rejected_count,
+            empty_pages_count=total_empty_pages_count,
         )
         final_status = "COMPLETE"
     else:
@@ -514,6 +519,7 @@ def sync_historical_basketball_games(
             pages_completed=pages_completed,
             acquisition_complete=acquisition_complete,
             rejected_count=rejected_count,
+            empty_pages_count=total_empty_pages_count,
         )
         final_status = "INCOMPLETE"
 
