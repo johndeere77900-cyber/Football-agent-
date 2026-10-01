@@ -68,21 +68,74 @@ def confidence_flag(outcome_probabilities, calibration_status="UNAVAILABLE"):
     }
 
 
+def _categorize_market(label: str) -> str:
+    lbl = str(label).lower()
+    if "btts" in lbl:
+        return "btts"
+    elif "cards" in lbl:
+        return "cards"
+    elif "over" in lbl or "under" in lbl:
+        if "home over" in lbl or "home under" in lbl or "away over" in lbl or "away under" in lbl:
+            return "team_goals"
+        return "over_under"
+    elif "draw" in lbl or "or" in lbl:
+        if "home or" in lbl or "away or" in lbl or "home_or" in lbl or "away_or" in lbl:
+            return "double_chance"
+        return "match_result"
+    elif "win" in lbl or "home" in lbl or "away" in lbl:
+        return "match_result" if ("home win" in lbl or "away win" in lbl or "draw" in lbl or lbl in ("home_win", "draw", "away_win")) else "moneyline"
+    elif "points" in lbl:
+        return "total_points"
+    return "other"
+
+
 def safest_pick(candidates):
     """
-    candidates: list of (label, probability) tuples covering every market
-    computed for this match (e.g. "Home Win", "Over 2.5 Goals", "BTTS No").
-    Returns the single most one-sided outcome across all of them - explicitly
-    marked non-authoritative and informational-only. It must never override
-    authoritative prediction contract, Quality Gate, or market-specific decisions.
+    candidates: dict of market_key -> list of (label, probability), OR list of (label, probability) tuples.
+
+    Returns market-scoped safest picks - explicitly marked non-authoritative and
+    informational-only. It must never override authoritative prediction contract,
+    Quality Gate, or market-specific decisions.
     """
     if not candidates:
         return None
-    best_label, best_prob = max(candidates, key=lambda x: x[1])
+
+    market_groups: dict = {}
+
+    if isinstance(candidates, dict):
+        for m_key, items in candidates.items():
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, (tuple, list)) and len(item) >= 2:
+                        market_groups.setdefault(str(m_key), []).append((str(item[0]), float(item[1])))
+            elif isinstance(items, (tuple, list)) and len(items) >= 2:
+                market_groups.setdefault(str(m_key), []).append((str(items[0]), float(items[1])))
+    elif isinstance(candidates, (list, tuple)):
+        for item in candidates:
+            if isinstance(item, (tuple, list)) and len(item) >= 2:
+                label, prob = str(item[0]), float(item[1])
+                m_key = _categorize_market(label)
+                market_groups.setdefault(m_key, []).append((label, prob))
+
+    if not market_groups:
+        return None
+
+    by_market = {}
+    for m_key, items in market_groups.items():
+        if items:
+            best_label, best_prob = max(items, key=lambda x: x[1])
+            by_market[m_key] = {"label": best_label, "probability": best_prob}
+
+    if not by_market:
+        return None
+
+    top_overall = max(by_market.values(), key=lambda x: x["probability"])
+
     return {
-        "label": best_label,
-        "probability": best_prob,
+        "label": top_overall["label"],
+        "probability": top_overall["probability"],
+        "by_market": by_market,
         "is_authoritative": False,
         "informational_only": True,
-        "warning": "Non-authoritative selection across distinct event spaces; does not represent model signal or Quality Gate decision.",
+        "warning": "Informational-only market-scoped selection; does not represent model signal or Quality Gate decision.",
     }

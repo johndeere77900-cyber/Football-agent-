@@ -1153,23 +1153,69 @@ def compute_accuracy_confidence_interval(
     }
 
 
-def compute_empirical_baseline(
-    actuals: Sequence[str],
+def compute_point_in_time_empirical_baseline(
+    log_subset: Sequence[Dict[str, Any]],
     outcomes: Sequence[str],
 ) -> Dict[str, Any]:
     """
-    Compute empirical frequency baseline for a sequence of actual outcomes.
-    Predicts constant probabilities equal to empirical distribution of actuals.
+    Compute point-in-time empirical baseline over log entries without target leakage.
+    Each entry's baseline probability distribution is constructed strictly
+    from prior finished matches before that entry's cutoff timestamp.
     """
-    if not actuals:
+    preds = []
+    acts = []
+
+    for entry in log_subset:
+        if not isinstance(entry, dict):
+            continue
+        act = entry.get("actual")
+        prior_dist = entry.get("prior_empirical_distribution")
+        if isinstance(act, str) and act in outcomes and isinstance(prior_dist, dict):
+            clean_dist = {o: _safe_float(prior_dist.get(o, 0.0)) or 0.0 for o in outcomes}
+            tot = sum(clean_dist.values())
+            if tot > 0:
+                norm_dist = {o: clean_dist[o] / tot for o in outcomes}
+            else:
+                norm_dist = {o: 1.0 / len(outcomes) for o in outcomes}
+            preds.append(norm_dist)
+            acts.append(act)
+
+    if not preds:
         return {
             "sample_count": 0,
             "accuracy": None,
             "brier_score": None,
             "log_loss": None,
-            "empirical_distribution": {},
+            "leakage_safe": True,
         }
 
+    n = len(preds)
+    acc = compute_binary_accuracy(preds, acts)
+    brier = compute_brier_score(preds, acts, outcomes=outcomes)
+    logloss = compute_log_loss(preds, acts, outcomes=outcomes)
+
+    return {
+        "sample_count": n,
+        "accuracy": round(acc, 4) if acc is not None else None,
+        "brier_score": round(brier, 4) if brier is not None else None,
+        "log_loss": round(logloss, 4) if logloss is not None else None,
+        "leakage_safe": True,
+    }
+
+
+def compute_empirical_baseline(
+    log_or_actuals: Any,
+    outcomes: Sequence[str],
+) -> Dict[str, Any]:
+    """
+    Compute empirical baseline.
+    If log_subset (sequence of dicts) is provided, uses point-in-time prior distributions.
+    """
+    if isinstance(log_or_actuals, (list, tuple)) and log_or_actuals and isinstance(log_or_actuals[0], dict):
+        return compute_point_in_time_empirical_baseline(log_or_actuals, outcomes)
+
+    # Fallback for plain string sequence (compatibility)
+    actuals = log_or_actuals if isinstance(log_or_actuals, (list, tuple)) else []
     clean_actuals = [a for a in actuals if a in outcomes]
     n = len(clean_actuals)
     if n == 0:
@@ -1178,15 +1224,13 @@ def compute_empirical_baseline(
             "accuracy": None,
             "brier_score": None,
             "log_loss": None,
-            "empirical_distribution": {},
+            "leakage_safe": False,
         }
 
     counts = {o: clean_actuals.count(o) for o in outcomes}
     probs = {o: counts[o] / n for o in outcomes}
-
     top_pick = max(probs, key=probs.get)
-    correct_cnt = counts[top_pick]
-    acc = correct_cnt / n
+    acc = counts[top_pick] / n
 
     brier = compute_brier_score([probs] * n, clean_actuals, outcomes=outcomes)
     logloss = compute_log_loss([probs] * n, clean_actuals, outcomes=outcomes)
@@ -1198,6 +1242,7 @@ def compute_empirical_baseline(
         "brier_score": round(brier, 4) if brier is not None else None,
         "log_loss": round(logloss, 4) if logloss is not None else None,
         "empirical_distribution": {k: round(v, 4) for k, v in probs.items()},
+        "leakage_safe": False,
     }
 
 
@@ -1207,20 +1252,34 @@ def compute_odds_baseline(
 ) -> Dict[str, Any]:
     """
     Compute odds implied probability baseline over entries with valid odds.
-    Never uses future odds (checks odds chronology / status).
+    Only includes odds when odds_status is explicitly 'VALID' and point-in-time safe.
+    Unknown, missing, stale, or future odds chronology is excluded.
     """
     preds = []
     acts = []
 
     for entry in log_entries:
         pred_rec = entry.get("prediction", {})
-        m_analysis = pred_rec.get("market_analysis", {}) if isinstance(pred_rec, dict) else {}
+        if not isinstance(pred_rec, dict):
+            continue
+
+        unc = pred_rec.get("uncertainty", {}) if isinstance(pred_rec.get("uncertainty"), dict) else {}
+        odds_status = unc.get("odds_status")
+
+        # Require explicit "VALID" odds status
+        if odds_status != "VALID":
+            continue
+
+        # Check chronology if timestamps are present
+        odds_ts = unc.get("odds_timestamp") or pred_rec.get("odds_timestamp")
+        cutoff_ts = pred_rec.get("data_cutoff_timestamp") or entry.get("date")
+        if odds_ts and cutoff_ts:
+            if not time_utils.is_strictly_before(odds_ts, cutoff_ts):
+                continue
+
+        m_analysis = pred_rec.get("market_analysis", {}) if isinstance(pred_rec.get("market_analysis"), dict) else {}
         m_key = "match_result" if sport == "football" else "moneyline"
         m_odds = m_analysis.get(m_key, {})
-
-        odds_status = pred_rec.get("uncertainty", {}).get("odds_status") if isinstance(pred_rec, dict) else None
-        if odds_status == "FUTURE":
-            continue
 
         if isinstance(m_odds, dict) and m_odds:
             implied_dist = {}
@@ -1269,30 +1328,57 @@ def compute_stability_diagnostics(
     if total == 0:
         return {
             "signal_vs_pass": {"signal_count": 0, "pass_count": 0, "signal_rate": 0.0, "pass_rate": 0.0},
+            "outcome_behavior": {},
             "outcome_frequencies": {},
             "performance_by_uncertainty_state": {},
             "performance_by_confidence_bucket": {},
+            "performance_by_probability_bucket": {},
+            "league_season_breakdown": {},
             "calibration_by_market": {},
         }
 
     signal_cnt = sum(1 for e in log_entries if e.get("quality_gate") == "SIGNAL")
     pass_cnt = sum(1 for e in log_entries if e.get("quality_gate") == "PASS")
 
+    # 1. Outcome Frequencies & Outcome Behavior (actual vs predicted mean probabilities)
     outcome_counts: Dict[str, int] = {}
+    predicted_prob_sums: Dict[str, float] = {}
+    m_key = "match_result" if sport == "football" else "moneyline"
+    possible_outcomes = ("home_win", "draw", "away_win") if sport == "football" else ("home_win", "away_win")
+
     for e in log_entries:
         act = e.get("actual")
         if act:
             outcome_counts[act] = outcome_counts.get(act, 0) + 1
 
-    actual_sample_cnt = sum(outcome_counts.values())
-    outcome_freqs = {
-        k: {
-            "count": v,
-            "frequency": round(v / actual_sample_cnt, 4) if actual_sample_cnt > 0 else 0.0,
-        }
-        for k, v in outcome_counts.items()
-    }
+        p_rec = e.get("prediction", {})
+        m_dist = p_rec.get("markets", {}).get(m_key) if isinstance(p_rec, dict) else None
+        if isinstance(m_dist, dict):
+            for o in possible_outcomes:
+                val = _safe_float(m_dist.get(o, 0.0)) or 0.0
+                predicted_prob_sums[o] = predicted_prob_sums.get(o, 0.0) + val
 
+    actual_sample_cnt = sum(outcome_counts.values())
+    outcome_freqs = {}
+    outcome_behavior = {}
+
+    for o in possible_outcomes:
+        act_cnt = outcome_counts.get(o, 0)
+        act_freq = act_cnt / actual_sample_cnt if actual_sample_cnt > 0 else 0.0
+        pred_mean = predicted_prob_sums.get(o, 0.0) / total if total > 0 else 0.0
+
+        outcome_freqs[o] = {
+            "count": act_cnt,
+            "frequency": round(act_freq, 4),
+        }
+        outcome_behavior[o] = {
+            "actual_count": act_cnt,
+            "actual_frequency": round(act_freq, 4),
+            "predicted_mean_probability": round(pred_mean, 4),
+            "calibration_gap": round(abs(act_freq - pred_mean), 4),
+        }
+
+    # 2. Performance by Uncertainty State
     by_unc: Dict[str, Dict[str, Any]] = {}
     for e in log_entries:
         pred = e.get("prediction", {})
@@ -1306,6 +1392,7 @@ def compute_stability_diagnostics(
         sc = bucket["sample_count"]
         bucket["accuracy"] = round(bucket["correct_count"] / sc, 4) if sc > 0 else 0.0
 
+    # 3. Performance by Confidence Bucket
     by_conf: Dict[str, Dict[str, Any]] = {}
     for e in log_entries:
         pred = e.get("prediction", {})
@@ -1320,6 +1407,52 @@ def compute_stability_diagnostics(
     for c_label, bucket in by_conf.items():
         sc = bucket["sample_count"]
         bucket["accuracy"] = round(bucket["correct_count"] / sc, 4) if sc > 0 else 0.0
+
+    # 4. Performance by Actual Predicted Probability Buckets (<50%, 50-60%, 60-70%, 70%+)
+    prob_buckets = {"<50%": {"sample_count": 0, "correct_count": 0, "accuracy": 0.0},
+                    "50-60%": {"sample_count": 0, "correct_count": 0, "accuracy": 0.0},
+                    "60-70%": {"sample_count": 0, "correct_count": 0, "accuracy": 0.0},
+                    "70%+": {"sample_count": 0, "correct_count": 0, "accuracy": 0.0}}
+
+    for e in log_entries:
+        pred = e.get("prediction", {})
+        m_dist = pred.get("markets", {}).get(m_key) if isinstance(pred, dict) else None
+        if isinstance(m_dist, dict) and m_dist:
+            top_p = max(_safe_float(v) or 0.0 for v in m_dist.values())
+            if top_p < 0.50:
+                b_key = "<50%"
+            elif top_p < 0.60:
+                b_key = "50-60%"
+            elif top_p < 0.70:
+                b_key = "60-70%"
+            else:
+                b_key = "70%+"
+
+            b_obj = prob_buckets[b_key]
+            b_obj["sample_count"] += 1
+            if e.get("correct"):
+                b_obj["correct_count"] += 1
+
+    for b_key, b_obj in prob_buckets.items():
+        sc = b_obj["sample_count"]
+        b_obj["accuracy"] = round(b_obj["correct_count"] / sc, 4) if sc > 0 else 0.0
+
+    # 5. League / Season Breakdown
+    league_season_map: Dict[str, Dict[str, Any]] = {}
+    for e in log_entries:
+        pred = e.get("prediction", {})
+        lid = pred.get("league_id") or e.get("league_id")
+        ssn = pred.get("season") or e.get("season")
+        if lid is not None and ssn is not None:
+            ls_key = f"{lid}_{ssn}"
+            ls_bucket = league_season_map.setdefault(ls_key, {"league_id": lid, "season": ssn, "sample_count": 0, "correct_count": 0, "accuracy": 0.0})
+            ls_bucket["sample_count"] += 1
+            if e.get("correct"):
+                ls_bucket["correct_count"] += 1
+
+    for ls_key, ls_bucket in league_season_map.items():
+        sc = ls_bucket["sample_count"]
+        ls_bucket["accuracy"] = round(ls_bucket["correct_count"] / sc, 4) if sc > 0 else 0.0
 
     if sport == "football":
         market_calib_status = {
@@ -1341,9 +1474,12 @@ def compute_stability_diagnostics(
             "signal_rate": round(signal_cnt / total, 4) if total > 0 else 0.0,
             "pass_rate": round(pass_cnt / total, 4) if total > 0 else 0.0,
         },
+        "outcome_behavior": outcome_behavior,
         "outcome_frequencies": outcome_freqs,
         "performance_by_uncertainty_state": by_unc,
         "performance_by_confidence_bucket": by_conf,
+        "performance_by_probability_bucket": prob_buckets,
+        "league_season_breakdown": league_season_map,
         "calibration_by_market": market_calib_status,
     }
 
@@ -1438,7 +1574,17 @@ def evaluate_football_log_group(
     acc_1x2 = compute_binary_accuracy(preds_1x2, acts_1x2)
     corr_1x2 = sum(1 for p, a in zip(preds_1x2, acts_1x2) if max(p, key=p.get) == a) if sc_1x2 > 0 else 0
     ci_1x2 = compute_accuracy_confidence_interval(corr_1x2, sc_1x2)
-    cal_status_1x2 = "CALIBRATED" if any(e.get("calibration_status") == "APPLIED" for e in log_subset) else "RAW_UNCALIBRATED"
+    cal_statuses_1x2 = [e.get("calibration_status") for e in log_subset if e.get("calibration_status")]
+    if not cal_statuses_1x2:
+        cal_status_1x2 = "UNAVAILABLE"
+    elif all(s == "APPLIED" for s in cal_statuses_1x2):
+        cal_status_1x2 = "CALIBRATED"
+    elif all(s == "ERROR" for s in cal_statuses_1x2):
+        cal_status_1x2 = "ERROR"
+    elif all(s == "UNAVAILABLE" for s in cal_statuses_1x2):
+        cal_status_1x2 = "UNAVAILABLE"
+    else:
+        cal_status_1x2 = "PARTIALLY_CALIBRATED"
 
     match_result_eval = {
         "sample_count": sc_1x2,
@@ -1527,7 +1673,7 @@ def evaluate_football_log_group(
     }
 
     baselines = {
-        "empirical": compute_empirical_baseline(acts_1x2, outcomes=("home_win", "draw", "away_win")),
+        "empirical": compute_empirical_baseline(log_subset, outcomes=("home_win", "draw", "away_win")),
         "odds_implied": compute_odds_baseline(log_subset, sport="football"),
     }
 
@@ -1588,7 +1734,17 @@ def evaluate_basketball_log_group(
     acc_ml = compute_binary_accuracy(preds_ml, acts_ml)
     corr_ml = sum(1 for p, a in zip(preds_ml, acts_ml) if ("home_win" if p.get("home_win", 0) >= p.get("away_win", 0) else "away_win") == a) if sc_ml > 0 else 0
     ci_ml = compute_accuracy_confidence_interval(corr_ml, sc_ml)
-    cal_status_ml = "CALIBRATED" if any(e.get("calibration_status") == "APPLIED" for e in log_subset) else "RAW_UNCALIBRATED"
+    cal_statuses_ml = [e.get("calibration_status") for e in log_subset if e.get("calibration_status")]
+    if not cal_statuses_ml:
+        cal_status_ml = "UNAVAILABLE"
+    elif all(s == "APPLIED" for s in cal_statuses_ml):
+        cal_status_ml = "CALIBRATED"
+    elif all(s == "ERROR" for s in cal_statuses_ml):
+        cal_status_ml = "ERROR"
+    elif all(s == "UNAVAILABLE" for s in cal_statuses_ml):
+        cal_status_ml = "UNAVAILABLE"
+    else:
+        cal_status_ml = "PARTIALLY_CALIBRATED"
 
     moneyline_eval = {
         "sample_count": sc_ml,
@@ -1622,7 +1778,7 @@ def evaluate_basketball_log_group(
     }
 
     baselines = {
-        "empirical": compute_empirical_baseline(acts_ml, outcomes=("home_win", "away_win")),
+        "empirical": compute_empirical_baseline(log_subset, outcomes=("home_win", "away_win")),
         "odds_implied": compute_odds_baseline(log_subset, sport="basketball"),
     }
 
@@ -2361,6 +2517,25 @@ def run_real_backtest(
         qg_decision = prediction.get("quality_gate") or prediction.get("quality_gate_result", {}).get("decision", "PASS")
         calib_status = prediction.get("calibration_metadata", {}).get("calibration_status", "UNAVAILABLE")
 
+        prior_outcomes = []
+        for prev_f in finished:
+            prev_date = _fixture_date(prev_f)
+            if not time_utils.is_strictly_before(prev_date, cutoff):
+                break
+            prev_act = _actual_match_result(prev_f)
+            if prev_act in ("home_win", "draw", "away_win"):
+                prior_outcomes.append(prev_act)
+
+        if prior_outcomes:
+            n_p = len(prior_outcomes)
+            prior_dist_1x2 = {
+                "home_win": prior_outcomes.count("home_win") / n_p,
+                "draw": prior_outcomes.count("draw") / n_p,
+                "away_win": prior_outcomes.count("away_win") / n_p,
+            }
+        else:
+            prior_dist_1x2 = {"home_win": 1.0 / 3.0, "draw": 1.0 / 3.0, "away_win": 1.0 / 3.0}
+
         entry = {
             "fixture_id": fixture_id,
             "match": (
@@ -2385,6 +2560,7 @@ def run_real_backtest(
             "actual": match_result,
             "quality_gate": qg_decision,
             "calibration_status": calib_status,
+            "prior_empirical_distribution": prior_dist_1x2,
             "probabilities": (
                 prediction_markets.get(
                     "match_result",
@@ -2788,6 +2964,26 @@ def run_basketball_backtest(
         qg_decision = pred.get("quality_gate") or pred.get("quality_gate_result", {}).get("decision", "PASS")
         calib_status = pred.get("calibration_metadata", {}).get("calibration_status", "UNAVAILABLE")
 
+        prior_outcomes = []
+        for prev_g in finished:
+            prev_date = str(prev_g.get("date", ""))
+            if not time_utils.is_strictly_before(prev_date, cutoff):
+                break
+            p_h_pts, p_a_pts = historical_match_policy.get_basketball_match_points(prev_g)
+            if p_h_pts is not None and p_a_pts is not None:
+                p_act = "home_win" if p_h_pts > p_a_pts else ("away_win" if p_a_pts > p_h_pts else "draw")
+                if p_act in ("home_win", "away_win"):
+                    prior_outcomes.append(p_act)
+
+        if prior_outcomes:
+            n_p = len(prior_outcomes)
+            prior_dist_ml = {
+                "home_win": prior_outcomes.count("home_win") / n_p,
+                "away_win": prior_outcomes.count("away_win") / n_p,
+            }
+        else:
+            prior_dist_ml = {"home_win": 0.5, "away_win": 0.5}
+
         entry = {
             "game_id": candidate.get("id"),
             "match": f"{candidate.get('teams', {}).get('home', {}).get('name')} vs {candidate.get('teams', {}).get('away', {}).get('name')}",
@@ -2797,6 +2993,7 @@ def run_basketball_backtest(
             "actual": actual_outcome,
             "quality_gate": qg_decision,
             "calibration_status": calib_status,
+            "prior_empirical_distribution": prior_dist_ml,
             "actual_points": {"home": h_pts, "away": a_pts},
             "prediction": pred,
         }
