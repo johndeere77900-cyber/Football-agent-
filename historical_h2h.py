@@ -17,7 +17,9 @@ def _fixture_date(fixture):
     return fixture.get("fixture", {}).get("date", "")
 
 
+from datetime import datetime, timezone
 import historical_match_policy
+import time_utils
 
 
 def _is_finished(fixture):
@@ -27,7 +29,7 @@ def _is_finished(fixture):
 
 def _is_before_cutoff(fixture, cutoff):
     """Return True only when the fixture occurred strictly before cutoff."""
-    return _fixture_date(fixture) < cutoff
+    return time_utils.is_strictly_before(_fixture_date(fixture), cutoff)
 
 
 def _has_valid_goals(fixture):
@@ -74,7 +76,7 @@ def historical_h2h_matches(
 
     return sorted(
         matches,
-        key=_fixture_date,
+        key=lambda f: time_utils.parse_utc_datetime(_fixture_date(f)) or datetime.min.replace(tzinfo=timezone.utc),
     )
 
 

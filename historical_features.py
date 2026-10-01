@@ -9,7 +9,9 @@ chronological backtests and tested deterministically.
 """
 
 
+from datetime import datetime, timezone
 import historical_match_policy
+import time_utils
 
 
 def _is_finished(fixture):
@@ -27,7 +29,7 @@ def _is_before_cutoff(fixture, cutoff):
     A historical fixture is usable only when its timestamp is strictly
     earlier than the prediction cutoff.
     """
-    return _fixture_date(fixture) < cutoff
+    return time_utils.is_strictly_before(_fixture_date(fixture), cutoff)
 
 
 def prior_completed_fixtures(fixtures, cutoff):
@@ -45,7 +47,7 @@ def prior_completed_fixtures(fixtures, cutoff):
 
     return sorted(
         eligible,
-        key=_fixture_date,
+        key=lambda f: time_utils.parse_utc_datetime(_fixture_date(f)) or datetime.min.replace(tzinfo=timezone.utc),
     )
 
 

@@ -65,6 +65,18 @@ LEAGUE_AVG_GOALS = {
 }
 LEAGUE_AVG_GOALS_FALLBACK = 1.35
 
+# --- Phase 3 Version Identifiers --------------------------------------------
+MODEL_VERSION = "v3.0.0"
+FEATURE_VERSION = "v3.0.0"
+CALIBRATION_VERSION = "v3.0.0"
+
+# --- Phase 3 Quality Gate & Market Thresholds ------------------------------
+MIN_FEATURE_COVERAGE = 0.50
+MIN_HISTORICAL_SAMPLE = 5
+MIN_EDGE_THRESHOLD = 0.02
+MIN_EV_THRESHOLD = 0.00
+MAX_ODDS_AGE_HOURS = 24.0
+
 # --- Confidence flag thresholds ----------------------------------------------
 CONFIDENCE_HIGH_GAP = 0.20
 CONFIDENCE_MODERATE_GAP = 0.08

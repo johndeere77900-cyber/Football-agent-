@@ -117,6 +117,13 @@ def _validate_probability(value, name="probability"):
     return number
 
 
+def _validate_optional_probability(value, name="probability"):
+    """Validate an optional probability in [0, 1] or return None."""
+    if value is None:
+        return None
+    return _validate_probability(value, name)
+
+
 def _validate_text(value, name, allow_empty=False):
     """Validate a text field."""
     if not isinstance(value, str):
@@ -224,10 +231,26 @@ def init_db():
                         home_team_id BIGINT,
                         away_team_id BIGINT,
                         prediction_context TEXT DEFAULT 'PRE_MATCH',
+                        model_version TEXT,
+                        feature_version TEXT,
+                        calibration_version TEXT,
+                        quality_gate TEXT,
+                        reason_codes_json JSONB,
+                        edge DOUBLE PRECISION,
+                        ev DOUBLE PRECISION,
+                        uncertainty_state TEXT,
                         created_at TEXT
                     )
                     """
                 )
+                cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS model_version TEXT")
+                cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS feature_version TEXT")
+                cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS calibration_version TEXT")
+                cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS quality_gate TEXT")
+                cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS reason_codes_json JSONB")
+                cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS edge DOUBLE PRECISION")
+                cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS ev DOUBLE PRECISION")
+                cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS uncertainty_state TEXT")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS elo_ratings (
@@ -255,10 +278,26 @@ def init_db():
                         actual_away_points INTEGER,
                         top_pick_correct INTEGER,
                         prediction_context TEXT DEFAULT 'PRE_MATCH',
+                        model_version TEXT,
+                        feature_version TEXT,
+                        calibration_version TEXT,
+                        quality_gate TEXT,
+                        reason_codes_json JSONB,
+                        edge DOUBLE PRECISION,
+                        ev DOUBLE PRECISION,
+                        uncertainty_state TEXT,
                         created_at TEXT
                     )
                     """
                 )
+                cur.execute("ALTER TABLE basketball_predictions ADD COLUMN IF NOT EXISTS model_version TEXT")
+                cur.execute("ALTER TABLE basketball_predictions ADD COLUMN IF NOT EXISTS feature_version TEXT")
+                cur.execute("ALTER TABLE basketball_predictions ADD COLUMN IF NOT EXISTS calibration_version TEXT")
+                cur.execute("ALTER TABLE basketball_predictions ADD COLUMN IF NOT EXISTS quality_gate TEXT")
+                cur.execute("ALTER TABLE basketball_predictions ADD COLUMN IF NOT EXISTS reason_codes_json JSONB")
+                cur.execute("ALTER TABLE basketball_predictions ADD COLUMN IF NOT EXISTS edge DOUBLE PRECISION")
+                cur.execute("ALTER TABLE basketball_predictions ADD COLUMN IF NOT EXISTS ev DOUBLE PRECISION")
+                cur.execute("ALTER TABLE basketball_predictions ADD COLUMN IF NOT EXISTS uncertainty_state TEXT")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS bot_memory (
@@ -413,6 +452,9 @@ def init_db():
                         league_id BIGINT NOT NULL,
                         season INTEGER NOT NULL,
                         dataset_identity TEXT,
+                        model_version TEXT,
+                        feature_version TEXT,
+                        calibration_version TEXT,
                         dataset_fixture_count INTEGER NOT NULL,
                         sample_size INTEGER NOT NULL,
                         min_prior_matches INTEGER NOT NULL,
@@ -431,6 +473,9 @@ def init_db():
                     )
                     """
                 )
+                cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS model_version TEXT")
+                cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS feature_version TEXT")
+                cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS calibration_version TEXT")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS backtest_market_metrics (
@@ -480,6 +525,14 @@ def init_db():
             _ensure_column_sqlite(conn, "predictions", "home_team_id", "INTEGER")
             _ensure_column_sqlite(conn, "predictions", "away_team_id", "INTEGER")
             _ensure_column_sqlite(conn, "predictions", "prediction_context", "TEXT DEFAULT 'PRE_MATCH'")
+            _ensure_column_sqlite(conn, "predictions", "model_version", "TEXT")
+            _ensure_column_sqlite(conn, "predictions", "feature_version", "TEXT")
+            _ensure_column_sqlite(conn, "predictions", "calibration_version", "TEXT")
+            _ensure_column_sqlite(conn, "predictions", "quality_gate", "TEXT")
+            _ensure_column_sqlite(conn, "predictions", "reason_codes_json", "TEXT")
+            _ensure_column_sqlite(conn, "predictions", "edge", "REAL")
+            _ensure_column_sqlite(conn, "predictions", "ev", "REAL")
+            _ensure_column_sqlite(conn, "predictions", "uncertainty_state", "TEXT")
 
             conn.execute(
                 """
@@ -513,6 +566,14 @@ def init_db():
                 """
             )
             _ensure_column_sqlite(conn, "basketball_predictions", "prediction_context", "TEXT DEFAULT 'PRE_MATCH'")
+            _ensure_column_sqlite(conn, "basketball_predictions", "model_version", "TEXT")
+            _ensure_column_sqlite(conn, "basketball_predictions", "feature_version", "TEXT")
+            _ensure_column_sqlite(conn, "basketball_predictions", "calibration_version", "TEXT")
+            _ensure_column_sqlite(conn, "basketball_predictions", "quality_gate", "TEXT")
+            _ensure_column_sqlite(conn, "basketball_predictions", "reason_codes_json", "TEXT")
+            _ensure_column_sqlite(conn, "basketball_predictions", "edge", "REAL")
+            _ensure_column_sqlite(conn, "basketball_predictions", "ev", "REAL")
+            _ensure_column_sqlite(conn, "basketball_predictions", "uncertainty_state", "TEXT")
 
             conn.execute(
                 """
@@ -712,6 +773,9 @@ def init_db():
                     league_id INTEGER NOT NULL,
                     season INTEGER NOT NULL,
                     dataset_identity TEXT,
+                    model_version TEXT,
+                    feature_version TEXT,
+                    calibration_version TEXT,
                     dataset_fixture_count INTEGER NOT NULL,
                     sample_size INTEGER NOT NULL,
                     min_prior_matches INTEGER NOT NULL,
@@ -730,6 +794,9 @@ def init_db():
                 )
                 """
             )
+            _ensure_column_sqlite(conn, "backtest_runs", "model_version", "TEXT")
+            _ensure_column_sqlite(conn, "backtest_runs", "feature_version", "TEXT")
+            _ensure_column_sqlite(conn, "backtest_runs", "calibration_version", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS backtest_market_metrics (
@@ -1104,6 +1171,9 @@ def save_backtest_run(run_data, market_metrics=None):
     league_id = _validate_positive_int(run_data.get("league_id"), "league_id")
     season = _validate_positive_int(run_data.get("season"), "season")
     dataset_identity = run_data.get("dataset_identity") or f"{sport}_{league_id}_{season}"
+    model_version = run_data.get("model_version") or getattr(config, "MODEL_VERSION", "v3.0.0")
+    feature_version = run_data.get("feature_version") or getattr(config, "FEATURE_VERSION", "v3.0.0")
+    calibration_version = run_data.get("calibration_version") or getattr(config, "CALIBRATION_VERSION", "v3.0.0")
     dataset_fixture_count = _validate_non_negative_int(run_data.get("dataset_fixture_count", 0), "dataset_fixture_count")
     sample_size = _validate_positive_int(run_data.get("sample_size", 1), "sample_size")
     min_prior_matches = _validate_non_negative_int(run_data.get("min_prior_matches", 0), "min_prior_matches")
@@ -1129,25 +1199,30 @@ def save_backtest_run(run_data, market_metrics=None):
                     cur.execute(
                         """
                         INSERT INTO backtest_runs (
-                            run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
-                            sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
-                            accuracy, brier_score, log_loss, ece, enrichment_status,
-                            started_at, completed_at, evaluation_json, code_version
+                            run_id, sport, league_id, season, dataset_identity,
+                            model_version, feature_version, calibration_version,
+                            dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
+                            selected_count, graded_count, accuracy, brier_score, log_loss, ece,
+                            enrichment_status, started_at, completed_at, evaluation_json, code_version
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (run_id) DO UPDATE SET
                             accuracy = EXCLUDED.accuracy,
                             brier_score = EXCLUDED.brier_score,
                             log_loss = EXCLUDED.log_loss,
                             ece = EXCLUDED.ece,
+                            model_version = EXCLUDED.model_version,
+                            feature_version = EXCLUDED.feature_version,
+                            calibration_version = EXCLUDED.calibration_version,
                             evaluation_json = EXCLUDED.evaluation_json,
                             completed_at = EXCLUDED.completed_at
                         """,
                         (
-                            run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
-                            sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
-                            accuracy, brier_score, log_loss, ece, enrichment_status,
-                            started_at, completed_at, eval_json_str, code_version,
+                            run_id, sport, league_id, season, dataset_identity,
+                            model_version, feature_version, calibration_version,
+                            dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
+                            selected_count, graded_count, accuracy, brier_score, log_loss, ece,
+                            enrichment_status, started_at, completed_at, eval_json_str, code_version,
                         ),
                     )
 
@@ -1177,25 +1252,30 @@ def save_backtest_run(run_data, market_metrics=None):
             conn.execute(
                 """
                 INSERT INTO backtest_runs (
-                    run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
-                    sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
-                    accuracy, brier_score, log_loss, ece, enrichment_status,
-                    started_at, completed_at, evaluation_json, code_version
+                    run_id, sport, league_id, season, dataset_identity,
+                    model_version, feature_version, calibration_version,
+                    dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
+                    selected_count, graded_count, accuracy, brier_score, log_loss, ece,
+                    enrichment_status, started_at, completed_at, evaluation_json, code_version
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (run_id) DO UPDATE SET
                     accuracy = excluded.accuracy,
                     brier_score = excluded.brier_score,
                     log_loss = excluded.log_loss,
                     ece = excluded.ece,
+                    model_version = excluded.model_version,
+                    feature_version = excluded.feature_version,
+                    calibration_version = excluded.calibration_version,
                     evaluation_json = excluded.evaluation_json,
                     completed_at = excluded.completed_at
                 """,
                 (
-                    run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
-                    sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
-                    accuracy, brier_score, log_loss, ece, enrichment_status,
-                    started_at, completed_at, eval_json_str, code_version,
+                    run_id, sport, league_id, season, dataset_identity,
+                    model_version, feature_version, calibration_version,
+                    dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
+                    selected_count, graded_count, accuracy, brier_score, log_loss, ece,
+                    enrichment_status, started_at, completed_at, eval_json_str, code_version,
                 ),
             )
 
@@ -1618,6 +1698,7 @@ def save_prediction(
     away_team_id=None,
     odds_comparison=None,
     prediction_context="PRE_MATCH",
+    prediction_record=None,
 ):
     """
     Save a football prediction exactly once.
@@ -1633,23 +1714,46 @@ def save_prediction(
 
     if not isinstance(markets, dict):
         raise ValueError("markets must be a dictionary.")
-    if not isinstance(confidence, dict):
-        raise ValueError("confidence must be a dictionary.")
 
-    required_confidence = ("label", "top_pick", "top_probability")
+    # Extract Phase 3 metadata if prediction_record is a contract dict or markets is a contract
+    rec = prediction_record if isinstance(prediction_record, dict) else (markets if "model_version" in markets else {})
+
+    if not isinstance(confidence, dict):
+        if rec and isinstance(rec.get("confidence"), dict):
+            confidence = rec["confidence"]
+        else:
+            mr = rec.get("calibrated_probabilities", {}).get("match_result", {}) if rec else markets.get("match_result", {})
+            if isinstance(mr, dict) and mr:
+                top_k = max(mr, key=mr.get)
+                confidence = {"label": "Moderate", "top_pick": top_k, "top_probability": mr[top_k]}
+            else:
+                confidence = {"label": "Unavailable", "top_pick": "None", "top_probability": None}
+
+    required_confidence = ("label", "top_pick")
     missing = [key for key in required_confidence if key not in confidence]
     if missing:
         raise ValueError("confidence is missing required fields: " + ", ".join(missing))
 
     _validate_text(confidence["label"], "confidence.label")
     _validate_text(confidence["top_pick"], "confidence.top_pick")
-    top_probability = _validate_probability(confidence["top_probability"], "confidence.top_probability")
+    top_probability = _validate_optional_probability(confidence.get("top_probability"), "confidence.top_probability")
 
     home_team_id = _validate_optional_positive_int(home_team_id, "home_team_id")
     away_team_id = _validate_optional_positive_int(away_team_id, "away_team_id")
     prediction_context = _validate_text(prediction_context, "prediction_context").upper()
     if prediction_context not in ("PRE_MATCH", "LIVE"):
         prediction_context = "PRE_MATCH"
+
+    # Extract Phase 3 fields
+    model_version = rec.get("model_version") or getattr(config, "MODEL_VERSION", "v3.0.0")
+    feature_version = rec.get("feature_version") or getattr(config, "FEATURE_VERSION", "v3.0.0")
+    calibration_version = rec.get("calibration_version") or getattr(config, "CALIBRATION_VERSION", "v3.0.0")
+    quality_gate = rec.get("quality_gate", "PASS")
+    reasons_list = rec.get("reason_codes", [])
+    reason_codes_json = _json_dumps(reasons_list, "reason_codes")
+    edge_val = rec.get("edge")
+    ev_val = rec.get("ev")
+    uncertainty_state = rec.get("uncertainty", {}).get("state") if isinstance(rec.get("uncertainty"), dict) else None
 
     markets_json_str = _json_dumps(markets, "markets")
     odds_json_str = _json_dumps(odds_comparison, "odds_comparison") if odds_comparison is not None else None
@@ -1666,16 +1770,20 @@ def save_prediction(
                         fixture_id, match_date, home_team, away_team, league,
                         markets_json, confidence_label, top_pick, top_probability,
                         odds_comparison_json, home_team_id, away_team_id,
-                        prediction_context, created_at
+                        prediction_context, model_version, feature_version,
+                        calibration_version, quality_gate, reason_codes_json,
+                        edge, ev, uncertainty_state, created_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (fixture_id) DO NOTHING
                     """,
                     (
                         fixture_id, match_date, home_team, away_team, league,
                         markets_json_str, confidence["label"], confidence["top_pick"], top_probability,
                         odds_json_str, home_team_id, away_team_id,
-                        prediction_context, now_str,
+                        prediction_context, model_version, feature_version,
+                        calibration_version, quality_gate, reason_codes_json,
+                        edge_val, ev_val, uncertainty_state, now_str,
                     ),
                 )
                 inserted = cur.rowcount == 1
@@ -1687,15 +1795,19 @@ def save_prediction(
                     fixture_id, match_date, home_team, away_team, league,
                     markets_json, confidence_label, top_pick, top_probability,
                     odds_comparison_json, home_team_id, away_team_id,
-                    prediction_context, created_at
+                    prediction_context, model_version, feature_version,
+                    calibration_version, quality_gate, reason_codes_json,
+                    edge, ev, uncertainty_state, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     fixture_id, match_date, home_team, away_team, league,
                     markets_json_str, confidence["label"], confidence["top_pick"], top_probability,
                     odds_json_str, home_team_id, away_team_id,
-                    prediction_context, now_str,
+                    prediction_context, model_version, feature_version,
+                    calibration_version, quality_gate, reason_codes_json,
+                    edge_val, ev_val, uncertainty_state, now_str,
                 ),
             )
             inserted = cursor.rowcount == 1
@@ -2105,6 +2217,7 @@ def save_basketball_prediction(
     markets,
     confidence,
     prediction_context="PRE_MATCH",
+    prediction_record=None,
 ):
     """Save a basketball prediction exactly once."""
     game_id = _validate_positive_int(game_id, "game_id")
@@ -2115,21 +2228,42 @@ def save_basketball_prediction(
 
     if not isinstance(markets, dict):
         raise ValueError("markets must be a dictionary.")
-    if not isinstance(confidence, dict):
-        raise ValueError("confidence must be a dictionary.")
 
-    required_confidence = ("label", "top_pick", "top_probability")
+    rec = prediction_record if isinstance(prediction_record, dict) else (markets if "model_version" in markets else {})
+
+    if not isinstance(confidence, dict):
+        if rec and isinstance(rec.get("confidence"), dict):
+            confidence = rec["confidence"]
+        else:
+            ml = rec.get("calibrated_probabilities", {}).get("moneyline", {}) if rec else markets.get("moneyline", {})
+            if isinstance(ml, dict) and ml:
+                top_k = "home_win" if ml.get("home_win", 0) >= ml.get("away_win", 0) else "away_win"
+                confidence = {"label": "Moderate", "top_pick": top_k, "top_probability": ml[top_k]}
+            else:
+                confidence = {"label": "Unavailable", "top_pick": "None", "top_probability": None}
+
+    required_confidence = ("label", "top_pick")
     missing = [key for key in required_confidence if key not in confidence]
     if missing:
         raise ValueError("confidence is missing required fields: " + ", ".join(missing))
 
     _validate_text(confidence["label"], "confidence.label")
     _validate_text(confidence["top_pick"], "confidence.top_pick")
-    top_probability = _validate_probability(confidence["top_probability"], "confidence.top_probability")
+    top_probability = _validate_optional_probability(confidence.get("top_probability"), "confidence.top_probability")
 
     prediction_context = _validate_text(prediction_context, "prediction_context").upper()
     if prediction_context not in ("PRE_MATCH", "LIVE"):
         prediction_context = "PRE_MATCH"
+
+    model_version = rec.get("model_version") or getattr(config, "MODEL_VERSION", "v3.0.0")
+    feature_version = rec.get("feature_version") or getattr(config, "FEATURE_VERSION", "v3.0.0")
+    calibration_version = rec.get("calibration_version") or getattr(config, "CALIBRATION_VERSION", "v3.0.0")
+    quality_gate = rec.get("quality_gate", "PASS")
+    reasons_list = rec.get("reason_codes", [])
+    reason_codes_json = _json_dumps(reasons_list, "reason_codes")
+    edge_val = rec.get("edge")
+    ev_val = rec.get("ev")
+    uncertainty_state = rec.get("uncertainty", {}).get("state") if isinstance(rec.get("uncertainty"), dict) else None
 
     markets_json_str = _json_dumps(markets, "markets")
     conn, db_type = _connect()
@@ -2143,15 +2277,19 @@ def save_basketball_prediction(
                     INSERT INTO basketball_predictions (
                         game_id, game_date, home_team, away_team, league,
                         markets_json, confidence_label, top_pick, top_probability,
-                        prediction_context, created_at
+                        prediction_context, model_version, feature_version,
+                        calibration_version, quality_gate, reason_codes_json,
+                        edge, ev, uncertainty_state, created_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (game_id) DO NOTHING
                     """,
                     (
                         game_id, game_date, home_team, away_team, league,
                         markets_json_str, confidence["label"], confidence["top_pick"], top_probability,
-                        prediction_context, now_str,
+                        prediction_context, model_version, feature_version,
+                        calibration_version, quality_gate, reason_codes_json,
+                        edge_val, ev_val, uncertainty_state, now_str,
                     ),
                 )
                 inserted = cur.rowcount == 1
@@ -2162,14 +2300,18 @@ def save_basketball_prediction(
                 INSERT OR IGNORE INTO basketball_predictions (
                     game_id, game_date, home_team, away_team, league,
                     markets_json, confidence_label, top_pick, top_probability,
-                    prediction_context, created_at
+                    prediction_context, model_version, feature_version,
+                    calibration_version, quality_gate, reason_codes_json,
+                    edge, ev, uncertainty_state, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     game_id, game_date, home_team, away_team, league,
                     markets_json_str, confidence["label"], confidence["top_pick"], top_probability,
-                    prediction_context, now_str,
+                    prediction_context, model_version, feature_version,
+                    calibration_version, quality_gate, reason_codes_json,
+                    edge_val, ev_val, uncertainty_state, now_str,
                 ),
             )
             inserted = cursor.rowcount == 1

@@ -217,7 +217,7 @@ def test_N_to_T_match_policy_semantics():
 
     # T: modules use authoritative policy
     fixtures = [ft, aet, pen]
-    prior = historical_features.prior_completed_fixtures(fixtures, "2026-01-01")
+    prior = historical_features.prior_completed_fixtures(fixtures, "2026-01-01T00:00:00+00:00")
     assert len(prior) == 3
 
 

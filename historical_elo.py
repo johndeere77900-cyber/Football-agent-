@@ -20,7 +20,9 @@ def _fixture_date(fixture):
     return fixture.get("fixture", {}).get("date", "")
 
 
+from datetime import datetime, timezone
 import historical_match_policy
+import time_utils
 
 
 def _is_finished(fixture):
@@ -30,7 +32,7 @@ def _is_finished(fixture):
 
 def _is_before_cutoff(fixture, cutoff):
     """Return True only when the fixture is strictly before cutoff."""
-    return _fixture_date(fixture) < cutoff
+    return time_utils.is_strictly_before(_fixture_date(fixture), cutoff)
 
 
 def _valid_team_ids(fixture):
@@ -75,7 +77,7 @@ def prior_elo_fixtures(fixtures, cutoff):
 
     return sorted(
         eligible,
-        key=_fixture_date,
+        key=lambda f: time_utils.parse_utc_datetime(_fixture_date(f)) or datetime.min.replace(tzinfo=timezone.utc),
     )
 
 
