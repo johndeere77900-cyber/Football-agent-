@@ -291,6 +291,74 @@ def test_legacy_sqlite_primary_key_migration(tmp_path, monkeypatch):
     assert status_fb_recheck["fixture_count"] == 380
 
 
+def test_early_quota_exhaustion_preserves_persisted_manifest_state_football_and_basketball(isolated_db, monkeypatch):
+    # 1. Football: Page 1 sync has 1 valid + 1 rejected fixture
+    fix_ok = sample_football_fixture(1401)
+    fix_bad = {"fixture": {"id": 1402}} # malformed
+
+    def mock_fb_p1(league_id, season, page=1, max_budget=None):
+        if page == 1:
+            return {"fixtures": [fix_ok, fix_bad], "page": 1, "expected_pages": 2}
+        raise api_football.APIFootballQuotaExhaustedError("Quota exhausted")
+
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1):
+        rep1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024, historical_budget=50)
+
+    assert rep1["pages_completed"] == 1
+    assert rep1["expected_pages"] == 2
+    assert rep1["rejected_count"] == 1
+
+    # Simulate daily budget exhausted before second run starts
+    for _ in range(50):
+        storage.record_api_request("api_football", "fixtures")
+
+    with patch("api_football.get_league_fixtures_page") as mock_http:
+        rep_quota = historical_sync.sync_historical_fixtures(league_id=39, season=2024, historical_budget=50)
+        mock_http.assert_not_called()
+
+    # Early exit must NOT wipe out pages_completed, expected_pages, or rejected_count!
+    assert rep_quota["status"] == "INCOMPLETE"
+    assert rep_quota["quota_budget_stopped"] is True
+    st_fb = storage.get_historical_dataset_status(39, 2024, sport="football")
+    assert st_fb["pages_completed"] == 1
+    assert st_fb["expected_pages"] == 2
+    assert st_fb["rejected_count"] == 1
+    assert st_fb["status"] == "INCOMPLETE"
+
+    # 2. Basketball: Page 1 sync has 1 valid + 1 rejected game
+    bg_ok = sample_basketball_game(8401)
+    bg_bad = {"id": 8402} # malformed
+
+    def mock_bb_p1(league_id, season, page=1, max_budget=None):
+        if page == 1:
+            return {"games": [bg_ok, bg_bad], "page": 1, "expected_pages": 2}
+        raise basketball_api.APIBasketballQuotaExhaustedError("Quota exhausted")
+
+    with patch("basketball_api.get_league_games_page", side_effect=mock_bb_p1):
+        rep_b1 = historical_sync.sync_historical_basketball_games(league_id=12, season=2024, historical_budget=50)
+
+    assert rep_b1["pages_completed"] == 1
+    assert rep_b1["expected_pages"] == 2
+    assert rep_b1["rejected_count"] == 1
+
+    # Simulate basketball daily budget exhausted before second run starts
+    for _ in range(50):
+        storage.record_api_request("api_basketball", "games")
+
+    with patch("basketball_api.get_league_games_page") as mock_bb_http:
+        rep_b_quota = historical_sync.sync_historical_basketball_games(league_id=12, season=2024, historical_budget=50)
+        mock_bb_http.assert_not_called()
+
+    # Early exit must NOT wipe out pages_completed, expected_pages, or rejected_count!
+    assert rep_b_quota["status"] == "INCOMPLETE"
+    assert rep_b_quota["quota_budget_stopped"] is True
+    st_bb = storage.get_historical_dataset_status(12, 2024, sport="basketball")
+    assert st_bb["pages_completed"] == 1
+    assert st_bb["expected_pages"] == 2
+    assert st_bb["rejected_count"] == 1
+    assert st_bb["status"] == "INCOMPLETE"
+
+
 def test_rejected_count_survives_resumed_sync_football_and_basketball(isolated_db):
     # Football: page 1 has 1 valid fixture + 1 rejected malformed fixture
     fix_ok = sample_football_fixture(1101)

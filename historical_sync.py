@@ -71,7 +71,19 @@ def sync_historical_fixtures(
             flush=True,
         )
         final_count = storage.get_historical_fixture_count(league_id, season)
-        storage.mark_historical_dataset_incomplete(league_id, season, fixture_count=final_count)
+        storage.mark_historical_dataset_incomplete(
+            league_id,
+            season,
+            fixture_count=final_count,
+            sport="football",
+            expected_pages=dataset_info.get("expected_pages", 0),
+            pages_completed=dataset_info.get("pages_completed", 0),
+            acquisition_complete=dataset_info.get("acquisition_complete", False),
+            enrichment_status=dataset_info.get("enrichment_status", "NONE"),
+            rejected_count=dataset_info.get("rejected_count", 0),
+            empty_pages_count=dataset_info.get("empty_pages_count", 0),
+            error_reason="quota_budget_exhausted_before_acquisition",
+        )
         return {
             "league_id": league_id,
             "season": season,
@@ -82,6 +94,10 @@ def sync_historical_fixtures(
             "duplicates_skipped": 0,
             "newly_stored": 0,
             "already_existing_skipped": 0,
+            "pages_completed": dataset_info.get("pages_completed", 0),
+            "expected_pages": dataset_info.get("expected_pages", 0),
+            "rejected_count": dataset_info.get("rejected_count", 0),
+            "empty_pages_count": dataset_info.get("empty_pages_count", 0),
             "api_requests_consumed": 0,
             "quota_budget_stopped": True,
             "final_stored_count": final_count,
@@ -379,7 +395,19 @@ def sync_historical_basketball_games(
             flush=True,
         )
         final_count = storage.get_historical_basketball_game_count(league_id, season)
-        storage.mark_historical_dataset_incomplete(league_id, season, fixture_count=final_count, sport="basketball")
+        storage.mark_historical_dataset_incomplete(
+            league_id,
+            season,
+            fixture_count=final_count,
+            sport="basketball",
+            expected_pages=dataset_info.get("expected_pages", 0),
+            pages_completed=dataset_info.get("pages_completed", 0),
+            acquisition_complete=dataset_info.get("acquisition_complete", False),
+            enrichment_status=dataset_info.get("enrichment_status", "NONE"),
+            rejected_count=dataset_info.get("rejected_count", 0),
+            empty_pages_count=dataset_info.get("empty_pages_count", 0),
+            error_reason="quota_budget_exhausted_before_acquisition",
+        )
         return {
             "sport": "basketball",
             "league_id": league_id,
@@ -391,6 +419,10 @@ def sync_historical_basketball_games(
             "duplicates_skipped": 0,
             "newly_stored": 0,
             "already_existing_skipped": 0,
+            "pages_completed": dataset_info.get("pages_completed", 0),
+            "expected_pages": dataset_info.get("expected_pages", 0),
+            "rejected_count": dataset_info.get("rejected_count", 0),
+            "empty_pages_count": dataset_info.get("empty_pages_count", 0),
             "api_requests_consumed": 0,
             "quota_budget_stopped": True,
             "final_stored_count": final_count,
@@ -536,6 +568,9 @@ def sync_historical_basketball_games(
         "rejection_reasons": rejection_reasons,
         "newly_stored": newly_stored,
         "already_existing_skipped": already_existing_skipped,
+        "expected_pages": expected_pages,
+        "pages_completed": pages_completed,
+        "acquisition_complete": acquisition_complete,
         "api_requests_consumed": total_consumed,
         "historical_budget": historical_budget,
         "quota_budget_stopped": quota_budget_stopped,
