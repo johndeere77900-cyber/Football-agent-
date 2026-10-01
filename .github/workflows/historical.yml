@@ -1,0 +1,99 @@
+name: Historical Data Acquisition
+
+on:
+  workflow_dispatch:
+    inputs:
+      sport:
+        description: 'Sport (football or basketball)'
+        required: true
+        default: 'football'
+        type: choice
+        options:
+          - football
+          - basketball
+
+      league_id:
+        description: 'League ID'
+        required: true
+        default: '39'
+
+      season:
+        description: 'Season year (e.g., 2024)'
+        required: true
+        default: '2024'
+
+      with_enrichment:
+        description: 'Fetch statistical enrichment (corners/cards)'
+        required: false
+        type: boolean
+        default: false
+
+      refresh:
+        description: 'Force dataset re-fetch even if COMPLETE'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  acquire_historical:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify credentials
+        run: |
+          if [ -z "${{ secrets.NEON_DATABASE_URL }}" ]; then
+            echo "ERROR: NEON_DATABASE_URL secret is missing."
+            exit 1
+          fi
+          if [ -z "${{ secrets.API_FOOTBALL_KEY }}" ]; then
+            echo "ERROR: API_FOOTBALL_KEY secret is missing."
+            exit 1
+          fi
+
+      - name: Historical Data Sync
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
+          ENVIRONMENT: "production"
+          INPUT_SPORT: ${{ inputs.sport }}
+          INPUT_LEAGUE_ID: ${{ inputs.league_id }}
+          INPUT_SEASON: ${{ inputs.season }}
+          INPUT_WITH_ENRICHMENT: ${{ inputs.with_enrichment }}
+          INPUT_REFRESH: ${{ inputs.refresh }}
+        run: |
+          ARGS=("--historical-sync" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--season" "$INPUT_SEASON")
+          if [ "$INPUT_WITH_ENRICHMENT" = "true" ]; then
+            ARGS+=("--with-enrichment")
+          fi
+          if [ "$INPUT_REFRESH" = "true" ]; then
+            ARGS+=("--refresh")
+          fi
+          python3 main.py "${ARGS[@]}"
+
+      - name: Check Dataset Completion Status
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
+          ENVIRONMENT: "production"
+          INPUT_SPORT: ${{ inputs.sport }}
+          INPUT_LEAGUE_ID: ${{ inputs.league_id }}
+          INPUT_SEASON: ${{ inputs.season }}
+        run: |
+          STATUS_OUTPUT=$(python3 main.py --dataset-status --sport "$INPUT_SPORT" --league "$INPUT_LEAGUE_ID" --season "$INPUT_SEASON")
+          echo "$STATUS_OUTPUT"
+          EXACT_STATUS=$(echo "$STATUS_OUTPUT" | grep "Status:" | awk '{print $2}')
+          echo "Extracted Exact Status: '$EXACT_STATUS'"
+          if [ "$EXACT_STATUS" != "COMPLETE" ]; then
+            echo "ERROR: Historical dataset status is '$EXACT_STATUS', expected 'COMPLETE'."
+            exit 1
+          fi

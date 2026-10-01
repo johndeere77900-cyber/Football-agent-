@@ -14,6 +14,7 @@ Rules:
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+import historical_match_policy
 
 
 def _valid_goal(value: Any) -> bool:
@@ -422,26 +423,32 @@ def grade_fixture_markets(
     fixture: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Produce the complete currently gradeable market outcome record.
+    Produce the complete currently gradeable market outcome record using centralized match policy goals.
+    - 1X2 and Double Chance are settled on regulation goals (90 min).
+    - Totals, BTTS, Team Goals, and Scoreline are settled on match goals (120 min, excluding penalties).
     """
-    home_goals = (
-        fixture
-        .get("goals", {})
-        .get("home")
-    )
+    reg_goals = historical_match_policy.get_regulation_goals(fixture)
+    if reg_goals is not None:
+        reg_home, reg_away = reg_goals
+    else:
+        reg_home, reg_away = None, None
 
-    away_goals = (
-        fixture
-        .get("goals", {})
-        .get("away")
-    )
+    match_goals = historical_match_policy.get_totals_and_btts_goals(fixture)
+    if match_goals is not None:
+        tot_home, tot_away = match_goals
+    else:
+        tot_home, tot_away = None, None
 
     return {
-        "goal_markets": grade_goal_markets(
-            home_goals,
-            away_goals,
-        ),
+        "goal_markets": {
+            "match_result": grade_match_result(reg_home, reg_away),
+            "double_chance": grade_double_chance(reg_home, reg_away),
+            "over_under": grade_over_under(tot_home, tot_away),
+            "btts": grade_btts(tot_home, tot_away),
+            "team_goals": grade_team_goals(tot_home, tot_away),
+            "scoreline": grade_scoreline(tot_home, tot_away),
+        },
         "statistical_markets": grade_statistical_markets(
             fixture,
         ),
-  }
+    }

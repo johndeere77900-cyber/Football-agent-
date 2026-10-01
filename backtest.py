@@ -18,11 +18,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import api_football
+import basketball_model
 import config
 import storage
+import historical_basketball_features
 import historical_elo
 import historical_features
 import historical_h2h
+import historical_match_policy
 import market_grading
 import prediction_engine
 
@@ -185,26 +188,16 @@ def _away_name(
 def _goals(
     fixture: Dict[str, Any],
 ) -> Tuple[Optional[int], Optional[int]]:
-    goals = fixture.get("goals", {})
-
-    home = goals.get("home")
-    away = goals.get("away")
-
-    if not _valid_goal(home) or not _valid_goal(away):
+    goals = historical_match_policy.get_football_match_goals(fixture)
+    if goals is None:
         return None, None
-
-    return int(home), int(away)
+    return goals
 
 
 def _is_finished(
     fixture: Dict[str, Any],
 ) -> bool:
-    return (
-        fixture.get("fixture", {})
-        .get("status", {})
-        .get("short")
-        == "FT"
-    )
+    return historical_match_policy.is_finished_match(fixture, sport="football")
 
 
 def _fixture_is_gradeable(
@@ -497,47 +490,36 @@ def _historical_prediction_for_fixture(
 def _actual_match_result(
     fixture: Dict[str, Any],
 ) -> Optional[str]:
-    home, away = _goals(fixture)
-
-    if home is None or away is None:
-        return None
-
-    if home > away:
-        return "home_win"
-
-    if home < away:
-        return "away_win"
-
-    return "draw"
+    return historical_match_policy.get_1x2_regulation_outcome(fixture)
 
 
 def _actual_double_chance(
     fixture: Dict[str, Any],
 ) -> Optional[str]:
-    result = _actual_match_result(fixture)
-
-    if result == "home_win" or result == "draw":
+    dc_graded = market_grading.grade_double_chance(
+        *(historical_match_policy.get_regulation_goals(fixture) or (None, None))
+    )
+    if not dc_graded:
+        return None
+    if dc_graded.get("home_or_draw", {}).get("won") and dc_graded.get("away_or_draw", {}).get("won"):
         return "home_or_draw"
-
-    if result == "away_win":
+    if dc_graded.get("home_or_draw", {}).get("won"):
+        return "home_or_draw"
+    if dc_graded.get("away_or_draw", {}).get("won"):
         return "away_or_draw"
-
     return None
 
 
 def _actual_btts(
     fixture: Dict[str, Any],
 ) -> Optional[str]:
-    home, away = _goals(fixture)
-
-    if home is None or away is None:
+    match_goals = historical_match_policy.get_totals_and_btts_goals(fixture)
+    if match_goals is None:
         return None
-
-    return (
-        "yes"
-        if home >= 1 and away >= 1
-        else "no"
-    )
+    btts_graded = market_grading.grade_btts(*match_goals)
+    if not btts_graded:
+        return None
+    return "yes" if btts_graded.get("yes", {}).get("won") else "no"
 
 
 def _actual_binary_total(
@@ -645,313 +627,141 @@ def _grade_prediction_markets(
     prediction_markets: Dict[str, Any],
     fixture: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Return selected predictions plus independent actual market outcomes."""
+    """Return selected predictions plus independent actual market outcomes from central market policy."""
     selected: Dict[str, Any] = {}
-    outcomes: Dict[str, Any] = {}
 
-    home, away = _goals(fixture)
-
-    total = (
-        home + away
-        if home is not None and away is not None
-        else None
-    )
+    graded_record = market_grading.grade_fixture_markets(fixture)
+    goal_outcomes = graded_record.get("goal_markets", {})
 
     # 1X2
+    actual_1x2 = goal_outcomes.get("match_result", {}).get("outcome") if isinstance(goal_outcomes.get("match_result"), dict) else None
     selected_1x2 = _pick_and_grade(
         prediction_markets.get("match_result"),
-        _actual_match_result(fixture),
+        actual_1x2,
     )
-
     if selected_1x2 is not None:
         selected["match_result"] = selected_1x2
 
-    outcomes["match_result"] = (
-        market_grading.grade_match_result(
-            home,
-            away,
-        )
-    )
-
     # Double Chance
+    dc_outcomes = goal_outcomes.get("double_chance")
+    dc_actual = None
+    if isinstance(dc_outcomes, dict):
+        if dc_outcomes.get("home_or_draw", {}).get("won") and dc_outcomes.get("away_or_draw", {}).get("won"):
+            dc_actual = "home_or_draw"
+        elif dc_outcomes.get("home_or_draw", {}).get("won"):
+            dc_actual = "home_or_draw"
+        elif dc_outcomes.get("away_or_draw", {}).get("won"):
+            dc_actual = "away_or_draw"
+
     selected_dc = _pick_and_grade(
         prediction_markets.get("double_chance"),
-        _actual_double_chance(fixture),
+        dc_actual,
     )
-
     if selected_dc is not None:
         selected["double_chance"] = selected_dc
 
-    outcomes["double_chance"] = (
-        market_grading.grade_double_chance(
-            home,
-            away,
-        )
-    )
-
     # BTTS
+    btts_outcomes = goal_outcomes.get("btts")
+    btts_actual = None
+    if isinstance(btts_outcomes, dict):
+        btts_actual = "yes" if btts_outcomes.get("yes", {}).get("won") else "no"
+
     selected_btts = _pick_and_grade(
         prediction_markets.get("btts"),
-        _actual_btts(fixture),
+        btts_actual,
     )
-
     if selected_btts is not None:
         selected["btts"] = selected_btts
 
-    outcomes["btts"] = (
-        market_grading.grade_btts(
-            home,
-            away,
-        )
-    )
-
     # Over / Under
     over_under_selected: Dict[str, Any] = {}
+    over_under = prediction_markets.get("over_under", {})
+    ou_outcomes = goal_outcomes.get("over_under", {})
 
-    over_under_outcomes = (
-        market_grading.grade_over_under(
-            home,
-            away,
-        )
-    )
-
-    over_under = prediction_markets.get(
-        "over_under",
-        {},
-    )
-
-    if isinstance(over_under, dict):
-        lines: Dict[
-            str,
-            Tuple[float, Dict[str, float]],
-        ] = {}
-
+    if isinstance(over_under, dict) and isinstance(ou_outcomes, dict):
+        lines: Dict[str, Tuple[float, Dict[str, float]]] = {}
         for key, value in over_under.items():
-            if (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-            ):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
                 continue
-
             key_text = str(key)
-
-            if not (
-                key_text.startswith("over_")
-                or key_text.startswith("under_")
-            ):
+            if not (key_text.startswith("over_") or key_text.startswith("under_")):
                 continue
-
-            parts = key_text.split(
-                "_",
-                1,
-            )
-
+            parts = key_text.split("_", 1)
             if len(parts) != 2:
                 continue
-
             try:
-                line = float(
-                    parts[1].replace(
-                        "_",
-                        ".",
-                    )
-                )
+                line = float(parts[1].replace("_", "."))
             except ValueError:
                 continue
+            lines.setdefault(str(line), (line, {}))[1][key_text] = float(value)
 
-            lines.setdefault(
-                str(line),
-                (line, {}),
-            )[1][key_text] = float(value)
-
-        for line_key, (
-            line,
-            distribution,
-        ) in lines.items():
-            actual = _actual_binary_total(
-                total,
-                line,
-            )
+        for line_key, (line, distribution) in lines.items():
             key_suffix = str(line).replace(".", "_")
-            actual_key = f"{actual}_{key_suffix}" if actual in {"over", "under"} else None
-
-            picked = _pick_and_grade(
-                distribution,
-                actual_key,
-            )
-
-            if picked is not None:
-                picked["actual"] = actual
-                over_under_selected[
-                    line_key
-                ] = picked
+            over_item = ou_outcomes.get(f"over_{key_suffix}")
+            if isinstance(over_item, dict):
+                actual = over_item.get("outcome")
+                actual_key = f"{actual}_{key_suffix}" if actual in {"over", "under"} else None
+                picked = _pick_and_grade(distribution, actual_key)
+                if picked is not None:
+                    picked["actual"] = actual
+                    over_under_selected[line_key] = picked
 
     if over_under_selected:
-        selected["over_under"] = (
-            over_under_selected
-        )
-
-    outcomes["over_under"] = (
-        over_under_outcomes or {}
-    )
+        selected["over_under"] = over_under_selected
 
     # Team goals
     team_selected: Dict[str, Any] = {}
+    team_goals = prediction_markets.get("team_goals", {})
+    tg_outcomes = goal_outcomes.get("team_goals", {})
 
-    team_goals = prediction_markets.get(
-        "team_goals",
-        {},
-    )
-
-    if isinstance(team_goals, dict):
-        lines: Dict[
-            str,
-            Tuple[float, Dict[str, float]],
-        ] = {}
-
+    if isinstance(team_goals, dict) and isinstance(tg_outcomes, dict):
+        lines: Dict[str, Tuple[float, Dict[str, float]]] = {}
         for key, value in team_goals.items():
-            if (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-            ):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
                 continue
-
-            parsed = _parse_goal_market_key(
-                key
-            )
-
+            parsed = _parse_goal_market_key(key)
             if parsed is None:
                 continue
-
             team, line, original_key = parsed
+            line_key = f"{team}_{str(line).replace('.', '_')}"
+            lines.setdefault(line_key, (line, {}))[1][original_key] = float(value)
 
-            line_key = (
-                f"{team}_{str(line).replace('.', '_')}"
-            )
-
-            lines.setdefault(
-                line_key,
-                (line, {}),
-            )[1][original_key] = float(
-                value
-            )
-
-        for line_key, (
-            line,
-            distribution,
-        ) in lines.items():
-            team = line_key.split(
-                "_",
-                1,
-            )[0]
-
-            actual_goals = (
-                home
-                if team == "home"
-                else away
-            )
-
-            actual = _actual_binary_total(
-                actual_goals,
-                line,
-            )
+        for line_key, (line, distribution) in lines.items():
+            team = line_key.split("_", 1)[0]
             key_suffix = str(line).replace(".", "_")
-            actual_key = f"{team}_{actual}_{key_suffix}" if actual in {"over", "under"} else None
-
-            picked = _pick_and_grade(
-                distribution,
-                actual_key,
-            )
-
-            if picked is not None:
-                picked["actual"] = actual
-                team_selected[
-                    line_key
-                ] = picked
+            item = tg_outcomes.get(f"{team}_over_{key_suffix}")
+            if isinstance(item, dict):
+                actual = item.get("outcome")
+                actual_key = f"{team}_{actual}_{key_suffix}" if actual in {"over", "under"} else None
+                picked = _pick_and_grade(distribution, actual_key)
+                if picked is not None:
+                    picked["actual"] = actual
+                    team_selected[line_key] = picked
 
     if team_selected:
-        selected["team_goals"] = (
-            team_selected
-        )
+        selected["team_goals"] = team_selected
 
-    outcomes["team_goals"] = (
-        market_grading.grade_team_goals(
-            home,
-            away,
-        )
-        or {}
-    )
+    # Scoreline
+    scorelines = prediction_markets.get("top_scorelines") or prediction_markets.get("scoreline")
+    actual_score = goal_outcomes.get("scoreline", {}).get("outcome") if isinstance(goal_outcomes.get("scoreline"), dict) else None
 
-    # Correct score / top scorelines
-    scorelines = prediction_markets.get(
-        "top_scorelines"
-    )
-
-    if not isinstance(scorelines, list):
-        scorelines = prediction_markets.get(
-            "scoreline"
-        )
-
-    if (
-        isinstance(scorelines, list)
-        and scorelines
-    ):
+    if isinstance(scorelines, list) and scorelines:
         clean_scores = {
-            str(item.get("score")):
-                _safe_float(
-                    item.get("probability")
-                )
+            str(item.get("score")): _safe_float(item.get("probability"))
             for item in scorelines
-            if (
-                isinstance(item, dict)
-                and item.get("score") is not None
-                and _safe_float(
-                    item.get("probability")
-                ) is not None
-            )
+            if isinstance(item, dict) and item.get("score") is not None and _safe_float(item.get("probability")) is not None
         }
-
-        actual_score = (
-            f"{home}-{away}"
-            if home is not None
-            and away is not None
-            else None
-        )
-
-        picked = _pick_and_grade(
-            clean_scores,
-            actual_score,
-        )
-
+        picked = _pick_and_grade(clean_scores, actual_score)
         if picked is not None:
             selected["scoreline"] = picked
-
     elif isinstance(scorelines, dict):
-        actual_score = (
-            f"{home}-{away}"
-            if home is not None
-            and away is not None
-            else None
-        )
-
-        picked = _pick_and_grade(
-            scorelines,
-            actual_score,
-        )
-
+        picked = _pick_and_grade(scorelines, actual_score)
         if picked is not None:
             selected["scoreline"] = picked
-
-    outcomes["scoreline"] = (
-        market_grading.grade_scoreline(
-            home,
-            away,
-        )
-    )
 
     return {
         "selected": selected,
-        "outcomes": outcomes,
+        "outcomes": goal_outcomes,
     }
 
 
@@ -2255,6 +2065,303 @@ def run_real_backtest(
     _print_backtest_report(
         result
     )
+
+    try:
+        run_id = f"football_{league_id}_{season}_{timestamp}"
+        run_data = {
+            "run_id": run_id,
+            "sport": "football",
+            "league_id": league_id,
+            "season": season,
+            "dataset_identity": f"football_{league_id}_{season}",
+            "dataset_fixture_count": actual_stored_count,
+            "sample_size": sample_size,
+            "min_prior_matches": min_prior_matches,
+            "sample_seed": sample_seed,
+            "selected_count": len(selected),
+            "graded_count": graded,
+            "accuracy": result["accuracy"],
+            "brier_score": brier_score,
+            "log_loss": log_loss,
+            "ece": calibration.get("ece") if isinstance(calibration, dict) else None,
+            "enrichment_status": dataset_status.get("enrichment_status", "NONE"),
+            "started_at": timestamp,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "evaluation_json": evaluation,
+            "code_version": "authoritative",
+        }
+        market_metrics = []
+        for m_key in ("match_result", "double_chance", "over_under_2_5", "btts"):
+            m_eval = evaluation.get(m_key, {})
+            if isinstance(m_eval, dict):
+                s_cnt = m_eval.get("sample_count", graded)
+                acc_val = m_eval.get("accuracy")
+                br_val = m_eval.get("brier_score")
+                ll_val = m_eval.get("log_loss")
+                ece_val = m_eval.get("calibration", {}).get("ece") if isinstance(m_eval.get("calibration"), dict) else None
+                market_metrics.append({
+                    "market_key": m_key,
+                    "sample_count": s_cnt,
+                    "accuracy": acc_val,
+                    "brier_score": br_val,
+                    "log_loss": ll_val,
+                    "ece": ece_val,
+                    "metrics_json": m_eval,
+                })
+        storage.save_backtest_run(run_data, market_metrics)
+        result["status"] = "COMPLETED"
+        result["persisted"] = True
+        result["persistence_error"] = None
+    except Exception as exc:
+        result["status"] = "PERSISTENCE_FAILED"
+        result["persisted"] = False
+        result["persistence_error"] = str(exc)
+        print(f"ERROR: Could not persist backtest experiment record: {exc}", flush=True)
+
+    return result
+
+
+def run_basketball_backtest(
+    league_id: Any,
+    season: Any,
+    sample_size: int = 50,
+    min_prior_matches: int = 5,
+    sample_seed: Optional[int] = 42,
+) -> Dict[str, Any]:
+    """
+    Run a chronological, leakage-safe historical basketball backtest database-first.
+    """
+    if isinstance(league_id, bool) or not isinstance(league_id, int):
+        raise ValueError("league_id must be an integer.")
+
+    if isinstance(season, bool) or not isinstance(season, int) or season < 1900:
+        raise ValueError("season must be a valid integer year.")
+
+    if isinstance(sample_size, bool) or not isinstance(sample_size, int) or sample_size <= 0:
+        raise ValueError("sample_size must be a positive integer.")
+
+    if isinstance(min_prior_matches, bool) or not isinstance(min_prior_matches, int) or min_prior_matches < 0:
+        raise ValueError("min_prior_matches must be a non-negative integer.")
+
+    if sample_seed is not None and (isinstance(sample_seed, bool) or not isinstance(sample_seed, int)):
+        raise ValueError("sample_seed must be an integer or None.")
+
+    dataset_status = storage.get_historical_dataset_status(league_id, season, sport="basketball")
+    if dataset_status.get("status") != "COMPLETE":
+        raise RuntimeError(
+            f"Historical basketball dataset missing or incomplete for league {league_id} season {season} (status: {dataset_status.get('status')}). "
+            f"Run the historical sync job first."
+        )
+
+    actual_stored_count = storage.get_historical_basketball_game_count(league_id, season)
+    manifest_count = dataset_status.get("fixture_count", 0)
+
+    if manifest_count != actual_stored_count:
+        raise RuntimeError(
+            f"Historical basketball dataset integrity mismatch for league {league_id} season {season}: "
+            f"manifest count ({manifest_count}) != actual stored count ({actual_stored_count}). "
+            f"Re-run the historical sync job."
+        )
+
+    games = storage.get_historical_basketball_games(league_id, season)
+
+    if not games:
+        raise RuntimeError(
+            f"Historical basketball dataset missing or incomplete for league {league_id} season {season}. "
+            f"Run the historical sync job first."
+        )
+
+    games = [g for g in games if isinstance(g, dict)]
+
+    finished = [g for g in games if historical_match_policy.is_finished_match(g, sport="basketball")]
+    finished.sort(key=lambda g: str(g.get("date", "")))
+
+    eligible = [
+        g for g in finished
+        if historical_basketball_features.game_has_minimum_history(
+            games,
+            g.get("teams", {}).get("home", {}).get("id"),
+            g.get("teams", {}).get("away", {}).get("id"),
+            str(g.get("date", "")),
+            minimum_matches=min_prior_matches,
+        )
+    ]
+
+    selected = _sample_backtest_candidates(eligible, sample_size, seed=sample_seed)
+    selected.sort(key=lambda g: str(g.get("date", "")))
+
+    log: List[Dict[str, Any]] = []
+    preds_ml = []
+    acts_ml = []
+    preds_tot = []
+    acts_tot = []
+
+    correct = 0
+    graded = 0
+
+    for candidate in selected:
+        cutoff = str(candidate.get("date", ""))
+        home_id = candidate.get("teams", {}).get("home", {}).get("id")
+        away_id = candidate.get("teams", {}).get("away", {}).get("id")
+
+        if not home_id or not away_id or not cutoff:
+            continue
+
+        home_stats = historical_basketball_features.reconstruct_basketball_team_stats(games, home_id, cutoff)
+        away_stats = historical_basketball_features.reconstruct_basketball_team_stats(games, away_id, cutoff)
+
+        if home_stats is None or away_stats is None:
+            continue
+
+        pred = basketball_model.predict_game(candidate, home_stats_override=home_stats, away_stats_override=away_stats)
+        if pred.get("insufficient_data"):
+            continue
+
+        h_pts, a_pts = historical_match_policy.get_basketball_match_points(candidate)
+        if h_pts is None or a_pts is None:
+            continue
+
+        actual_outcome = "home_win" if h_pts > a_pts else ("away_win" if a_pts > h_pts else "draw")
+        ml_markets = pred["markets"]["moneyline"]
+        p_home = ml_markets["home_win"]
+        p_away = ml_markets["away_win"]
+
+        picked_ml = "home_win" if p_home >= p_away else "away_win"
+        won_ml = (picked_ml == actual_outcome)
+
+        graded += 1
+        if won_ml:
+            correct += 1
+
+        preds_ml.append({"home_win": p_home, "away_win": p_away})
+        acts_ml.append(actual_outcome)
+
+        tot_m = pred["markets"]["total_points"]
+        p_over = tot_m["over"]
+        p_under = tot_m["under"]
+        total_line = tot_m["line"]
+        actual_total_pts = h_pts + a_pts
+        actual_tot_outcome = "over" if actual_total_pts > total_line else ("under" if actual_total_pts < total_line else "push")
+
+        if actual_tot_outcome in ("over", "under"):
+            preds_tot.append({"over": p_over, "under": p_under})
+            acts_tot.append(actual_tot_outcome)
+
+        entry = {
+            "game_id": candidate.get("id"),
+            "match": f"{candidate.get('teams', {}).get('home', {}).get('name')} vs {candidate.get('teams', {}).get('away', {}).get('name')}",
+            "date": cutoff,
+            "correct": won_ml,
+            "predicted": picked_ml,
+            "actual": actual_outcome,
+            "actual_points": {"home": h_pts, "away": a_pts},
+            "prediction": pred,
+        }
+        log.append(entry)
+
+    brier_ml = compute_brier_score(preds_ml, acts_ml, outcomes=("home_win", "away_win"))
+    loss_ml = compute_log_loss(preds_ml, acts_ml, outcomes=("home_win", "away_win"))
+    cal_ml = compute_market_calibration(preds_ml, acts_ml, outcomes=("home_win", "away_win"))
+
+    brier_tot = compute_brier_score(preds_tot, acts_tot, outcomes=("over", "under"))
+    loss_tot = compute_log_loss(preds_tot, acts_tot, outcomes=("over", "under"))
+    cal_tot = compute_market_calibration(preds_tot, acts_tot, outcomes=("over", "under"))
+    acc_tot = compute_binary_accuracy(preds_tot, acts_tot)
+
+    evaluation = {
+        "moneyline": {
+            "sample_count": len(preds_ml),
+            "accuracy": correct / graded if graded else 0.0,
+            "brier_score": brier_ml,
+            "log_loss": loss_ml,
+            "calibration": cal_ml,
+        },
+        "total_points": {
+            "sample_count": len(preds_tot),
+            "accuracy": acc_tot,
+            "brier_score": brier_tot,
+            "log_loss": loss_tot,
+            "calibration": cal_tot,
+        },
+    }
+
+    start_ts = datetime.now(timezone.utc).isoformat()
+    result = {
+        "sport": "basketball",
+        "league_id": league_id,
+        "season": season,
+        "fixtures_fetched": len(games),
+        "finished_fixtures": len(finished),
+        "eligible_candidates": len(eligible),
+        "requested_sample": sample_size,
+        "selected": len(selected),
+        "graded": graded,
+        "correct": correct,
+        "accuracy": correct / graded if graded else 0.0,
+        "brier_score": brier_ml,
+        "log_loss": loss_ml,
+        "calibration": cal_ml,
+        "evaluation": evaluation,
+        "min_prior_matches": min_prior_matches,
+        "sample_seed": sample_seed,
+        "log": log,
+    }
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_id = f"basketball_{league_id}_{season}_{timestamp}"
+
+    try:
+        run_data = {
+            "run_id": run_id,
+            "sport": "basketball",
+            "league_id": league_id,
+            "season": season,
+            "dataset_identity": f"basketball_{league_id}_{season}",
+            "dataset_fixture_count": actual_stored_count,
+            "sample_size": sample_size,
+            "min_prior_matches": min_prior_matches,
+            "sample_seed": sample_seed,
+            "selected_count": len(selected),
+            "graded_count": graded,
+            "accuracy": result["accuracy"],
+            "brier_score": brier_ml,
+            "log_loss": loss_ml,
+            "ece": cal_ml.get("ece") if isinstance(cal_ml, dict) else None,
+            "enrichment_status": "NONE",
+            "started_at": start_ts,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "evaluation_json": evaluation,
+            "code_version": "authoritative",
+        }
+        market_metrics = [
+            {
+                "market_key": "moneyline",
+                "sample_count": len(preds_ml),
+                "accuracy": result["accuracy"],
+                "brier_score": brier_ml,
+                "log_loss": loss_ml,
+                "ece": cal_ml.get("ece") if isinstance(cal_ml, dict) else None,
+                "metrics_json": evaluation["moneyline"],
+            },
+            {
+                "market_key": "total_points",
+                "sample_count": len(preds_tot),
+                "accuracy": acc_tot,
+                "brier_score": brier_tot,
+                "log_loss": loss_tot,
+                "ece": cal_tot.get("ece") if isinstance(cal_tot, dict) else None,
+                "metrics_json": evaluation["total_points"],
+            },
+        ]
+        storage.save_backtest_run(run_data, market_metrics)
+        result["status"] = "COMPLETED"
+        result["persisted"] = True
+        result["persistence_error"] = None
+    except Exception as exc:
+        result["status"] = "PERSISTENCE_FAILED"
+        result["persisted"] = False
+        result["persistence_error"] = str(exc)
+        print(f"ERROR: Could not persist basketball backtest experiment record: {exc}", flush=True)
 
     return result
 

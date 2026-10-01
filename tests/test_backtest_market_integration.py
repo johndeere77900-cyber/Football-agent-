@@ -392,6 +392,54 @@ def test_missing_statistical_data_is_not_fabricated(monkeypatch, tmp_path):
         )
 
 
+def test_backtest_grading_uses_centralized_settlement_outcomes():
+    # AET fixture where regulation was 1-1, extratime 2-1 final
+    aet_fixture = {
+        "fixture": {"id": 999, "status": {"short": "AET"}},
+        "goals": {"home": 2, "away": 1},
+        "score": {
+            "fulltime": {"home": 1, "away": 1},
+            "extratime": {"home": 1, "away": 0},
+        },
+    }
+
+    prediction_markets = {
+        "match_result": {"home_win": 0.40, "draw": 0.35, "away_win": 0.25},
+        "double_chance": {"home_or_draw": 0.75, "away_or_draw": 0.60, "home_or_away": 0.65},
+        "over_under": {"over_2_5": 0.60, "under_2_5": 0.40},
+        "btts": {"yes": 0.70, "no": 0.30},
+        "team_goals": {"home_over_1_5": 0.65, "home_under_1_5": 0.35},
+        "scoreline": {"2-1": 0.20, "1-1": 0.15},
+    }
+
+    graded = backtest._grade_prediction_markets(prediction_markets, aet_fixture)
+    selected = graded["selected"]
+
+    # 1X2 uses regulation score 1-1 -> actual is 'draw', pick 'home_win' -> won is False
+    assert selected["match_result"]["actual"] == "draw"
+    assert selected["match_result"]["won"] is False
+
+    # Double Chance uses regulation score 1-1 -> actual is 'home_or_draw', pick 'home_or_draw' -> won is True
+    assert selected["double_chance"]["actual"] == "home_or_draw"
+    assert selected["double_chance"]["won"] is True
+
+    # Over/Under uses match goals (2-1 = 3) -> actual 'over', pick 'over_2_5' -> won is True
+    assert selected["over_under"]["2.5"]["actual"] == "over"
+    assert selected["over_under"]["2.5"]["won"] is True
+
+    # BTTS uses match goals (2-1) -> actual 'yes', pick 'yes' -> won is True
+    assert selected["btts"]["actual"] == "yes"
+    assert selected["btts"]["won"] is True
+
+    # Team goals uses match goals (home=2) -> actual 'over', pick 'home_over_1_5' -> won is True
+    assert selected["team_goals"]["home_1_5"]["actual"] == "over"
+    assert selected["team_goals"]["home_1_5"]["won"] is True
+
+    # Scoreline uses match goals (2-1) -> actual '2-1', pick '2-1' -> won is True
+    assert selected["scoreline"]["actual"] == "2-1"
+    assert selected["scoreline"]["won"] is True
+
+
 def test_invalid_enrichment_flag_is_rejected():
     with pytest.raises(ValueError):
         backtest.run_real_backtest(

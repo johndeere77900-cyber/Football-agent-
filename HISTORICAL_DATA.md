@@ -1,73 +1,76 @@
 # Historical Data Layer & Backtest Architecture
 
-This document describes the historical data architecture for football backtesting.
+This document describes the unified historical data and backtest architecture for football and basketball.
 
 ## Overview
 
-The historical backtesting pipeline is decoupled from live API acquisition to prevent unnecessary credit consumption on API-Football:
+The historical acquisition and backtesting pipeline is decoupled from live prediction execution to ensure point-in-time integrity and protect API quota:
 
 ```
-    API-Football
-          ↓
-    historical_sync.py (controlled historical collector)
-          ↓
-    Neon PostgreSQL / SQLite (`historical_fixtures`, `historical_fixture_enrichment`, `historical_datasets`)
-          ↓
+    API-Football / API-Basketball
+                ↓
+    historical_sync.py (controlled multi-sport historical collector)
+                ↓
+    Neon PostgreSQL / SQLite Storage
+      - `historical_fixtures` / `historical_basketball_games`
+      - `historical_fixture_enrichment`
+      - `historical_datasets` (manifests keyed by sport, league_id, season)
+      - `backtest_runs` & `backtest_market_metrics`
+                ↓
     backtest.py (database-first backtest engine)
-          ↓
-    prediction / reconstruction / evaluation
+                ↓
+    prediction / reconstruction / market evaluation & experiment persistence
 ```
 
-## Dataset Completion States & Integrity Invariants
+## Invariants & Rules
 
-1. **Strict Pagination Completion Criteria**: A dataset is marked `COMPLETE` in `historical_datasets` ONLY IF:
-   - All expected pagination pages (`expected_pages`) have been successfully retrieved (`pages_completed == expected_pages`);
-   - Pagination metadata is valid and `acquisition_complete` is `True`;
-   - Valid fixture records have been persisted;
-   - No quota exhaustion occurred;
-   - No API/network/acquisition errors occurred.
-2. **Zero-API Acquisition on COMPLETE Datasets**: When `status == 'COMPLETE'`, `historical_sync.py` **skips API acquisition entirely (0 API requests made)** unless `--refresh` is explicitly passed.
-3. **Backtest Integrity Check**: Before executing a backtest, `backtest.py` verifies both:
-   - `dataset_status["status"] == "COMPLETE"`
-   - `dataset_status["fixture_count"] == actual_stored_count`
-   If the manifest count differs from actual stored database rows, `backtest.py` fails closed with a clear `"historical dataset integrity mismatch"` error.
-4. **Explicit Refresh**: Passing `--refresh` explicitly re-fetches fixtures according to quota protections without deleting pre-existing data until successful completion.
+1. **NORMAL BACKTEST INVARIANT**:
+   - `Neon/SQLite historical dataset` -> `zero API-Football/API-Basketball network calls`.
+   - Backtests read strictly from database storage and fail closed if a dataset is missing, incomplete, or count-mismatched.
+2. **HISTORICAL ACQUISITION INVARIANT**:
+   - `Provider API` -> `persistent quota / cache` -> `validated storage` -> `manifest`.
+3. **COMPLETE Datasets**:
+   - A dataset marked `COMPLETE` bypasses API calls completely (0 requests made) unless `--refresh` is explicitly specified.
+4. **Exact Budget Completion**:
+   - Reaching the exact final allowed credit quota slot on a successful final response allows a dataset to become `COMPLETE` provided all expected pages/games were successfully retrieved.
+5. **Match Status & Score Policy (`historical_match_policy.py`)**:
+   - Football: `FT`, `AET`, and `PEN` matches are completed historical matches.
+   - Basketball: `FT` and `AOT` games are completed historical games.
 
-## Quota Protections & Header Fail-Safes
+### API-Football Score Field Semantics & Settlement Policy
+API-Football payloads contain both top-level `goals` and nested `score` objects:
+- `goals`: `{home, away}` — The authoritative total match goals after 90 or 120 minutes of play (excluding penalty shootout kicks). Used for Over/Under totals, BTTS, team goals, Elo ratings, and H2H/recent form calculations.
+- `score.fulltime`: `{home, away}` — The 90-minute regulation-time score. Used strictly for 1X2 market settlement.
+- `score.extratime`: `{home, away}` — Goals scored specifically during extra time in knockout fixtures.
+- `score.penalty`: `{home, away}` — Goals scored during penalty shootouts. **Penalty shootout kicks are never counted as match goals** for 1X2, Totals, BTTS, Elo, or form calculations.
+6. **Multi-Sport Identity**:
+   - Manifests are keyed by `(sport, league_id, season)` preventing collision between football league 12 and basketball league 12.
+7. **Empty-Page Acquisition Policy**:
+   - An API response returning an empty payload list (`response: []`) cannot mark a dataset as `COMPLETE`. `valid_fixtures_count > 0` and `final_stored_count > 0` are strictly required, ensuring empty queries remain `INCOMPLETE`. Empty page occurrences (`empty_pages_count`) are persisted in the manifest and preserved across resumable acquisition runs.
+8. **Backtest Experiment Recording**:
+   - Backtest results, market-level metrics (Brier score, log loss, calibration/ECE), sample sizes, and seed details are permanently recorded in `backtest_runs` and `backtest_market_metrics`.
 
-- **Global Limit**: The global 100 daily request limit (`API_FOOTBALL_DAILY_CREDIT_LIMIT`) remains authoritative and atomic across all network attempts.
-- **Historical Daily Budget**: Historical acquisition enforces `API_FOOTBALL_HISTORICAL_DAILY_BUDGET = 50` (configurable via environment variable) per network attempt (including pagination and retries).
-- **Provider Header Fail-Safe**: Dynamic rate-limit headers (`x-ratelimit-requests-remaining` / `X-RateLimit-Remaining`) are inspected on every API response. If the provider reports remaining credits $\le 0$, an `APIFootballQuotaExhaustedError` is raised immediately to block further network attempts.
+## CLI Commands
 
-## Point-in-Time Integrity
-
-- For any fixture at kickoff time $T$, feature reconstruction (recent form, H2H, Elo, league averages) strictly uses fixtures where `kickoff < T`.
-- Future fixtures and target fixture outcomes are excluded from prediction feature snapshots.
-
-## Running Historical Data Sync
-
-To acquire historical fixtures for a league and season:
-
+To check historical dataset manifest status:
 ```bash
-python historical_sync.py --league-id 39 --season 2024
+python3 main.py --dataset-status --sport football --league 39 --season 2024
+python3 main.py --dataset-status --sport basketball --league 12 --season 2024
 ```
 
-To include optional statistical enrichment (corners and cards):
-
+To sync historical data:
 ```bash
-python historical_sync.py --league-id 39 --season 2024 --with-enrichment
+python3 main.py --historical-sync --sport football --league 39 --season 2024 --with-enrichment
+python3 main.py --historical-sync --sport basketball --league 12 --season 2024
 ```
 
-To force re-acquisition on a COMPLETE dataset:
-
+To run database-first backtests:
 ```bash
-python historical_sync.py --league-id 39 --season 2024 --refresh
+python3 main.py --backtest --sport football --league 39 --season 2024 --sample 50
+python3 main.py --backtest --sport basketball --league 12 --season 2024 --sample 50
 ```
 
-## Running Backtests
-
-Once the historical dataset status is `COMPLETE` in storage, run backtests normally:
-
+To view past backtest run history:
 ```bash
-python backtest.py --league-id 39 --season 2024 --sample 50
+python3 main.py --backtest-history
 ```

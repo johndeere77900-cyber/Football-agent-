@@ -90,6 +90,12 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False, verify_only=False)
         "bot_memory": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
         "api_cache": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
         "api_request_counts": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "historical_fixtures": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "historical_basketball_games": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "historical_fixture_enrichment": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "historical_datasets": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "backtest_runs": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "backtest_market_metrics": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
         "key_field_verification": "PENDING",
         "verification": "PENDING",
     }
@@ -443,7 +449,246 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False, verify_only=False)
                             report["api_request_counts"]["migrated"] += 1
 
         # -------------------------------------------------------------
-        # 7. Exact Source-vs-Destination Deterministic Verification
+        # 7. Migrate Historical Fixtures
+        # -------------------------------------------------------------
+        try:
+            hf_rows = source_cursor.execute(
+                """
+                SELECT fixture_id, league_id, season, kickoff_at, status_short,
+                       home_team_id, away_team_id, home_team, away_team,
+                       home_goals, away_goals, raw_json, source, fetched_at
+                FROM historical_fixtures
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            hf_rows = []
+
+        report["historical_fixtures"]["source"] = len(hf_rows)
+
+        if not dry_run and not verify_only and hf_rows:
+            with target_conn.transaction():
+                with target_conn.cursor() as cur:
+                    for r in hf_rows:
+                        fid, lid, ssn, kick, st, hid, aid, hname, aname, hg, ag, rjson, src, fat = r
+                        raw_data = storage._json_loads(rjson) if rjson else {}
+                        raw_str = storage._json_dumps(raw_data, "raw_json")
+                        cur.execute(
+                            """
+                            INSERT INTO historical_fixtures (
+                                fixture_id, league_id, season, kickoff_at, status_short,
+                                home_team_id, away_team_id, home_team, away_team,
+                                home_goals, away_goals, raw_json, source, fetched_at
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (fixture_id) DO NOTHING
+                            """,
+                            (fid, lid, ssn, kick, st, hid, aid, hname, aname, hg, ag, raw_str, src or 'api_football', fat),
+                        )
+                        if cur.rowcount >= 1:
+                            report["historical_fixtures"]["migrated"] += 1
+
+        # -------------------------------------------------------------
+        # 8. Migrate Historical Basketball Games
+        # -------------------------------------------------------------
+        try:
+            hbg_rows = source_cursor.execute(
+                """
+                SELECT game_id, league_id, season, game_date, status_short,
+                       home_team_id, away_team_id, home_team, away_team,
+                       home_points, away_points, raw_json, source, fetched_at
+                FROM historical_basketball_games
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            hbg_rows = []
+
+        report["historical_basketball_games"]["source"] = len(hbg_rows)
+
+        if not dry_run and not verify_only and hbg_rows:
+            with target_conn.transaction():
+                with target_conn.cursor() as cur:
+                    for r in hbg_rows:
+                        gid, lid, ssn, gdate, st, hid, aid, hname, aname, hp, ap, rjson, src, fat = r
+                        raw_data = storage._json_loads(rjson) if rjson else {}
+                        raw_str = storage._json_dumps(raw_data, "raw_json")
+                        cur.execute(
+                            """
+                            INSERT INTO historical_basketball_games (
+                                game_id, league_id, season, game_date, status_short,
+                                home_team_id, away_team_id, home_team, away_team,
+                                home_points, away_points, raw_json, source, fetched_at
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (game_id) DO NOTHING
+                            """,
+                            (gid, lid, ssn, gdate, st, hid, aid, hname, aname, hp, ap, raw_str, src or 'api_basketball', fat),
+                        )
+                        if cur.rowcount >= 1:
+                            report["historical_basketball_games"]["migrated"] += 1
+
+        # -------------------------------------------------------------
+        # 9. Migrate Historical Fixture Enrichment
+        # -------------------------------------------------------------
+        try:
+            hfe_rows = source_cursor.execute(
+                "SELECT fixture_id, raw_json, fetched_at, source FROM historical_fixture_enrichment"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            hfe_rows = []
+
+        report["historical_fixture_enrichment"]["source"] = len(hfe_rows)
+
+        if not dry_run and not verify_only and hfe_rows:
+            with target_conn.transaction():
+                with target_conn.cursor() as cur:
+                    for r in hfe_rows:
+                        fid, rjson, fat, src = r
+                        raw_data = storage._json_loads(rjson) if rjson else {}
+                        raw_str = storage._json_dumps(raw_data, "raw_json")
+                        cur.execute(
+                            """
+                            INSERT INTO historical_fixture_enrichment (fixture_id, raw_json, fetched_at, source)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (fixture_id) DO NOTHING
+                            """,
+                            (fid, raw_str, fat, src or 'api_football'),
+                        )
+                        if cur.rowcount >= 1:
+                            report["historical_fixture_enrichment"]["migrated"] += 1
+
+        # -------------------------------------------------------------
+        # 10. Migrate Historical Datasets Manifests
+        # -------------------------------------------------------------
+        try:
+            hd_cols = {row[1] for row in source_cursor.execute("PRAGMA table_info(historical_datasets)").fetchall()}
+            has_sport = "sport" in hd_cols
+            if has_sport:
+                hd_rows = source_cursor.execute(
+                    """
+                    SELECT sport, league_id, season, status, fixture_count, expected_pages,
+                           pages_completed, acquisition_complete, enrichment_status, completed_at,
+                           updated_at, source, error_reason
+                    FROM historical_datasets
+                    """
+                ).fetchall()
+            else:
+                hd_rows = source_cursor.execute(
+                    """
+                    SELECT 'football' AS sport, league_id, season, status, fixture_count, 0 AS expected_pages,
+                           0 AS pages_completed, 0 AS acquisition_complete, 'NONE' AS enrichment_status, completed_at,
+                           updated_at, source, NULL AS error_reason
+                    FROM historical_datasets
+                    """
+                ).fetchall()
+        except sqlite3.OperationalError:
+            hd_rows = []
+
+        report["historical_datasets"]["source"] = len(hd_rows)
+
+        if not dry_run and not verify_only and hd_rows:
+            with target_conn.transaction():
+                with target_conn.cursor() as cur:
+                    for r in hd_rows:
+                        spt, lid, ssn, st, fc, ep, pc, ac, es, cat, uat, src, err = r
+                        cur.execute(
+                            """
+                            INSERT INTO historical_datasets (
+                                sport, league_id, season, status, fixture_count, expected_pages,
+                                pages_completed, acquisition_complete, enrichment_status, completed_at,
+                                updated_at, source, error_reason
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (sport, league_id, season) DO UPDATE SET
+                                status = EXCLUDED.status,
+                                fixture_count = EXCLUDED.fixture_count,
+                                expected_pages = EXCLUDED.expected_pages,
+                                pages_completed = EXCLUDED.pages_completed,
+                                acquisition_complete = EXCLUDED.acquisition_complete,
+                                enrichment_status = EXCLUDED.enrichment_status,
+                                completed_at = EXCLUDED.completed_at,
+                                updated_at = EXCLUDED.updated_at,
+                                source = EXCLUDED.source,
+                                error_reason = EXCLUDED.error_reason
+                            """,
+                            (spt or 'football', lid, ssn, st, fc, ep or 0, pc or 0, ac or 0, es or 'NONE', cat, uat, src or 'api_football', err),
+                        )
+                        if cur.rowcount >= 1:
+                            report["historical_datasets"]["migrated"] += 1
+
+        # -------------------------------------------------------------
+        # 11 & 12. Migrate Backtest Runs and Market Metrics
+        # -------------------------------------------------------------
+        try:
+            btr_rows = source_cursor.execute(
+                """
+                SELECT run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
+                       sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
+                       accuracy, brier_score, log_loss, ece, enrichment_status,
+                       started_at, completed_at, evaluation_json, code_version
+                FROM backtest_runs
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            btr_rows = []
+
+        report["backtest_runs"]["source"] = len(btr_rows)
+
+        if not dry_run and not verify_only and btr_rows:
+            with target_conn.transaction():
+                with target_conn.cursor() as cur:
+                    for r in btr_rows:
+                        rid, spt, lid, ssn, did, dfc, ss, mpm, seed, sc, gc, acc, bs, ll, ece, es, sat, cat, eval_json, cv = r
+                        eval_data = storage._json_loads(eval_json) if eval_json else None
+                        eval_str = storage._json_dumps(eval_data, "eval_json") if eval_data else None
+                        cur.execute(
+                            """
+                            INSERT INTO backtest_runs (
+                                run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
+                                sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
+                                accuracy, brier_score, log_loss, ece, enrichment_status,
+                                started_at, completed_at, evaluation_json, code_version
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (run_id) DO NOTHING
+                            """,
+                            (rid, spt, lid, ssn, did, dfc, ss, mpm, seed, sc, gc, acc, bs, ll, ece, es, sat, cat, eval_str, cv),
+                        )
+                        if cur.rowcount >= 1:
+                            report["backtest_runs"]["migrated"] += 1
+
+        try:
+            btm_rows = source_cursor.execute(
+                """
+                SELECT run_id, sport, market_key, sample_count, accuracy, brier_score, log_loss, ece, metrics_json
+                FROM backtest_market_metrics
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            btm_rows = []
+
+        report["backtest_market_metrics"]["source"] = len(btm_rows)
+
+        if not dry_run and not verify_only and btm_rows:
+            with target_conn.transaction():
+                with target_conn.cursor() as cur:
+                    for r in btm_rows:
+                        rid, spt, mkey, sc, acc, bs, ll, ece, mjson = r
+                        m_data = storage._json_loads(mjson) if mjson else None
+                        m_str = storage._json_dumps(m_data, "mjson") if m_data else None
+                        cur.execute(
+                            """
+                            INSERT INTO backtest_market_metrics (
+                                run_id, sport, market_key, sample_count, accuracy, brier_score, log_loss, ece, metrics_json
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """,
+                            (rid, spt, mkey, sc, acc, bs, ll, ece, m_str),
+                        )
+                        if cur.rowcount >= 1:
+                            report["backtest_market_metrics"]["migrated"] += 1
+
+        # -------------------------------------------------------------
+        # 13. Exact Source-vs-Destination Deterministic Verification
         # -------------------------------------------------------------
         if not dry_run:
             errors = []

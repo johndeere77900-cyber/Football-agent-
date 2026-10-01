@@ -27,6 +27,15 @@ import time
 import requests
 
 import config
+import storage
+
+
+class APIBasketballError(RuntimeError):
+    """Expected API-Basketball/network-service failure."""
+
+
+class APIBasketballQuotaExhaustedError(APIBasketballError):
+    """Raised when API-Basketball daily request quota is exhausted."""
 
 
 # ---------------------------------------------------------------------------
@@ -238,110 +247,71 @@ def _cache_path(endpoint, params):
 
 def _cache_get(endpoint, params):
     """
-    Read a cached API response.
+    Read a cached API response from persistent storage cache first, then disk fallback.
 
     Returns:
         dict: cached response when fresh and valid.
         None: when no usable cache entry exists.
     """
-    path = _cache_path(
-        endpoint,
-        params,
-    )
+    cache_k = _cache_key(endpoint, params)
+    try:
+        persistent = storage.get_api_cache(cache_k)
+        if persistent is not None:
+            return persistent
+    except Exception:
+        pass
+
+    path = _cache_path(endpoint, params)
 
     if not os.path.exists(path):
         return None
 
     try:
-        ttl_hours = float(
-            getattr(
-                config,
-                "CACHE_TTL_HOURS",
-                20,
-            )
-        )
+        ttl_hours = float(getattr(config, "CACHE_TTL_HOURS", 20))
 
         if ttl_hours < 0:
             return None
 
-        age_seconds = (
-            time.time()
-            - os.path.getmtime(path)
-        )
+        age_seconds = time.time() - os.path.getmtime(path)
 
-        if age_seconds < 0:
+        if age_seconds < 0 or age_seconds > ttl_hours * 3600:
             return None
 
-        if age_seconds > ttl_hours * 3600:
-            return None
-
-        with open(
-            path,
-            "r",
-            encoding="utf-8",
-        ) as file:
+        with open(path, "r", encoding="utf-8") as file:
             data = json.load(file)
 
-        if not isinstance(data, dict):
-            return None
-
-        # A cache entry must itself look like an API response.
-        if "response" not in data:
+        if not isinstance(data, dict) or "response" not in data:
             return None
 
         return data
 
-    except (
-        OSError,
-        ValueError,
-        TypeError,
-        json.JSONDecodeError,
-    ):
-        # Corrupt cache must never block a fresh API request.
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
 
 
 def _cache_set(endpoint, params, data):
     """
-    Atomically store an API response.
-
-    Important:
-    Empty but valid API responses are cached too. This prevents repeated
-    queries for a date with no games from unnecessarily consuming API quota.
+    Store an API response in persistent storage cache and disk fallback.
     """
     if not isinstance(data, dict):
-        raise ValueError(
-            "Cached API data must be a dictionary."
-        )
+        raise ValueError("Cached API data must be a dictionary.")
 
-    path = _cache_path(
-        endpoint,
-        params,
-    )
-
-    temp_path = (
-        path
-        + ".tmp"
-        + f".{os.getpid()}"
-    )
+    cache_k = _cache_key(endpoint, params)
+    ttl_seconds = int(float(getattr(config, "CACHE_TTL_HOURS", 20)) * 3600)
 
     try:
-        with open(
-            temp_path,
-            "w",
-            encoding="utf-8",
-        ) as file:
-            json.dump(
-                data,
-                file,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
+        storage.set_api_cache(cache_k, endpoint, params, data, ttl_seconds)
+    except Exception:
+        pass
 
-        os.replace(
-            temp_path,
-            path,
-        )
+    path = _cache_path(endpoint, params)
+    temp_path = path + f".tmp.{os.getpid()}"
+
+    try:
+        with open(temp_path, "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, separators=(",", ":"))
+
+        os.replace(temp_path, path)
 
     finally:
         if os.path.exists(temp_path):
@@ -349,6 +319,43 @@ def _cache_set(endpoint, params, data):
                 os.remove(temp_path)
             except OSError:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Quota Management
+# ---------------------------------------------------------------------------
+
+
+def _check_and_consume_quota(endpoint, max_budget=None):
+    """
+    Atomically verify and reserve daily basketball credit quota.
+
+    Fails closed: if quota storage cannot be queried or updated, raises
+    APIBasketballQuotaExhaustedError to prevent unauthorized external requests.
+    """
+    global_limit = int(getattr(config, "API_BASKETBALL_DAILY_CREDIT_LIMIT", 100))
+    limit = global_limit
+    if max_budget is not None:
+        try:
+            budget_val = int(max_budget)
+            if budget_val > 0:
+                limit = min(limit, budget_val)
+        except (TypeError, ValueError):
+            pass
+
+    today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    try:
+        reserved = storage.reserve_api_request("api_basketball", today_str, today_str, endpoint, limit)
+    except Exception as exc:
+        raise APIBasketballQuotaExhaustedError(
+            f"Basketball quota storage error; failing closed: {exc}"
+        ) from exc
+
+    if not reserved:
+        raise APIBasketballQuotaExhaustedError(
+            f"API-Basketball credit limit reached ({limit})."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -457,51 +464,24 @@ def _sleep_before_retry(seconds):
 # ---------------------------------------------------------------------------
 
 
-def _get(endpoint, params):
+def _get(endpoint, params, max_budget=None):
     """
-    Perform a cache-first GET request to API-Sports Basketball.
-
-    Cache behavior:
-    - fresh cached responses are returned without an API request;
-    - valid empty responses are cached;
-    - corrupt/expired cache is ignored.
-
-    Retry behavior:
-    - network errors are retried;
-    - HTTP 429 is retried;
-    - transient 5xx responses are retried;
-    - permanent 4xx responses are not repeatedly requested.
+    Perform a GET request with persistent cache-first behavior and hard quota enforcement.
     """
-    endpoint = _validate_endpoint(
-        endpoint
-    )
+    endpoint = _validate_endpoint(endpoint)
+    params = _validate_params(params)
 
-    params = _validate_params(
-        params
-    )
-
-    cached = _cache_get(
-        endpoint,
-        params,
-    )
-
+    cached = _cache_get(endpoint, params)
     if cached is not None:
         return cached
 
-    url = (
-        f"{_base_url()}/{endpoint}"
-    )
-
-    backoff = (
-        RETRY_BACKOFF_SECONDS
-    )
-
+    url = f"{_base_url()}/{endpoint}"
+    backoff = RETRY_BACKOFF_SECONDS
     last_exception = None
 
-    for attempt in range(
-        1,
-        MAX_RETRIES + 1,
-    ):
+    for attempt in range(1, MAX_RETRIES + 1):
+        _check_and_consume_quota(endpoint, max_budget=max_budget)
+
         try:
             response = requests.get(
                 url,
@@ -512,20 +492,15 @@ def _get(endpoint, params):
 
         except requests.RequestException as exc:
             last_exception = exc
-
             if attempt >= MAX_RETRIES:
-                raise
+                raise APIBasketballError(
+                    f"API-Basketball request failed after {MAX_RETRIES} attempts: {exc}"
+                ) from exc
 
             print(
-                "  Basketball API network error; "
-                f"retrying in {backoff}s "
-                f"(attempt {attempt}/{MAX_RETRIES})..."
+                f"  Basketball API network error; retrying in {backoff}s (attempt {attempt}/{MAX_RETRIES})..."
             )
-
-            _sleep_before_retry(
-                backoff
-            )
-
+            _sleep_before_retry(backoff)
             backoff *= 2
             continue
 
@@ -536,59 +511,30 @@ def _get(endpoint, params):
                 response.raise_for_status()
 
             if status == 429:
-                delay = _retry_after_seconds(
-                    response,
-                    backoff,
-                )
-
+                delay = _retry_after_seconds(response, backoff)
                 print(
-                    "  Basketball API rate limited (429); "
-                    f"retrying in {delay:g}s "
-                    f"(attempt {attempt}/{MAX_RETRIES})..."
+                    f"  Basketball API rate limited (429); retrying in {delay:g}s (attempt {attempt}/{MAX_RETRIES})..."
                 )
-
             else:
-                delay = min(
-                    float(backoff),
-                    60.0,
-                )
-
+                delay = min(float(backoff), 60.0)
                 print(
-                    "  Basketball API temporary "
-                    f"HTTP {status}; "
-                    f"retrying in {delay:g}s "
-                    f"(attempt {attempt}/{MAX_RETRIES})..."
+                    f"  Basketball API temporary HTTP {status}; retrying in {delay:g}s (attempt {attempt}/{MAX_RETRIES})..."
                 )
 
-            _sleep_before_retry(
-                delay
-            )
-
+            _sleep_before_retry(delay)
             backoff *= 2
             continue
 
-        # Permanent HTTP failure.
         response.raise_for_status()
+        data = _parse_json_response(response)
 
-        data = _parse_json_response(
-            response
-        )
-
-        # Cache every valid response, including response=[].
-        _cache_set(
-            endpoint,
-            params,
-            data,
-        )
-
+        _cache_set(endpoint, params, data)
         return data
 
     if last_exception is not None:
         raise last_exception
 
-    raise RuntimeError(
-        "API-Basketball request failed."
-    )
+    raise APIBasketballError("API-Basketball request failed.")
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +563,71 @@ def _season_for_date(parsed_date):
         )
 
     return season
+
+
+def get_league_games_page(league_id, season, page=1, max_budget=None):
+    """
+    Retrieve one page of basketball games for a league season with strict pagination metadata validation.
+
+    Fails closed if pagination metadata is missing, malformed, or inconsistent with requested page.
+
+    Returns dict:
+        {
+            "games": list_of_games,
+            "page": int,
+            "expected_pages": int
+        }
+    """
+    league_id = _validate_positive_int(league_id, "league_id")
+    season = _validate_positive_int(season, "season")
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        raise ValueError("page must be a positive integer.")
+
+    params = {
+        "league": league_id,
+        "season": season,
+        "page": page,
+    }
+
+    data = _get("games", params, max_budget=max_budget)
+
+    if not isinstance(data, dict):
+        raise APIBasketballError("API-Basketball response must be a JSON object.")
+
+    response = data.get("response")
+    if not isinstance(response, list):
+        raise APIBasketballError("API-Basketball response missing valid 'response' list.")
+
+    paging = data.get("paging")
+    if not isinstance(paging, dict):
+        raise APIBasketballError("Missing or invalid 'paging' object in API-Basketball response.")
+
+    current = paging.get("current")
+    total = paging.get("total")
+
+    if (
+        isinstance(current, bool)
+        or not isinstance(current, int)
+        or current < 1
+        or isinstance(total, bool)
+        or not isinstance(total, int)
+        or total < 1
+        or current > total
+    ):
+        raise APIBasketballError(
+            f"Malformed pagination metadata from API-Basketball: current={current!r}, total={total!r}"
+        )
+
+    if current != page:
+        raise APIBasketballError(
+            f"Inconsistent pagination metadata: current page ({current}) != requested page ({page})."
+        )
+
+    return {
+        "games": response,
+        "page": page,
+        "expected_pages": total,
+    }
 
 
 def get_games_by_date(

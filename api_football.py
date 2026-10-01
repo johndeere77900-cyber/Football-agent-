@@ -481,90 +481,114 @@ def get_fixture_result(fixture_id):
     return None
 
 
-def get_league_fixtures_with_metadata(league_id, season, max_budget=None):
+def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
     """
-    Retrieve all fixtures for a league season with pagination support and explicit completion metadata.
+    Retrieve one single page of fixtures for a league season with strict pagination metadata validation.
+
+    Fails closed if pagination metadata is missing, malformed, or inconsistent with requested page.
 
     Returns dict:
         {
             "fixtures": list_of_fixtures,
-            "expected_pages": int,
-            "pages_completed": int,
-            "acquisition_complete": bool
+            "page": int,
+            "expected_pages": int
         }
     """
     league_id = _validate_positive_int_like(league_id, "league_id")
     season = _validate_positive_int_like(season, "season")
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        raise ValueError("page must be a positive integer.")
 
     kwargs = {"max_budget": max_budget} if max_budget is not None else {}
-    page_1_data = _get("fixtures", {"league": league_id, "season": season, "page": 1}, **kwargs)
+    page_data = _get("fixtures", {"league": league_id, "season": season, "page": page}, **kwargs)
 
-    paging = page_1_data.get("paging")
-    if paging is not None:
-        if not isinstance(paging, dict):
-            raise APIFootballError("Malformed pagination metadata from API-Football: paging is not an object.")
+    if not isinstance(page_data, dict):
+        raise APIFootballError("API-Football response must be a JSON object.")
 
-        current = paging.get("current")
-        total = paging.get("total")
+    response = page_data.get("response")
+    if not isinstance(response, list):
+        raise APIFootballError("API-Football response missing valid 'response' list.")
 
-        if (
-            isinstance(current, bool)
-            or not isinstance(current, int)
-            or current < 1
-            or isinstance(total, bool)
-            or not isinstance(total, int)
-            or total < 1
-            or current > total
-        ):
-            raise APIFootballError(
-                f"Malformed pagination metadata from API-Football: current={current!r}, total={total!r}"
-            )
-    else:
-        current, total = 1, 1
+    paging = page_data.get("paging")
+    if not isinstance(paging, dict):
+        raise APIFootballError("Missing or invalid 'paging' object in API-Football response.")
 
-    all_pages = [page_1_data]
-    pages_completed = 1
+    current = paging.get("current")
+    total = paging.get("total")
 
-    if total > 1:
-        for page_num in range(2, total + 1):
-            page_data = _get("fixtures", {"league": league_id, "season": season, "page": page_num}, **kwargs)
-            all_pages.append(page_data)
+    if (
+        isinstance(current, bool)
+        or not isinstance(current, int)
+        or current < 1
+        or isinstance(total, bool)
+        or not isinstance(total, int)
+        or total < 1
+        or current > total
+    ):
+        raise APIFootballError(
+            f"Malformed pagination metadata from API-Football: current={current!r}, total={total!r}"
+        )
+
+    if current != page:
+        raise APIFootballError(
+            f"Inconsistent pagination metadata: current page ({current}) != requested page ({page})."
+        )
+
+    return {
+        "fixtures": response,
+        "page": page,
+        "expected_pages": total,
+    }
+
+
+def get_league_fixtures_with_metadata(league_id, season, start_page=1, max_budget=None):
+    """
+    Retrieve fixtures for a league season starting from start_page with explicit completion metadata.
+    """
+    league_id = _validate_positive_int_like(league_id, "league_id")
+    season = _validate_positive_int_like(season, "season")
+    if start_page < 1:
+        start_page = 1
+
+    kwargs = {"max_budget": max_budget} if max_budget is not None else {}
+    page_1 = get_league_fixtures_page(league_id, season, page=start_page, **kwargs)
+    total = page_1["expected_pages"]
+
+    raw_pages = [page_1["fixtures"]]
+    pages_completed = start_page
+
+    if total > start_page:
+        for p in range(start_page + 1, total + 1):
+            p_data = get_league_fixtures_page(league_id, season, page=p, **kwargs)
+            if p_data["expected_pages"] != total:
+                raise APIFootballError(
+                    f"Inconsistent pagination metadata across multi-page fetch: expected {total}, got {p_data['expected_pages']} on page {p}"
+                )
+            raw_pages.append(p_data["fixtures"])
             pages_completed += 1
 
     fixtures = []
-    seen_fixture_ids = set()
-
-    for page_data in all_pages:
-        response = page_data.get("response", [])
-        if not isinstance(response, list):
-            continue
-
-        for item in response:
-            if not isinstance(item, dict):
-                continue
-
-            fid = item.get("fixture", {}).get("id")
-            if fid is not None:
-                try:
-                    fid = int(fid)
-                except (TypeError, ValueError):
-                    pass
-
-            if fid and fid in seen_fixture_ids:
-                continue
-
-            if fid:
-                seen_fixture_ids.add(fid)
-
+    seen_ids = set()
+    for page_items in raw_pages:
+        for item in page_items:
+            if isinstance(item, dict):
+                fid = item.get("fixture", {}).get("id")
+                if fid is not None:
+                    try:
+                        fid = int(fid)
+                    except (TypeError, ValueError):
+                        pass
+                if fid and fid in seen_ids:
+                    continue
+                if fid:
+                    seen_ids.add(fid)
             fixtures.append(item)
-
-    acquisition_complete = (pages_completed == total)
 
     return {
         "fixtures": fixtures,
         "expected_pages": total,
         "pages_completed": pages_completed,
-        "acquisition_complete": acquisition_complete,
+        "acquisition_complete": (pages_completed == total),
     }
 
 

@@ -1873,11 +1873,11 @@ def run_backtest_command(
         sample_size,
     )
 
-    if result["graded"] == 0:
+    if result.get("graded", 0) == 0:
         print(
             "No matches could be backtested."
         )
-        return
+        return 1 if result.get("status") == "PERSISTENCE_FAILED" or result.get("persisted") is False else 0
 
     print(
         f"\nBacktest accuracy: "
@@ -1901,6 +1901,12 @@ def run_backtest_command(
             f"predicted: "
             f"{entry['predicted']}"
         )
+
+    if result.get("status") == "PERSISTENCE_FAILED" or result.get("persisted") is False:
+        print("\nERROR: Backtest run failed to persist to database.", file=sys.stderr)
+        return 1
+
+    return 0
 
 
 def run_find_league(name):
@@ -2415,9 +2421,39 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--historical-sync",
+        action="store_true",
+        help="Acquire historical league data.",
+    )
+
+    parser.add_argument(
+        "--dataset-status",
+        action="store_true",
+        help="Check historical dataset status.",
+    )
+
+    parser.add_argument(
+        "--backtest-history",
+        action="store_true",
+        help="Show past backtest runs.",
+    )
+
+    parser.add_argument(
+        "--with-enrichment",
+        action="store_true",
+        help="Fetch statistical enrichment during sync.",
+    )
+
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Force re-fetch dataset during sync.",
+    )
+
+    parser.add_argument(
         "--season",
         type=int,
-        help="Season year for backtest.",
+        help="Season year for historical/backtest.",
     )
 
     parser.add_argument(
@@ -2523,39 +2559,79 @@ def main():
             return 0
 
         # --------------------------------------------------------------
-        # Basketball
+        # Multi-sport Historical & Backtest commands
         # --------------------------------------------------------------
+        import historical_sync
+
+        if args.historical_sync:
+            sport = args.sport or "football"
+            league_id = args.league or (config.ALLOWED_BASKETBALL_LEAGUE_IDS[0] if sport == "basketball" else config.ALLOWED_LEAGUE_IDS[0])
+            season = args.season or (datetime.now(timezone.utc).year - 1)
+            storage.init_db()
+
+            if sport == "basketball":
+                report = historical_sync.sync_historical_basketball_games(
+                    league_id=league_id,
+                    season=season,
+                    refresh=args.refresh,
+                )
+            else:
+                report = historical_sync.sync_historical_fixtures(
+                    league_id=league_id,
+                    season=season,
+                    with_enrichment=args.with_enrichment,
+                    refresh=args.refresh,
+                )
+
+            if not isinstance(report, dict) or report.get("status") != "COMPLETE":
+                print(f"Historical sync ended with status '{report.get('status', 'FAILED')}' (non-COMPLETE). Exiting with code 1.", file=sys.stderr)
+                return 1
+            return 0
+
+        if args.dataset_status:
+            sport = args.sport or "football"
+            league_id = args.league or (config.ALLOWED_BASKETBALL_LEAGUE_IDS[0] if sport == "basketball" else config.ALLOWED_LEAGUE_IDS[0])
+            season = args.season or (datetime.now(timezone.utc).year - 1)
+            storage.init_db()
+
+            st = storage.get_historical_dataset_status(league_id, season, sport=sport)
+            print(f"\nDataset Status ({sport.upper()}):")
+            print(f"  League: {st['league_id']}, Season: {st['season']}")
+            print(f"  Status: {st['status']}")
+            print(f"  Game/Fixture Count: {st['fixture_count']}")
+            print(f"  Enrichment Status: {st['enrichment_status']}")
+            print(f"  Pages Completed: {st['pages_completed']}/{st['expected_pages']}")
+            print(f"  Updated At: {st['updated_at']}\n")
+            return 0
+
+        if args.backtest_history:
+            sport = args.sport
+            storage.init_db()
+            runs = storage.get_latest_backtest_runs(sport=sport, limit=10)
+            if not runs:
+                print("No recorded backtest runs found.")
+                return 0
+
+            print("\nRecent Backtest Runs:")
+            print(f"{'Run ID':35} {'Sport':10} {'League':8} {'Season':8} {'Graded':8} {'Accuracy':10} {'Completed'}")
+            print("-" * 90)
+            for r in runs:
+                rid, sp, lid, ssn, dfc, ss, gc, acc, bs, ll, cat = r
+                acc_str = f"{acc:.1%}" if acc is not None else "N/A"
+                print(f"{rid:35} {sp:10} {lid:<8} {ssn:<8} {gc:<8} {acc_str:10} {cat}")
+            print("-" * 90 + "\n")
+            return 0
 
         if args.sport == "basketball":
 
-            # Basketball does not use football league validation.
-            if args.league is not None:
-                raise ValueError(
-                    "--league is only valid for football."
-                )
-
             if args.league_name is not None:
-                raise ValueError(
-                    "--league-name is only valid for football."
-                )
+                raise ValueError("--league-name is only valid for football.")
 
             if args.with_odds:
-                print(
-                    "Basketball odds comparison is not "
-                    "enabled by the current basketball model."
-                )
-
-            if args.backtest:
-                raise ValueError(
-                    "Basketball backtesting is not "
-                    "available through this CLI."
-                )
+                print("Basketball odds comparison is not enabled by the current basketball model.")
 
             if args.cleanup:
-                raise ValueError(
-                    "Cleanup is currently a football "
-                    "prediction database operation."
-                )
+                raise ValueError("Cleanup is currently a football prediction database operation.")
 
             if args.grade:
                 run_grading_basketball()
@@ -2565,20 +2641,20 @@ def main():
                 run_accuracy_report_basketball()
                 return 0
 
-            date_str = (
-                args.date
-                or datetime.now(
-                    timezone.utc
-                ).strftime("%Y-%m-%d")
-            )
+            if args.backtest:
+                league_id = args.league or config.ALLOWED_BASKETBALL_LEAGUE_IDS[0]
+                season = args.season or (datetime.now(timezone.utc).year - 1)
+                storage.init_db()
+                res = backtest.run_basketball_backtest(league_id=league_id, season=season, sample_size=args.sample)
+                print(f"\nBasketball Backtest Accuracy: {res['accuracy']:.1%} ({res['correct']}/{res['graded']})")
+                if res.get("status") == "PERSISTENCE_FAILED" or res.get("persisted") is False:
+                    print("\nERROR: Backtest run failed to persist to database.", file=sys.stderr)
+                    return 1
+                return 0
 
+            date_str = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             validate_date_string(date_str)
-
-            run_daily_basketball(
-                date_str,
-                args.limit,
-            )
-
+            run_daily_basketball(date_str, args.limit)
             return 0
 
         # --------------------------------------------------------------
@@ -2654,13 +2730,11 @@ def main():
                     league_id
                 )
 
-            run_backtest_command(
+            return run_backtest_command(
                 league_id,
                 args.season,
                 args.sample,
             )
-
-            return 0
 
         # --------------------------------------------------------------
         # Normal football prediction path
