@@ -127,6 +127,7 @@ def test_build_historical_features_returns_four_model_ratios():
         "away_defence",
         "league_avg_goals",
         "h2h_available",
+        "feature_coverage",
     }
 
     assert result["league_avg_goals"] == 1.5

@@ -348,6 +348,8 @@ def build_historical_features(
         h2h_away_defence,
     )
 
+    feature_coverage = 1.0 if h2h_available else 0.85
+
     return {
         "home_attack": home_attack,
         "home_defence": home_defence,
@@ -355,6 +357,7 @@ def build_historical_features(
         "away_defence": away_defence,
         "league_avg_goals": league_avg_goals,
         "h2h_available": h2h_available,
+        "feature_coverage": feature_coverage,
     }
 
 
@@ -590,8 +593,7 @@ def predict_from_features(
     else:
         top_p = 0.0
 
-    h2h_avail = features.get("h2h_available", False)
-    feature_coverage = features.get("feature_coverage", 1.0 if h2h_avail else 0.85)
+    feature_coverage = features.get("feature_coverage")
     sample_count = features.get("sample_count", 0)
 
     unc_info = uncertainty.calculate_uncertainty(

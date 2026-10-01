@@ -27,23 +27,17 @@ def check_odds_chronology_and_staleness(
     - 'STALE' if odds_timestamp < cutoff_timestamp but older than max age.
     - 'MISSING' if odds_timestamp or cutoff_timestamp is missing/invalid.
     """
-    if not odds_timestamp:
+    if not odds_timestamp or not cutoff_timestamp:
         return "MISSING"
 
     dt_odds = parse_utc_datetime(odds_timestamp)
-    if dt_odds is None:
+    dt_ref = parse_utc_datetime(cutoff_timestamp)
+
+    if dt_odds is None or dt_ref is None:
         return "MISSING"
 
-    if cutoff_timestamp is not None:
-        dt_ref = parse_utc_datetime(cutoff_timestamp)
-        if dt_ref is None:
-            return "MISSING"
-        if dt_odds >= dt_ref:
-            return "FUTURE"
-    else:
-        dt_ref = datetime.now(timezone.utc)
-        if dt_odds > dt_ref:
-            return "FUTURE"
+    if dt_odds >= dt_ref:
+        return "FUTURE"
 
     diff_seconds = (dt_ref - dt_odds).total_seconds()
     if diff_seconds < 0:

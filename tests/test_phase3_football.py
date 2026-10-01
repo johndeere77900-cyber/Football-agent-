@@ -99,7 +99,8 @@ def test_football_odds_implied_prob_edge_ev():
     out = market_analysis.calculate_outcome_market_analysis(
         calibrated_prob=0.60,
         decimal_odds=2.00,
-        odds_timestamp=datetime.now(timezone.utc).isoformat(),
+        odds_timestamp="2025-01-01T10:00:00+00:00",
+        cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
     assert out["implied_probability"] == pytest.approx(0.50)
     assert out["edge"] == pytest.approx(0.10)
@@ -110,6 +111,8 @@ def test_football_odds_implied_prob_edge_ev():
     out_missing = market_analysis.calculate_outcome_market_analysis(
         calibrated_prob=0.60,
         decimal_odds=None,
+        odds_timestamp="2025-01-01T10:00:00+00:00",
+        cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
     assert out_missing["edge"] is None
     assert out_missing["ev"] is None
@@ -121,6 +124,7 @@ def test_football_odds_implied_prob_edge_ev():
         calibrated_prob=0.60,
         decimal_odds=2.00,
         odds_timestamp=stale_ts,
+        cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
     assert out_stale["odds_status"] == "STALE"
     assert out_stale["edge"] is None
@@ -206,3 +210,33 @@ def test_edge_ev_requires_applied_calibration():
     assert out_applied["edge"] == pytest.approx(0.10)
     assert out_applied["ev"] == pytest.approx(0.20)
     assert out_applied["implied_probability"] == pytest.approx(0.50)
+
+
+def test_missing_feature_coverage_not_fabricated():
+    """Verify missing feature_coverage is not converted to 1.0 or 0.85 in prediction_engine."""
+    raw_features = {
+        "home_attack": 1.1,
+        "home_defence": 0.9,
+        "away_attack": 0.9,
+        "away_defence": 1.1,
+        "league_avg_goals": 1.4,
+        "sample_count": 10,
+    }
+    # No feature_coverage key in raw_features
+    contract = prediction_engine.predict_from_features(
+        raw_features,
+        data_cutoff_timestamp="2025-01-01T12:00:00+00:00",
+    )
+    # feature_data_coverage must be 0.0 (not 1.0 or 0.85)
+    assert contract["feature_data_coverage"] == 0.0
+    assert contract["uncertainty"]["state"] == "insufficient_data"
+    assert contract["quality_gate"] == "PASS"
+
+
+def test_missing_cutoff_in_market_analysis_returns_missing():
+    """Verify missing cutoff_timestamp in check_odds_chronology_and_staleness returns MISSING without inventing now()."""
+    status = market_analysis.check_odds_chronology_and_staleness(
+        odds_timestamp="2025-01-01T10:00:00+00:00",
+        cutoff_timestamp=None,
+    )
+    assert status == "MISSING"
