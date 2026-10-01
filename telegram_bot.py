@@ -1220,9 +1220,48 @@ def handle_evaluate_op():
     return "\n".join(lines)
 
 
+def get_dynamic_calibration_status():
+    """
+    Derive calibration status dynamically from database state and datasets.
+
+    Returns one of: APPLIED, UNAVAILABLE, ERROR, NOT_APPLIED
+    """
+    try:
+        conn, db_type = storage._connect()
+        try:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute("SELECT calibration_version, quality_gate, reason_codes_json FROM predictions WHERE calibration_version IS NOT NULL ORDER BY id DESC LIMIT 10")
+                    rows = cur.fetchall()
+            else:
+                rows = conn.execute("SELECT calibration_version, quality_gate, reason_codes_json FROM predictions WHERE calibration_version IS NOT NULL ORDER BY id DESC LIMIT 10").fetchall()
+
+            if rows:
+                applied_count = 0
+                for r in rows:
+                    reasons = storage._json_loads(r[2]) if len(r) > 2 and r[2] else []
+                    if isinstance(reasons, list) and ("calibration_unavailable" in reasons or "calibration_error" in reasons):
+                        continue
+                    if r[0]:
+                        applied_count += 1
+                if applied_count > 0:
+                    return "APPLIED"
+                return "UNAVAILABLE"
+        finally:
+            conn.close()
+
+        ds = storage.get_historical_dataset_status(39, 2024, sport="football")
+        if ds.get("status") == "COMPLETE" and ds.get("fixture_count", 0) >= 100:
+            return "APPLIED"
+
+        return "UNAVAILABLE"
+    except Exception:
+        return "ERROR"
+
+
 def handle_health_op():
     """Execute /health operation with real component checks."""
-    tp_status = "VERIFIED" if TELEGRAM_TOKEN and CHAT_ID else "UNAVAILABLE"
+    tp_status = "CONFIGURED" if TELEGRAM_TOKEN and CHAT_ID else "UNAVAILABLE"
 
     db_status = "FAILED"
     try:
@@ -1238,8 +1277,8 @@ def handle_health_op():
         db_status = "FAILED"
 
     fb_key = getattr(config, "API_FOOTBALL_KEY", None) or os.environ.get("API_FOOTBALL_KEY")
-    fb_data = "VERIFIED" if fb_key else "UNAVAILABLE"
-    bk_data = "VERIFIED" if fb_key else "UNAVAILABLE"
+    fb_data = "CONFIGURED" if fb_key else "UNAVAILABLE"
+    bk_data = "CONFIGURED" if fb_key else "UNAVAILABLE"
 
     ds_fb = storage.get_historical_dataset_status(39, 2024, sport="football")
     ds_bk = storage.get_historical_dataset_status(12, 2024, sport="basketball")
@@ -1251,7 +1290,9 @@ def handle_health_op():
     else:
         ds_status = "UNAVAILABLE"
 
-    calib_status = "VERIFIED" if getattr(config, "CALIBRATION_VERSION", None) else "UNAVAILABLE"
+    calib_state = get_dynamic_calibration_status()
+    calib_health = "VERIFIED" if calib_state == "APPLIED" else ("FAILED" if calib_state == "ERROR" else "UNAVAILABLE")
+
     gh_status = "VERIFIED" if os.environ.get("GITHUB_RUN_ID") else "UNAVAILABLE"
 
     lines = [
@@ -1262,7 +1303,7 @@ def handle_health_op():
         f"• *Football Data API:* {fb_data}",
         f"• *Basketball Data API:* {bk_data}",
         f"• *Historical Datasets:* {ds_status}",
-        f"• *Calibration Layer:* {calib_status}",
+        f"• *Calibration Layer:* {calib_health}",
         f"• *GitHub Actions Integration:* {gh_status}",
     ]
     return "\n".join(lines)
@@ -1270,6 +1311,8 @@ def handle_health_op():
 
 def handle_model_status_op():
     """Execute /model_status operation."""
+    calib_status = get_dynamic_calibration_status()
+
     lines = [
         "📈 *MODEL & FEATURE STATUS*",
         f"• *Football Model Version:* {config.MODEL_VERSION}",
@@ -1277,7 +1320,7 @@ def handle_model_status_op():
         f"• *Feature Version:* {config.FEATURE_VERSION}",
         f"• *Calibration Version:* {config.CALIBRATION_VERSION}",
         "• *Supported Markets:* Match Result (1X2), Double Chance, Over/Under Goals, BTTS, Team Goals, Basketball Moneyline",
-        "• *Calibration Status:* APPLIED",
+        f"• *Calibration Status:* {calib_status}",
         "• *Quality Gate State:* ACTIVE",
     ]
     return "\n".join(lines)

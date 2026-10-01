@@ -404,6 +404,24 @@ def test_suggested_action_buttons():
     assert buttons["inline_keyboard"][0][0]["callback_data"] == "cmd:fixtures"
 
 
+def test_model_status_dynamic_calibration_status(monkeypatch):
+    monkeypatch.setattr(telegram_bot, "get_dynamic_calibration_status", lambda: "UNAVAILABLE")
+    res = telegram_bot.handle_model_status_op()
+    assert "Calibration Status:" in res
+    assert "UNAVAILABLE" in res
+
+    monkeypatch.setattr(telegram_bot, "get_dynamic_calibration_status", lambda: "APPLIED")
+    res2 = telegram_bot.handle_model_status_op()
+    assert "Calibration Status:" in res2
+    assert "APPLIED" in res2
+
+
+def test_health_op_configured_data_api(monkeypatch):
+    monkeypatch.setenv("API_FOOTBALL_KEY", "test_key")
+    res = telegram_bot.handle_health_op()
+    assert "• *Football Data API:* CONFIGURED" in res
+
+
 def test_parse_control_envelope():
     json_envelope = '{"version": "1.0", "request_id": "req_555", "telegram_update_id": "upd_555", "chat_id": "12345", "operation": "health", "text": "/health"}'
     parsed = telegram_bot.parse_control_envelope(json_envelope)
