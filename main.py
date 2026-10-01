@@ -1261,6 +1261,7 @@ def predict_fixture(
             "h2h": h2h,
             "league_avg_goals": league_avg_goals,
         },
+        "prediction_record": prediction,
     }
 
 
@@ -1598,6 +1599,7 @@ def run_daily(
                     "odds_comparison"
                 ),
                 prediction_context=prediction_context,
+                prediction_record=prediction.get("prediction_record") or prediction,
             )
 
             predicted_count += 1
@@ -2116,6 +2118,7 @@ def run_daily_basketball(
                 markets=prediction["markets"],
                 confidence=prediction["confidence"],
                 prediction_context=prediction_context,
+                prediction_record=prediction,
             )
 
             predicted_count += 1

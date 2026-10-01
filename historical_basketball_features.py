@@ -7,8 +7,10 @@ strictly from completed games prior to the prediction cutoff timestamp.
 No future games or same-timestamp target games are included.
 """
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 import historical_match_policy
+import time_utils
 
 
 def _game_date(game: Dict[str, Any]) -> str:
@@ -16,7 +18,7 @@ def _game_date(game: Dict[str, Any]) -> str:
 
 
 def _is_before_cutoff(game: Dict[str, Any], cutoff: str) -> bool:
-    return _game_date(game) < cutoff
+    return time_utils.is_strictly_before(_game_date(game), cutoff)
 
 
 def prior_completed_games(games: List[Dict[str, Any]], cutoff: str) -> List[Dict[str, Any]]:
@@ -27,7 +29,10 @@ def prior_completed_games(games: List[Dict[str, Any]], cutoff: str) -> List[Dict
         if historical_match_policy.is_finished_match(game, sport="basketball")
         and _is_before_cutoff(game, cutoff)
     ]
-    return sorted(eligible, key=_game_date)
+    return sorted(
+        eligible,
+        key=lambda g: time_utils.parse_utc_datetime(_game_date(g)) or datetime.min.replace(tzinfo=timezone.utc),
+    )
 
 
 def team_scoring_averages(games: List[Dict[str, Any]], team_id: int, cutoff: str) -> Optional[Dict[str, float]]:

@@ -117,6 +117,13 @@ def _validate_probability(value, name="probability"):
     return number
 
 
+def _validate_optional_probability(value, name="probability"):
+    """Validate an optional probability in [0, 1] or return None."""
+    if value is None:
+        return None
+    return _validate_probability(value, name)
+
+
 def _validate_text(value, name, allow_empty=False):
     """Validate a text field."""
     if not isinstance(value, str):
@@ -1715,22 +1722,21 @@ def save_prediction(
         if rec and isinstance(rec.get("confidence"), dict):
             confidence = rec["confidence"]
         else:
-            # Construct default fallback confidence dictionary if missing
             mr = rec.get("calibrated_probabilities", {}).get("match_result", {}) if rec else markets.get("match_result", {})
             if isinstance(mr, dict) and mr:
                 top_k = max(mr, key=mr.get)
                 confidence = {"label": "Moderate", "top_pick": top_k, "top_probability": mr[top_k]}
             else:
-                confidence = {"label": "Moderate", "top_pick": "home_win", "top_probability": 0.33}
+                confidence = {"label": "Unavailable", "top_pick": "None", "top_probability": None}
 
-    required_confidence = ("label", "top_pick", "top_probability")
+    required_confidence = ("label", "top_pick")
     missing = [key for key in required_confidence if key not in confidence]
     if missing:
         raise ValueError("confidence is missing required fields: " + ", ".join(missing))
 
     _validate_text(confidence["label"], "confidence.label")
     _validate_text(confidence["top_pick"], "confidence.top_pick")
-    top_probability = _validate_probability(confidence["top_probability"], "confidence.top_probability")
+    top_probability = _validate_optional_probability(confidence.get("top_probability"), "confidence.top_probability")
 
     home_team_id = _validate_optional_positive_int(home_team_id, "home_team_id")
     away_team_id = _validate_optional_positive_int(away_team_id, "away_team_id")
@@ -2234,16 +2240,16 @@ def save_basketball_prediction(
                 top_k = "home_win" if ml.get("home_win", 0) >= ml.get("away_win", 0) else "away_win"
                 confidence = {"label": "Moderate", "top_pick": top_k, "top_probability": ml[top_k]}
             else:
-                confidence = {"label": "Moderate", "top_pick": "home_win", "top_probability": 0.50}
+                confidence = {"label": "Unavailable", "top_pick": "None", "top_probability": None}
 
-    required_confidence = ("label", "top_pick", "top_probability")
+    required_confidence = ("label", "top_pick")
     missing = [key for key in required_confidence if key not in confidence]
     if missing:
         raise ValueError("confidence is missing required fields: " + ", ".join(missing))
 
     _validate_text(confidence["label"], "confidence.label")
     _validate_text(confidence["top_pick"], "confidence.top_pick")
-    top_probability = _validate_probability(confidence["top_probability"], "confidence.top_probability")
+    top_probability = _validate_optional_probability(confidence.get("top_probability"), "confidence.top_probability")
 
     prediction_context = _validate_text(prediction_context, "prediction_context").upper()
     if prediction_context not in ("PRE_MATCH", "LIVE"):

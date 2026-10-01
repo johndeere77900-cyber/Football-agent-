@@ -252,6 +252,9 @@ def _probability_pick(
 # ---------------------------------------------------------------------------
 
 
+import time_utils
+
+
 def _compute_stats_as_of(
     fixtures: Sequence[Dict[str, Any]],
     team_id: Any,
@@ -265,7 +268,7 @@ def _compute_stats_as_of(
         if not _is_finished(fixture):
             continue
 
-        if _fixture_date(fixture) >= cutoff:
+        if not time_utils.is_strictly_before(_fixture_date(fixture), cutoff):
             continue
 
         home_id = _home_id(fixture)
@@ -342,7 +345,7 @@ def _filter_candidates_by_minimum_history(
             for fixture in finished_fixtures
             if _fixture_is_gradeable(fixture)
         ],
-        key=_fixture_date,
+        key=lambda f: time_utils.parse_utc_datetime(_fixture_date(f)) or datetime.min.replace(tzinfo=timezone.utc),
     )
 
     result: List[Dict[str, Any]] = []
@@ -1607,7 +1610,7 @@ def run_real_backtest(
     ]
 
     finished.sort(
-        key=_fixture_date
+        key=lambda f: time_utils.parse_utc_datetime(_fixture_date(f)) or datetime.min.replace(tzinfo=timezone.utc)
     )
 
     eligible = (
@@ -1625,7 +1628,7 @@ def run_real_backtest(
     )
 
     selected.sort(
-        key=_fixture_date
+        key=lambda f: time_utils.parse_utc_datetime(_fixture_date(f)) or datetime.min.replace(tzinfo=timezone.utc)
     )
 
     enriched_by_id: Dict[
@@ -1678,7 +1681,7 @@ def run_real_backtest(
 
         for prev_f in finished:
             prev_date = _fixture_date(prev_f)
-            if prev_date >= cutoff:
+            if not time_utils.is_strictly_before(prev_date, cutoff):
                 break
             prev_id = _fixture_id(prev_f)
             if prev_id not in prior_raw_predictions_by_id:
@@ -2228,7 +2231,7 @@ def run_basketball_backtest(
     games = [g for g in games if isinstance(g, dict)]
 
     finished = [g for g in games if historical_match_policy.is_finished_match(g, sport="basketball")]
-    finished.sort(key=lambda g: str(g.get("date", "")))
+    finished.sort(key=lambda g: time_utils.parse_utc_datetime(str(g.get("date", ""))) or datetime.min.replace(tzinfo=timezone.utc))
 
     eligible = [
         g for g in finished
@@ -2242,7 +2245,7 @@ def run_basketball_backtest(
     ]
 
     selected = _sample_backtest_candidates(eligible, sample_size, seed=sample_seed)
-    selected.sort(key=lambda g: str(g.get("date", "")))
+    selected.sort(key=lambda g: time_utils.parse_utc_datetime(str(g.get("date", ""))) or datetime.min.replace(tzinfo=timezone.utc))
 
     log: List[Dict[str, Any]] = []
     preds_ml = []
@@ -2264,7 +2267,7 @@ def run_basketball_backtest(
 
         for prev_g in finished:
             prev_date = str(prev_g.get("date", ""))
-            if prev_date >= cutoff:
+            if not time_utils.is_strictly_before(prev_date, cutoff):
                 break
             prev_id = prev_g.get("id")
             if prev_id not in prior_raw_predictions_by_id:
