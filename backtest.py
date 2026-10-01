@@ -510,16 +510,11 @@ def _actual_double_chance(
 def _actual_btts(
     fixture: Dict[str, Any],
 ) -> Optional[str]:
-    home, away = _goals(fixture)
-
-    if home is None or away is None:
+    match_goals = historical_match_policy.get_totals_and_btts_goals(fixture)
+    if match_goals is None:
         return None
-
-    return (
-        "yes"
-        if home >= 1 and away >= 1
-        else "no"
-    )
+    home, away = match_goals
+    return "yes" if home >= 1 and away >= 1 else "no"
 
 
 def _actual_binary_total(

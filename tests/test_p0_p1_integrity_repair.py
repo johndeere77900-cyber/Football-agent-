@@ -130,6 +130,72 @@ def test_H_to_M_basketball_pagination_deduplication_and_completeness(isolated_db
 # ============================================================================
 
 
+def test_consumer_level_settlement_outcomes_football():
+    import market_grading
+
+    # 1. Normal FT (2-1)
+    ft_fixture = {
+        "fixture": {"id": 101, "status": {"short": "FT"}},
+        "goals": {"home": 2, "away": 1},
+        "score": {"fulltime": {"home": 2, "away": 1}},
+    }
+    graded_ft = market_grading.grade_fixture_markets(ft_fixture)
+    gm_ft = graded_ft["goal_markets"]
+    assert gm_ft["match_result"]["outcome"] == "home_win"
+    assert gm_ft["double_chance"]["home_or_draw"]["won"] is True
+    assert gm_ft["btts"]["yes"]["won"] is True
+    assert gm_ft["over_under"]["over_2_5"]["won"] is True
+
+    # 2. AET fixture with fulltime present (regulation 1-1, extra-time 2-1 final)
+    aet_fixture = {
+        "fixture": {"id": 102, "status": {"short": "AET"}},
+        "goals": {"home": 2, "away": 1},
+        "score": {
+            "fulltime": {"home": 1, "away": 1},
+            "extratime": {"home": 1, "away": 0},
+        },
+    }
+    graded_aet = market_grading.grade_fixture_markets(aet_fixture)
+    gm_aet = graded_aet["goal_markets"]
+    # 1X2 uses regulation 1-1 -> draw!
+    assert gm_aet["match_result"]["outcome"] == "draw"
+    assert gm_aet["double_chance"]["home_or_draw"]["won"] is True
+    assert gm_aet["double_chance"]["away_or_draw"]["won"] is True
+    # Totals & BTTS use match goals (2-1) -> BTTS yes, Over 2.5 over
+    assert gm_aet["btts"]["yes"]["won"] is True
+    assert gm_aet["over_under"]["over_2_5"]["won"] is True
+
+    # 3. PEN fixture with fulltime present (regulation 1-1, shootout 4-3)
+    pen_fixture = {
+        "fixture": {"id": 103, "status": {"short": "PEN"}},
+        "goals": {"home": 1, "away": 1},
+        "score": {
+            "fulltime": {"home": 1, "away": 1},
+            "penalty": {"home": 4, "away": 3},
+        },
+    }
+    graded_pen = market_grading.grade_fixture_markets(pen_fixture)
+    gm_pen = graded_pen["goal_markets"]
+    # 1X2 uses regulation 1-1 -> draw! (shootout kicks excluded)
+    assert gm_pen["match_result"]["outcome"] == "draw"
+    assert gm_pen["btts"]["yes"]["won"] is True
+    assert gm_pen["over_under"]["under_2_5"]["won"] is True
+
+    # 4. AET fixture missing score.fulltime -> fails closed for 1X2 and DC!
+    aet_missing_fulltime = {
+        "fixture": {"id": 104, "status": {"short": "AET"}},
+        "goals": {"home": 2, "away": 1},
+        "score": {"extratime": {"home": 1, "away": 0}}, # missing fulltime block
+    }
+    graded_missing = market_grading.grade_fixture_markets(aet_missing_fulltime)
+    gm_missing = graded_missing["goal_markets"]
+    assert gm_missing["match_result"] is None
+    assert gm_missing["double_chance"] is None
+    # Totals and BTTS still grade safely from match goals (2-1)
+    assert gm_missing["btts"]["yes"]["won"] is True
+    assert gm_missing["over_under"]["over_2_5"]["won"] is True
+
+
 def test_N_to_T_match_policy_semantics():
     ft = sample_football_fixture(9001, status="FT", home_goals=1, away_goals=1)
     aet = sample_football_fixture(9002, status="AET", home_goals=2, away_goals=1)
@@ -350,6 +416,37 @@ def test_changing_pagination_totals_fails_closed(isolated_db):
     assert rep["status"] == "INCOMPLETE"
     st = storage.get_historical_dataset_status(39, 2024, sport="football")
     assert st["status"] == "INCOMPLETE"
+
+
+def test_storage_level_complete_invariant_enforcement(isolated_db):
+    # 1. fixture_count <= 0 -> rejected
+    with pytest.raises(ValueError, match="fixture_count is 0"):
+        storage.mark_historical_dataset_complete(39, 2024, fixture_count=0, expected_pages=1, pages_completed=1, acquisition_complete=True)
+
+    # 2. expected_pages <= 0 -> rejected
+    with pytest.raises(ValueError, match="expected_pages"):
+        storage.mark_historical_dataset_complete(39, 2024, fixture_count=10, expected_pages=0, pages_completed=0, acquisition_complete=True)
+
+    # 3. pages_completed != expected_pages -> rejected
+    with pytest.raises(ValueError, match="pages_completed"):
+        storage.mark_historical_dataset_complete(39, 2024, fixture_count=10, expected_pages=2, pages_completed=1, acquisition_complete=True)
+
+    # 4. acquisition_complete is False -> rejected
+    with pytest.raises(ValueError, match="acquisition_complete is False"):
+        storage.mark_historical_dataset_complete(39, 2024, fixture_count=10, expected_pages=2, pages_completed=2, acquisition_complete=False)
+
+    # 5. rejected_count > 0 -> rejected
+    with pytest.raises(ValueError, match="rejected_count"):
+        storage.mark_historical_dataset_complete(39, 2024, fixture_count=10, expected_pages=1, pages_completed=1, acquisition_complete=True, rejected_count=1)
+
+    # 6. empty_pages_count > 0 -> rejected
+    with pytest.raises(ValueError, match="empty_pages_count"):
+        storage.mark_historical_dataset_complete(39, 2024, fixture_count=10, expected_pages=1, pages_completed=1, acquisition_complete=True, empty_pages_count=1)
+
+    # 7. Basketball valid dataset -> accepted
+    storage.mark_historical_dataset_complete(12, 2024, fixture_count=100, sport="basketball", expected_pages=2, pages_completed=2, acquisition_complete=True)
+    st = storage.get_historical_dataset_status(12, 2024, sport="basketball")
+    assert st["status"] == "COMPLETE"
 
 
 def test_U_to_Y_backtest_persistence_status_and_errors(isolated_db, monkeypatch):

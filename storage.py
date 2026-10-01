@@ -1386,8 +1386,8 @@ def mark_historical_dataset_complete(
     fixture_count,
     source=None,
     sport="football",
-    expected_pages=0,
-    pages_completed=0,
+    expected_pages=1,
+    pages_completed=1,
     acquisition_complete=True,
     enrichment_status="NONE",
     rejected_count=0,
@@ -1395,6 +1395,14 @@ def mark_historical_dataset_complete(
 ):
     """
     Mark a historical dataset as COMPLETE.
+
+    Storage-level completion invariants enforced:
+    - fixture_count > 0
+    - expected_pages > 0
+    - pages_completed == expected_pages
+    - acquisition_complete is True
+    - rejected_count == 0
+    - empty_pages_count == 0
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
@@ -1404,6 +1412,20 @@ def mark_historical_dataset_complete(
     sport = _validate_text(sport, "sport").lower()
     if source is None:
         source = "api_basketball" if sport == "basketball" else "api_football"
+
+    # Storage-level invariant enforcement
+    if fixture_count <= 0:
+        raise ValueError("Cannot mark dataset COMPLETE when fixture_count is 0.")
+    if expected_pages <= 0:
+        raise ValueError(f"Cannot mark dataset COMPLETE when expected_pages ({expected_pages}) <= 0.")
+    if pages_completed != expected_pages:
+        raise ValueError(f"Cannot mark dataset COMPLETE when pages_completed ({pages_completed}) != expected_pages ({expected_pages}).")
+    if not acquisition_complete:
+        raise ValueError("Cannot mark dataset COMPLETE when acquisition_complete is False.")
+    if rejected_count > 0:
+        raise ValueError(f"Cannot mark dataset COMPLETE when rejected_count ({rejected_count}) > 0.")
+    if empty_pages_count > 0:
+        raise ValueError(f"Cannot mark dataset COMPLETE when empty_pages_count ({empty_pages_count}) > 0.")
 
     acq_int = 1 if acquisition_complete else 0
     now_str = _utc_now()
