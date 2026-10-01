@@ -1083,6 +1083,36 @@ def compute_market_calibration(
     return compute_calibration_bins(samples)
 
 
+def compute_multiclass_1x2_calibration(
+    predictions: Sequence[Dict[str, float]],
+    actuals: Sequence[str],
+) -> Dict[str, Any]:
+    """
+    Compute calibration metrics for 1X2 market, returning overall calibration
+    as well as class-specific calibration for home_win, draw, and away_win.
+    """
+    overall = compute_market_calibration(
+        predictions, actuals, outcomes=("home_win", "draw", "away_win")
+    )
+
+    by_class = {}
+    for cls in ("home_win", "draw", "away_win"):
+        cls_samples = []
+        for pred, actual in zip(predictions, actuals):
+            if not isinstance(pred, dict) or actual is None:
+                continue
+            if actual not in ("home_win", "draw", "away_win"):
+                continue
+            prob = _safe_float(pred.get(cls, 0.0)) or 0.0
+            occurred = (actual == cls)
+            cls_samples.append((prob, occurred))
+        by_class[cls] = compute_calibration_bins(cls_samples)
+
+    result = dict(overall)
+    result["by_class"] = by_class
+    return result
+
+
 def compute_picked_calibration(
     picked_items: Sequence[Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -1100,6 +1130,512 @@ def compute_picked_calibration(
             samples.append((prob, bool(won)))
 
     return compute_calibration_bins(samples)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 Hardened Evaluation Helpers (Statistical Safety, Baselines, Diagnostics)
+# ---------------------------------------------------------------------------
+
+
+def compute_accuracy_confidence_interval(
+    correct: int,
+    graded: int,
+) -> Dict[str, Optional[float]]:
+    """Compute 95% Normal-approximation confidence interval for accuracy."""
+    if graded <= 0:
+        return {"ci_lower": None, "ci_upper": None}
+    p = correct / graded
+    z = 1.96
+    margin = z * math.sqrt((p * (1.0 - p)) / graded)
+    return {
+        "ci_lower": round(max(0.0, p - margin), 4),
+        "ci_upper": round(min(1.0, p + margin), 4),
+    }
+
+
+def compute_empirical_baseline(
+    actuals: Sequence[str],
+    outcomes: Sequence[str],
+) -> Dict[str, Any]:
+    """
+    Compute empirical frequency baseline for a sequence of actual outcomes.
+    Predicts constant probabilities equal to empirical distribution of actuals.
+    """
+    if not actuals:
+        return {
+            "sample_count": 0,
+            "accuracy": None,
+            "brier_score": None,
+            "log_loss": None,
+            "empirical_distribution": {},
+        }
+
+    clean_actuals = [a for a in actuals if a in outcomes]
+    n = len(clean_actuals)
+    if n == 0:
+        return {
+            "sample_count": 0,
+            "accuracy": None,
+            "brier_score": None,
+            "log_loss": None,
+            "empirical_distribution": {},
+        }
+
+    counts = {o: clean_actuals.count(o) for o in outcomes}
+    probs = {o: counts[o] / n for o in outcomes}
+
+    top_pick = max(probs, key=probs.get)
+    correct_cnt = counts[top_pick]
+    acc = correct_cnt / n
+
+    brier = compute_brier_score([probs] * n, clean_actuals, outcomes=outcomes)
+    logloss = compute_log_loss([probs] * n, clean_actuals, outcomes=outcomes)
+
+    return {
+        "sample_count": n,
+        "top_pick": top_pick,
+        "accuracy": round(acc, 4),
+        "brier_score": round(brier, 4) if brier is not None else None,
+        "log_loss": round(logloss, 4) if logloss is not None else None,
+        "empirical_distribution": {k: round(v, 4) for k, v in probs.items()},
+    }
+
+
+def compute_odds_baseline(
+    log_entries: Sequence[Dict[str, Any]],
+    sport: str = "football",
+) -> Dict[str, Any]:
+    """
+    Compute odds implied probability baseline over entries with valid odds.
+    Never uses future odds (checks odds chronology / status).
+    """
+    preds = []
+    acts = []
+
+    for entry in log_entries:
+        pred_rec = entry.get("prediction", {})
+        m_analysis = pred_rec.get("market_analysis", {}) if isinstance(pred_rec, dict) else {}
+        m_key = "match_result" if sport == "football" else "moneyline"
+        m_odds = m_analysis.get(m_key, {})
+
+        odds_status = pred_rec.get("uncertainty", {}).get("odds_status") if isinstance(pred_rec, dict) else None
+        if odds_status == "FUTURE":
+            continue
+
+        if isinstance(m_odds, dict) and m_odds:
+            implied_dist = {}
+            for k, v in m_odds.items():
+                if isinstance(v, dict) and v.get("implied_probability") is not None:
+                    implied_dist[k] = v["implied_probability"]
+
+            if implied_dist:
+                total_p = sum(implied_dist.values())
+                if total_p > 0:
+                    norm_dist = {k: v / total_p for k, v in implied_dist.items()}
+                    act = entry.get("actual")
+                    if act and act in norm_dist:
+                        preds.append(norm_dist)
+                        acts.append(act)
+
+    if not preds:
+        return {
+            "sample_count": 0,
+            "accuracy": None,
+            "brier_score": None,
+            "log_loss": None,
+            "odds_available": False,
+        }
+
+    outcomes = tuple(preds[0].keys())
+    acc = compute_binary_accuracy(preds, acts)
+    brier = compute_brier_score(preds, acts, outcomes=outcomes)
+    logloss = compute_log_loss(preds, acts, outcomes=outcomes)
+
+    return {
+        "sample_count": len(preds),
+        "accuracy": round(acc, 4) if acc is not None else None,
+        "brier_score": round(brier, 4) if brier is not None else None,
+        "log_loss": round(logloss, 4) if logloss is not None else None,
+        "odds_available": True,
+    }
+
+
+def compute_stability_diagnostics(
+    log_entries: Sequence[Dict[str, Any]],
+    sport: str = "football",
+) -> Dict[str, Any]:
+    """Compute factual diagnostics across log entries without ranking or best labels."""
+    total = len(log_entries)
+    if total == 0:
+        return {
+            "signal_vs_pass": {"signal_count": 0, "pass_count": 0, "signal_rate": 0.0, "pass_rate": 0.0},
+            "outcome_frequencies": {},
+            "performance_by_uncertainty_state": {},
+            "performance_by_confidence_bucket": {},
+            "calibration_by_market": {},
+        }
+
+    signal_cnt = sum(1 for e in log_entries if e.get("quality_gate") == "SIGNAL")
+    pass_cnt = sum(1 for e in log_entries if e.get("quality_gate") == "PASS")
+
+    outcome_counts: Dict[str, int] = {}
+    for e in log_entries:
+        act = e.get("actual")
+        if act:
+            outcome_counts[act] = outcome_counts.get(act, 0) + 1
+
+    actual_sample_cnt = sum(outcome_counts.values())
+    outcome_freqs = {
+        k: {
+            "count": v,
+            "frequency": round(v / actual_sample_cnt, 4) if actual_sample_cnt > 0 else 0.0,
+        }
+        for k, v in outcome_counts.items()
+    }
+
+    by_unc: Dict[str, Dict[str, Any]] = {}
+    for e in log_entries:
+        pred = e.get("prediction", {})
+        unc_st = pred.get("uncertainty", {}).get("state", "unknown") if isinstance(pred, dict) else "unknown"
+        bucket = by_unc.setdefault(unc_st, {"sample_count": 0, "correct_count": 0, "accuracy": 0.0})
+        bucket["sample_count"] += 1
+        if e.get("correct"):
+            bucket["correct_count"] += 1
+
+    for unc_st, bucket in by_unc.items():
+        sc = bucket["sample_count"]
+        bucket["accuracy"] = round(bucket["correct_count"] / sc, 4) if sc > 0 else 0.0
+
+    by_conf: Dict[str, Dict[str, Any]] = {}
+    for e in log_entries:
+        pred = e.get("prediction", {})
+        c_label = pred.get("confidence", {}).get("label") if isinstance(pred.get("confidence"), dict) else None
+        if not c_label:
+            c_label = "Unspecified"
+        bucket = by_conf.setdefault(c_label, {"sample_count": 0, "correct_count": 0, "accuracy": 0.0})
+        bucket["sample_count"] += 1
+        if e.get("correct"):
+            bucket["correct_count"] += 1
+
+    for c_label, bucket in by_conf.items():
+        sc = bucket["sample_count"]
+        bucket["accuracy"] = round(bucket["correct_count"] / sc, 4) if sc > 0 else 0.0
+
+    if sport == "football":
+        market_calib_status = {
+            "match_result": "CALIBRATED" if any(e.get("calibration_status") == "APPLIED" for e in log_entries) else "RAW_UNCALIBRATED",
+            "double_chance": "RAW_UNCALIBRATED",
+            "over_under_2_5": "RAW_UNCALIBRATED",
+            "btts": "RAW_UNCALIBRATED",
+        }
+    else:
+        market_calib_status = {
+            "moneyline": "CALIBRATED" if any(e.get("calibration_status") == "APPLIED" for e in log_entries) else "RAW_UNCALIBRATED",
+            "total_points": "RAW_UNCALIBRATED",
+        }
+
+    return {
+        "signal_vs_pass": {
+            "signal_count": signal_cnt,
+            "pass_count": pass_cnt,
+            "signal_rate": round(signal_cnt / total, 4) if total > 0 else 0.0,
+            "pass_rate": round(pass_cnt / total, 4) if total > 0 else 0.0,
+        },
+        "outcome_frequencies": outcome_freqs,
+        "performance_by_uncertainty_state": by_unc,
+        "performance_by_confidence_bucket": by_conf,
+        "calibration_by_market": market_calib_status,
+    }
+
+
+def evaluate_football_log_group(
+    log_subset: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Evaluate full market metrics for a specific subset of football log entries."""
+    min_thresh = getattr(config, "MIN_EVALUATION_SAMPLE_THRESHOLD", 30)
+
+    preds_1x2, acts_1x2, top_picks_1x2 = [], [], []
+    preds_dc, acts_dc = [], []
+    preds_dc_hd, acts_dc_hd = [], []
+    preds_dc_ad, acts_dc_ad = [], []
+    preds_dc_ha, acts_dc_ha = [], []
+    preds_ou25, acts_ou25 = [], []
+    preds_btts, acts_btts = [], []
+
+    for entry in log_subset:
+        p_markets = entry.get("prediction", {}).get("markets", {})
+        m_grading = entry.get("market_grading", {})
+        outcomes = m_grading.get("outcomes", {})
+        selected = m_grading.get("selected", {})
+
+        # 1X2
+        act_1x2 = entry.get("actual")
+        m_dist_1x2 = p_markets.get("match_result")
+        if isinstance(act_1x2, str) and act_1x2 in {"home_win", "draw", "away_win"} and isinstance(m_dist_1x2, dict):
+            preds_1x2.append(m_dist_1x2)
+            acts_1x2.append(act_1x2)
+
+        sel_1x2 = selected.get("match_result")
+        if isinstance(sel_1x2, dict):
+            top_picks_1x2.append(sel_1x2)
+
+        # Double Chance
+        m_dist_dc = p_markets.get("double_chance")
+        out_dc = outcomes.get("double_chance", {})
+        if isinstance(m_dist_dc, dict) and isinstance(out_dc, dict):
+            p_hd = _safe_float(m_dist_dc.get("home_or_draw"))
+            p_ad = _safe_float(m_dist_dc.get("away_or_draw"))
+            p_ha = _safe_float(m_dist_dc.get("home_or_away"))
+
+            won_hd = out_dc.get("home_or_draw", {}).get("won")
+            won_ad = out_dc.get("away_or_draw", {}).get("won")
+            won_ha = out_dc.get("home_or_away", {}).get("won")
+
+            if p_hd is not None and won_hd is not None:
+                preds_dc.append({"yes": p_hd, "no": 1.0 - p_hd})
+                acts_dc.append("yes" if won_hd else "no")
+                preds_dc_hd.append({"yes": p_hd, "no": 1.0 - p_hd})
+                acts_dc_hd.append("yes" if won_hd else "no")
+
+            if p_ad is not None and won_ad is not None:
+                preds_dc.append({"yes": p_ad, "no": 1.0 - p_ad})
+                acts_dc.append("yes" if won_ad else "no")
+                preds_dc_ad.append({"yes": p_ad, "no": 1.0 - p_ad})
+                acts_dc_ad.append("yes" if won_ad else "no")
+
+            if p_ha is not None and won_ha is not None:
+                preds_dc.append({"yes": p_ha, "no": 1.0 - p_ha})
+                acts_dc.append("yes" if won_ha else "no")
+                preds_dc_ha.append({"yes": p_ha, "no": 1.0 - p_ha})
+                acts_dc_ha.append("yes" if won_ha else "no")
+
+        # Over / Under 2.5
+        sel_ou = selected.get("over_under", {})
+        if isinstance(sel_ou, dict):
+            sel_ou25 = sel_ou.get("2.5") or sel_ou.get("2_5")
+            if isinstance(sel_ou25, dict) and sel_ou25.get("actual") in {"over", "under"}:
+                act_ou25 = sel_ou25["actual"]
+                m_dist_ou = p_markets.get("over_under")
+                if isinstance(m_dist_ou, dict):
+                    p_over = _safe_float(m_dist_ou.get("over_2_5"))
+                    p_under = _safe_float(m_dist_ou.get("under_2_5"))
+                    if p_over is not None and p_under is not None:
+                        preds_ou25.append({"over": p_over, "under": p_under})
+                        acts_ou25.append(act_ou25)
+
+        # BTTS
+        sel_btts = selected.get("btts")
+        m_dist_btts = p_markets.get("btts")
+        if isinstance(sel_btts, dict) and sel_btts.get("actual") in {"yes", "no"} and isinstance(m_dist_btts, dict):
+            act_btts = sel_btts["actual"]
+            p_yes = _safe_float(m_dist_btts.get("yes"))
+            p_no = _safe_float(m_dist_btts.get("no"))
+            if p_yes is not None and p_no is not None:
+                preds_btts.append({"yes": p_yes, "no": p_no})
+                acts_btts.append(act_btts)
+
+    sc_1x2 = len(preds_1x2)
+    acc_1x2 = compute_binary_accuracy(preds_1x2, acts_1x2)
+    corr_1x2 = sum(1 for p, a in zip(preds_1x2, acts_1x2) if max(p, key=p.get) == a) if sc_1x2 > 0 else 0
+    ci_1x2 = compute_accuracy_confidence_interval(corr_1x2, sc_1x2)
+    cal_status_1x2 = "CALIBRATED" if any(e.get("calibration_status") == "APPLIED" for e in log_subset) else "RAW_UNCALIBRATED"
+
+    match_result_eval = {
+        "sample_count": sc_1x2,
+        "is_low_sample": sc_1x2 < min_thresh,
+        "sample_reliability": "INSUFFICIENT_SAMPLE" if sc_1x2 < min_thresh else "ADEQUATE_SAMPLE",
+        "accuracy": round(acc_1x2, 4) if acc_1x2 is not None else None,
+        "accuracy_ci_lower": ci_1x2["ci_lower"],
+        "accuracy_ci_upper": ci_1x2["ci_upper"],
+        "brier_score": compute_brier_score(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+        "log_loss": compute_log_loss(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
+        "calibration_status": cal_status_1x2,
+        "calibration": compute_multiclass_1x2_calibration(preds_1x2, acts_1x2),
+        "top_pick_calibration": compute_picked_calibration(top_picks_1x2),
+    }
+
+    sc_dc = len(preds_dc)
+    acc_dc = compute_binary_accuracy(preds_dc, acts_dc)
+    corr_dc = sum(1 for p, a in zip(preds_dc, acts_dc) if max(p, key=p.get) == a) if sc_dc > 0 else 0
+    ci_dc = compute_accuracy_confidence_interval(corr_dc, sc_dc)
+
+    double_chance_eval = {
+        "sample_count": sc_dc,
+        "is_low_sample": sc_dc < min_thresh,
+        "sample_reliability": "INSUFFICIENT_SAMPLE" if sc_dc < min_thresh else "ADEQUATE_SAMPLE",
+        "accuracy": round(acc_dc, 4) if acc_dc is not None else None,
+        "accuracy_ci_lower": ci_dc["ci_lower"],
+        "accuracy_ci_upper": ci_dc["ci_upper"],
+        "brier_score": compute_brier_score(preds_dc, acts_dc, outcomes=("yes", "no")),
+        "log_loss": compute_log_loss(preds_dc, acts_dc, outcomes=("yes", "no")),
+        "calibration_status": "RAW_UNCALIBRATED",
+        "calibration": compute_market_calibration(preds_dc, acts_dc, outcomes=("yes", "no")),
+        "home_or_draw": {
+            "sample_count": len(preds_dc_hd),
+            "brier_score": compute_brier_score(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+            "log_loss": compute_log_loss(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+            "calibration": compute_market_calibration(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
+        },
+        "away_or_draw": {
+            "sample_count": len(preds_dc_ad),
+            "brier_score": compute_brier_score(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+            "log_loss": compute_log_loss(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+            "calibration": compute_market_calibration(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
+        },
+        "home_or_away": {
+            "sample_count": len(preds_dc_ha),
+            "brier_score": compute_brier_score(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+            "log_loss": compute_log_loss(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+            "calibration": compute_market_calibration(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
+        },
+    }
+
+    sc_ou = len(preds_ou25)
+    acc_ou = compute_binary_accuracy(preds_ou25, acts_ou25)
+    corr_ou = sum(1 for p, a in zip(preds_ou25, acts_ou25) if max(p, key=p.get) == a) if sc_ou > 0 else 0
+    ci_ou = compute_accuracy_confidence_interval(corr_ou, sc_ou)
+
+    ou25_eval = {
+        "sample_count": sc_ou,
+        "is_low_sample": sc_ou < min_thresh,
+        "sample_reliability": "INSUFFICIENT_SAMPLE" if sc_ou < min_thresh else "ADEQUATE_SAMPLE",
+        "accuracy": round(acc_ou, 4) if acc_ou is not None else None,
+        "accuracy_ci_lower": ci_ou["ci_lower"],
+        "accuracy_ci_upper": ci_ou["ci_upper"],
+        "brier_score": compute_brier_score(preds_ou25, acts_ou25, outcomes=("over", "under")),
+        "log_loss": compute_log_loss(preds_ou25, acts_ou25, outcomes=("over", "under")),
+        "calibration_status": "RAW_UNCALIBRATED",
+        "calibration": compute_market_calibration(preds_ou25, acts_ou25, outcomes=("over", "under")),
+    }
+
+    sc_btts = len(preds_btts)
+    acc_btts = compute_binary_accuracy(preds_btts, acts_btts)
+    corr_btts = sum(1 for p, a in zip(preds_btts, acts_btts) if max(p, key=p.get) == a) if sc_btts > 0 else 0
+    ci_btts = compute_accuracy_confidence_interval(corr_btts, sc_btts)
+
+    btts_eval = {
+        "sample_count": sc_btts,
+        "is_low_sample": sc_btts < min_thresh,
+        "sample_reliability": "INSUFFICIENT_SAMPLE" if sc_btts < min_thresh else "ADEQUATE_SAMPLE",
+        "accuracy": round(acc_btts, 4) if acc_btts is not None else None,
+        "accuracy_ci_lower": ci_btts["ci_lower"],
+        "accuracy_ci_upper": ci_btts["ci_upper"],
+        "brier_score": compute_brier_score(preds_btts, acts_btts, outcomes=("yes", "no")),
+        "log_loss": compute_log_loss(preds_btts, acts_btts, outcomes=("yes", "no")),
+        "calibration_status": "RAW_UNCALIBRATED",
+        "calibration": compute_market_calibration(preds_btts, acts_btts, outcomes=("yes", "no")),
+    }
+
+    baselines = {
+        "empirical": compute_empirical_baseline(acts_1x2, outcomes=("home_win", "draw", "away_win")),
+        "odds_implied": compute_odds_baseline(log_subset, sport="football"),
+    }
+
+    return {
+        "total_graded_samples": len(log_subset),
+        "markets": {
+            "match_result": match_result_eval,
+            "double_chance": double_chance_eval,
+            "over_under_2_5": ou25_eval,
+            "btts": btts_eval,
+        },
+        "match_result": match_result_eval,
+        "double_chance": double_chance_eval,
+        "over_under_2_5": ou25_eval,
+        "btts": btts_eval,
+        "baselines": baselines,
+    }
+
+
+def evaluate_basketball_log_group(
+    log_subset: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Evaluate market metrics for a specific subset of basketball log entries."""
+    min_thresh = getattr(config, "MIN_EVALUATION_SAMPLE_THRESHOLD", 30)
+
+    preds_ml, acts_ml = [], []
+    preds_tot, acts_tot = [], []
+
+    for entry in log_subset:
+        pred_rec = entry.get("prediction", {})
+        p_markets = pred_rec.get("markets", {}) if isinstance(pred_rec, dict) else {}
+
+        act_ml = entry.get("actual")
+        ml_dist = p_markets.get("moneyline")
+        if isinstance(act_ml, str) and act_ml in {"home_win", "away_win"} and isinstance(ml_dist, dict):
+            p_h = _safe_float(ml_dist.get("home_win"))
+            p_a = _safe_float(ml_dist.get("away_win"))
+            if p_h is not None and p_a is not None:
+                preds_ml.append({"home_win": p_h, "away_win": p_a})
+                acts_ml.append(act_ml)
+
+        tot_dist = p_markets.get("total_points")
+        act_pts = entry.get("actual_points")
+        if isinstance(tot_dist, dict) and isinstance(act_pts, dict):
+            h_pts = _safe_float(act_pts.get("home"))
+            a_pts = _safe_float(act_pts.get("away"))
+            line = _safe_float(tot_dist.get("line"))
+            p_over = _safe_float(tot_dist.get("over"))
+            p_under = _safe_float(tot_dist.get("under"))
+            if h_pts is not None and a_pts is not None and line is not None and p_over is not None and p_under is not None:
+                tot_sum = h_pts + a_pts
+                act_tot = "over" if tot_sum > line else ("under" if tot_sum < line else "push")
+                if act_tot in {"over", "under"}:
+                    preds_tot.append({"over": p_over, "under": p_under})
+                    acts_tot.append(act_tot)
+
+    sc_ml = len(preds_ml)
+    acc_ml = compute_binary_accuracy(preds_ml, acts_ml)
+    corr_ml = sum(1 for p, a in zip(preds_ml, acts_ml) if ("home_win" if p.get("home_win", 0) >= p.get("away_win", 0) else "away_win") == a) if sc_ml > 0 else 0
+    ci_ml = compute_accuracy_confidence_interval(corr_ml, sc_ml)
+    cal_status_ml = "CALIBRATED" if any(e.get("calibration_status") == "APPLIED" for e in log_subset) else "RAW_UNCALIBRATED"
+
+    moneyline_eval = {
+        "sample_count": sc_ml,
+        "is_low_sample": sc_ml < min_thresh,
+        "sample_reliability": "INSUFFICIENT_SAMPLE" if sc_ml < min_thresh else "ADEQUATE_SAMPLE",
+        "accuracy": round(acc_ml, 4) if acc_ml is not None else None,
+        "accuracy_ci_lower": ci_ml["ci_lower"],
+        "accuracy_ci_upper": ci_ml["ci_upper"],
+        "brier_score": compute_brier_score(preds_ml, acts_ml, outcomes=("home_win", "away_win")),
+        "log_loss": compute_log_loss(preds_ml, acts_ml, outcomes=("home_win", "away_win")),
+        "calibration_status": cal_status_ml,
+        "calibration": compute_market_calibration(preds_ml, acts_ml, outcomes=("home_win", "away_win")),
+    }
+
+    sc_tot = len(preds_tot)
+    acc_tot = compute_binary_accuracy(preds_tot, acts_tot)
+    corr_tot = sum(1 for p, a in zip(preds_tot, acts_tot) if ("over" if p.get("over", 0) >= p.get("under", 0) else "under") == a) if sc_tot > 0 else 0
+    ci_tot = compute_accuracy_confidence_interval(corr_tot, sc_tot)
+
+    total_points_eval = {
+        "sample_count": sc_tot,
+        "is_low_sample": sc_tot < min_thresh,
+        "sample_reliability": "INSUFFICIENT_SAMPLE" if sc_tot < min_thresh else "ADEQUATE_SAMPLE",
+        "accuracy": round(acc_tot, 4) if acc_tot is not None else None,
+        "accuracy_ci_lower": ci_tot["ci_lower"],
+        "accuracy_ci_upper": ci_tot["ci_upper"],
+        "brier_score": compute_brier_score(preds_tot, acts_tot, outcomes=("over", "under")),
+        "log_loss": compute_log_loss(preds_tot, acts_tot, outcomes=("over", "under")),
+        "calibration_status": "RAW_UNCALIBRATED",
+        "calibration": compute_market_calibration(preds_tot, acts_tot, outcomes=("over", "under")),
+    }
+
+    baselines = {
+        "empirical": compute_empirical_baseline(acts_ml, outcomes=("home_win", "away_win")),
+        "odds_implied": compute_odds_baseline(log_subset, sport="basketball"),
+    }
+
+    return {
+        "total_graded_samples": len(log_subset),
+        "markets": {
+            "moneyline": moneyline_eval,
+            "total_points": total_points_eval,
+        },
+        "moneyline": moneyline_eval,
+        "total_points": total_points_eval,
+        "baselines": baselines,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1822,6 +2358,9 @@ def run_real_backtest(
             else None
         )
 
+        qg_decision = prediction.get("quality_gate") or prediction.get("quality_gate_result", {}).get("decision", "PASS")
+        calib_status = prediction.get("calibration_metadata", {}).get("calibration_status", "UNAVAILABLE")
+
         entry = {
             "fixture_id": fixture_id,
             "match": (
@@ -1844,6 +2383,8 @@ def run_real_backtest(
             ),
             "predicted": predicted,
             "actual": match_result,
+            "quality_gate": qg_decision,
+            "calibration_status": calib_status,
             "probabilities": (
                 prediction_markets.get(
                     "match_result",
@@ -1894,150 +2435,38 @@ def run_real_backtest(
         log.append(entry)
 
     # -----------------------------------------------------------------------
-    # Comprehensive baseline evaluation across distinct markets
+    # Comprehensive Phase 4 evaluation across groups, baselines, and diagnostics
     # -----------------------------------------------------------------------
-    # 1. 1X2 market (multiclass)
-    preds_1x2 = []
-    acts_1x2 = []
-
-    # 2. Double Chance market (3 independent binary events)
-    preds_dc, acts_dc = [], []
-    preds_dc_hd, acts_dc_hd = [], []
-    preds_dc_ad, acts_dc_ad = [], []
-    preds_dc_ha, acts_dc_ha = [], []
-
-    # 3. Over/Under 2.5 market (binary)
-    preds_ou25 = []
-    acts_ou25 = []
-
-    # 4. BTTS market (binary)
-    preds_btts = []
-    acts_btts = []
-
-    # Top-pick items across markets for picked calibration
-    top_picks_1x2 = []
-
-    for entry in log:
-        p_markets = entry.get("prediction", {}).get("markets", {})
-        m_grading = entry.get("market_grading", {})
-        outcomes = m_grading.get("outcomes", {})
-        selected = m_grading.get("selected", {})
-
-        # 1X2
-        act_1x2 = entry.get("actual")
-        m_dist_1x2 = p_markets.get("match_result")
-        if isinstance(act_1x2, str) and act_1x2 in {"home_win", "draw", "away_win"} and isinstance(m_dist_1x2, dict):
-            preds_1x2.append(m_dist_1x2)
-            acts_1x2.append(act_1x2)
-
-        sel_1x2 = selected.get("match_result")
-        if isinstance(sel_1x2, dict):
-            top_picks_1x2.append(sel_1x2)
-
-        # Double Chance - 3 independent binary events (overlapping probabilities)
-        m_dist_dc = p_markets.get("double_chance")
-        out_dc = outcomes.get("double_chance", {})
-        if isinstance(m_dist_dc, dict) and isinstance(out_dc, dict):
-            p_hd = _safe_float(m_dist_dc.get("home_or_draw"))
-            p_ad = _safe_float(m_dist_dc.get("away_or_draw"))
-            p_ha = _safe_float(m_dist_dc.get("home_or_away"))
-
-            won_hd = out_dc.get("home_or_draw", {}).get("won")
-            won_ad = out_dc.get("away_or_draw", {}).get("won")
-            won_ha = out_dc.get("home_or_away", {}).get("won")
-
-            if p_hd is not None and won_hd is not None:
-                preds_dc.append({"yes": p_hd, "no": 1.0 - p_hd})
-                acts_dc.append("yes" if won_hd else "no")
-
-                preds_dc_hd.append({"yes": p_hd, "no": 1.0 - p_hd})
-                acts_dc_hd.append("yes" if won_hd else "no")
-
-            if p_ad is not None and won_ad is not None:
-                preds_dc.append({"yes": p_ad, "no": 1.0 - p_ad})
-                acts_dc.append("yes" if won_ad else "no")
-
-                preds_dc_ad.append({"yes": p_ad, "no": 1.0 - p_ad})
-                acts_dc_ad.append("yes" if won_ad else "no")
-
-            if p_ha is not None and won_ha is not None:
-                preds_dc.append({"yes": p_ha, "no": 1.0 - p_ha})
-                acts_dc.append("yes" if won_ha else "no")
-
-                preds_dc_ha.append({"yes": p_ha, "no": 1.0 - p_ha})
-                acts_dc_ha.append("yes" if won_ha else "no")
-
-        # Over / Under 2.5 - check both "2.5" and "2_5" in market grading/selected
-        sel_ou = selected.get("over_under", {})
-        if isinstance(sel_ou, dict):
-            sel_ou25 = sel_ou.get("2.5") or sel_ou.get("2_5")
-            if isinstance(sel_ou25, dict) and sel_ou25.get("actual") in {"over", "under"}:
-                act_ou25 = sel_ou25["actual"]
-                m_dist_ou = p_markets.get("over_under")
-                if isinstance(m_dist_ou, dict):
-                    p_over = _safe_float(m_dist_ou.get("over_2_5"))
-                    p_under = _safe_float(m_dist_ou.get("under_2_5"))
-                    if p_over is not None and p_under is not None:
-                        preds_ou25.append({"over": p_over, "under": p_under})
-                        acts_ou25.append(act_ou25)
-
-        # BTTS
-        sel_btts = selected.get("btts")
-        m_dist_btts = p_markets.get("btts")
-        if isinstance(sel_btts, dict) and sel_btts.get("actual") in {"yes", "no"} and isinstance(m_dist_btts, dict):
-            act_btts = sel_btts["actual"]
-            p_yes = _safe_float(m_dist_btts.get("yes"))
-            p_no = _safe_float(m_dist_btts.get("no"))
-            if p_yes is not None and p_no is not None:
-                preds_btts.append({"yes": p_yes, "no": p_no})
-                acts_btts.append(act_btts)
-
-    evaluation = {
-        "match_result": {
-            "brier_score": compute_brier_score(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
-            "log_loss": compute_log_loss(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
-            "calibration": compute_market_calibration(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
-            "top_pick_calibration": compute_picked_calibration(top_picks_1x2),
-        },
-        "double_chance": {
-            "sample_count": len(preds_dc),
-            "brier_score": compute_brier_score(preds_dc, acts_dc, outcomes=("yes", "no")),
-            "log_loss": compute_log_loss(preds_dc, acts_dc, outcomes=("yes", "no")),
-            "calibration": compute_market_calibration(preds_dc, acts_dc, outcomes=("yes", "no")),
-            "home_or_draw": {
-                "sample_count": len(preds_dc_hd),
-                "brier_score": compute_brier_score(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
-                "log_loss": compute_log_loss(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
-                "calibration": compute_market_calibration(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
-            },
-            "away_or_draw": {
-                "sample_count": len(preds_dc_ad),
-                "brier_score": compute_brier_score(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
-                "log_loss": compute_log_loss(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
-                "calibration": compute_market_calibration(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
-            },
-            "home_or_away": {
-                "sample_count": len(preds_dc_ha),
-                "brier_score": compute_brier_score(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
-                "log_loss": compute_log_loss(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
-                "calibration": compute_market_calibration(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
-            },
-        },
-        "over_under_2_5": {
-            "sample_count": len(preds_ou25),
-            "accuracy": compute_binary_accuracy(preds_ou25, acts_ou25),
-            "brier_score": compute_brier_score(preds_ou25, acts_ou25, outcomes=("over", "under")),
-            "log_loss": compute_log_loss(preds_ou25, acts_ou25, outcomes=("over", "under")),
-            "calibration": compute_market_calibration(preds_ou25, acts_ou25, outcomes=("over", "under")),
-        },
-        "btts": {
-            "sample_count": len(preds_btts),
-            "accuracy": compute_binary_accuracy(preds_btts, acts_btts),
-            "brier_score": compute_brier_score(preds_btts, acts_btts, outcomes=("yes", "no")),
-            "log_loss": compute_log_loss(preds_btts, acts_btts, outcomes=("yes", "no")),
-            "calibration": compute_market_calibration(preds_btts, acts_btts, outcomes=("yes", "no")),
-        },
+    sampling_info = {
+        "total_eligible_population": len(eligible),
+        "selected_sample": len(selected),
+        "sample_seed": sample_seed,
+        "sampling_mode": "FULL" if len(selected) >= len(eligible) else "RANDOM_SAMPLED",
+        "evaluation_coverage": round(len(selected) / len(eligible), 4) if len(eligible) > 0 else 0.0,
+        "is_sampled": len(selected) < len(eligible),
     }
+
+    all_eval = evaluate_football_log_group(log)
+    signal_log = [e for e in log if e.get("quality_gate") == "SIGNAL"]
+    pass_log = [e for e in log if e.get("quality_gate") == "PASS"]
+
+    signal_eval = evaluate_football_log_group(signal_log)
+    pass_eval = evaluate_football_log_group(pass_log)
+
+    diagnostics = compute_stability_diagnostics(log, sport="football")
+
+    evaluation = dict(all_eval["markets"])
+    evaluation["groups"] = {
+        "all": all_eval,
+        "signal": signal_eval,
+        "pass": pass_eval,
+    }
+    evaluation["all"] = all_eval
+    evaluation["signal"] = signal_eval
+    evaluation["pass"] = pass_eval
+    evaluation["sampling"] = sampling_info
+    evaluation["diagnostics"] = diagnostics
+    evaluation["baselines"] = all_eval.get("baselines", {})
 
     # Extract top-level backward-compatible metrics for 1X2 match result
     brier_score = evaluation["match_result"]["brier_score"]
@@ -2068,6 +2497,8 @@ def run_real_backtest(
         "log_loss": log_loss,
         "calibration": match_result_calibration,
         "evaluation": evaluation,
+        "sampling": sampling_info,
+        "diagnostics": diagnostics,
         "league_id": league_id,
         "season": season,
         "min_prior_matches": (
@@ -2354,6 +2785,9 @@ def run_basketball_backtest(
             preds_tot.append({"over": p_over, "under": p_under})
             acts_tot.append(actual_tot_outcome)
 
+        qg_decision = pred.get("quality_gate") or pred.get("quality_gate_result", {}).get("decision", "PASS")
+        calib_status = pred.get("calibration_metadata", {}).get("calibration_status", "UNAVAILABLE")
+
         entry = {
             "game_id": candidate.get("id"),
             "match": f"{candidate.get('teams', {}).get('home', {}).get('name')} vs {candidate.get('teams', {}).get('away', {}).get('name')}",
@@ -2361,36 +2795,47 @@ def run_basketball_backtest(
             "correct": won_ml,
             "predicted": picked_ml,
             "actual": actual_outcome,
+            "quality_gate": qg_decision,
+            "calibration_status": calib_status,
             "actual_points": {"home": h_pts, "away": a_pts},
             "prediction": pred,
         }
         log.append(entry)
 
-    brier_ml = compute_brier_score(preds_ml, acts_ml, outcomes=("home_win", "away_win"))
-    loss_ml = compute_log_loss(preds_ml, acts_ml, outcomes=("home_win", "away_win"))
-    cal_ml = compute_market_calibration(preds_ml, acts_ml, outcomes=("home_win", "away_win"))
-
-    brier_tot = compute_brier_score(preds_tot, acts_tot, outcomes=("over", "under"))
-    loss_tot = compute_log_loss(preds_tot, acts_tot, outcomes=("over", "under"))
-    cal_tot = compute_market_calibration(preds_tot, acts_tot, outcomes=("over", "under"))
-    acc_tot = compute_binary_accuracy(preds_tot, acts_tot)
-
-    evaluation = {
-        "moneyline": {
-            "sample_count": len(preds_ml),
-            "accuracy": correct / graded if graded else 0.0,
-            "brier_score": brier_ml,
-            "log_loss": loss_ml,
-            "calibration": cal_ml,
-        },
-        "total_points": {
-            "sample_count": len(preds_tot),
-            "accuracy": acc_tot,
-            "brier_score": brier_tot,
-            "log_loss": loss_tot,
-            "calibration": cal_tot,
-        },
+    sampling_info = {
+        "total_eligible_population": len(eligible),
+        "selected_sample": len(selected),
+        "sample_seed": sample_seed,
+        "sampling_mode": "FULL" if len(selected) >= len(eligible) else "RANDOM_SAMPLED",
+        "evaluation_coverage": round(len(selected) / len(eligible), 4) if len(eligible) > 0 else 0.0,
+        "is_sampled": len(selected) < len(eligible),
     }
+
+    all_eval = evaluate_basketball_log_group(log)
+    signal_log = [e for e in log if e.get("quality_gate") == "SIGNAL"]
+    pass_log = [e for e in log if e.get("quality_gate") == "PASS"]
+
+    signal_eval = evaluate_basketball_log_group(signal_log)
+    pass_eval = evaluate_basketball_log_group(pass_log)
+
+    diagnostics = compute_stability_diagnostics(log, sport="basketball")
+
+    evaluation = dict(all_eval["markets"])
+    evaluation["groups"] = {
+        "all": all_eval,
+        "signal": signal_eval,
+        "pass": pass_eval,
+    }
+    evaluation["all"] = all_eval
+    evaluation["signal"] = signal_eval
+    evaluation["pass"] = pass_eval
+    evaluation["sampling"] = sampling_info
+    evaluation["diagnostics"] = diagnostics
+    evaluation["baselines"] = all_eval.get("baselines", {})
+
+    brier_ml = evaluation["moneyline"]["brier_score"]
+    loss_ml = evaluation["moneyline"]["log_loss"]
+    cal_ml = evaluation["moneyline"]["calibration"]
 
     start_ts = datetime.now(timezone.utc).isoformat()
     result = {
@@ -2409,6 +2854,8 @@ def run_basketball_backtest(
         "log_loss": loss_ml,
         "calibration": cal_ml,
         "evaluation": evaluation,
+        "sampling": sampling_info,
+        "diagnostics": diagnostics,
         "min_prior_matches": min_prior_matches,
         "sample_seed": sample_seed,
         "log": log,
@@ -2443,10 +2890,16 @@ def run_basketball_backtest(
             "evaluation_json": evaluation,
             "code_version": "authoritative",
         }
+        acc_tot = evaluation.get("total_points", {}).get("accuracy")
+        brier_tot = evaluation.get("total_points", {}).get("brier_score")
+        loss_tot = evaluation.get("total_points", {}).get("log_loss")
+        cal_tot_dict = evaluation.get("total_points", {}).get("calibration", {})
+        ece_tot = cal_tot_dict.get("ece") if isinstance(cal_tot_dict, dict) else None
+
         market_metrics = [
             {
                 "market_key": "moneyline",
-                "sample_count": len(preds_ml),
+                "sample_count": evaluation.get("moneyline", {}).get("sample_count", graded),
                 "accuracy": result["accuracy"],
                 "brier_score": brier_ml,
                 "log_loss": loss_ml,
@@ -2455,11 +2908,11 @@ def run_basketball_backtest(
             },
             {
                 "market_key": "total_points",
-                "sample_count": len(preds_tot),
+                "sample_count": evaluation.get("total_points", {}).get("sample_count", 0),
                 "accuracy": acc_tot,
                 "brier_score": brier_tot,
                 "log_loss": loss_tot,
-                "ece": cal_tot.get("ece") if isinstance(cal_tot, dict) else None,
+                "ece": ece_tot,
                 "metrics_json": evaluation["total_points"],
             },
         ]
@@ -2494,7 +2947,9 @@ def run_multi_season_backtest(
     """
     all_log: List[Dict[str, Any]] = []
     season_reports: Dict[int, Dict[str, Any]] = {}
+    season_statuses: Dict[int, Dict[str, Any]] = {}
     season_limitations: Dict[int, str] = {}
+    contributing_seasons: List[int] = []
 
     total_fixtures_fetched = 0
     total_finished_fixtures = 0
@@ -2504,6 +2959,7 @@ def run_multi_season_backtest(
     total_correct = 0
 
     combined_market_summary = _new_market_summary()
+    is_aggregate_complete = True
 
     for s in seasons:
         try:
@@ -2517,164 +2973,84 @@ def run_multi_season_backtest(
             )
 
             season_reports[s] = res
+            graded_s = res.get("graded", 0)
+
+            if graded_s > 0 and res.get("status") == "COMPLETED":
+                season_st = "COMPLETE"
+                err_reason = None
+                contributing_seasons.append(s)
+            else:
+                season_st = "PARTIAL"
+                err_reason = f"Season {s} returned {graded_s} graded fixtures."
+                is_aggregate_complete = False
+                season_limitations[s] = err_reason
+
+            season_statuses[s] = {
+                "status": season_st,
+                "graded_count": graded_s,
+                "error_reason": err_reason,
+            }
+
             total_fixtures_fetched += res.get("fixtures_fetched", 0)
             total_finished_fixtures += res.get("finished_fixtures", 0)
             total_eligible_candidates += res.get("eligible_candidates", 0)
             total_selected += res.get("selected", 0)
-            total_graded += res.get("graded", 0)
+            total_graded += graded_s
             total_correct += res.get("correct", 0)
 
             all_log.extend(res.get("log", []))
 
-            if res.get("graded", 0) == 0:
-                season_limitations[s] = (
-                    f"Season {s} returned 0 graded fixtures "
-                    f"(fetched {res.get('fixtures_fetched', 0)}, eligible {res.get('eligible_candidates', 0)})."
-                )
+            # Update market summary
+            for entry in res.get("log", []):
+                selected = entry.get("market_grading", {}).get("selected", {})
+                _update_market_summary(combined_market_summary, selected)
 
         except Exception as exc:
-            season_limitations[s] = f"Season {s} failed with error: {exc}"
+            is_aggregate_complete = False
+            err_msg = str(exc)
+            season_limitations[s] = f"Season {s} failed with error: {err_msg}"
+            season_statuses[s] = {
+                "status": "FAILED",
+                "graded_count": 0,
+                "error_reason": err_msg,
+            }
 
-    # Evaluate combined log across seasons
-    preds_1x2, acts_1x2, top_picks_1x2 = [], [], []
-    preds_dc, acts_dc = [], []
-    preds_dc_hd, acts_dc_hd = [], []
-    preds_dc_ad, acts_dc_ad = [], []
-    preds_dc_ha, acts_dc_ha = [], []
-    preds_ou25, acts_ou25 = [], []
-    preds_btts, acts_btts = [], []
+    all_failed = all(st.get("status") == "FAILED" for st in season_statuses.values()) if season_statuses else False
+    if all_failed:
+        overall_status = "FAILED"
+    elif not is_aggregate_complete:
+        overall_status = "PARTIAL"
+    else:
+        overall_status = "COMPLETE"
 
-    for entry in all_log:
-        p_markets = entry.get("prediction", {}).get("markets", {})
-        m_grading = entry.get("market_grading", {})
-        outcomes = m_grading.get("outcomes", {})
-        selected = m_grading.get("selected", {})
+    all_eval = evaluate_football_log_group(all_log)
+    signal_log = [e for e in all_log if e.get("quality_gate") == "SIGNAL"]
+    pass_log = [e for e in all_log if e.get("quality_gate") == "PASS"]
 
-        _update_market_summary(combined_market_summary, selected)
+    signal_eval = evaluate_football_log_group(signal_log)
+    pass_eval = evaluate_football_log_group(pass_log)
 
-        # 1X2
-        act_1x2 = entry.get("actual")
-        m_dist_1x2 = p_markets.get("match_result")
-        if isinstance(act_1x2, str) and act_1x2 in {"home_win", "draw", "away_win"} and isinstance(m_dist_1x2, dict):
-            preds_1x2.append(m_dist_1x2)
-            acts_1x2.append(act_1x2)
+    diagnostics = compute_stability_diagnostics(all_log, sport="football")
 
-        sel_1x2 = selected.get("match_result")
-        if isinstance(sel_1x2, dict):
-            top_picks_1x2.append(sel_1x2)
-
-        # Double Chance - 3 independent binary events (overlapping probabilities)
-        m_dist_dc = p_markets.get("double_chance")
-        out_dc = outcomes.get("double_chance", {})
-        if isinstance(m_dist_dc, dict) and isinstance(out_dc, dict):
-            p_hd = _safe_float(m_dist_dc.get("home_or_draw"))
-            p_ad = _safe_float(m_dist_dc.get("away_or_draw"))
-            p_ha = _safe_float(m_dist_dc.get("home_or_away"))
-
-            won_hd = out_dc.get("home_or_draw", {}).get("won")
-            won_ad = out_dc.get("away_or_draw", {}).get("won")
-            won_ha = out_dc.get("home_or_away", {}).get("won")
-
-            if p_hd is not None and won_hd is not None:
-                preds_dc.append({"yes": p_hd, "no": 1.0 - p_hd})
-                acts_dc.append("yes" if won_hd else "no")
-
-                preds_dc_hd.append({"yes": p_hd, "no": 1.0 - p_hd})
-                acts_dc_hd.append("yes" if won_hd else "no")
-
-            if p_ad is not None and won_ad is not None:
-                preds_dc.append({"yes": p_ad, "no": 1.0 - p_ad})
-                acts_dc.append("yes" if won_ad else "no")
-
-                preds_dc_ad.append({"yes": p_ad, "no": 1.0 - p_ad})
-                acts_dc_ad.append("yes" if won_ad else "no")
-
-            if p_ha is not None and won_ha is not None:
-                preds_dc.append({"yes": p_ha, "no": 1.0 - p_ha})
-                acts_dc.append("yes" if won_ha else "no")
-
-                preds_dc_ha.append({"yes": p_ha, "no": 1.0 - p_ha})
-                acts_dc_ha.append("yes" if won_ha else "no")
-
-        # Over / Under 2.5
-        sel_ou = selected.get("over_under", {})
-        if isinstance(sel_ou, dict):
-            sel_ou25 = sel_ou.get("2.5") or sel_ou.get("2_5")
-            if isinstance(sel_ou25, dict) and sel_ou25.get("actual") in {"over", "under"}:
-                act_ou25 = sel_ou25["actual"]
-                m_dist_ou = p_markets.get("over_under")
-                if isinstance(m_dist_ou, dict):
-                    p_over = _safe_float(m_dist_ou.get("over_2_5"))
-                    p_under = _safe_float(m_dist_ou.get("under_2_5"))
-                    if p_over is not None and p_under is not None:
-                        preds_ou25.append({"over": p_over, "under": p_under})
-                        acts_ou25.append(act_ou25)
-
-        # BTTS
-        sel_btts = selected.get("btts")
-        m_dist_btts = p_markets.get("btts")
-        if isinstance(sel_btts, dict) and sel_btts.get("actual") in {"yes", "no"} and isinstance(m_dist_btts, dict):
-            act_btts = sel_btts["actual"]
-            p_yes = _safe_float(m_dist_btts.get("yes"))
-            p_no = _safe_float(m_dist_btts.get("no"))
-            if p_yes is not None and p_no is not None:
-                preds_btts.append({"yes": p_yes, "no": p_no})
-                acts_btts.append(act_btts)
-
-    evaluation = {
-        "match_result": {
-            "accuracy": total_correct / total_graded if total_graded else 0.0,
-            "brier_score": compute_brier_score(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
-            "log_loss": compute_log_loss(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
-            "calibration": compute_market_calibration(preds_1x2, acts_1x2, outcomes=("home_win", "draw", "away_win")),
-            "top_pick_calibration": compute_picked_calibration(top_picks_1x2),
-        },
-        "double_chance": {
-            "accuracy": (
-                combined_market_summary.get("double_chance", {}).get("accuracy", 0.0)
-            ),
-            "sample_count": len(preds_dc),
-            "brier_score": compute_brier_score(preds_dc, acts_dc, outcomes=("yes", "no")),
-            "log_loss": compute_log_loss(preds_dc, acts_dc, outcomes=("yes", "no")),
-            "calibration": compute_market_calibration(preds_dc, acts_dc, outcomes=("yes", "no")),
-            "home_or_draw": {
-                "sample_count": len(preds_dc_hd),
-                "brier_score": compute_brier_score(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
-                "log_loss": compute_log_loss(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
-                "calibration": compute_market_calibration(preds_dc_hd, acts_dc_hd, outcomes=("yes", "no")),
-            },
-            "away_or_draw": {
-                "sample_count": len(preds_dc_ad),
-                "brier_score": compute_brier_score(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
-                "log_loss": compute_log_loss(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
-                "calibration": compute_market_calibration(preds_dc_ad, acts_dc_ad, outcomes=("yes", "no")),
-            },
-            "home_or_away": {
-                "sample_count": len(preds_dc_ha),
-                "brier_score": compute_brier_score(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
-                "log_loss": compute_log_loss(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
-                "calibration": compute_market_calibration(preds_dc_ha, acts_dc_ha, outcomes=("yes", "no")),
-            },
-        },
-        "over_under_2_5": {
-            "sample_count": len(preds_ou25),
-            "accuracy": compute_binary_accuracy(preds_ou25, acts_ou25),
-            "brier_score": compute_brier_score(preds_ou25, acts_ou25, outcomes=("over", "under")),
-            "log_loss": compute_log_loss(preds_ou25, acts_ou25, outcomes=("over", "under")),
-            "calibration": compute_market_calibration(preds_ou25, acts_ou25, outcomes=("over", "under")),
-        },
-        "btts": {
-            "sample_count": len(preds_btts),
-            "accuracy": compute_binary_accuracy(preds_btts, acts_btts),
-            "brier_score": compute_brier_score(preds_btts, acts_btts, outcomes=("yes", "no")),
-            "log_loss": compute_log_loss(preds_btts, acts_btts, outcomes=("yes", "no")),
-            "calibration": compute_market_calibration(preds_btts, acts_btts, outcomes=("yes", "no")),
-        },
+    evaluation = dict(all_eval["markets"])
+    evaluation["groups"] = {
+        "all": all_eval,
+        "signal": signal_eval,
+        "pass": pass_eval,
     }
+    evaluation["all"] = all_eval
+    evaluation["signal"] = signal_eval
+    evaluation["pass"] = pass_eval
+    evaluation["diagnostics"] = diagnostics
+    evaluation["baselines"] = all_eval.get("baselines", {})
 
     return {
         "league_id": league_id,
         "seasons_evaluated": list(seasons),
+        "contributing_seasons": contributing_seasons,
+        "season_statuses": season_statuses,
+        "overall_status": overall_status,
+        "is_aggregate_complete": is_aggregate_complete,
         "fixtures_fetched": total_fixtures_fetched,
         "finished_fixtures": total_finished_fixtures,
         "eligible_candidates": total_eligible_candidates,

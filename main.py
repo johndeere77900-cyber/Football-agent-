@@ -1264,8 +1264,10 @@ def predict_fixture(
             "Prediction is missing match_result probabilities."
         )
 
+    cal_status = prediction.get("calibration_metadata", {}).get("calibration_status") if isinstance(prediction, dict) else "UNAVAILABLE"
     conf = confidence.confidence_flag(
-        match_result
+        match_result,
+        calibration_status=cal_status,
     )
 
     safest = confidence.safest_pick(

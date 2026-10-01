@@ -445,7 +445,7 @@ def predict_game(
     )
 
     active_moneyline = calibrated_markets.get("moneyline") or raw_markets.get("moneyline", {})
-    conf = confidence.confidence_flag(active_moneyline)
+    conf = confidence.confidence_flag(active_moneyline, calibration_status=calib_meta.get("calibration_status", "UNAVAILABLE"))
     safest = confidence.safest_pick(build_basketball_safest_candidates(calibrated_markets if calibrated_markets else raw_markets))
 
     # 7. STANDARDIZED CONTRACT OUTPUT
@@ -486,7 +486,8 @@ def print_prediction(pred):
         return
 
     m = pred["markets"]
-    c = pred.get("confidence") or confidence.confidence_flag(m["moneyline"])
+    calib_st = pred.get("calibration_metadata", {}).get("calibration_status", "UNAVAILABLE") if isinstance(pred, dict) else "UNAVAILABLE"
+    c = pred.get("confidence") or confidence.confidence_flag(m["moneyline"], calibration_status=calib_st)
     s = pred.get("safest") or confidence.safest_pick(build_basketball_safest_candidates(m))
 
     print(f"\n{pred['home_team']} vs {pred['away_team']} ({pred['league']})")
