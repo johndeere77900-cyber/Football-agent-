@@ -1423,13 +1423,37 @@ def research_football(
         ):
             continue
 
-        mr = prediction.get("markets", {}).get("match_result", {}) if isinstance(prediction, dict) else {}
-        primary_prob = max(mr.values()) if (isinstance(mr, dict) and mr) else 0.0
+        safest = prediction.get(
+            "safest"
+        )
+
+        if not isinstance(
+            safest,
+            dict,
+        ):
+            continue
+
+        probability = safest.get(
+            "probability"
+        )
+
+        try:
+            probability = float(
+                probability
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+        if not 0.0 <= probability <= 1.0:
+            continue
 
         item = {
             "fixture": fixture,
             "prediction": prediction,
-            "primary_probability": float(primary_prob),
+            "safest_probability": probability,
         }
 
         # Persist every valid Telegram prediction immediately.
@@ -1453,7 +1477,7 @@ def research_football(
 
     predictions.sort(
         key=lambda item: item[
-            "primary_probability"
+            "safest_probability"
         ],
         reverse=True,
     )
@@ -1566,13 +1590,37 @@ def research_basketball(
         ):
             continue
 
-        ml = prediction.get("markets", {}).get("moneyline", {}) if isinstance(prediction, dict) else {}
-        primary_prob = max(ml.values()) if (isinstance(ml, dict) and ml) else 0.0
+        safest = prediction.get(
+            "safest"
+        )
+
+        if not isinstance(
+            safest,
+            dict,
+        ):
+            continue
+
+        probability = safest.get(
+            "probability"
+        )
+
+        try:
+            probability = float(
+                probability
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+        if not 0.0 <= probability <= 1.0:
+            continue
 
         item = {
             "game": game,
             "prediction": prediction,
-            "primary_probability": float(primary_prob),
+            "safest_probability": probability,
         }
 
         try:
@@ -1595,7 +1643,7 @@ def research_basketball(
 
     predictions.sort(
         key=lambda item: item[
-            "primary_probability"
+            "safest_probability"
         ],
         reverse=True,
     )
@@ -1759,12 +1807,17 @@ def handle_prediction_command(text):
             safest,
             dict,
         ):
-            by_market = safest.get("by_market", {})
-            if isinstance(by_market, dict) and by_market:
-                safest_label = ", ".join(f"{v.get('label')}" for v in by_market.values() if isinstance(v, dict) and v.get("label"))
-            else:
-                safest_label = safest.get("label", "N/A")
-            probability = item["safest_probability"]
+            safest_label = safest.get(
+                "label",
+                "N/A",
+            )
+
+            probability = safest.get(
+                "probability",
+                item[
+                    "safest_probability"
+                ],
+            )
 
         else:
             safest_label = "N/A"

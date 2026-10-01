@@ -56,19 +56,15 @@ def test_parse_quantity_reads_explicit_quantity():
 def test_safest_schema_uses_nested_probability():
     prediction = {
         "safest": {
-            "by_market": {
-                "match_result": {
-                    "label": "Home Win",
-                    "probability": 0.72,
-                }
-            }
+            "label": "Home Win",
+            "probability": 0.72,
         }
     }
 
     safest = prediction["safest"]
 
-    assert safest["by_market"]["match_result"]["label"] == "Home Win"
-    assert safest["by_market"]["match_result"]["probability"] == 0.72
+    assert safest["label"] == "Home Win"
+    assert safest["probability"] == 0.72
 
     # Regression guard against the old nonexistent key.
     assert "safest_probability" not in prediction
@@ -293,55 +289,6 @@ def test_count_question_does_not_claim_unrelated_text():
     )
 
     assert result is None
-
-
-def test_research_football_sorts_by_primary_market_probability():
-    """Verify research_football orders matches strictly by primary match_result top probability."""
-    f1 = {
-        "fixture": {"id": 1, "date": "2026-09-28T15:00:00+00:00"},
-        "league": {"name": "League A"},
-        "teams": {"home": {"id": 10, "name": "Team A"}, "away": {"id": 11, "name": "Team B"}},
-    }
-    f2 = {
-        "fixture": {"id": 2, "date": "2026-09-28T18:00:00+00:00"},
-        "league": {"name": "League A"},
-        "teams": {"home": {"id": 12, "name": "Team C"}, "away": {"id": 13, "name": "Team D"}},
-    }
-
-    p1 = {
-        "markets": {
-            "match_result": {"home_win": 0.55, "draw": 0.25, "away_win": 0.20},
-            "over_under": {"over_2_5": 0.90},  # Unrelated market has high prob (0.90)
-        },
-        "confidence": {"label": "Moderate"},
-        "insufficient_data": False,
-    }
-    p2 = {
-        "markets": {
-            "match_result": {"home_win": 0.75, "draw": 0.15, "away_win": 0.10},  # Primary market is higher (0.75)
-            "over_under": {"over_2_5": 0.60},
-        },
-        "confidence": {"label": "High"},
-        "insufficient_data": False,
-    }
-
-    def mock_fetch(dates, leagues):
-        return [f1, f2]
-
-    def mock_predict(f, *args, **kwargs):
-        return p1 if f["fixture"]["id"] == 1 else p2
-
-    from unittest.mock import patch
-    with patch("telegram_bot.get_tracked_fixtures_for_date", lambda date_str: [f1, f2]), \
-         patch("telegram_bot.agent.get_league_avg_goals", lambda lid, ssn: 2.5), \
-         patch("telegram_bot.agent.predict_fixture", side_effect=mock_predict), \
-         patch("telegram_bot._save_football_prediction", lambda item: True):
-        res = telegram_bot.research_football(date_str="2026-09-28", quantity=2)
-
-    assert len(res) == 2
-    # f2 has primary market probability 0.75 vs f1's 0.55, so f2 MUST come first
-    assert res[0]["fixture"]["fixture"]["id"] == 2
-    assert res[1]["fixture"]["fixture"]["id"] == 1
 
 
 def test_schedule_question_returns_none_when_not_handled():
