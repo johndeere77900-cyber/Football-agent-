@@ -8,7 +8,33 @@ on:
     inputs:
       message:
         description: Message received from Telegram
-        required: true
+        required: false
+        default: ''
+        type: string
+      request_id:
+        description: Control request ID
+        required: false
+        default: ''
+        type: string
+      telegram_update_id:
+        description: Telegram update ID for idempotency
+        required: false
+        default: ''
+        type: string
+      chat_id:
+        description: Telegram chat ID
+        required: false
+        default: ''
+        type: string
+      operation:
+        description: Structured operation name
+        required: false
+        default: ''
+        type: string
+      parameters:
+        description: Structured parameters JSON
+        required: false
+        default: ''
         type: string
 
 concurrency:
@@ -119,6 +145,11 @@ jobs:
       - name: Process Telegram message
         env:
           TELEGRAM_MESSAGE: ${{ inputs.message }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          TELEGRAM_UPDATE_ID: ${{ inputs.telegram_update_id }}
+          INPUT_CHAT_ID: ${{ inputs.chat_id }}
+          OPERATION: ${{ inputs.operation }}
+          PARAMETERS: ${{ inputs.parameters }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}

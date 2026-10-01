@@ -402,3 +402,61 @@ def test_suggested_action_buttons():
     assert "inline_keyboard" in buttons
     assert len(buttons["inline_keyboard"]) >= 2
     assert buttons["inline_keyboard"][0][0]["callback_data"] == "cmd:fixtures"
+
+
+def test_parse_control_envelope():
+    json_envelope = '{"version": "1.0", "request_id": "req_555", "telegram_update_id": "upd_555", "chat_id": "12345", "operation": "health", "text": "/health"}'
+    parsed = telegram_bot.parse_control_envelope(json_envelope)
+    assert parsed is not None
+    assert parsed["request_id"] == "req_555"
+    assert parsed["telegram_update_id"] == "upd_555"
+    assert parsed["operation"] == "health"
+
+    assert telegram_bot.parse_control_envelope("hello world") is None
+
+
+def test_control_envelope_processing(monkeypatch):
+    monkeypatch.setattr(telegram_bot, "CHAT_ID", "12345")
+    telegram_bot.storage.init_db()
+
+    json_envelope = '{"version": "1.0", "request_id": "req_env_01", "telegram_update_id": "upd_env_01", "chat_id": "12345", "operation": "health", "text": "/health"}'
+
+    res = telegram_bot.process_telegram_update(json_envelope)
+    assert "PREDICTION CONTROL CENTER HEALTH" in res
+
+    req = telegram_bot.storage.get_operation_request("req_env_01")
+    assert req is not None
+    assert req["telegram_update_id"] == "upd_env_01"
+    assert req["operation"] == "health"
+    assert req["status"] == "COMPLETED"
+
+
+def test_no_cross_market_safest_sorting(monkeypatch):
+    monkeypatch.setattr(telegram_bot, "get_tracked_fixtures_for_date", lambda date: [
+        {"fixture": {"id": 1, "status": {"short": "NS"}}, "league": {"id": 39, "season": 2024}, "teams": {"home": {"id": 10, "name": "A"}, "away": {"id": 20, "name": "B"}}},
+        {"fixture": {"id": 2, "status": {"short": "NS"}}, "league": {"id": 39, "season": 2024}, "teams": {"home": {"id": 30, "name": "C"}, "away": {"id": 40, "name": "D"}}},
+    ])
+    monkeypatch.setattr(telegram_bot.agent, "get_league_avg_goals", lambda lid, ssn: 2.5)
+
+    def mock_predict(fixture, avg, fetch_odds=False):
+        fid = fixture["fixture"]["id"]
+        prob = 0.50 if fid == 1 else 0.90
+        return {
+            "fixture_id": fid,
+            "date": "2026-10-01",
+            "home_team": "H",
+            "away_team": "A",
+            "league": "L",
+            "markets": {"match_result": {"home_win": prob}},
+            "confidence": {"label": "Moderate", "top_pick": "Home Win"},
+            "safest": {"label": "Home Win", "probability": prob},
+            "insufficient_data": False,
+        }
+
+    monkeypatch.setattr(telegram_bot.agent, "predict_fixture", mock_predict)
+    monkeypatch.setattr(telegram_bot, "_save_football_prediction", lambda item: True)
+
+    results = telegram_bot.research_football("2026-10-01", quantity=2)
+    assert len(results) == 2
+    assert results[0]["fixture"]["fixture"]["id"] == 1
+    assert results[1]["fixture"]["fixture"]["id"] == 2
