@@ -63,6 +63,7 @@ def sync_historical_fixtures(
 
     quota_budget_stopped = False
     acquisition_failed = False
+    last_error_reason = None
 
     if initial_request_count >= historical_budget:
         quota_budget_stopped = True
@@ -130,6 +131,7 @@ def sync_historical_fixtures(
                 expected_pages = page_expected
             elif page_expected != expected_pages:
                 acquisition_failed = True
+                last_error_reason = "pagination_metadata_mismatch"
                 print(
                     f"Pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
                     flush=True,
@@ -168,6 +170,7 @@ def sync_historical_fixtures(
                 acquisition_complete=acquisition_complete,
                 rejected_count=total_rejected_count,
                 empty_pages_count=total_empty_pages_count,
+                error_reason=last_error_reason,
             )
             if acquisition_complete or current_page >= expected_pages:
                 break
@@ -175,10 +178,12 @@ def sync_historical_fixtures(
 
         except api_football.APIFootballQuotaExhaustedError as exc:
             quota_budget_stopped = True
+            last_error_reason = "quota_budget_exhausted_during_acquisition"
             print(f"API Quota exhausted during fixture fetch on page {current_page}: {exc}", flush=True)
             break
         except Exception as exc:
             acquisition_failed = True
+            last_error_reason = "api_error_during_acquisition"
             print(f"API acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
             break
 
@@ -196,6 +201,7 @@ def sync_historical_fixtures(
         current_reqs = storage.get_api_request_count("api_football", today_str)
         if current_reqs >= historical_budget:
             quota_budget_stopped = True
+            last_error_reason = "quota_budget_exhausted_during_enrichment"
             print(
                 f"Historical budget ceiling reached before enrichment fetch ({current_reqs}/{historical_budget}).",
                 flush=True,
@@ -222,8 +228,10 @@ def sync_historical_fixtures(
                         enrichment_stored = storage.save_historical_enrichment(enriched_batch)
                 except api_football.APIFootballQuotaExhaustedError:
                     quota_budget_stopped = True
+                    last_error_reason = "quota_budget_exhausted_during_enrichment"
                 except Exception as exc:
                     acquisition_failed = True
+                    last_error_reason = "api_error_during_enrichment"
                     print(f"API acquisition error during enrichment fetch: {exc}", flush=True)
 
     final_reqs = storage.get_api_request_count("api_football", today_str)
@@ -291,6 +299,7 @@ def sync_historical_fixtures(
             enrichment_status=enrichment_status,
             rejected_count=rejected_count,
             empty_pages_count=total_empty_pages_count,
+            error_reason=last_error_reason,
         )
         final_status = "INCOMPLETE"
 
@@ -387,6 +396,7 @@ def sync_historical_basketball_games(
 
     quota_budget_stopped = False
     acquisition_failed = False
+    last_error_reason = None
 
     if initial_request_count >= historical_budget:
         quota_budget_stopped = True
@@ -454,6 +464,7 @@ def sync_historical_basketball_games(
                 expected_pages = page_expected
             elif page_expected != expected_pages:
                 acquisition_failed = True
+                last_error_reason = "pagination_metadata_mismatch"
                 print(
                     f"Basketball pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
                     flush=True,
@@ -490,6 +501,7 @@ def sync_historical_basketball_games(
                 acquisition_complete=acquisition_complete,
                 rejected_count=total_rejected_count,
                 empty_pages_count=total_empty_pages_count,
+                error_reason=last_error_reason,
             )
             if acquisition_complete or current_page >= expected_pages:
                 break
@@ -497,10 +509,12 @@ def sync_historical_basketball_games(
 
         except basketball_api.APIBasketballQuotaExhaustedError as exc:
             quota_budget_stopped = True
+            last_error_reason = "quota_budget_exhausted_during_acquisition"
             print(f"API Quota exhausted during basketball games fetch on page {current_page}: {exc}", flush=True)
             break
         except Exception as exc:
             acquisition_failed = True
+            last_error_reason = "api_error_during_acquisition"
             print(f"API acquisition error during basketball games fetch on page {current_page}: {exc}", flush=True)
             break
 
@@ -552,6 +566,7 @@ def sync_historical_basketball_games(
             acquisition_complete=acquisition_complete,
             rejected_count=rejected_count,
             empty_pages_count=total_empty_pages_count,
+            error_reason=last_error_reason,
         )
         final_status = "INCOMPLETE"
 
