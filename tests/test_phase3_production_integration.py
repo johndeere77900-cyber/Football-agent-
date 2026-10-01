@@ -90,7 +90,7 @@ def test_production_football_pre_match_route_e2e(tmp_path, monkeypatch):
 # ============================================================================
 
 def test_production_football_live_route_e2e(tmp_path, monkeypatch):
-    """Exercise main.run_daily with a live fixture and verify storage persistence as LIVE context."""
+    """Exercise main.run_daily with a live fixture and verify storage persistence as LIVE context with synchronized live markets."""
     db_file = tmp_path / "prod_football_live.db"
     monkeypatch.setattr(config, "DB_PATH", db_file)
     storage.init_db()
@@ -110,11 +110,20 @@ def test_production_football_live_route_e2e(tmp_path, monkeypatch):
         },
     }
 
+    # Mock live_model to return a distinctive probability payload (0.88)
+    distinctive_live_markets = {
+        "match_result": {"home_win": 0.88, "draw": 0.08, "away_win": 0.04},
+        "is_live": True,
+        "minutes_elapsed": 30,
+        "current_score": {"home": 1, "away": 0},
+    }
+
     monkeypatch.setattr(api_football, "get_fixtures_by_date", lambda date_str, league_id=None: [live_fixture_item])
     monkeypatch.setattr(api_football, "get_league_standings", lambda lid, ssn: [])
     monkeypatch.setattr(api_football, "get_team_statistics", lambda tid, lid, ssn: mock_stats)
     monkeypatch.setattr(api_football, "get_recent_form", lambda tid, last=8: [{"teams": {"home": {"id": tid}, "away": {"id": 99}}, "goals": {"home": 2, "away": 0}}])
     monkeypatch.setattr(api_football, "get_head_to_head", lambda h, a, last=6: [])
+    monkeypatch.setattr(live_model, "live_market_probabilities", lambda h_xg, a_xg, el, st, h_g, a_g: distinctive_live_markets)
 
     # Execute main.run_daily for live match
     main.run_daily("2025-01-10", league_id=39, limit=1, fetch_odds=False)
@@ -123,7 +132,7 @@ def test_production_football_live_route_e2e(tmp_path, monkeypatch):
     try:
         row = conn.execute(
             """
-            SELECT prediction_context, model_version, feature_version, calibration_version, quality_gate
+            SELECT prediction_context, model_version, feature_version, calibration_version, quality_gate, markets_json, top_probability
             FROM predictions WHERE fixture_id = ?
             """,
             (9002,),
@@ -135,6 +144,10 @@ def test_production_football_live_route_e2e(tmp_path, monkeypatch):
         assert row[2] == config.FEATURE_VERSION
         assert row[3] == config.CALIBRATION_VERSION
         assert row[4] in ("SIGNAL", "PASS")
+
+        # Verify the persisted markets_json contains the distinctive LIVE probability (0.88)
+        assert "0.88" in row[5]
+        assert math.isclose(row[6], 0.88, abs_tol=1e-4)
     finally:
         conn.close()
 

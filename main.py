@@ -35,8 +35,11 @@ import elo
 import live_model
 import odds_api
 import poisson_model
+import prediction_contract
 import prediction_engine
+import quality_gate
 import storage
+import uncertainty
 
 
 FOOTBALL_FINISHED_STATUSES = {
@@ -1157,6 +1160,51 @@ def predict_fixture(
                 current_away_goals,
             )
         )
+
+        live_calib_meta = {
+            "calibration_version": prediction.get("calibration_version") or getattr(config, "CALIBRATION_VERSION", "v3.0.0"),
+            "calibration_method": "LIVE_MODEL",
+            "calibration_status": "UNAVAILABLE",
+            "calibration_dataset_identity": f"football_{league['id']}_{league['season']}",
+            "calibration_timestamp": fixture_data["date"],
+        }
+        live_unc_info = uncertainty.calculate_uncertainty(
+            feature_coverage=1.0,
+            sample_count=10,
+            top_probability=max(markets.get("match_result", {}).values()) if isinstance(markets.get("match_result"), dict) and markets.get("match_result") else 0.5,
+            calibration_status="UNAVAILABLE",
+            odds_status="MISSING",
+        )
+        live_gate_res = quality_gate.evaluate_quality_gate(
+            uncertainty_info=live_unc_info,
+            probability_valid=True,
+            odds_status="MISSING",
+            calibration_status="UNAVAILABLE",
+        )
+        prediction = prediction_contract.build_prediction_contract(
+            sport="football",
+            fixture_id=fixture_data["id"],
+            league_id=league["id"],
+            season=league["season"],
+            raw_markets=markets,
+            calibrated_markets=markets,
+            calibration_metadata=live_calib_meta,
+            market_analysis={},
+            uncertainty_info=live_unc_info,
+            quality_gate_result=live_gate_res,
+            data_cutoff_timestamp=fixture_data["date"],
+            prediction_timestamp=fixture_data["date"],
+            home_team=home_team["name"],
+            away_team=away_team["name"],
+            league_name=league["name"],
+            additional_metadata={
+                "is_live": True,
+                "elapsed": elapsed,
+                "status_short": status_short,
+                "current_score": {"home": current_home_goals, "away": current_away_goals},
+            },
+        )
+        prediction["prediction_context"] = "LIVE"
 
     else:
         markets = dict(
