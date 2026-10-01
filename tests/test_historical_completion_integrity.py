@@ -41,14 +41,12 @@ def dataset_with_history():
 
 def test_A_all_pagination_pages_succeed_dataset_becomes_complete(temp_db):
     fixtures = [sample_fixture(9001), sample_fixture(9002)]
-    meta_return = {
-        "fixtures": fixtures,
-        "expected_pages": 2,
-        "pages_completed": 2,
-        "acquisition_complete": True,
-    }
+    def mock_page_fetch(league_id, season, page, max_budget=None):
+        if page == 1:
+            return {"fixtures": [fixtures[0]], "page": 1, "expected_pages": 2}
+        return {"fixtures": [fixtures[1]], "page": 2, "expected_pages": 2}
 
-    with patch("api_football.get_league_fixtures_with_metadata", return_value=meta_return):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report["status"] == "COMPLETE"
@@ -59,14 +57,12 @@ def test_A_all_pagination_pages_succeed_dataset_becomes_complete(temp_db):
 
 def test_B_pagination_stops_before_final_page_dataset_remains_incomplete(temp_db):
     fixtures = [sample_fixture(9001)]
-    meta_return = {
-        "fixtures": fixtures,
-        "expected_pages": 3,
-        "pages_completed": 1,
-        "acquisition_complete": False,
-    }
+    def mock_page_fetch(league_id, season, page, max_budget=None):
+        if page == 1:
+            return {"fixtures": fixtures, "page": 1, "expected_pages": 3}
+        raise RuntimeError("Stopped on page 2")
 
-    with patch("api_football.get_league_fixtures_with_metadata", return_value=meta_return):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report["status"] == "INCOMPLETE"
@@ -75,7 +71,7 @@ def test_B_pagination_stops_before_final_page_dataset_remains_incomplete(temp_db
 
 
 def test_C_quota_exhaustion_during_later_page_dataset_remains_incomplete(temp_db):
-    with patch("api_football.get_league_fixtures_with_metadata", side_effect=api_football.APIFootballQuotaExhaustedError("Quota exhausted")):
+    with patch("api_football.get_league_fixtures_page", side_effect=api_football.APIFootballQuotaExhaustedError("Quota exhausted")):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report["status"] == "INCOMPLETE"
@@ -85,7 +81,7 @@ def test_C_quota_exhaustion_during_later_page_dataset_remains_incomplete(temp_db
 
 
 def test_D_malformed_pagination_metadata_dataset_remains_incomplete(temp_db):
-    with patch("api_football.get_league_fixtures_with_metadata", side_effect=api_football.APIFootballError("Malformed pagination metadata")):
+    with patch("api_football.get_league_fixtures_page", side_effect=api_football.APIFootballError("Malformed pagination metadata")):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report["status"] == "INCOMPLETE"
@@ -98,7 +94,7 @@ def test_E_complete_dataset_second_sync_makes_zero_api_calls(temp_db):
     storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
     storage.mark_historical_dataset_complete(39, 2024, fixture_count=1)
 
-    with patch("api_football.get_league_fixtures_with_metadata") as mock_get:
+    with patch("api_football.get_league_fixtures_page") as mock_get:
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         mock_get.assert_not_called()
 

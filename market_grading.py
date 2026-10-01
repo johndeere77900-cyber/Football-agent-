@@ -14,6 +14,7 @@ Rules:
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+import historical_match_policy
 
 
 def _valid_goal(value: Any) -> bool:
@@ -422,19 +423,18 @@ def grade_fixture_markets(
     fixture: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Produce the complete currently gradeable market outcome record.
+    Produce the complete currently gradeable market outcome record using centralized match policy goals.
     """
-    home_goals = (
-        fixture
-        .get("goals", {})
-        .get("home")
-    )
-
-    away_goals = (
-        fixture
-        .get("goals", {})
-        .get("away")
-    )
+    reg_goals = historical_match_policy.get_regulation_goals(fixture)
+    if reg_goals is not None:
+        home_goals, away_goals = reg_goals
+    else:
+        goals = historical_match_policy.get_football_match_goals(fixture)
+        if goals is not None:
+            home_goals, away_goals = goals
+        else:
+            home_goals = fixture.get("goals", {}).get("home")
+            away_goals = fixture.get("goals", {}).get("away")
 
     return {
         "goal_markets": grade_goal_markets(
@@ -444,4 +444,4 @@ def grade_fixture_markets(
         "statistical_markets": grade_statistical_markets(
             fixture,
         ),
-  }
+    }

@@ -1873,11 +1873,11 @@ def run_backtest_command(
         sample_size,
     )
 
-    if result["graded"] == 0:
+    if result.get("graded", 0) == 0:
         print(
             "No matches could be backtested."
         )
-        return
+        return 1 if result.get("status") == "PERSISTENCE_FAILED" or result.get("persisted") is False else 0
 
     print(
         f"\nBacktest accuracy: "
@@ -1901,6 +1901,12 @@ def run_backtest_command(
             f"predicted: "
             f"{entry['predicted']}"
         )
+
+    if result.get("status") == "PERSISTENCE_FAILED" or result.get("persisted") is False:
+        print("\nERROR: Backtest run failed to persist to database.", file=sys.stderr)
+        return 1
+
+    return 0
 
 
 def run_find_league(name):
@@ -2637,6 +2643,9 @@ def main():
                 storage.init_db()
                 res = backtest.run_basketball_backtest(league_id=league_id, season=season, sample_size=args.sample)
                 print(f"\nBasketball Backtest Accuracy: {res['accuracy']:.1%} ({res['correct']}/{res['graded']})")
+                if res.get("status") == "PERSISTENCE_FAILED" or res.get("persisted") is False:
+                    print("\nERROR: Backtest run failed to persist to database.", file=sys.stderr)
+                    return 1
                 return 0
 
             date_str = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -2717,13 +2726,11 @@ def main():
                     league_id
                 )
 
-            run_backtest_command(
+            return run_backtest_command(
                 league_id,
                 args.season,
                 args.sample,
             )
-
-            return 0
 
         # --------------------------------------------------------------
         # Normal football prediction path

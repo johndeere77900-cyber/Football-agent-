@@ -173,6 +173,40 @@ def test_separate_basketball_quota_configuration(isolated_db, monkeypatch):
 # ============================================================================
 
 
+def test_legacy_sqlite_primary_key_migration(tmp_path, monkeypatch):
+    import sqlite3
+    legacy_db = tmp_path / "legacy.db"
+    monkeypatch.setattr(config, "DB_PATH", str(legacy_db))
+    monkeypatch.setattr(config, "ENVIRONMENT", "development")
+
+    # Initialize legacy schema with primary key (league_id, season)
+    conn = sqlite3.connect(str(legacy_db))
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE historical_datasets (
+            league_id INTEGER NOT NULL,
+            season INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            fixture_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (league_id, season)
+        )
+    """)
+    cur.execute("""
+        INSERT INTO historical_datasets (league_id, season, status, fixture_count)
+        VALUES (39, 2024, 'COMPLETE', 380)
+    """)
+    conn.commit()
+    conn.close()
+
+    # Now run storage.init_db() which triggers legacy primary key migration
+    storage.init_db()
+
+    # Verify primary key now contains sport, league_id, season and data is preserved
+    status = storage.get_historical_dataset_status(39, 2024, sport="football")
+    assert status["status"] == "COMPLETE"
+    assert status["fixture_count"] == 380
+
+
 def test_U_to_Y_backtest_persistence_status_and_errors(isolated_db, monkeypatch):
     # Setup complete dataset
     games = [sample_basketball_game(1000 + i, date=f"2024-11-{i:02d}T20:00:00+00:00") for i in range(1, 10)]

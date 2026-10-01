@@ -483,7 +483,9 @@ def get_fixture_result(fixture_id):
 
 def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
     """
-    Retrieve one single page of fixtures for a league season with pagination metadata.
+    Retrieve one single page of fixtures for a league season with strict pagination metadata validation.
+
+    Fails closed if pagination metadata is missing, malformed, or inconsistent with requested page.
 
     Returns dict:
         {
@@ -494,38 +496,43 @@ def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
     """
     league_id = _validate_positive_int_like(league_id, "league_id")
     season = _validate_positive_int_like(season, "season")
-    if page < 1:
-        page = 1
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        raise ValueError("page must be a positive integer.")
 
     kwargs = {"max_budget": max_budget} if max_budget is not None else {}
     page_data = _get("fixtures", {"league": league_id, "season": season, "page": page}, **kwargs)
 
-    paging = page_data.get("paging")
-    if paging is not None:
-        if not isinstance(paging, dict):
-            raise APIFootballError("Malformed pagination metadata from API-Football: paging is not an object.")
+    if not isinstance(page_data, dict):
+        raise APIFootballError("API-Football response must be a JSON object.")
 
-        current = paging.get("current")
-        total = paging.get("total")
-
-        if (
-            isinstance(current, bool)
-            or not isinstance(current, int)
-            or current < 1
-            or isinstance(total, bool)
-            or not isinstance(total, int)
-            or total < 1
-            or current > total
-        ):
-            raise APIFootballError(
-                f"Malformed pagination metadata from API-Football: current={current!r}, total={total!r}"
-            )
-    else:
-        total = page
-
-    response = page_data.get("response", [])
+    response = page_data.get("response")
     if not isinstance(response, list):
-        response = []
+        raise APIFootballError("API-Football response missing valid 'response' list.")
+
+    paging = page_data.get("paging")
+    if not isinstance(paging, dict):
+        raise APIFootballError("Missing or invalid 'paging' object in API-Football response.")
+
+    current = paging.get("current")
+    total = paging.get("total")
+
+    if (
+        isinstance(current, bool)
+        or not isinstance(current, int)
+        or current < 1
+        or isinstance(total, bool)
+        or not isinstance(total, int)
+        or total < 1
+        or current > total
+    ):
+        raise APIFootballError(
+            f"Malformed pagination metadata from API-Football: current={current!r}, total={total!r}"
+        )
+
+    if current != page:
+        raise APIFootballError(
+            f"Inconsistent pagination metadata: current page ({current}) != requested page ({page})."
+        )
 
     return {
         "fixtures": response,

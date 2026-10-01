@@ -567,7 +567,9 @@ def _season_for_date(parsed_date):
 
 def get_league_games_page(league_id, season, page=1, max_budget=None):
     """
-    Retrieve one page of basketball games for a league season with pagination metadata.
+    Retrieve one page of basketball games for a league season with strict pagination metadata validation.
+
+    Fails closed if pagination metadata is missing, malformed, or inconsistent with requested page.
 
     Returns dict:
         {
@@ -578,8 +580,8 @@ def get_league_games_page(league_id, season, page=1, max_budget=None):
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
-    if page < 1:
-        page = 1
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        raise ValueError("page must be a positive integer.")
 
     params = {
         "league": league_id,
@@ -589,29 +591,37 @@ def get_league_games_page(league_id, season, page=1, max_budget=None):
 
     data = _get("games", params, max_budget=max_budget)
 
-    paging = data.get("paging")
-    if isinstance(paging, dict):
-        current = paging.get("current")
-        total = paging.get("total")
+    if not isinstance(data, dict):
+        raise APIBasketballError("API-Basketball response must be a JSON object.")
 
-        if (
-            isinstance(current, bool)
-            or not isinstance(current, int)
-            or current < 1
-            or isinstance(total, bool)
-            or not isinstance(total, int)
-            or total < 1
-            or current > total
-        ):
-            raise APIBasketballError(
-                f"Malformed pagination metadata from API-Basketball: current={current!r}, total={total!r}"
-            )
-    else:
-        total = page
-
-    response = data.get("response", [])
+    response = data.get("response")
     if not isinstance(response, list):
-        response = []
+        raise APIBasketballError("API-Basketball response missing valid 'response' list.")
+
+    paging = data.get("paging")
+    if not isinstance(paging, dict):
+        raise APIBasketballError("Missing or invalid 'paging' object in API-Basketball response.")
+
+    current = paging.get("current")
+    total = paging.get("total")
+
+    if (
+        isinstance(current, bool)
+        or not isinstance(current, int)
+        or current < 1
+        or isinstance(total, bool)
+        or not isinstance(total, int)
+        or total < 1
+        or current > total
+    ):
+        raise APIBasketballError(
+            f"Malformed pagination metadata from API-Basketball: current={current!r}, total={total!r}"
+        )
+
+    if current != page:
+        raise APIBasketballError(
+            f"Inconsistent pagination metadata: current page ({current}) != requested page ({page})."
+        )
 
     return {
         "games": response,

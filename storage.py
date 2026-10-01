@@ -593,6 +593,7 @@ def init_db():
                     pages_completed INTEGER NOT NULL DEFAULT 0,
                     acquisition_complete INTEGER NOT NULL DEFAULT 0,
                     enrichment_status TEXT NOT NULL DEFAULT 'NONE',
+                    rejected_count INTEGER NOT NULL DEFAULT 0,
                     completed_at TEXT,
                     updated_at TEXT NOT NULL,
                     source TEXT NOT NULL DEFAULT 'api_football',
@@ -606,7 +607,64 @@ def init_db():
             _ensure_column_sqlite(conn, "historical_datasets", "pages_completed", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column_sqlite(conn, "historical_datasets", "acquisition_complete", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column_sqlite(conn, "historical_datasets", "enrichment_status", "TEXT NOT NULL DEFAULT 'NONE'")
+            _ensure_column_sqlite(conn, "historical_datasets", "rejected_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column_sqlite(conn, "historical_datasets", "error_reason", "TEXT")
+
+            try:
+                tbl_info = conn.execute("PRAGMA table_info(historical_datasets)").fetchall()
+                col_names = [row[1] for row in tbl_info]
+                pk_cols = [row[1] for row in tbl_info if row[5] > 0]
+                if pk_cols and ("sport" not in pk_cols or "rejected_count" not in col_names):
+                    conn.execute("ALTER TABLE historical_datasets RENAME TO historical_datasets_old")
+                    conn.execute(
+                        """
+                        CREATE TABLE historical_datasets (
+                            sport TEXT NOT NULL DEFAULT 'football',
+                            league_id INTEGER NOT NULL,
+                            season INTEGER NOT NULL,
+                            status TEXT NOT NULL DEFAULT 'INCOMPLETE',
+                            fixture_count INTEGER NOT NULL DEFAULT 0,
+                            expected_pages INTEGER NOT NULL DEFAULT 0,
+                            pages_completed INTEGER NOT NULL DEFAULT 0,
+                            acquisition_complete INTEGER NOT NULL DEFAULT 0,
+                            enrichment_status TEXT NOT NULL DEFAULT 'NONE',
+                            rejected_count INTEGER NOT NULL DEFAULT 0,
+                            completed_at TEXT,
+                            updated_at TEXT NOT NULL,
+                            source TEXT NOT NULL DEFAULT 'api_football',
+                            error_reason TEXT,
+                            PRIMARY KEY (sport, league_id, season)
+                        )
+                        """
+                    )
+                    old_cols = {row[1] for row in conn.execute("PRAGMA table_info(historical_datasets_old)").fetchall()}
+                    sport_expr = "COALESCE(sport, 'football')" if "sport" in old_cols else "'football'"
+                    exp_expr = "expected_pages" if "expected_pages" in old_cols else "0"
+                    pc_expr = "pages_completed" if "pages_completed" in old_cols else "0"
+                    ac_expr = "acquisition_complete" if "acquisition_complete" in old_cols else "0"
+                    es_expr = "COALESCE(enrichment_status, 'NONE')" if "enrichment_status" in old_cols else "'NONE'"
+                    rej_expr = "COALESCE(rejected_count, 0)" if "rejected_count" in old_cols else "0"
+                    err_expr = "error_reason" if "error_reason" in old_cols else "NULL"
+                    comp_expr = "completed_at" if "completed_at" in old_cols else "NULL"
+                    upd_expr = "updated_at" if "updated_at" in old_cols else "datetime('now')"
+                    src_expr = "COALESCE(source, 'api_football')" if "source" in old_cols else "'api_football'"
+
+                    conn.execute(
+                        f"""
+                        INSERT OR IGNORE INTO historical_datasets (
+                            sport, league_id, season, status, fixture_count, expected_pages,
+                            pages_completed, acquisition_complete, enrichment_status, rejected_count,
+                            completed_at, updated_at, source, error_reason
+                        )
+                        SELECT {sport_expr}, league_id, season, status, fixture_count, {exp_expr},
+                               {pc_expr}, {ac_expr}, {es_expr}, {rej_expr},
+                               {comp_expr}, {upd_expr}, {src_expr}, {err_expr}
+                        FROM historical_datasets_old
+                        """
+                    )
+                    conn.execute("DROP TABLE historical_datasets_old")
+            except sqlite3.OperationalError:
+                pass
 
             conn.execute(
                 """
@@ -1240,7 +1298,7 @@ def get_historical_dataset_status(league_id, season, sport="football"):
                 cur.execute(
                     """
                     SELECT status, fixture_count, expected_pages, pages_completed,
-                           acquisition_complete, enrichment_status, completed_at, updated_at, error_reason
+                           acquisition_complete, enrichment_status, rejected_count, completed_at, updated_at, error_reason
                     FROM historical_datasets
                     WHERE sport = %s AND league_id = %s AND season = %s
                     """,
@@ -1252,7 +1310,7 @@ def get_historical_dataset_status(league_id, season, sport="football"):
                 row = conn.execute(
                     """
                     SELECT status, fixture_count, expected_pages, pages_completed,
-                           acquisition_complete, enrichment_status, completed_at, updated_at, error_reason
+                           acquisition_complete, enrichment_status, rejected_count, completed_at, updated_at, error_reason
                     FROM historical_datasets
                     WHERE sport = ? AND league_id = ? AND season = ?
                     """,
@@ -1265,7 +1323,7 @@ def get_historical_dataset_status(league_id, season, sport="football"):
                 row = conn.execute(
                     """
                     SELECT status, fixture_count, expected_pages, pages_completed,
-                           acquisition_complete, enrichment_status, completed_at, updated_at, error_reason
+                           acquisition_complete, enrichment_status, rejected_count, completed_at, updated_at, error_reason
                     FROM historical_datasets
                     WHERE sport = ? AND league_id = ? AND season = ?
                     """,
@@ -1283,9 +1341,10 @@ def get_historical_dataset_status(league_id, season, sport="football"):
                 "pages_completed": row[3] or 0,
                 "acquisition_complete": bool(row[4]),
                 "enrichment_status": row[5] or "NONE",
-                "completed_at": row[6],
-                "updated_at": row[7],
-                "error_reason": row[8],
+                "rejected_count": row[6] or 0,
+                "completed_at": row[7],
+                "updated_at": row[8],
+                "error_reason": row[9],
             }
 
         return {
@@ -1298,6 +1357,7 @@ def get_historical_dataset_status(league_id, season, sport="football"):
             "pages_completed": 0,
             "acquisition_complete": False,
             "enrichment_status": "NONE",
+            "rejected_count": 0,
             "completed_at": None,
             "updated_at": None,
             "error_reason": None,
@@ -1317,6 +1377,7 @@ def mark_historical_dataset_complete(
     pages_completed=0,
     acquisition_complete=True,
     enrichment_status="NONE",
+    rejected_count=0,
 ):
     """
     Mark a historical dataset as COMPLETE.
@@ -1324,6 +1385,7 @@ def mark_historical_dataset_complete(
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
     fixture_count = _validate_non_negative_int(fixture_count, "fixture_count")
+    rejected_count = _validate_non_negative_int(rejected_count, "rejected_count")
     sport = _validate_text(sport, "sport").lower()
     if source is None:
         source = "api_basketball" if sport == "basketball" else "api_football"
@@ -1339,9 +1401,9 @@ def mark_historical_dataset_complete(
                     """
                     INSERT INTO historical_datasets (
                         sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
-                        acquisition_complete, enrichment_status, completed_at, updated_at, source, error_reason
+                        acquisition_complete, enrichment_status, rejected_count, completed_at, updated_at, source, error_reason
                     )
-                    VALUES (%s, %s, %s, 'COMPLETE', %s, %s, %s, %s, %s, %s, %s, %s, NULL)
+                    VALUES (%s, %s, %s, 'COMPLETE', %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL)
                     ON CONFLICT (sport, league_id, season) DO UPDATE SET
                         status = 'COMPLETE',
                         fixture_count = EXCLUDED.fixture_count,
@@ -1349,6 +1411,7 @@ def mark_historical_dataset_complete(
                         pages_completed = EXCLUDED.pages_completed,
                         acquisition_complete = EXCLUDED.acquisition_complete,
                         enrichment_status = EXCLUDED.enrichment_status,
+                        rejected_count = EXCLUDED.rejected_count,
                         completed_at = EXCLUDED.completed_at,
                         updated_at = EXCLUDED.updated_at,
                         source = EXCLUDED.source,
@@ -1356,7 +1419,7 @@ def mark_historical_dataset_complete(
                     """,
                     (
                         sport, league_id, season, fixture_count, expected_pages, pages_completed,
-                        acq_int, enrichment_status, now_str, now_str, source,
+                        acq_int, enrichment_status, rejected_count, now_str, now_str, source,
                     ),
                 )
             conn.commit()
@@ -1365,9 +1428,9 @@ def mark_historical_dataset_complete(
                 """
                 INSERT INTO historical_datasets (
                     sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
-                    acquisition_complete, enrichment_status, completed_at, updated_at, source, error_reason
+                    acquisition_complete, enrichment_status, rejected_count, completed_at, updated_at, source, error_reason
                 )
-                VALUES (?, ?, ?, 'COMPLETE', ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, 'COMPLETE', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT (sport, league_id, season) DO UPDATE SET
                     status = 'COMPLETE',
                     fixture_count = excluded.fixture_count,
@@ -1375,6 +1438,7 @@ def mark_historical_dataset_complete(
                     pages_completed = excluded.pages_completed,
                     acquisition_complete = excluded.acquisition_complete,
                     enrichment_status = excluded.enrichment_status,
+                    rejected_count = excluded.rejected_count,
                     completed_at = excluded.completed_at,
                     updated_at = excluded.updated_at,
                     source = excluded.source,
@@ -1382,7 +1446,7 @@ def mark_historical_dataset_complete(
                 """,
                 (
                     sport, league_id, season, fixture_count, expected_pages, pages_completed,
-                    acq_int, enrichment_status, now_str, now_str, source,
+                    acq_int, enrichment_status, rejected_count, now_str, now_str, source,
                 ),
             )
             conn.commit()
@@ -1403,6 +1467,7 @@ def mark_historical_dataset_incomplete(
     pages_completed=0,
     acquisition_complete=False,
     enrichment_status="NONE",
+    rejected_count=0,
     error_reason=None,
 ):
     """
@@ -1410,6 +1475,7 @@ def mark_historical_dataset_incomplete(
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
+    rejected_count = _validate_non_negative_int(rejected_count, "rejected_count")
     sport = _validate_text(sport, "sport").lower()
     if source is None:
         source = "api_basketball" if sport == "basketball" else "api_football"
@@ -1433,9 +1499,9 @@ def mark_historical_dataset_incomplete(
                     """
                     INSERT INTO historical_datasets (
                         sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
-                        acquisition_complete, enrichment_status, completed_at, updated_at, source, error_reason
+                        acquisition_complete, enrichment_status, rejected_count, completed_at, updated_at, source, error_reason
                     )
-                    VALUES (%s, %s, %s, 'INCOMPLETE', %s, %s, %s, %s, %s, NULL, %s, %s, %s)
+                    VALUES (%s, %s, %s, 'INCOMPLETE', %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s)
                     ON CONFLICT (sport, league_id, season) DO UPDATE SET
                         status = 'INCOMPLETE',
                         fixture_count = EXCLUDED.fixture_count,
@@ -1443,13 +1509,14 @@ def mark_historical_dataset_incomplete(
                         pages_completed = EXCLUDED.pages_completed,
                         acquisition_complete = EXCLUDED.acquisition_complete,
                         enrichment_status = EXCLUDED.enrichment_status,
+                        rejected_count = EXCLUDED.rejected_count,
                         updated_at = EXCLUDED.updated_at,
                         source = EXCLUDED.source,
                         error_reason = EXCLUDED.error_reason
                     """,
                     (
                         sport, league_id, season, fixture_count, expected_pages, pages_completed,
-                        acq_int, enrichment_status, now_str, source, error_reason,
+                        acq_int, enrichment_status, rejected_count, now_str, source, error_reason,
                     ),
                 )
             conn.commit()
@@ -1458,9 +1525,9 @@ def mark_historical_dataset_incomplete(
                 """
                 INSERT INTO historical_datasets (
                     sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
-                    acquisition_complete, enrichment_status, completed_at, updated_at, source, error_reason
+                    acquisition_complete, enrichment_status, rejected_count, completed_at, updated_at, source, error_reason
                 )
-                VALUES (?, ?, ?, 'INCOMPLETE', ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+                VALUES (?, ?, ?, 'INCOMPLETE', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
                 ON CONFLICT (sport, league_id, season) DO UPDATE SET
                     status = 'INCOMPLETE',
                     fixture_count = excluded.fixture_count,
@@ -1468,13 +1535,14 @@ def mark_historical_dataset_incomplete(
                     pages_completed = excluded.pages_completed,
                     acquisition_complete = excluded.acquisition_complete,
                     enrichment_status = excluded.enrichment_status,
+                    rejected_count = excluded.rejected_count,
                     updated_at = excluded.updated_at,
                     source = excluded.source,
                     error_reason = excluded.error_reason
                 """,
                 (
                     sport, league_id, season, fixture_count, expected_pages, pages_completed,
-                    acq_int, enrichment_status, now_str, source, error_reason,
+                    acq_int, enrichment_status, rejected_count, now_str, source, error_reason,
                 ),
             )
             conn.commit()

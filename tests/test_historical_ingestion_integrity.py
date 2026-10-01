@@ -220,12 +220,11 @@ def test_req15_malformed_fixture_cannot_cause_complete(temp_db):
 
     fetch_meta = {
         "fixtures": [valid_fix, malformed_fix],
+        "page": 1,
         "expected_pages": 1,
-        "pages_completed": 1,
-        "acquisition_complete": True,
     }
 
-    with patch("api_football.get_league_fixtures_with_metadata", return_value=fetch_meta):
+    with patch("api_football.get_league_fixtures_page", return_value=fetch_meta):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024, refresh=True)
 
     assert report["rejected_count"] == 1

@@ -101,6 +101,63 @@ def get_football_match_goals(fixture: Dict[str, Any]) -> Optional[Tuple[int, int
     return h, a
 
 
+def get_regulation_goals(fixture: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """
+    Return 90-minute regulation time goals (home, away) for 1X2 market settlement.
+
+    Uses `score.fulltime` if present, falling back to `goals` for regular 'FT' fixtures.
+    """
+    if not isinstance(fixture, dict):
+        return None
+
+    score_obj = fixture.get("score")
+    if isinstance(score_obj, dict):
+        ft_obj = score_obj.get("fulltime")
+        if isinstance(ft_obj, dict):
+            fh = parse_strict_int(ft_obj.get("home"))
+            fa = parse_strict_int(ft_obj.get("away"))
+            if fh is not None and fh >= 0 and fa is not None and fa >= 0:
+                return fh, fa
+
+    return get_football_match_goals(fixture)
+
+
+def get_1x2_regulation_outcome(fixture: Dict[str, Any]) -> Optional[str]:
+    """
+    Determine 1X2 outcome based on 90-minute regulation time ("home_win", "draw", "away_win").
+    """
+    reg = get_regulation_goals(fixture)
+    if reg is None:
+        return None
+    h, a = reg
+    if h > a:
+        return "home_win"
+    if a > h:
+        return "away_win"
+    return "draw"
+
+
+def get_totals_and_btts_goals(fixture: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """
+    Return match goals for Over/Under and BTTS market settlement (excluding penalty shootout kicks).
+    """
+    return get_football_match_goals(fixture)
+
+
+def get_elo_settlement_goals(fixture: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """
+    Return match goals for Elo rating updates (excluding penalty shootout kicks).
+    """
+    return get_football_match_goals(fixture)
+
+
+def get_h2h_form_goals(fixture: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """
+    Return match goals for historical H2H and recent form snapshots (excluding penalty shootout kicks).
+    """
+    return get_football_match_goals(fixture)
+
+
 def get_basketball_match_points(game: Dict[str, Any]) -> Optional[Tuple[int, int]]:
     """
     Return valid numeric points (home, away) for a basketball game, or None if missing/invalid.

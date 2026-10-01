@@ -28,6 +28,17 @@ def test_football_match_goals():
     assert historical_match_policy.get_football_match_goals(invalid_negative) is None
 
 
+def test_get_regulation_goals_and_1x2_outcome():
+    aet_fixture = {
+        "fixture": {"status": {"short": "AET"}},
+        "goals": {"home": 3, "away": 2},
+        "score": {"fulltime": {"home": 2, "away": 2}}
+    }
+    assert historical_match_policy.get_regulation_goals(aet_fixture) == (2, 2)
+    assert historical_match_policy.get_1x2_regulation_outcome(aet_fixture) == "draw"
+    assert historical_match_policy.get_totals_and_btts_goals(aet_fixture) == (3, 2)
+
+
 def test_score_breakdown():
     fixture = {
         "score": {

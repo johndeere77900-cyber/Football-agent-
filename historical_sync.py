@@ -89,15 +89,15 @@ def sync_historical_fixtures(
         }
 
     fixtures_received = []
-    start_p = dataset_info.get("pages_completed", 0) + 1 if (dataset_info.get("pages_completed", 0) > 0 and not dataset_info.get("acquisition_complete")) else 1
+    start_p = dataset_info.get("pages_completed", 0) + 1 if (dataset_info.get("pages_completed", 0) > 0 and not dataset_info.get("acquisition_complete") and not refresh) else 1
     expected_pages = dataset_info.get("expected_pages", 0) or 1
-    pages_completed = dataset_info.get("pages_completed", 0)
+    pages_completed = dataset_info.get("pages_completed", 0) if not refresh else 0
     acquisition_complete = False
 
     total_valid_fixtures = 0
     total_newly_stored = 0
     total_duplicates_skipped = 0
-    total_rejected_count = 0
+    total_rejected_count = dataset_info.get("rejected_count", 0) if not refresh else 0
     all_rejection_reasons = {}
 
     current_page = start_p
@@ -143,31 +143,6 @@ def sync_historical_fixtures(
             print(f"API Quota exhausted during fixture fetch on page {current_page}: {exc}", flush=True)
             break
         except Exception as exc:
-            # If get_league_fixtures_with_metadata was mocked in existing tests, try fallback
-            if current_page == start_p:
-                try:
-                    fetch_meta = api_football.get_league_fixtures_with_metadata(
-                        league_id, season, start_page=start_p, max_budget=historical_budget
-                    )
-                    fixtures_received = fetch_meta.get("fixtures", [])
-                    expected_pages = fetch_meta.get("expected_pages", 1)
-                    pages_completed = fetch_meta.get("pages_completed", 1)
-                    acquisition_complete = fetch_meta.get("acquisition_complete", True)
-
-                    save_result = storage.save_historical_fixtures(fixtures_received, league_id, season)
-                    total_valid_fixtures = save_result.get("valid", 0)
-                    total_newly_stored = save_result.get("inserted", 0)
-                    total_duplicates_skipped = save_result.get("duplicates_skipped", 0)
-                    total_rejected_count = save_result.get("rejected_count", 0)
-                    all_rejection_reasons = save_result.get("rejection_reasons", {})
-                    break
-                except api_football.APIFootballQuotaExhaustedError as q_exc:
-                    quota_budget_stopped = True
-                    print(f"API Quota exhausted during fixture fetch: {q_exc}", flush=True)
-                    break
-                except Exception:
-                    pass
-
             acquisition_failed = True
             print(f"API acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
             break
@@ -264,6 +239,7 @@ def sync_historical_fixtures(
             pages_completed=pages_completed,
             acquisition_complete=acquisition_complete,
             enrichment_status=enrichment_status,
+            rejected_count=rejected_count,
         )
         final_status = "COMPLETE"
     else:
@@ -276,6 +252,7 @@ def sync_historical_fixtures(
             pages_completed=pages_completed,
             acquisition_complete=acquisition_complete,
             enrichment_status=enrichment_status,
+            rejected_count=rejected_count,
         )
         final_status = "INCOMPLETE"
 
@@ -398,15 +375,15 @@ def sync_historical_basketball_games(
         }
 
     games_received = []
-    start_p = dataset_info.get("pages_completed", 0) + 1 if (dataset_info.get("pages_completed", 0) > 0 and not dataset_info.get("acquisition_complete")) else 1
+    start_p = dataset_info.get("pages_completed", 0) + 1 if (dataset_info.get("pages_completed", 0) > 0 and not dataset_info.get("acquisition_complete") and not refresh) else 1
     expected_pages = dataset_info.get("expected_pages", 0) or 1
-    pages_completed = dataset_info.get("pages_completed", 0)
+    pages_completed = dataset_info.get("pages_completed", 0) if not refresh else 0
     acquisition_complete = False
 
     total_valid_games = 0
     total_newly_stored = 0
     total_duplicates_skipped = 0
-    total_rejected_count = 0
+    total_rejected_count = dataset_info.get("rejected_count", 0) if not refresh else 0
     all_rejection_reasons = {}
 
     current_page = start_p
@@ -450,28 +427,6 @@ def sync_historical_basketball_games(
             print(f"API Quota exhausted during basketball games fetch on page {current_page}: {exc}", flush=True)
             break
         except Exception as exc:
-            # Fallback if _get was mocked directly in older tests
-            if current_page == start_p:
-                try:
-                    data = basketball_api._get("games", {"league": league_id, "season": season}, max_budget=historical_budget)
-                    games_received = data.get("response", []) if isinstance(data, dict) else []
-                    save_result = storage.save_historical_basketball_games(games_received, league_id, season)
-                    total_valid_games = save_result.get("valid", 0)
-                    total_newly_stored = save_result.get("inserted", 0)
-                    total_duplicates_skipped = save_result.get("duplicates_skipped", 0)
-                    total_rejected_count = save_result.get("rejected_count", 0)
-                    all_rejection_reasons = save_result.get("rejection_reasons", {})
-                    expected_pages = 1
-                    pages_completed = 1
-                    acquisition_complete = True
-                    break
-                except basketball_api.APIBasketballQuotaExhaustedError as q_exc:
-                    quota_budget_stopped = True
-                    print(f"API Quota exhausted during basketball games fetch: {q_exc}", flush=True)
-                    break
-                except Exception:
-                    pass
-
             acquisition_failed = True
             print(f"API acquisition error during basketball games fetch on page {current_page}: {exc}", flush=True)
             break
@@ -508,6 +463,7 @@ def sync_historical_basketball_games(
             expected_pages=expected_pages,
             pages_completed=pages_completed,
             acquisition_complete=acquisition_complete,
+            rejected_count=rejected_count,
         )
         final_status = "COMPLETE"
     else:
@@ -519,6 +475,7 @@ def sync_historical_basketball_games(
             expected_pages=expected_pages,
             pages_completed=pages_completed,
             acquisition_complete=acquisition_complete,
+            rejected_count=rejected_count,
         )
         final_status = "INCOMPLETE"
 

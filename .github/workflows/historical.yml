@@ -65,21 +65,33 @@ jobs:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           REQUIRE_NEON: "true"
           ENVIRONMENT: "production"
+          INPUT_SPORT: ${{ inputs.sport }}
+          INPUT_LEAGUE_ID: ${{ inputs.league_id }}
+          INPUT_SEASON: ${{ inputs.season }}
+          INPUT_WITH_ENRICHMENT: ${{ inputs.with_enrichment }}
+          INPUT_REFRESH: ${{ inputs.refresh }}
         run: |
-          CMD="python3 main.py --historical-sync --sport ${{ inputs.sport }} --league ${{ inputs.league_id }} --season ${{ inputs.season }}"
-          if [ "${{ inputs.with_enrichment }}" = "true" ]; then
-            CMD="$CMD --with-enrichment"
+          ARGS=("--historical-sync" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--season" "$INPUT_SEASON")
+          if [ "$INPUT_WITH_ENRICHMENT" = "true" ]; then
+            ARGS+=("--with-enrichment")
           fi
-          if [ "${{ inputs.refresh }}" = "true" ]; then
-            CMD="$CMD --refresh"
+          if [ "$INPUT_REFRESH" = "true" ]; then
+            ARGS+=("--refresh")
           fi
-          echo "Executing: $CMD"
-          $CMD
+          python3 main.py "${ARGS[@]}"
 
       - name: Check Dataset Completion Status
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           REQUIRE_NEON: "true"
           ENVIRONMENT: "production"
+          INPUT_SPORT: ${{ inputs.sport }}
+          INPUT_LEAGUE_ID: ${{ inputs.league_id }}
+          INPUT_SEASON: ${{ inputs.season }}
         run: |
-          python3 main.py --dataset-status --sport ${{ inputs.sport }} --league ${{ inputs.league_id }} --season ${{ inputs.season }}
+          STATUS_OUTPUT=$(python3 main.py --dataset-status --sport "$INPUT_SPORT" --league "$INPUT_LEAGUE_ID" --season "$INPUT_SEASON")
+          echo "$STATUS_OUTPUT"
+          if ! echo "$STATUS_OUTPUT" | grep -q "COMPLETE"; then
+            echo "ERROR: Historical dataset is not COMPLETE after sync."
+            exit 1
+          fi
