@@ -90,7 +90,7 @@ def sync_historical_fixtures(
 
     fixtures_received = []
     start_p = dataset_info.get("pages_completed", 0) + 1 if (dataset_info.get("pages_completed", 0) > 0 and not dataset_info.get("acquisition_complete") and not refresh) else 1
-    expected_pages = dataset_info.get("expected_pages", 0) or 1
+    expected_pages = dataset_info.get("expected_pages", 0) if not refresh else 0
     pages_completed = dataset_info.get("pages_completed", 0) if not refresh else 0
     acquisition_complete = False
 
@@ -101,13 +101,24 @@ def sync_historical_fixtures(
     all_rejection_reasons = {}
 
     current_page = start_p
-    while current_page <= expected_pages:
+    while True:
         try:
             page_meta = api_football.get_league_fixtures_page(
                 league_id, season, page=current_page, max_budget=historical_budget
             )
             page_fixtures = page_meta.get("fixtures", [])
-            expected_pages = page_meta.get("expected_pages", expected_pages)
+            page_expected = page_meta.get("expected_pages")
+
+            if expected_pages == 0:
+                expected_pages = page_expected
+            elif page_expected != expected_pages:
+                acquisition_failed = True
+                print(
+                    f"Pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
+                    flush=True,
+                )
+                break
+
             fixtures_received.extend(page_fixtures)
 
             # Persist valid fixtures from this page immediately
@@ -123,10 +134,10 @@ def sync_historical_fixtures(
             pages_completed = current_page
             current_stored_count = storage.get_historical_fixture_count(league_id, season)
 
-            if current_page == expected_pages:
+            if current_page >= expected_pages:
                 acquisition_complete = True
 
-            # Update progress in manifest immediately
+            # Update progress in manifest immediately with cumulative rejected_count
             storage.mark_historical_dataset_incomplete(
                 league_id,
                 season,
@@ -135,7 +146,10 @@ def sync_historical_fixtures(
                 expected_pages=expected_pages,
                 pages_completed=pages_completed,
                 acquisition_complete=acquisition_complete,
+                rejected_count=total_rejected_count,
             )
+            if acquisition_complete or current_page >= expected_pages:
+                break
             current_page += 1
 
         except api_football.APIFootballQuotaExhaustedError as exc:
@@ -376,7 +390,7 @@ def sync_historical_basketball_games(
 
     games_received = []
     start_p = dataset_info.get("pages_completed", 0) + 1 if (dataset_info.get("pages_completed", 0) > 0 and not dataset_info.get("acquisition_complete") and not refresh) else 1
-    expected_pages = dataset_info.get("expected_pages", 0) or 1
+    expected_pages = dataset_info.get("expected_pages", 0) if not refresh else 0
     pages_completed = dataset_info.get("pages_completed", 0) if not refresh else 0
     acquisition_complete = False
 
@@ -387,13 +401,24 @@ def sync_historical_basketball_games(
     all_rejection_reasons = {}
 
     current_page = start_p
-    while current_page <= expected_pages:
+    while True:
         try:
             page_meta = basketball_api.get_league_games_page(
                 league_id, season, page=current_page, max_budget=historical_budget
             )
             page_games = page_meta.get("games", [])
-            expected_pages = page_meta.get("expected_pages", expected_pages)
+            page_expected = page_meta.get("expected_pages")
+
+            if expected_pages == 0:
+                expected_pages = page_expected
+            elif page_expected != expected_pages:
+                acquisition_failed = True
+                print(
+                    f"Basketball pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
+                    flush=True,
+                )
+                break
+
             games_received.extend(page_games)
 
             save_result = storage.save_historical_basketball_games(page_games, league_id, season)
@@ -408,7 +433,7 @@ def sync_historical_basketball_games(
             pages_completed = current_page
             current_stored_count = storage.get_historical_basketball_game_count(league_id, season)
 
-            if current_page == expected_pages:
+            if current_page >= expected_pages:
                 acquisition_complete = True
 
             storage.mark_historical_dataset_incomplete(
@@ -419,7 +444,10 @@ def sync_historical_basketball_games(
                 expected_pages=expected_pages,
                 pages_completed=pages_completed,
                 acquisition_complete=acquisition_complete,
+                rejected_count=total_rejected_count,
             )
+            if acquisition_complete or current_page >= expected_pages:
+                break
             current_page += 1
 
         except basketball_api.APIBasketballQuotaExhaustedError as exc:

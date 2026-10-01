@@ -91,7 +91,9 @@ jobs:
         run: |
           STATUS_OUTPUT=$(python3 main.py --dataset-status --sport "$INPUT_SPORT" --league "$INPUT_LEAGUE_ID" --season "$INPUT_SEASON")
           echo "$STATUS_OUTPUT"
-          if ! echo "$STATUS_OUTPUT" | grep -q "COMPLETE"; then
-            echo "ERROR: Historical dataset is not COMPLETE after sync."
+          EXACT_STATUS=$(echo "$STATUS_OUTPUT" | grep "Status:" | awk '{print $2}')
+          echo "Extracted Exact Status: '$EXACT_STATUS'"
+          if [ "$EXACT_STATUS" != "COMPLETE" ]; then
+            echo "ERROR: Historical dataset status is '$EXACT_STATUS', expected 'COMPLETE'."
             exit 1
           fi

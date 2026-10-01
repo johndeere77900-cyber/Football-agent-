@@ -361,6 +361,51 @@ def test_get_enriched_fixtures_batches_and_deduplicates(
     ]
 
 
+def test_get_league_fixtures_page_pagination_validation(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test-key")
+
+    # A. Valid single-page response
+    def fake_get_single(url, headers, params, timeout):
+        return FakeResponse(payload={
+            "response": [{"fixture": {"id": 101}}],
+            "paging": {"current": 1, "total": 1}
+        })
+
+    monkeypatch.setattr(api_football.requests, "get", fake_get_single)
+    res_single = api_football.get_league_fixtures_page(39, 2024, page=1)
+    assert res_single["expected_pages"] == 1
+    assert len(res_single["fixtures"]) == 1
+
+    # B. Missing or malformed pagination
+    def fake_get_malformed(url, headers, params, timeout):
+        return FakeResponse(payload={
+            "response": [],
+            "paging": {"current": "invalid", "total": 1}
+        })
+
+    monkeypatch.setattr(api_football.requests, "get", fake_get_malformed)
+    try:
+        api_football.get_league_fixtures_page(39, 2024, page=2)
+        assert False, "Expected APIFootballError"
+    except api_football.APIFootballError:
+        pass
+
+    # C. Current page mismatch
+    def fake_get_mismatch(url, headers, params, timeout):
+        return FakeResponse(payload={
+            "response": [],
+            "paging": {"current": 2, "total": 2}
+        })
+
+    monkeypatch.setattr(api_football.requests, "get", fake_get_mismatch)
+    try:
+        api_football.get_league_fixtures_page(39, 2024, page=3)
+        assert False, "Expected APIFootballError"
+    except api_football.APIFootballError:
+        pass
+
+
 def test_raw_debug_call_bypasses_cache(
     tmp_path,
     monkeypatch,

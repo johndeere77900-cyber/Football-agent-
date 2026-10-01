@@ -193,7 +193,7 @@ def test_legacy_sqlite_primary_key_migration(tmp_path, monkeypatch):
     """)
     cur.execute("""
         INSERT INTO historical_datasets (league_id, season, status, fixture_count)
-        VALUES (39, 2024, 'COMPLETE', 380)
+        VALUES (12, 2024, 'COMPLETE', 380)
     """)
     conn.commit()
     conn.close()
@@ -201,10 +201,80 @@ def test_legacy_sqlite_primary_key_migration(tmp_path, monkeypatch):
     # Now run storage.init_db() which triggers legacy primary key migration
     storage.init_db()
 
-    # Verify primary key now contains sport, league_id, season and data is preserved
-    status = storage.get_historical_dataset_status(39, 2024, sport="football")
-    assert status["status"] == "COMPLETE"
-    assert status["fixture_count"] == 380
+    # Verify composite PK (sport, league_id, season)
+    conn = sqlite3.connect(str(legacy_db))
+    tbl_info = conn.execute("PRAGMA table_info(historical_datasets)").fetchall()
+    pk_cols = [row[1] for row in tbl_info if row[5] > 0]
+    conn.close()
+    assert set(pk_cols) == {"sport", "league_id", "season"}
+
+    # Verify football row preserved
+    status_fb = storage.get_historical_dataset_status(12, 2024, sport="football")
+    assert status_fb["status"] == "COMPLETE"
+    assert status_fb["fixture_count"] == 380
+
+    # Insert basketball row with identical league_id=12 and season=2024
+    storage.mark_historical_dataset_complete(12, 2024, fixture_count=1230, sport="basketball")
+
+    # Verify coexistence without primary key collision
+    status_bb = storage.get_historical_dataset_status(12, 2024, sport="basketball")
+    assert status_bb["status"] == "COMPLETE"
+    assert status_bb["fixture_count"] == 1230
+
+    status_fb_recheck = storage.get_historical_dataset_status(12, 2024, sport="football")
+    assert status_fb_recheck["fixture_count"] == 380
+
+
+def test_rejected_count_survives_resumed_sync_football_and_basketball(isolated_db):
+    # Football: page 1 has 1 valid fixture + 1 rejected malformed fixture
+    fix_ok = sample_football_fixture(1101)
+    fix_bad = {"fixture": {"id": 1102}} # missing dates/teams
+
+    def mock_fb_p1(league_id, season, page=1, max_budget=None):
+        if page == 1:
+            return {"fixtures": [fix_ok, fix_bad], "page": 1, "expected_pages": 2}
+        raise api_football.APIFootballQuotaExhaustedError("Quota exhausted")
+
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1):
+        rep1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    assert rep1["rejected_count"] == 1
+    assert rep1["status"] == "INCOMPLETE"
+
+    # Page 2 resumed run: valid fixture
+    fix_ok2 = sample_football_fixture(1103)
+
+    def mock_fb_p2(league_id, season, page=1, max_budget=None):
+        if page == 2:
+            return {"fixtures": [fix_ok2], "page": 2, "expected_pages": 2}
+        raise RuntimeError("Unexpected page")
+
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p2):
+        rep2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    # rejected_count MUST survive resumption and prevent dataset from becoming COMPLETE!
+    assert rep2["rejected_count"] == 1
+    assert rep2["status"] == "INCOMPLETE"
+    st = storage.get_historical_dataset_status(39, 2024, sport="football")
+    assert st["rejected_count"] == 1
+    assert st["status"] == "INCOMPLETE"
+
+
+def test_changing_pagination_totals_fails_closed(isolated_db):
+    fix1 = sample_football_fixture(1201)
+
+    # Page 1 claims expected_pages = 2, page 2 claims expected_pages = 3
+    def mock_changing_pages(league_id, season, page=1, max_budget=None):
+        if page == 1:
+            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
+        return {"fixtures": [fix1], "page": 2, "expected_pages": 3}
+
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_changing_pages):
+        rep = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    assert rep["status"] == "INCOMPLETE"
+    st = storage.get_historical_dataset_status(39, 2024, sport="football")
+    assert st["status"] == "INCOMPLETE"
 
 
 def test_U_to_Y_backtest_persistence_status_and_errors(isolated_db, monkeypatch):

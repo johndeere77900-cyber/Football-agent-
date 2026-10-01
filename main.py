@@ -2570,18 +2570,22 @@ def main():
             storage.init_db()
 
             if sport == "basketball":
-                historical_sync.sync_historical_basketball_games(
+                report = historical_sync.sync_historical_basketball_games(
                     league_id=league_id,
                     season=season,
                     refresh=args.refresh,
                 )
             else:
-                historical_sync.sync_historical_fixtures(
+                report = historical_sync.sync_historical_fixtures(
                     league_id=league_id,
                     season=season,
                     with_enrichment=args.with_enrichment,
                     refresh=args.refresh,
                 )
+
+            if not isinstance(report, dict) or report.get("status") != "COMPLETE":
+                print(f"Historical sync ended with status '{report.get('status', 'FAILED')}' (non-COMPLETE). Exiting with code 1.", file=sys.stderr)
+                return 1
             return 0
 
         if args.dataset_status:

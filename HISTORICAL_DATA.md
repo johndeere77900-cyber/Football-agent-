@@ -34,8 +34,15 @@ The historical acquisition and backtesting pipeline is decoupled from live predi
 4. **Exact Budget Completion**:
    - Reaching the exact final allowed credit quota slot on a successful final response allows a dataset to become `COMPLETE` provided all expected pages/games were successfully retrieved.
 5. **Match Status & Score Policy (`historical_match_policy.py`)**:
-   - Football: `FT`, `AET`, and `PEN` matches are completed historical matches. Goals are extracted strictly from regular/extra time goals (excluding penalty shootout totals).
+   - Football: `FT`, `AET`, and `PEN` matches are completed historical matches.
    - Basketball: `FT` and `AOT` games are completed historical games.
+
+### API-Football Score Field Semantics & Settlement Policy
+API-Football payloads contain both top-level `goals` and nested `score` objects:
+- `goals`: `{home, away}` — The authoritative total match goals after 90 or 120 minutes of play (excluding penalty shootout kicks). Used for Over/Under totals, BTTS, team goals, Elo ratings, and H2H/recent form calculations.
+- `score.fulltime`: `{home, away}` — The 90-minute regulation-time score. Used strictly for 1X2 market settlement.
+- `score.extratime`: `{home, away}` — Goals scored specifically during extra time in knockout fixtures.
+- `score.penalty`: `{home, away}` — Goals scored during penalty shootouts. **Penalty shootout kicks are never counted as match goals** for 1X2, Totals, BTTS, Elo, or form calculations.
 6. **Multi-Sport Identity**:
    - Manifests are keyed by `(sport, league_id, season)` preventing collision between football league 12 and basketball league 12.
 7. **Backtest Experiment Recording**:

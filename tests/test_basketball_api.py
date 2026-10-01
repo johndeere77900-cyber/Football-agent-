@@ -383,6 +383,48 @@ def test_get_games_for_date_alias_matches_primary_function(
     ]
 
 
+def test_get_league_games_page_pagination_validation(isolated_cache, monkeypatch):
+    # A. Valid single-page response
+    def fake_get_single(url, headers, params, timeout):
+        return FakeResponse(payload={
+            "response": [{"id": 201}],
+            "paging": {"current": 1, "total": 1}
+        })
+
+    monkeypatch.setattr(basketball_api.requests, "get", fake_get_single)
+    res_single = basketball_api.get_league_games_page(12, 2024, page=1)
+    assert res_single["expected_pages"] == 1
+    assert len(res_single["games"]) == 1
+
+    # B. Missing/malformed pagination
+    def fake_get_malformed(url, headers, params, timeout):
+        return FakeResponse(payload={
+            "response": [],
+            "paging": {"current": None, "total": 1}
+        })
+
+    monkeypatch.setattr(basketball_api.requests, "get", fake_get_malformed)
+    try:
+        basketball_api.get_league_games_page(12, 2024, page=2)
+        assert False, "Expected APIBasketballError"
+    except basketball_api.APIBasketballError:
+        pass
+
+    # C. Page mismatch
+    def fake_get_mismatch(url, headers, params, timeout):
+        return FakeResponse(payload={
+            "response": [],
+            "paging": {"current": 3, "total": 3}
+        })
+
+    monkeypatch.setattr(basketball_api.requests, "get", fake_get_mismatch)
+    try:
+        basketball_api.get_league_games_page(12, 2024, page=4)
+        assert False, "Expected APIBasketballError"
+    except basketball_api.APIBasketballError:
+        pass
+
+
 def test_get_game_result_returns_first_game(
     isolated_cache,
     monkeypatch,

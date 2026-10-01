@@ -175,8 +175,10 @@ def team_goal_averages(fixtures, team_id, cutoff):
 
     for fixture in history:
         home_id = fixture["teams"]["home"]["id"]
-        home_goals = fixture["goals"]["home"]
-        away_goals = fixture["goals"]["away"]
+        goals = historical_match_policy.get_football_match_goals(fixture)
+        if goals is None:
+            continue
+        home_goals, away_goals = goals
 
         if home_id == team_id:
             goals_for.append(home_goals)
@@ -326,8 +328,10 @@ def team_recent_form(
 
     for fixture in recent:
         home_id = fixture["teams"]["home"]["id"]
-        home_goals = fixture["goals"]["home"]
-        away_goals = fixture["goals"]["away"]
+        goals = historical_match_policy.get_football_match_goals(fixture)
+        if goals is None:
+            continue
+        home_goals, away_goals = goals
 
         if home_id == team_id:
             team_goals = home_goals
@@ -365,18 +369,18 @@ def team_recent_form(
                 "W"
                 if (
                     (
-                        fixture["goals"]["home"]
-                        > fixture["goals"]["away"]
+                        historical_match_policy.get_football_match_goals(fixture)[0]
+                        > historical_match_policy.get_football_match_goals(fixture)[1]
                         and fixture["teams"]["home"]["id"] == team_id
                     )
                     or (
-                        fixture["goals"]["away"]
-                        > fixture["goals"]["home"]
+                        historical_match_policy.get_football_match_goals(fixture)[1]
+                        > historical_match_policy.get_football_match_goals(fixture)[0]
                         and fixture["teams"]["away"]["id"] == team_id
                     )
                 )
                 else "D"
-                if fixture["goals"]["home"] == fixture["goals"]["away"]
+                if historical_match_policy.get_football_match_goals(fixture)[0] == historical_match_policy.get_football_match_goals(fixture)[1]
                 else "L"
             )
             for fixture in recent

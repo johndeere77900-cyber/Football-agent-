@@ -610,11 +610,12 @@ def init_db():
             _ensure_column_sqlite(conn, "historical_datasets", "rejected_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column_sqlite(conn, "historical_datasets", "error_reason", "TEXT")
 
-            try:
-                tbl_info = conn.execute("PRAGMA table_info(historical_datasets)").fetchall()
-                col_names = [row[1] for row in tbl_info]
-                pk_cols = [row[1] for row in tbl_info if row[5] > 0]
-                if pk_cols and ("sport" not in pk_cols or "rejected_count" not in col_names):
+            tbl_info = conn.execute("PRAGMA table_info(historical_datasets)").fetchall()
+            col_names = [row[1] for row in tbl_info]
+            pk_cols = [row[1] for row in tbl_info if row[5] > 0]
+            if pk_cols and ("sport" not in pk_cols or "rejected_count" not in col_names):
+                conn.execute("BEGIN TRANSACTION")
+                try:
                     conn.execute("ALTER TABLE historical_datasets RENAME TO historical_datasets_old")
                     conn.execute(
                         """
@@ -663,8 +664,10 @@ def init_db():
                         """
                     )
                     conn.execute("DROP TABLE historical_datasets_old")
-            except sqlite3.OperationalError:
-                pass
+                    conn.execute("COMMIT")
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    raise
 
             conn.execute(
                 """
