@@ -179,7 +179,8 @@ def test_predict_from_features_preserves_complete_markets():
     )
 
     result = prediction_engine.predict_from_features(
-        features
+        features,
+        data_cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
 
     markets = result["markets"]
@@ -203,7 +204,8 @@ def test_predict_from_features_match_result_sums_to_one():
     )
 
     result = prediction_engine.predict_from_features(
-        features
+        features,
+        data_cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
 
     probabilities = result["markets"]["match_result"]
@@ -225,7 +227,8 @@ def test_predict_from_features_preserves_team_goal_distributions():
     )
 
     markets = prediction_engine.predict_from_features(
-        features
+        features,
+        data_cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )["markets"]
 
     team_goals = markets["team_goals"]
@@ -258,7 +261,8 @@ def test_elo_blending_changes_only_the_1x2_distribution_and_double_chance():
     )
 
     poisson_only = prediction_engine.predict_from_features(
-        features
+        features,
+        data_cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
 
     elo_result = prediction_engine.predict_from_features(
@@ -269,6 +273,7 @@ def test_elo_blending_changes_only_the_1x2_distribution_and_double_chance():
             "away": 0.10,
         },
         elo_weight=0.15,
+        data_cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
 
     assert (
@@ -307,6 +312,7 @@ def test_historical_prediction_uses_supplied_pre_match_elo():
         league_avg_goals=1.5,
         home_elo=1600,
         away_elo=1450,
+        data_cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
 
     assert result["elo_probabilities"] is not None
@@ -363,6 +369,7 @@ def test_prediction_is_deterministic():
         league_avg_goals=1.5,
         home_elo=1550,
         away_elo=1500,
+        data_cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
 
     second = prediction_engine.predict_historical_fixture(
@@ -372,6 +379,7 @@ def test_prediction_is_deterministic():
         league_avg_goals=1.5,
         home_elo=1550,
         away_elo=1500,
+        data_cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
 
     assert first == second

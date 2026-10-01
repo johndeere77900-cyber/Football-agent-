@@ -11,23 +11,7 @@ from typing import Any, Dict, Optional
 
 import config
 from probability_validation import validate_single_probability, ProbabilityValidationError
-
-
-def _parse_utc_datetime(ts_val: Any) -> Optional[datetime]:
-    """Parse a timestamp into a timezone-aware UTC datetime. Reject timezone-naive or malformed inputs."""
-    if not ts_val or isinstance(ts_val, bool):
-        return None
-    ts_str = str(ts_val).strip()
-    if not ts_str:
-        return None
-    try:
-        iso_str = ts_str.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(iso_str)
-        if dt.tzinfo is None:
-            return None
-        return dt.astimezone(timezone.utc)
-    except (ValueError, TypeError):
-        return None
+from time_utils import parse_utc_datetime
 
 
 def check_odds_chronology_and_staleness(
@@ -46,12 +30,12 @@ def check_odds_chronology_and_staleness(
     if not odds_timestamp:
         return "MISSING"
 
-    dt_odds = _parse_utc_datetime(odds_timestamp)
+    dt_odds = parse_utc_datetime(odds_timestamp)
     if dt_odds is None:
         return "MISSING"
 
     if cutoff_timestamp:
-        dt_ref = _parse_utc_datetime(cutoff_timestamp)
+        dt_ref = parse_utc_datetime(cutoff_timestamp)
         if dt_ref is None:
             dt_ref = datetime.now(timezone.utc)
         if dt_odds >= dt_ref:

@@ -362,3 +362,62 @@ def test_backtest_actual_calibration_order(tmp_path, monkeypatch):
                 assert target_fid not in sample_ids, f"Target fixture ID {target_fid} must NOT be present in calibration history at cutoff {cutoff}"
                 for ts in timestamps:
                     assert time_utils.is_strictly_before(ts, target_date), f"Sample timestamp {ts} must be strictly before cutoff {target_date}"
+
+
+def test_basketball_backtest_actual_calibration_order(tmp_path, monkeypatch):
+    """Instrument calibration.train_walk_forward_calibrator during basketball backtest to prove target game ID is excluded from calibration history."""
+    db_file = tmp_path / "e2e_bball_calib_order.db"
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    storage.init_db()
+
+    observed_calibrations = []
+
+    original_train = calibration.train_walk_forward_calibrator
+
+    def instrumented_train(prior_samples, cutoff_timestamp, sport="basketball"):
+        sample_ids = {s.get("game_id") or s.get("fixture_id") for s in prior_samples if (s.get("game_id") or s.get("fixture_id")) is not None}
+        sample_timestamps = [s.get("timestamp") for s in prior_samples]
+        observed_calibrations.append((cutoff_timestamp, sample_ids, sample_timestamps))
+
+        for s in prior_samples:
+            assert time_utils.is_strictly_before(s.get("timestamp"), cutoff_timestamp)
+
+        return original_train(prior_samples, cutoff_timestamp, sport=sport)
+
+    monkeypatch.setattr(calibration, "train_walk_forward_calibrator", instrumented_train)
+
+    raw_games = [
+        {
+            "id": 400 + i,
+            "date": f"2024-01-{i:02d}T20:00:00+00:00",
+            "league": {"id": 12, "season": 2024, "name": "NBA"},
+            "teams": {"home": {"id": 1, "name": "Lakers"}, "away": {"id": 2, "name": "Celtics"}},
+            "scores": {"home": {"total": 110}, "away": {"total": 105}},
+            "status": {"short": "FT"},
+        }
+        for i in range(1, 25)
+    ]
+
+    storage.save_historical_basketball_games(raw_games, league_id=12, season=2024)
+    storage.mark_historical_dataset_complete(
+        league_id=12,
+        season=2024,
+        fixture_count=24,
+        expected_pages=1,
+        pages_completed=1,
+        acquisition_complete=True,
+        sport="basketball",
+    )
+
+    res = backtest.run_basketball_backtest(league_id=12, season=2024, sample_size=5, min_prior_matches=1)
+
+    assert len(observed_calibrations) > 0
+
+    for entry in res["log"]:
+        target_gid = entry["game_id"]
+        target_date = entry["date"]
+        for cutoff, sample_ids, timestamps in observed_calibrations:
+            if cutoff == target_date:
+                assert target_gid not in sample_ids, f"Target game ID {target_gid} must NOT be present in calibration history at cutoff {cutoff}"
+                for ts in timestamps:
+                    assert time_utils.is_strictly_before(ts, target_date), f"Sample timestamp {ts} must be strictly before cutoff {target_date}"

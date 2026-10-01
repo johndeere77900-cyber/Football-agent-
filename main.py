@@ -39,6 +39,7 @@ import prediction_contract
 import prediction_engine
 import quality_gate
 import storage
+import time_utils
 import uncertainty
 
 
@@ -1112,11 +1113,17 @@ def predict_fixture(
         )
     )
 
+    now_utc = time_utils.format_utc_iso(datetime.now(timezone.utc))
     prediction = (
         prediction_engine.predict_from_features(
             features,
             elo_probabilities=elo_probabilities,
             elo_weight=config.ELO_BLEND_WEIGHT,
+            prediction_timestamp=now_utc,
+            data_cutoff_timestamp=now_utc,
+            fixture_id=fixture_data["id"],
+            league_id=league["id"],
+            season=league["season"],
         )
     )
 
@@ -1163,10 +1170,10 @@ def predict_fixture(
 
         live_calib_meta = {
             "calibration_version": prediction.get("calibration_version") or getattr(config, "CALIBRATION_VERSION", "v3.0.0"),
-            "calibration_method": "LIVE_MODEL",
+            "calibration_method": "NONE",
             "calibration_status": "UNAVAILABLE",
             "calibration_dataset_identity": f"football_{league['id']}_{league['season']}",
-            "calibration_timestamp": fixture_data["date"],
+            "calibration_timestamp": now_utc,
         }
         live_unc_info = uncertainty.calculate_uncertainty(
             feature_coverage=1.0,
@@ -1192,8 +1199,8 @@ def predict_fixture(
             market_analysis={},
             uncertainty_info=live_unc_info,
             quality_gate_result=live_gate_res,
-            data_cutoff_timestamp=fixture_data["date"],
-            prediction_timestamp=fixture_data["date"],
+            data_cutoff_timestamp=now_utc,
+            prediction_timestamp=now_utc,
             home_team=home_team["name"],
             away_team=away_team["name"],
             league_name=league["name"],
@@ -2135,6 +2142,7 @@ def run_daily_basketball(
     predicted_count = 0
     skipped_count = 0
 
+    now_utc = time_utils.format_utc_iso(datetime.now(timezone.utc))
     for game in games:
         if quota_hit:
             break
@@ -2142,7 +2150,9 @@ def run_daily_basketball(
         try:
             prediction = (
                 basketball_model.predict_game(
-                    game
+                    game,
+                    prediction_timestamp=now_utc,
+                    data_cutoff_timestamp=now_utc,
                 )
             )
 

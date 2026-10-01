@@ -1699,6 +1699,7 @@ def run_real_backtest(
                     if prev_act in ("home_win", "draw", "away_win") and isinstance(prev_pred, dict):
                         prior_raw_predictions_by_id[prev_id] = {
                             "fixture_id": prev_id,
+                            "game_id": prev_id,
                             "raw_probabilities": prev_pred.get("raw_probabilities", {}),
                             "actual": prev_act,
                             "timestamp": prev_date,
@@ -1808,6 +1809,8 @@ def run_real_backtest(
 
         if match_result in ("home_win", "draw", "away_win") and fixture_id is not None:
             prior_raw_predictions_by_id[fixture_id] = {
+                "fixture_id": fixture_id,
+                "game_id": fixture_id,
                 "raw_probabilities": prediction.get("raw_probabilities", {}),
                 "actual": match_result,
                 "timestamp": cutoff,

@@ -401,7 +401,27 @@ def predict_from_features(
         )
 
     if prediction_timestamp is None and data_cutoff_timestamp is None:
-        data_cutoff_timestamp = features.get("cutoff_timestamp") or "1970-01-01T00:00:00+00:00"
+        data_cutoff_timestamp = features.get("cutoff_timestamp")
+
+    if prediction_timestamp is None and data_cutoff_timestamp is None:
+        raise ValueError("Authoritative prediction_timestamp or data_cutoff_timestamp must be provided.")
+
+    if prediction_timestamp is None:
+        prediction_timestamp = data_cutoff_timestamp
+    if data_cutoff_timestamp is None:
+        data_cutoff_timestamp = prediction_timestamp
+
+    from time_utils import parse_utc_datetime, format_utc_iso
+    dt_pred = parse_utc_datetime(prediction_timestamp)
+    dt_cutoff = parse_utc_datetime(data_cutoff_timestamp)
+
+    if dt_pred is None or dt_cutoff is None:
+        raise ValueError(
+            f"Invalid or timezone-naive timestamp: prediction_timestamp={prediction_timestamp!r}, data_cutoff_timestamp={data_cutoff_timestamp!r}"
+        )
+
+    prediction_timestamp = format_utc_iso(dt_pred)
+    data_cutoff_timestamp = format_utc_iso(dt_cutoff)
 
     # 1. MODEL -> RAW PROBABILITIES
     home_xg = poisson_model.expected_goals(
@@ -538,7 +558,7 @@ def predict_from_features(
             contract["insufficient_data"] = True
             contract["reason"] = f"Calibrated probability validation error: {exc}"
             return contract
-    elif calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
+    elif calib_meta["calibration_status"] == "ERROR":
         calibrated_markets = {}
 
     # 4. MARKET ANALYSIS (ODDS / IMPLIED / EDGE / EV)
@@ -550,7 +570,7 @@ def predict_from_features(
         cutoff_timestamp=data_cutoff_timestamp,
     )
 
-    if calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
+    if calib_meta["calibration_status"] == "ERROR":
         for m_key, m_val in m_analysis.items():
             if isinstance(m_val, dict):
                 for o_key, o_val in m_val.items():
@@ -625,7 +645,7 @@ def predict_from_features(
         },
     )
 
-    if calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
+    if calib_meta["calibration_status"] == "ERROR":
         res["status"] = "CALIBRATION_ERROR"
 
     return res

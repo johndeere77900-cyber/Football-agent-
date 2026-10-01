@@ -181,6 +181,7 @@ def predict_game(
     odds_data: Optional[Dict[str, Any]] = None,
     odds_timestamp: Optional[str] = None,
     data_cutoff_timestamp: Optional[str] = None,
+    prediction_timestamp: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Authoritative basketball prediction path through Phase 3 pipeline.
@@ -308,8 +309,31 @@ def predict_game(
         contract["reason"] = f"Model probability validation error: {exc}"
         return contract
 
+    if prediction_timestamp is None and data_cutoff_timestamp is None:
+        data_cutoff_timestamp = game.get("date") if isinstance(game, dict) else None
+
+    if prediction_timestamp is None and data_cutoff_timestamp is None:
+        raise ValueError("Authoritative prediction_timestamp or data_cutoff_timestamp must be provided.")
+
+    if prediction_timestamp is None:
+        prediction_timestamp = data_cutoff_timestamp
+    if data_cutoff_timestamp is None:
+        data_cutoff_timestamp = prediction_timestamp
+
+    from time_utils import parse_utc_datetime, format_utc_iso
+    dt_pred = parse_utc_datetime(prediction_timestamp)
+    dt_cutoff = parse_utc_datetime(data_cutoff_timestamp)
+
+    if dt_pred is None or dt_cutoff is None:
+        raise ValueError(
+            f"Invalid or timezone-naive timestamp: prediction_timestamp={prediction_timestamp!r}, data_cutoff_timestamp={data_cutoff_timestamp!r}"
+        )
+
+    prediction_timestamp = format_utc_iso(dt_pred)
+    data_cutoff_timestamp = format_utc_iso(dt_cutoff)
+
     # 3. CALIBRATION
-    cutoff_ts = data_cutoff_timestamp or game.get("date")
+    cutoff_ts = data_cutoff_timestamp
     dataset_identity = f"basketball_{league_id}_{season}"
     calibration_res = calibration.apply_calibration_layer(
         raw_markets=validated_raw_markets,
@@ -347,7 +371,8 @@ def predict_game(
                 market_analysis={},
                 uncertainty_info=unc_info,
                 quality_gate_result=gate_res,
-                data_cutoff_timestamp=cutoff_ts,
+            data_cutoff_timestamp=data_cutoff_timestamp,
+            prediction_timestamp=prediction_timestamp,
                 home_team=home_team["name"],
                 away_team=away_team["name"],
                 league_name=league.get("name", "NBA"),
@@ -356,7 +381,7 @@ def predict_game(
             contract["insufficient_data"] = True
             contract["reason"] = f"Calibrated probability validation error: {exc}"
             return contract
-    elif calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
+    elif calib_meta["calibration_status"] == "ERROR":
         calibrated_markets = {}
 
     if calibrated_markets:
@@ -374,7 +399,7 @@ def predict_game(
         cutoff_timestamp=cutoff_ts,
     )
 
-    if calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
+    if calib_meta["calibration_status"] == "ERROR":
         for m_key, m_val in m_analysis.items():
             if isinstance(m_val, dict):
                 for o_key, o_val in m_val.items():
@@ -444,7 +469,7 @@ def predict_game(
         },
     )
 
-    if calib_meta["calibration_status"] in ("ERROR", "ERROR_FALLBACK_RAW"):
+    if calib_meta["calibration_status"] == "ERROR":
         contract["status"] = "CALIBRATION_ERROR"
 
     return contract

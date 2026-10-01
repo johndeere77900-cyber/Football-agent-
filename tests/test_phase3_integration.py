@@ -43,7 +43,7 @@ class MalformedCalibrator:
 
 
 def test_calibration_fail_closed_on_error():
-    """Verify failed calibration sets status=ERROR_FALLBACK_RAW, clears edge/EV, and forces PASS."""
+    """Verify failed calibration sets status=ERROR, clears edge/EV, and forces PASS."""
     raw_markets = {
         "match_result": {"home_win": 0.5, "draw": 0.3, "away_win": 0.2},
     }
@@ -55,7 +55,7 @@ def test_calibration_fail_closed_on_error():
     res = calibration.apply_calibration_layer(raw_markets, calibrator=RaisingCalibrator(), sport="football")
     assert res["calibration_metadata"]["calibration_status"] == "ERROR"
 
-    # Verify prediction_engine pipeline handles ERROR_FALLBACK_RAW properly
+    # Verify prediction_engine pipeline handles ERROR properly
     features = {
         "home_attack": 1.1,
         "home_defence": 0.9,
@@ -302,12 +302,12 @@ def test_football_sample_count_propagation():
     # Case 1: home=12, away=8 -> sample_count=8
     hist_snap1 = {"home": {"matches": 12, "goals_for": 20, "goals_against": 10}, "away": {"matches": 8, "goals_for": 10, "goals_against": 12}}
     recent_snap1 = {"home": {"matches": 5, "goals_for": 10, "goals_against": 5}, "away": {"matches": 5, "goals_for": 5, "goals_against": 8}}
-    res1 = prediction_engine.predict_historical_fixture(hist_snap1, recent_snap1, h2h_snapshot=None, league_avg_goals=1.5)
+    res1 = prediction_engine.predict_historical_fixture(hist_snap1, recent_snap1, h2h_snapshot=None, league_avg_goals=1.5, data_cutoff_timestamp="2025-01-01T12:00:00+00:00")
     assert res1["uncertainty"]["historical_sample_count"] == 8
 
     # Case 2: home=5, away=5 -> sample_count=5
     hist_snap2 = {"home": {"matches": 5, "goals_for": 10, "goals_against": 5}, "away": {"matches": 5, "goals_for": 5, "goals_against": 8}}
-    res2 = prediction_engine.predict_historical_fixture(hist_snap2, recent_snap1, h2h_snapshot=None, league_avg_goals=1.5)
+    res2 = prediction_engine.predict_historical_fixture(hist_snap2, recent_snap1, h2h_snapshot=None, league_avg_goals=1.5, data_cutoff_timestamp="2025-01-01T12:00:00+00:00")
     assert res2["uncertainty"]["historical_sample_count"] == 5
 
 
@@ -390,6 +390,7 @@ def test_end_to_end_football_pipeline():
         fixture_id=98765,
         league_id=39,
         season=2024,
+        data_cutoff_timestamp="2025-01-01T12:00:00+00:00",
     )
 
     assert res["sport"] == "football"

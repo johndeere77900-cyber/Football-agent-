@@ -50,7 +50,7 @@ def evaluate_quality_gate(
         if "insufficient_data" not in reasons and "insufficient_history" not in reasons:
             reasons.append("high_uncertainty")
 
-    if calibration_status in ("ERROR", "ERROR_FALLBACK_RAW"):
+    if calibration_status == "ERROR":
         reasons.append("calibration_error")
     elif calibration_status != "APPLIED":
         reasons.append("calibration_unavailable")
@@ -91,12 +91,11 @@ def evaluate_quality_gate(
         "insufficient_edge",
         "insufficient_ev",
         "calibration_error",
+        "calibration_unavailable",
         "future_odds",
     }
     if require_odds:
         pass_triggers.update({"missing_odds"})
-    if require_calibration:
-        pass_triggers.update({"calibration_unavailable"})
 
     is_pass = any(r in pass_triggers for r in dedup_reasons)
     decision = "PASS" if is_pass else "SIGNAL"

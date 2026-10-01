@@ -15,12 +15,21 @@ def parse_utc_datetime(ts_val: Any) -> Optional[datetime]:
 
     Rules:
     - Accepts ISO-8601 strings containing timezone offsets (e.g. 'Z', '+00:00', '-05:00').
-    - Rejects missing values, empty strings, non-string types, and booleans.
-    - Rejects timezone-naive timestamps (dt.tzinfo is None) rather than guessing.
+    - Accepts timezone-aware datetime objects.
+    - Rejects missing values, empty strings, booleans, and invalid types.
+    - Rejects timezone-naive timestamps (dt.tzinfo is None or utcoffset is None).
     - Rejects malformed strings that fail ISO parsing.
-    - Converts valid datetimes to UTC (dt.astimezone(timezone.utc)).
+    - Converts valid datetimes to UTC.
     """
-    if not ts_val or isinstance(ts_val, bool) or not isinstance(ts_val, str):
+    if ts_val is None or isinstance(ts_val, bool):
+        return None
+
+    if isinstance(ts_val, datetime):
+        if ts_val.tzinfo is None or ts_val.tzinfo.utcoffset(ts_val) is None:
+            return None
+        return ts_val.astimezone(timezone.utc)
+
+    if not isinstance(ts_val, str):
         return None
 
     ts_str = ts_val.strip()
@@ -30,7 +39,7 @@ def parse_utc_datetime(ts_val: Any) -> Optional[datetime]:
     try:
         iso_str = ts_str.replace("Z", "+00:00")
         dt = datetime.fromisoformat(iso_str)
-        if dt.tzinfo is None:
+        if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
             return None
         return dt.astimezone(timezone.utc)
     except (ValueError, TypeError):
@@ -60,11 +69,12 @@ def is_strictly_before(
 
 
 def format_utc_iso(dt: Optional[datetime]) -> Optional[str]:
-    """Return ISO-8601 string representation in UTC or None if dt is None."""
+    """
+    Return ISO-8601 string representation in UTC or None if dt is None.
+    Rejects timezone-naive datetimes.
+    """
     if dt is None:
         return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt.isoformat()
+    if not isinstance(dt, datetime) or dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+        raise ValueError("Timezone-naive datetime or non-datetime object rejected.")
+    return dt.astimezone(timezone.utc).isoformat()

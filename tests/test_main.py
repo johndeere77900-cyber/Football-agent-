@@ -189,6 +189,7 @@ def test_predict_fixture_uses_shared_prediction_engine(
         features,
         elo_probabilities=None,
         elo_weight=None,
+        **kwargs,
     ):
         called["features"] = features
         called["elo"] = elo_probabilities
@@ -198,6 +199,7 @@ def test_predict_fixture_uses_shared_prediction_engine(
             features,
             elo_probabilities,
             elo_weight,
+            **kwargs,
         )
 
     monkeypatch.setattr(
@@ -1184,6 +1186,7 @@ def test_prediction_engine_receives_average_based_production_features(
         features,
         elo_probabilities=None,
         elo_weight=None,
+        **kwargs,
     ):
         captured["features"] = features
 

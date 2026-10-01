@@ -5,6 +5,7 @@ Standardized Prediction Result Contract for Football and Basketball predictions.
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import config
+from time_utils import parse_utc_datetime, format_utc_iso
 
 
 def build_prediction_contract(
@@ -29,8 +30,14 @@ def build_prediction_contract(
     Build the authoritative Phase 3 prediction contract output.
     """
     sport_clean = str(sport).lower()
-    now_ts = prediction_timestamp or data_cutoff_timestamp or datetime.now(timezone.utc).isoformat()
-    cutoff_ts = data_cutoff_timestamp or now_ts
+
+    dt_pred = parse_utc_datetime(prediction_timestamp) or parse_utc_datetime(data_cutoff_timestamp)
+    if dt_pred is None:
+        dt_pred = datetime.now(timezone.utc)
+    now_ts = format_utc_iso(dt_pred)
+
+    dt_cutoff = parse_utc_datetime(data_cutoff_timestamp) or dt_pred
+    cutoff_ts = format_utc_iso(dt_cutoff)
 
     # Extract top pick across markets for selected_market summary
     top_outcome = None
