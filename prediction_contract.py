@@ -32,11 +32,12 @@ def build_prediction_contract(
     sport_clean = str(sport).lower()
 
     dt_pred = parse_utc_datetime(prediction_timestamp) or parse_utc_datetime(data_cutoff_timestamp)
-    if dt_pred is None:
-        dt_pred = datetime.now(timezone.utc)
-    now_ts = format_utc_iso(dt_pred)
-
     dt_cutoff = parse_utc_datetime(data_cutoff_timestamp) or dt_pred
+
+    if dt_pred is None and dt_cutoff is None:
+        raise ValueError("Authoritative timezone-aware UTC prediction or cutoff timestamp required.")
+
+    now_ts = format_utc_iso(dt_pred)
     cutoff_ts = format_utc_iso(dt_cutoff)
 
     # Extract top pick across markets for selected_market summary
@@ -49,8 +50,8 @@ def build_prediction_contract(
     top_ev = None
 
     if sport_clean == "football":
-        mr = calibrated_markets.get("match_result", {})
-        if isinstance(mr, dict) and mr:
+        if isinstance(calibrated_markets, dict) and "match_result" in calibrated_markets and calibrated_markets["match_result"]:
+            mr = calibrated_markets["match_result"]
             top_key = max(mr, key=mr.get)
             top_outcome = top_key
             top_cal_p = mr.get(top_key)
@@ -62,10 +63,16 @@ def build_prediction_contract(
                 top_implied_p = analysis_item.get("implied_probability")
                 top_edge = analysis_item.get("edge")
                 top_ev = analysis_item.get("ev")
+        else:
+            mr = raw_markets.get("match_result", {}) if isinstance(raw_markets, dict) else {}
+            if isinstance(mr, dict) and mr:
+                top_key = max(mr, key=mr.get)
+                top_outcome = top_key
+                top_raw_p = mr.get(top_key)
 
     elif sport_clean == "basketball":
-        ml = calibrated_markets.get("moneyline", {})
-        if isinstance(ml, dict) and ml:
+        if isinstance(calibrated_markets, dict) and "moneyline" in calibrated_markets and calibrated_markets["moneyline"]:
+            ml = calibrated_markets["moneyline"]
             top_key = max(ml, key=ml.get)
             top_outcome = top_key
             top_cal_p = ml.get(top_key)
@@ -77,6 +84,12 @@ def build_prediction_contract(
                 top_implied_p = analysis_item.get("implied_probability")
                 top_edge = analysis_item.get("edge")
                 top_ev = analysis_item.get("ev")
+        else:
+            ml = raw_markets.get("moneyline", {}) if isinstance(raw_markets, dict) else {}
+            if isinstance(ml, dict) and ml:
+                top_key = max(ml, key=ml.get)
+                top_outcome = top_key
+                top_raw_p = ml.get(top_key)
 
     contract = {
         "sport": sport_clean,
@@ -94,7 +107,7 @@ def build_prediction_contract(
         "calibration_version": getattr(config, "CALIBRATION_VERSION", "v3.0.0"),
         "raw_probabilities": raw_markets,
         "calibrated_probabilities": calibrated_markets,
-        "markets": calibrated_markets,  # Backward compatibility
+        "markets": calibrated_markets if calibrated_markets else raw_markets,  # Backward compatibility
         "calibration_metadata": calibration_metadata,
         "market_analysis": market_analysis,
         "selected_market": {

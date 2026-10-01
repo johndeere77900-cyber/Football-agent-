@@ -79,9 +79,9 @@ def test_football_calibration_and_leakage_prevention():
     }
 
     # Uncalibrated fallback
-    res = calibration.apply_calibration_layer(raw_markets, calibrator=None, sport="football")
+    res = calibration.apply_calibration_layer(raw_markets, calibrator=None, sport="football", cutoff_timestamp="2025-01-01T12:00:00+00:00")
     assert res["calibration_metadata"]["calibration_status"] == "UNAVAILABLE"
-    assert res["calibrated_markets"] == raw_markets
+    assert res["calibrated_markets"] == {}
 
     # Fit calibration on historical samples only
     hist_samples = [(0.4, 0), (0.5, 1), (0.6, 1)] * 10
@@ -173,6 +173,7 @@ def test_football_version_persistence_and_contract():
         market_analysis={},
         uncertainty_info={"feature_coverage": 1.0, "historical_sample_count": 10, "state": "sufficient_data"},
         quality_gate_result={"decision": "SIGNAL", "reason_codes": []},
+        prediction_timestamp="2025-01-01T12:00:00+00:00",
     )
 
     assert contract["model_version"] == config.MODEL_VERSION
@@ -180,3 +181,28 @@ def test_football_version_persistence_and_contract():
     assert contract["calibration_version"] == config.CALIBRATION_VERSION
     assert contract["quality_gate"] == "SIGNAL"
     assert contract["sport"] == "football"
+
+
+def test_edge_ev_requires_applied_calibration():
+    """Verify Requirement 4: Edge and EV are None when calibration is UNAVAILABLE or ERROR, but present when APPLIED."""
+    # A. Calibration UNAVAILABLE (calibrated_prob is None)
+    out_unavail = market_analysis.calculate_outcome_market_analysis(
+        calibrated_prob=None,
+        decimal_odds=2.00,
+        odds_timestamp="2025-01-01T10:00:00+00:00",
+        cutoff_timestamp="2025-01-01T12:00:00+00:00",
+    )
+    assert out_unavail["edge"] is None
+    assert out_unavail["ev"] is None
+    assert out_unavail["implied_probability"] == pytest.approx(0.50)
+
+    # B. Calibration APPLIED
+    out_applied = market_analysis.calculate_outcome_market_analysis(
+        calibrated_prob=0.60,
+        decimal_odds=2.00,
+        odds_timestamp="2025-01-01T10:00:00+00:00",
+        cutoff_timestamp="2025-01-01T12:00:00+00:00",
+    )
+    assert out_applied["edge"] == pytest.approx(0.10)
+    assert out_applied["ev"] == pytest.approx(0.20)
+    assert out_applied["implied_probability"] == pytest.approx(0.50)

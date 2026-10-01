@@ -581,8 +581,15 @@ def predict_from_features(
     odds_status = market_analysis.check_odds_chronology_and_staleness(odds_timestamp, data_cutoff_timestamp) if odds_data else "MISSING"
 
     # 5. UNCERTAINTY
-    mr = calibrated_markets.get("match_result", {})
-    top_p = max(mr.values()) if isinstance(mr, dict) and mr else 0.0
+    if calib_meta["calibration_status"] == "APPLIED" and isinstance(calibrated_markets.get("match_result"), dict) and calibrated_markets.get("match_result"):
+        mr = calibrated_markets["match_result"]
+        top_p = max(mr.values())
+    elif isinstance(validated_raw_markets.get("match_result"), dict) and validated_raw_markets.get("match_result"):
+        mr = validated_raw_markets["match_result"]
+        top_p = max(mr.values())
+    else:
+        top_p = 0.0
+
     h2h_avail = features.get("h2h_available", False)
     feature_coverage = features.get("feature_coverage", 1.0 if h2h_avail else 0.85)
     sample_count = features.get("sample_count", 0)
@@ -596,7 +603,8 @@ def predict_from_features(
     )
 
     # 6. QUALITY GATE
-    top_key = max(mr, key=mr.get) if isinstance(mr, dict) and mr else "home_win"
+    mr_gate = calibrated_markets.get("match_result") or validated_raw_markets.get("match_result", {})
+    top_key = max(mr_gate, key=mr_gate.get) if isinstance(mr_gate, dict) and mr_gate else "home_win"
     top_analysis = m_analysis.get("match_result", {}).get(top_key, {})
     edge_val = top_analysis.get("edge")
     ev_val = top_analysis.get("ev")

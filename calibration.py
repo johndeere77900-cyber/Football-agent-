@@ -164,21 +164,7 @@ def fit_isotonic_scaling(samples: List[Tuple[float, int]]) -> Optional[IsotonicC
     return IsotonicCalibrator(x_thresholds=x_thresh, y_values=y_calib)
 
 
-def _parse_utc_datetime(ts_val: Any) -> Optional[datetime]:
-    """Parse a timestamp into a timezone-aware UTC datetime. Reject timezone-naive or malformed inputs."""
-    if not ts_val or isinstance(ts_val, bool):
-        return None
-    ts_str = str(ts_val).strip()
-    if not ts_str:
-        return None
-    try:
-        iso_str = ts_str.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(iso_str)
-        if dt.tzinfo is None:
-            return None
-        return dt.astimezone(timezone.utc)
-    except (ValueError, TypeError):
-        return None
+from time_utils import parse_utc_datetime, format_utc_iso
 
 
 def filter_samples_by_cutoff(
@@ -190,7 +176,7 @@ def filter_samples_by_cutoff(
     Only samples strictly earlier than cutoff_timestamp (sample_timestamp < cutoff_timestamp) are eligible.
     Both timestamps are parsed as timezone-aware UTC datetimes.
     """
-    cutoff_dt = _parse_utc_datetime(cutoff_timestamp)
+    cutoff_dt = parse_utc_datetime(cutoff_timestamp)
     if cutoff_dt is None:
         return []
 
@@ -200,7 +186,7 @@ def filter_samples_by_cutoff(
             continue
 
         ts_val = s.get("timestamp") or s.get("date") or s.get("prediction_timestamp")
-        sample_dt = _parse_utc_datetime(ts_val)
+        sample_dt = parse_utc_datetime(ts_val)
         if sample_dt is None:
             continue
 
@@ -289,22 +275,28 @@ def apply_calibration_layer(
     """
     sport_clean = str(sport).lower()
     calibration_version = getattr(config, "CALIBRATION_VERSION", "v3.0.0")
-    timestamp = prediction_timestamp or cutoff_timestamp or datetime.now(timezone.utc).isoformat()
+
+    dt_pred = parse_utc_datetime(prediction_timestamp) or parse_utc_datetime(cutoff_timestamp)
+    pred_ts = format_utc_iso(dt_pred)
+    dt_cutoff = parse_utc_datetime(cutoff_timestamp) or dt_pred
+    cutoff_ts = format_utc_iso(dt_cutoff)
+    calib_ts = pred_ts or cutoff_ts
 
     if calibrator is None:
         return {
-            "calibrated_markets": dict(raw_markets),
+            "calibrated_markets": {},
             "calibration_metadata": {
                 "calibration_version": calibration_version,
                 "calibration_method": "NONE",
                 "calibration_status": "UNAVAILABLE",
                 "calibration_dataset_identity": dataset_identity or "UNKNOWN",
-                "calibration_cutoff_timestamp": cutoff_timestamp,
-                "calibration_timestamp": timestamp,
+                "calibration_cutoff_timestamp": cutoff_ts,
+                "prediction_timestamp": pred_ts,
+                "calibration_timestamp": calib_ts,
             },
         }
 
-    calibrated_markets = dict(raw_markets)
+    calibrated_markets = {}
     method_name = calibrator.__class__.__name__
 
     try:
@@ -347,7 +339,8 @@ def apply_calibration_layer(
             "calibration_method": method_name if status == "APPLIED" else "NONE",
             "calibration_status": status,
             "calibration_dataset_identity": dataset_identity or "UNKNOWN",
-            "calibration_cutoff_timestamp": cutoff_timestamp,
-            "calibration_timestamp": timestamp,
+            "calibration_cutoff_timestamp": cutoff_ts,
+            "prediction_timestamp": pred_ts,
+            "calibration_timestamp": calib_ts if status == "APPLIED" else None,
         },
     }

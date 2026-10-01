@@ -444,8 +444,9 @@ def predict_game(
         model_error=(not prob_valid),
     )
 
-    conf = confidence.confidence_flag(calibrated_markets["moneyline"])
-    safest = confidence.safest_pick(build_basketball_safest_candidates(calibrated_markets))
+    active_moneyline = calibrated_markets.get("moneyline") or raw_markets.get("moneyline", {})
+    conf = confidence.confidence_flag(active_moneyline)
+    safest = confidence.safest_pick(build_basketball_safest_candidates(calibrated_markets if calibrated_markets else raw_markets))
 
     # 7. STANDARDIZED CONTRACT OUTPUT
     contract = prediction_contract.build_prediction_contract(

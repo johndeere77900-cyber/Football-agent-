@@ -1173,14 +1173,22 @@ def predict_fixture(
             "calibration_method": "NONE",
             "calibration_status": "UNAVAILABLE",
             "calibration_dataset_identity": f"football_{league['id']}_{league['season']}",
+            "calibration_cutoff_timestamp": now_utc,
+            "prediction_timestamp": now_utc,
             "calibration_timestamp": now_utc,
         }
+
+        mr_live = markets.get("match_result", {}) if isinstance(markets, dict) else {}
+        top_p_live = max(mr_live.values()) if (isinstance(mr_live, dict) and mr_live) else 0.0
+        live_sample_count = features.get("sample_count", 0)
+
         live_unc_info = uncertainty.calculate_uncertainty(
-            feature_coverage=1.0,
-            sample_count=10,
-            top_probability=max(markets.get("match_result", {}).values()) if isinstance(markets.get("match_result"), dict) and markets.get("match_result") else 0.5,
+            feature_coverage=features.get("feature_coverage", 0.85),
+            sample_count=live_sample_count,
+            top_probability=top_p_live,
             calibration_status="UNAVAILABLE",
             odds_status="MISSING",
+            is_live=True,
         )
         live_gate_res = quality_gate.evaluate_quality_gate(
             uncertainty_info=live_unc_info,
@@ -1194,7 +1202,7 @@ def predict_fixture(
             league_id=league["id"],
             season=league["season"],
             raw_markets=markets,
-            calibrated_markets=markets,
+            calibrated_markets={},
             calibration_metadata=live_calib_meta,
             market_analysis={},
             uncertainty_info=live_unc_info,

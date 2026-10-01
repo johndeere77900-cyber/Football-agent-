@@ -22,10 +22,10 @@ def check_odds_chronology_and_staleness(
     Check odds timestamp against cutoff timestamp and freshness policy.
 
     Returns:
-    - 'AVAILABLE' if odds_timestamp < cutoff_timestamp (or cutoff is None) and within max age.
+    - 'AVAILABLE' if odds_timestamp < cutoff_timestamp and within max age.
     - 'FUTURE' if cutoff_timestamp is provided and odds_timestamp >= cutoff_timestamp.
     - 'STALE' if odds_timestamp < cutoff_timestamp but older than max age.
-    - 'MISSING' if odds_timestamp is missing or empty.
+    - 'MISSING' if odds_timestamp or cutoff_timestamp is missing/invalid.
     """
     if not odds_timestamp:
         return "MISSING"
@@ -34,17 +34,19 @@ def check_odds_chronology_and_staleness(
     if dt_odds is None:
         return "MISSING"
 
-    if cutoff_timestamp:
+    if cutoff_timestamp is not None:
         dt_ref = parse_utc_datetime(cutoff_timestamp)
         if dt_ref is None:
-            dt_ref = datetime.now(timezone.utc)
+            return "MISSING"
         if dt_odds >= dt_ref:
             return "FUTURE"
     else:
         dt_ref = datetime.now(timezone.utc)
+        if dt_odds > dt_ref:
+            return "FUTURE"
 
     diff_seconds = (dt_ref - dt_odds).total_seconds()
-    if diff_seconds <= 0 and cutoff_timestamp:
+    if diff_seconds < 0:
         return "FUTURE"
 
     max_age = float(getattr(config, "MAX_ODDS_AGE_HOURS", 24.0))
@@ -60,7 +62,7 @@ def is_odds_stale(odds_timestamp: Optional[str], cutoff_timestamp: Optional[str]
 
 
 def calculate_outcome_market_analysis(
-    calibrated_prob: float,
+    calibrated_prob: Optional[float],
     decimal_odds: Optional[float],
     odds_timestamp: Optional[str] = None,
     raw_prob: Optional[float] = None,
@@ -73,19 +75,18 @@ def calculate_outcome_market_analysis(
       implied_prob = 1.0 / decimal_odds
       edge = calibrated_prob - implied_prob
       EV = (calibrated_prob * decimal_odds) - 1.0
+
+    CRITICAL:
+    Edge and EV are ONLY calculated when calibrated_prob is valid and calibration status is APPLIED.
+    If calibrated_prob is None (uncalibrated/error), edge and EV MUST be None.
     """
-    # Validate calibrated probability
-    try:
-        c_prob = validate_single_probability(calibrated_prob, name="calibrated_prob")
-    except ProbabilityValidationError:
-        return {
-            "odds": None,
-            "implied_probability": None,
-            "edge": None,
-            "ev": None,
-            "odds_timestamp": odds_timestamp,
-            "odds_status": "INVALID_PROBABILITY",
-        }
+    # Validate calibrated probability if supplied
+    c_prob = None
+    if calibrated_prob is not None:
+        try:
+            c_prob = validate_single_probability(calibrated_prob, name="calibrated_prob")
+        except ProbabilityValidationError:
+            c_prob = None
 
     # Validate decimal odds
     if decimal_odds is None or isinstance(decimal_odds, bool):
@@ -134,8 +135,8 @@ def calculate_outcome_market_analysis(
         }
 
     implied_p = 1.0 / odds_val
-    edge = c_prob - implied_p
-    ev = (c_prob * odds_val) - 1.0
+    edge = (c_prob - implied_p) if c_prob is not None else None
+    ev = ((c_prob * odds_val) - 1.0) if c_prob is not None else None
 
     return {
         "odds": odds_val,
@@ -161,13 +162,14 @@ def analyze_market_odds(
     """
     analysis: Dict[str, Any] = {}
 
-    if not isinstance(calibrated_markets, dict):
+    target_markets = calibrated_markets if (isinstance(calibrated_markets, dict) and calibrated_markets) else raw_markets
+    if not isinstance(target_markets, dict):
         return analysis
 
     if not isinstance(odds_data, dict):
         odds_data = {}
 
-    for market_key, market_val in calibrated_markets.items():
+    for market_key, market_val in target_markets.items():
         if isinstance(market_val, dict):
             m_odds = odds_data.get(market_key, {})
             if not isinstance(m_odds, dict):
@@ -181,9 +183,15 @@ def analyze_market_odds(
                         d_odds = 1.0 / float(d_odds)
 
                     raw_p = raw_markets.get(market_key, {}).get(outcome_key) if isinstance(raw_markets, dict) else None
+                    is_calibrated = (
+                        isinstance(calibrated_markets, dict)
+                        and market_key in calibrated_markets
+                        and outcome_key in calibrated_markets[market_key]
+                    )
+                    c_p = float(prob) if is_calibrated else None
 
                     analysis[market_key][outcome_key] = calculate_outcome_market_analysis(
-                        calibrated_prob=float(prob),
+                        calibrated_prob=c_p,
                         decimal_odds=d_odds,
                         odds_timestamp=odds_timestamp,
                         raw_prob=raw_p,

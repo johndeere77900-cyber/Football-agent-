@@ -76,9 +76,10 @@ def test_calibration_fail_closed_on_error():
     assert contract["status"] == "CALIBRATION_ERROR"
     assert contract["quality_gate"] == "PASS"
     assert "calibration_error" in contract["reason_codes"]
-    # Calibrated markets and market analysis must be empty (no raw probabilities copied into calibrated_markets)
+    # Calibrated markets must be empty, and market analysis edge/ev must be None
     assert contract["calibrated_probabilities"] == {}
-    assert contract["market_analysis"] == {}
+    assert contract["market_analysis"]["match_result"]["home_win"]["edge"] is None
+    assert contract["market_analysis"]["match_result"]["home_win"]["ev"] is None
 
 
 def test_malformed_calibrated_probabilities_fail_closed():
