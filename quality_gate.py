@@ -77,9 +77,9 @@ def evaluate_quality_gate(
             dedup_reasons.append(r)
 
     # Determine gate triggers that force a PASS decision
-    pass_triggers = {"model_error", "invalid_probability", "insufficient_history", "insufficient_data", "high_uncertainty", "stale_data"}
+    pass_triggers = {"model_error", "invalid_probability", "insufficient_history", "insufficient_data", "high_uncertainty", "stale_data", "insufficient_edge", "insufficient_ev"}
     if require_odds:
-        pass_triggers.update({"missing_odds", "insufficient_edge", "insufficient_ev"})
+        pass_triggers.update({"missing_odds"})
     if require_calibration:
         pass_triggers.update({"calibration_unavailable"})
 

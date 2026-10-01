@@ -267,13 +267,46 @@ def predict_game(
         },
     }
 
-    # 2. PROBABILITY VALIDATION
+    # 2. PROBABILITY VALIDATION ON RAW MARKETS
     try:
         validated_raw_markets = probability_validation.validate_all_probabilities(raw_markets, sport="basketball")
         prob_valid = True
-    except probability_validation.ProbabilityValidationError:
+    except probability_validation.ProbabilityValidationError as exc:
         prob_valid = False
-        validated_raw_markets = raw_markets
+        unc_info = uncertainty.calculate_uncertainty(
+            feature_coverage=0.0,
+            sample_count=0,
+            top_probability=0.0,
+        )
+        gate_res = quality_gate.evaluate_quality_gate(
+            uncertainty_info=unc_info,
+            probability_valid=False,
+            model_error=True,
+        )
+        contract = prediction_contract.build_prediction_contract(
+            sport="basketball",
+            fixture_id=game["id"],
+            league_id=league_id,
+            season=season,
+            raw_markets={},
+            calibrated_markets={},
+            calibration_metadata={
+                "calibration_version": getattr(config, "CALIBRATION_VERSION", "v3.0.0"),
+                "calibration_method": "NONE",
+                "calibration_status": "UNAVAILABLE",
+            },
+            market_analysis={},
+            uncertainty_info=unc_info,
+            quality_gate_result=gate_res,
+            data_cutoff_timestamp=data_cutoff_timestamp or game.get("date"),
+            home_team=home_team["name"],
+            away_team=away_team["name"],
+            league_name=league.get("name", "NBA"),
+        )
+        contract["status"] = "INVALID_PROBABILITY"
+        contract["insufficient_data"] = True
+        contract["reason"] = f"Model probability validation error: {exc}"
+        return contract
 
     # 3. CALIBRATION
     cutoff_ts = data_cutoff_timestamp or game.get("date")
@@ -288,7 +321,41 @@ def predict_game(
     calibrated_markets = calibration_res["calibrated_markets"]
     calib_meta = calibration_res["calibration_metadata"]
 
-    # Preserve expected_points & line details in calibrated_markets
+    # 3b. RE-VALIDATE CALIBRATED MARKETS
+    try:
+        calibrated_markets = probability_validation.validate_all_probabilities(calibrated_markets, sport="basketball")
+    except probability_validation.ProbabilityValidationError as exc:
+        unc_info = uncertainty.calculate_uncertainty(
+            feature_coverage=0.0,
+            sample_count=0,
+            top_probability=0.0,
+        )
+        gate_res = quality_gate.evaluate_quality_gate(
+            uncertainty_info=unc_info,
+            probability_valid=False,
+            model_error=True,
+        )
+        contract = prediction_contract.build_prediction_contract(
+            sport="basketball",
+            fixture_id=game["id"],
+            league_id=league_id,
+            season=season,
+            raw_markets=validated_raw_markets,
+            calibrated_markets={},
+            calibration_metadata=calib_meta,
+            market_analysis={},
+            uncertainty_info=unc_info,
+            quality_gate_result=gate_res,
+            data_cutoff_timestamp=cutoff_ts,
+            home_team=home_team["name"],
+            away_team=away_team["name"],
+            league_name=league.get("name", "NBA"),
+        )
+        contract["status"] = "INVALID_CALIBRATED_PROBABILITY"
+        contract["insufficient_data"] = True
+        contract["reason"] = f"Calibrated probability validation error: {exc}"
+        return contract
+
     calibrated_markets["expected_points"] = raw_markets["expected_points"]
     if "total_points" in calibrated_markets and isinstance(calibrated_markets["total_points"], dict):
         calibrated_markets["total_points"]["line"] = TOTAL_LINE
@@ -303,14 +370,21 @@ def predict_game(
         cutoff_timestamp=cutoff_ts,
     )
 
-    odds_status = "AVAILABLE" if odds_data else "MISSING"
+    odds_status = market_analysis.check_odds_chronology_and_staleness(odds_timestamp, cutoff_ts) if odds_data else "MISSING"
 
-    # 5. UNCERTAINTY
+    # 5. UNCERTAINTY (Use actual historical sample counts from stats payload)
+    home_matches = home_stats.get("matches", 0) if isinstance(home_stats, dict) else 0
+    away_matches = away_stats.get("matches", 0) if isinstance(away_stats, dict) else 0
+
+    if home_matches > 0 and away_matches > 0:
+        samples = min(home_matches, away_matches)
+    else:
+        samples = home_matches or away_matches or 0
+
     ml = calibrated_markets["moneyline"]
     top_p = max(ml.values())
-    samples = 10  # Standard team stats sample default
     unc_info = uncertainty.calculate_uncertainty(
-        feature_coverage=1.0,
+        feature_coverage=1.0 if samples >= 5 else (samples / 5.0),
         sample_count=samples,
         top_probability=top_p,
         calibration_status=calib_meta["calibration_status"],
@@ -333,7 +407,6 @@ def predict_game(
         model_error=(not prob_valid),
     )
 
-    # Backward compatibility confidence & safest
     conf = confidence.confidence_flag(calibrated_markets["moneyline"])
     safest = confidence.safest_pick(build_basketball_safest_candidates(calibrated_markets))
 

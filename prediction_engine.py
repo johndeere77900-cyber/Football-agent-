@@ -5,7 +5,7 @@ This module contains the shared mathematical prediction path used by
 production prediction and chronological historical backtesting.
 
 Pipeline:
-DATA → VALIDATION → POINT-IN-TIME FEATURES → MODEL → RAW PROBABILITIES → PROBABILITY VALIDATION → CALIBRATION → MARKET PROBABILITIES → ODDS / IMPLIED PROBABILITY → EDGE / EV → UNCERTAINTY → QUALITY GATE → SIGNAL / PASS → PERSISTENCE
+DATA → VALIDATION → POINT-IN-TIME FEATURES → MODEL → RAW PROBABILITIES → PROBABILITY VALIDATION → CALIBRATION → CALIBRATED VALIDATION → MARKET PROBABILITIES → ODDS / IMPLIED PROBABILITY → EDGE / EV → UNCERTAINTY → QUALITY GATE → SIGNAL / PASS → PERSISTENCE
 """
 
 from __future__ import annotations
@@ -453,9 +453,40 @@ def predict_from_features(
             sport="football",
         )
         prob_valid = True
-    except probability_validation.ProbabilityValidationError:
+    except probability_validation.ProbabilityValidationError as exc:
         prob_valid = False
-        validated_raw_markets = raw_markets
+        unc_info = uncertainty.calculate_uncertainty(
+            feature_coverage=0.0,
+            sample_count=0,
+            top_probability=0.0,
+        )
+        gate_res = quality_gate.evaluate_quality_gate(
+            uncertainty_info=unc_info,
+            probability_valid=False,
+            model_error=True,
+        )
+        contract = prediction_contract.build_prediction_contract(
+            sport="football",
+            fixture_id=fixture_id,
+            league_id=league_id or 0,
+            season=season or 0,
+            raw_markets={},
+            calibrated_markets={},
+            calibration_metadata={
+                "calibration_version": getattr(config, "CALIBRATION_VERSION", "v3.0.0"),
+                "calibration_method": "NONE",
+                "calibration_status": "UNAVAILABLE",
+            },
+            market_analysis={},
+            uncertainty_info=unc_info,
+            quality_gate_result=gate_res,
+            data_cutoff_timestamp=data_cutoff_timestamp,
+            prediction_timestamp=prediction_timestamp,
+        )
+        contract["status"] = "INVALID_PROBABILITY"
+        contract["insufficient_data"] = True
+        contract["reason"] = f"Model probability validation error: {exc}"
+        return contract
 
     # 3. CALIBRATION
     dataset_identity = f"football_{league_id or 'all'}_{season or 'all'}"
@@ -471,6 +502,42 @@ def predict_from_features(
     calibrated_markets = calibration_res["calibrated_markets"]
     calib_meta = calibration_res["calibration_metadata"]
 
+    # 3b. RE-VALIDATE CALIBRATED MARKETS
+    try:
+        calibrated_markets = probability_validation.validate_all_probabilities(
+            calibrated_markets,
+            sport="football",
+        )
+    except probability_validation.ProbabilityValidationError as exc:
+        unc_info = uncertainty.calculate_uncertainty(
+            feature_coverage=0.0,
+            sample_count=0,
+            top_probability=0.0,
+        )
+        gate_res = quality_gate.evaluate_quality_gate(
+            uncertainty_info=unc_info,
+            probability_valid=False,
+            model_error=True,
+        )
+        contract = prediction_contract.build_prediction_contract(
+            sport="football",
+            fixture_id=fixture_id,
+            league_id=league_id or 0,
+            season=season or 0,
+            raw_markets=validated_raw_markets,
+            calibrated_markets={},
+            calibration_metadata=calib_meta,
+            market_analysis={},
+            uncertainty_info=unc_info,
+            quality_gate_result=gate_res,
+            data_cutoff_timestamp=data_cutoff_timestamp,
+            prediction_timestamp=prediction_timestamp,
+        )
+        contract["status"] = "INVALID_CALIBRATED_PROBABILITY"
+        contract["insufficient_data"] = True
+        contract["reason"] = f"Calibrated probability validation error: {exc}"
+        return contract
+
     # 4. MARKET ANALYSIS (ODDS / IMPLIED / EDGE / EV)
     m_analysis = market_analysis.analyze_market_odds(
         calibrated_markets=calibrated_markets,
@@ -480,14 +547,14 @@ def predict_from_features(
         cutoff_timestamp=data_cutoff_timestamp,
     )
 
-    odds_status = "AVAILABLE" if odds_data else "MISSING"
+    odds_status = market_analysis.check_odds_chronology_and_staleness(odds_timestamp, data_cutoff_timestamp) if odds_data else "MISSING"
 
     # 5. UNCERTAINTY
     mr = calibrated_markets.get("match_result", {})
     top_p = max(mr.values()) if isinstance(mr, dict) and mr else 0.0
     h2h_avail = features.get("h2h_available", False)
     feature_coverage = features.get("feature_coverage", 1.0 if h2h_avail else 0.85)
-    sample_count = features.get("sample_count", 5)
+    sample_count = features.get("sample_count", 0)
 
     unc_info = uncertainty.calculate_uncertainty(
         feature_coverage=feature_coverage,
@@ -576,6 +643,10 @@ def predict_historical_fixture(
         h2h_snapshot=h2h_snapshot,
         league_avg_goals=league_avg_goals,
     )
+
+    home_matches = historical_snapshot.get("home", {}).get("matches", 0) if isinstance(historical_snapshot, dict) else 0
+    away_matches = historical_snapshot.get("away", {}).get("matches", 0) if isinstance(historical_snapshot, dict) else 0
+    features["sample_count"] = min(home_matches, away_matches) if (home_matches and away_matches) else (home_matches or away_matches or 0)
 
     elo_probabilities = None
 

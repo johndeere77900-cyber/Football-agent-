@@ -73,17 +73,26 @@ class MulticlassPlattCalibrator:
         self.away_calibrator = away_calibrator
 
     def calibrate_1x2(self, raw_1x2: Dict[str, float]) -> Dict[str, float]:
-        p_home = raw_1x2.get("home_win", 0.33)
-        p_draw = raw_1x2.get("draw", 0.33)
-        p_away = raw_1x2.get("away_win", 0.34)
+        if not isinstance(raw_1x2, dict):
+            raise ValueError("raw_1x2 must be a dictionary.")
 
-        c_home = self.home_calibrator.calibrate(p_home)
-        c_draw = self.draw_calibrator.calibrate(p_draw)
-        c_away = self.away_calibrator.calibrate(p_away)
+        if "home_win" not in raw_1x2 or "draw" not in raw_1x2 or "away_win" not in raw_1x2:
+            raise ValueError("Missing required 1X2 keys (home_win, draw, away_win) in raw_1x2.")
+
+        p_home = raw_1x2["home_win"]
+        p_draw = raw_1x2["draw"]
+        p_away = raw_1x2["away_win"]
+
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) for v in (p_home, p_draw, p_away)):
+            raise ValueError("Invalid non-numeric or boolean value in raw_1x2.")
+
+        c_home = self.home_calibrator.calibrate(float(p_home))
+        c_draw = self.draw_calibrator.calibrate(float(p_draw))
+        c_away = self.away_calibrator.calibrate(float(p_away))
 
         total = c_home + c_draw + c_away
         if total <= 0:
-            return {"home_win": p_home, "draw": p_draw, "away_win": p_away}
+            raise ValueError("Calibrated 1X2 probabilities summed to non-positive total.")
 
         return {
             "home_win": c_home / total,
@@ -153,6 +162,101 @@ def fit_isotonic_scaling(samples: List[Tuple[float, int]]) -> Optional[IsotonicC
     x_thresh = [b[0] for b in blocks]
     y_calib = [b[1] for b in blocks]
     return IsotonicCalibrator(x_thresholds=x_thresh, y_values=y_calib)
+
+
+def filter_samples_by_cutoff(
+    samples: List[Dict[str, Any]],
+    cutoff_timestamp: str,
+) -> List[Dict[str, Any]]:
+    """
+    Reject/exclude every sample where sample_timestamp >= cutoff_timestamp.
+    Only samples strictly earlier than cutoff_timestamp (sample_timestamp < cutoff_timestamp) are eligible.
+    """
+    if not cutoff_timestamp:
+        return []
+
+    eligible = []
+    for s in samples:
+        if not isinstance(s, dict):
+            continue
+
+        ts = str(s.get("timestamp") or s.get("date") or "")
+        if not ts:
+            continue
+
+        if ts < str(cutoff_timestamp):
+            eligible.append(s)
+
+    return eligible
+
+
+def train_walk_forward_calibrator(
+    prior_prediction_samples: List[Dict[str, Any]],
+    cutoff_timestamp: str,
+    sport: str = "football",
+) -> Optional[Any]:
+    """
+    Train a walk-forward calibrator using only eligible prior samples strictly before cutoff_timestamp.
+    """
+    eligible = filter_samples_by_cutoff(prior_prediction_samples, cutoff_timestamp)
+    if len(eligible) < 20:
+        return None
+
+    sport_clean = str(sport).lower()
+
+    if sport_clean == "football":
+        home_samples = []
+        draw_samples = []
+        away_samples = []
+
+        for s in eligible:
+            raw_m = s.get("raw_probabilities") or s.get("probabilities") or {}
+            mr = raw_m.get("match_result", {}) if isinstance(raw_m, dict) else {}
+            act = s.get("actual") or s.get("actual_outcome")
+
+            if act in ("home_win", "draw", "away_win") and isinstance(mr, dict):
+                p_h = mr.get("home_win")
+                p_d = mr.get("draw")
+                p_a = mr.get("away_win")
+
+                if all(v is not None for v in (p_h, p_d, p_a)):
+                    home_samples.append((p_h, 1 if act == "home_win" else 0))
+                    draw_samples.append((p_d, 1 if act == "draw" else 0))
+                    away_samples.append((p_a, 1 if act == "away_win" else 0))
+
+        if len(home_samples) < 20:
+            return None
+
+        cal_h = fit_platt_scaling(home_samples)
+        cal_d = fit_platt_scaling(draw_samples)
+        cal_a = fit_platt_scaling(away_samples)
+
+        if cal_h is None or cal_d is None or cal_a is None:
+            # Fall back to default PlattCalibrators if fitting doesn't converge or has 0 variance
+            cal_h = cal_h or PlattCalibrator(1.0, 0.0)
+            cal_d = cal_d or PlattCalibrator(1.0, 0.0)
+            cal_a = cal_a or PlattCalibrator(1.0, 0.0)
+
+        return MulticlassPlattCalibrator(cal_h, cal_d, cal_a)
+
+    elif sport_clean == "basketball":
+        ml_samples = []
+        for s in eligible:
+            raw_m = s.get("raw_probabilities") or s.get("probabilities") or {}
+            ml = raw_m.get("moneyline", {}) if isinstance(raw_m, dict) else {}
+            act = s.get("actual") or s.get("actual_outcome")
+
+            if act in ("home_win", "away_win") and isinstance(ml, dict):
+                p_h = ml.get("home_win")
+                if p_h is not None:
+                    ml_samples.append((p_h, 1 if act == "home_win" else 0))
+
+        if len(ml_samples) < 20:
+            return None
+
+        return fit_platt_scaling(ml_samples)
+
+    return None
 
 
 def apply_calibration_layer(

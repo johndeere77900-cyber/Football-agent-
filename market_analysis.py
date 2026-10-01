@@ -2,7 +2,8 @@
 Market analysis layer for Football and Basketball.
 
 Calculates bookmaker implied probabilities, market normalized probabilities, edge, and EV.
-Enforces strict validity and freshness rules. Never invents odds or substitutes arbitrary values.
+Enforces strict validity, chronology (odds_timestamp < cutoff_timestamp for historical prediction),
+and freshness rules. Never invents odds or substitutes arbitrary values.
 """
 
 from datetime import datetime, timezone
@@ -12,30 +13,55 @@ import config
 from probability_validation import validate_single_probability, ProbabilityValidationError
 
 
-def is_odds_stale(odds_timestamp: Optional[str], cutoff_timestamp: Optional[str] = None) -> bool:
+def check_odds_chronology_and_staleness(
+    odds_timestamp: Optional[str],
+    cutoff_timestamp: Optional[str] = None,
+) -> str:
     """
-    Check if odds are stale according to configured data policy (MAX_ODDS_AGE_HOURS).
+    Check odds timestamp against cutoff timestamp and freshness policy.
+
+    Returns:
+    - 'AVAILABLE' if odds_timestamp <= cutoff_timestamp (or cutoff is None) and within max age.
+    - 'FUTURE' if cutoff_timestamp is provided and odds_timestamp > cutoff_timestamp.
+    - 'STALE' if odds_timestamp <= cutoff_timestamp but older than max age.
+    - 'MISSING' if odds_timestamp is missing or empty.
     """
     if not odds_timestamp:
-        return True
+        return "MISSING"
+
+    odds_ts_str = str(odds_timestamp).strip()
+    if not odds_ts_str:
+        return "MISSING"
 
     try:
-        iso_str = odds_timestamp.replace("Z", "+00:00")
+        iso_str = odds_ts_str.replace("Z", "+00:00")
         dt_odds = datetime.fromisoformat(iso_str)
 
         if cutoff_timestamp:
-            iso_cut = cutoff_timestamp.replace("Z", "+00:00")
+            iso_cut = str(cutoff_timestamp).strip().replace("Z", "+00:00")
             dt_ref = datetime.fromisoformat(iso_cut)
+            if dt_odds > dt_ref:
+                return "FUTURE"
         else:
             dt_ref = datetime.now(timezone.utc)
 
-        diff_hours = abs((dt_ref - dt_odds).total_seconds()) / 3600.0
-        max_age = float(getattr(config, "MAX_ODDS_AGE_HOURS", 24.0))
+        diff_seconds = (dt_ref - dt_odds).total_seconds()
+        if diff_seconds < 0 and cutoff_timestamp:
+            return "FUTURE"
 
-        return diff_hours > max_age
+        max_age = float(getattr(config, "MAX_ODDS_AGE_HOURS", 24.0))
+        if diff_seconds / 3600.0 > max_age:
+            return "STALE"
+
+        return "AVAILABLE"
 
     except (ValueError, TypeError):
-        return True
+        return "STALE"
+
+
+def is_odds_stale(odds_timestamp: Optional[str], cutoff_timestamp: Optional[str] = None) -> bool:
+    """Helper returning True if odds status is not AVAILABLE."""
+    return check_odds_chronology_and_staleness(odds_timestamp, cutoff_timestamp) != "AVAILABLE"
 
 
 def calculate_outcome_market_analysis(
@@ -99,14 +125,17 @@ def calculate_outcome_market_analysis(
             "odds_status": "INVALID_ODDS",
         }
 
-    if is_odds_stale(odds_timestamp, cutoff_timestamp):
+    status = check_odds_chronology_and_staleness(odds_timestamp, cutoff_timestamp)
+
+    if status != "AVAILABLE":
+        implied_p = 1.0 / odds_val if status in ("STALE", "FUTURE") else None
         return {
             "odds": odds_val,
-            "implied_probability": 1.0 / odds_val,
+            "implied_probability": implied_p,
             "edge": None,
             "ev": None,
             "odds_timestamp": odds_timestamp,
-            "odds_status": "STALE",
+            "odds_status": status,
         }
 
     implied_p = 1.0 / odds_val
@@ -133,7 +162,7 @@ def analyze_market_odds(
     """
     Analyze odds across all supported market choices.
 
-    Returns dict mapping outcome key -> market analysis dict.
+    Returns dict mapping market_key -> outcome_key -> market analysis dict.
     """
     analysis: Dict[str, Any] = {}
 
@@ -153,9 +182,7 @@ def analyze_market_odds(
             for outcome_key, prob in market_val.items():
                 if isinstance(prob, (int, float)) and not isinstance(prob, bool):
                     d_odds = m_odds.get(outcome_key) or m_odds.get(f"implied_{outcome_key}")
-                    # If odds_data was from odds_api.get_odds_for_match which gives implied probabilities directly:
                     if d_odds is not None and 0.0 < float(d_odds) < 1.0 and "implied" in str(m_odds.keys()):
-                        # Convert implied prob back to decimal odds for EV calc:
                         d_odds = 1.0 / float(d_odds)
 
                     raw_p = raw_markets.get(market_key, {}).get(outcome_key) if isinstance(raw_markets, dict) else None

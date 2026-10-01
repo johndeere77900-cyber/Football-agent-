@@ -19,8 +19,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import api_football
 import basketball_model
+import calibration
 import config
-import storage
 import historical_basketball_features
 import historical_elo
 import historical_features
@@ -28,6 +28,7 @@ import historical_h2h
 import historical_match_policy
 import market_grading
 import prediction_engine
+import storage
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -375,6 +376,9 @@ def _historical_prediction_for_fixture(
     fixtures: Sequence[Dict[str, Any]],
     fixture: Dict[str, Any],
     min_prior_matches: int = 5,
+    calibrator: Optional[Any] = None,
+    league_id: Optional[int] = None,
+    season: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Build every prediction input strictly from information before cutoff."""
     if not _fixture_is_gradeable(fixture):
@@ -469,6 +473,11 @@ def _historical_prediction_for_fixture(
             league_avg_goals=league_avg_goals,
             home_elo=elo_snapshot["home_rating"],
             away_elo=elo_snapshot["away_rating"],
+            calibrator=calibrator,
+            data_cutoff_timestamp=cutoff,
+            fixture_id=_fixture_id(fixture),
+            league_id=league_id,
+            season=season,
         )
     )
 
@@ -1656,6 +1665,7 @@ def run_real_backtest(
 
     log: List[Dict[str, Any]] = []
     market_summary = _new_market_summary()
+    prior_prediction_samples: List[Dict[str, Any]] = []
 
     correct = 0
     graded = 0
@@ -1663,6 +1673,13 @@ def run_real_backtest(
     for candidate in selected:
         fixture_id = _fixture_id(
             candidate
+        )
+        cutoff = _fixture_date(candidate)
+
+        calibrator = calibration.train_walk_forward_calibrator(
+            prior_prediction_samples,
+            cutoff,
+            sport="football",
         )
 
         enriched_fixture = (
@@ -1687,6 +1704,9 @@ def run_real_backtest(
                 fixtures,
                 candidate,
                 min_prior_matches=min_prior_matches,
+                calibrator=calibrator,
+                league_id=league_id,
+                season=season,
             )
         )
 
@@ -1757,6 +1777,13 @@ def run_real_backtest(
         match_result = _actual_match_result(
             candidate
         )
+
+        if match_result in ("home_win", "draw", "away_win"):
+            prior_prediction_samples.append({
+                "raw_probabilities": prediction.get("raw_probabilities", {}),
+                "actual": match_result,
+                "timestamp": cutoff,
+            })
 
         predicted = (
             primary.get("pick")
@@ -1984,7 +2011,7 @@ def run_real_backtest(
     # Extract top-level backward-compatible metrics for 1X2 match result
     brier_score = evaluation["match_result"]["brier_score"]
     log_loss = evaluation["match_result"]["log_loss"]
-    calibration = evaluation["match_result"]["calibration"]
+    match_result_calibration = evaluation["match_result"]["calibration"]
 
     result = {
         "fixtures_fetched": len(
@@ -2008,7 +2035,7 @@ def run_real_backtest(
         ),
         "brier_score": brier_score,
         "log_loss": log_loss,
-        "calibration": calibration,
+        "calibration": match_result_calibration,
         "evaluation": evaluation,
         "league_id": league_id,
         "season": season,
@@ -2074,6 +2101,9 @@ def run_real_backtest(
             "league_id": league_id,
             "season": season,
             "dataset_identity": f"football_{league_id}_{season}",
+            "model_version": getattr(config, "MODEL_VERSION", "v3.0.0"),
+            "feature_version": getattr(config, "FEATURE_VERSION", "v3.0.0"),
+            "calibration_version": getattr(config, "CALIBRATION_VERSION", "v3.0.0"),
             "dataset_fixture_count": actual_stored_count,
             "sample_size": sample_size,
             "min_prior_matches": min_prior_matches,
@@ -2083,7 +2113,7 @@ def run_real_backtest(
             "accuracy": result["accuracy"],
             "brier_score": brier_score,
             "log_loss": log_loss,
-            "ece": calibration.get("ece") if isinstance(calibration, dict) else None,
+            "ece": match_result_calibration.get("ece") if isinstance(match_result_calibration, dict) else None,
             "enrichment_status": dataset_status.get("enrichment_status", "NONE"),
             "started_at": timestamp,
             "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -2195,6 +2225,7 @@ def run_basketball_backtest(
     acts_ml = []
     preds_tot = []
     acts_tot = []
+    prior_prediction_samples: List[Dict[str, Any]] = []
 
     correct = 0
     graded = 0
@@ -2207,13 +2238,25 @@ def run_basketball_backtest(
         if not home_id or not away_id or not cutoff:
             continue
 
+        calibrator = calibration.train_walk_forward_calibrator(
+            prior_prediction_samples,
+            cutoff,
+            sport="basketball",
+        )
+
         home_stats = historical_basketball_features.reconstruct_basketball_team_stats(games, home_id, cutoff)
         away_stats = historical_basketball_features.reconstruct_basketball_team_stats(games, away_id, cutoff)
 
         if home_stats is None or away_stats is None:
             continue
 
-        pred = basketball_model.predict_game(candidate, home_stats_override=home_stats, away_stats_override=away_stats)
+        pred = basketball_model.predict_game(
+            candidate,
+            home_stats_override=home_stats,
+            away_stats_override=away_stats,
+            calibrator=calibrator,
+            data_cutoff_timestamp=cutoff,
+        )
         if pred.get("insufficient_data"):
             continue
 
@@ -2222,6 +2265,13 @@ def run_basketball_backtest(
             continue
 
         actual_outcome = "home_win" if h_pts > a_pts else ("away_win" if a_pts > h_pts else "draw")
+
+        if actual_outcome in ("home_win", "away_win"):
+            prior_prediction_samples.append({
+                "raw_probabilities": pred.get("raw_probabilities", {}),
+                "actual": actual_outcome,
+                "timestamp": cutoff,
+            })
         ml_markets = pred["markets"]["moneyline"]
         p_home = ml_markets["home_win"]
         p_away = ml_markets["away_win"]
@@ -2317,6 +2367,9 @@ def run_basketball_backtest(
             "league_id": league_id,
             "season": season,
             "dataset_identity": f"basketball_{league_id}_{season}",
+            "model_version": getattr(config, "MODEL_VERSION", "v3.0.0"),
+            "feature_version": getattr(config, "FEATURE_VERSION", "v3.0.0"),
+            "calibration_version": getattr(config, "CALIBRATION_VERSION", "v3.0.0"),
             "dataset_fixture_count": actual_stored_count,
             "sample_size": sample_size,
             "min_prior_matches": min_prior_matches,

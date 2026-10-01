@@ -72,12 +72,14 @@ def team_scoring_averages(games: List[Dict[str, Any]], team_id: int, cutoff: str
 def reconstruct_basketball_team_stats(games: List[Dict[str, Any]], team_id: int, cutoff: str) -> Optional[Dict[str, Any]]:
     """
     Reconstruct the team statistics payload expected by basketball_model._extract_scoring().
+    Includes real historical matches count.
     """
     avgs = team_scoring_averages(games, team_id, cutoff)
     if avgs is None:
         return None
 
     return {
+        "matches": avgs["matches"],
         "points": {
             "for": {
                 "average": {
