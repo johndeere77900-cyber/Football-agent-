@@ -627,313 +627,124 @@ def _grade_prediction_markets(
     prediction_markets: Dict[str, Any],
     fixture: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Return selected predictions plus independent actual market outcomes."""
+    """Return selected predictions plus independent actual market outcomes from central market policy."""
     selected: Dict[str, Any] = {}
-    outcomes: Dict[str, Any] = {}
 
-    home, away = _goals(fixture)
-
-    total = (
-        home + away
-        if home is not None and away is not None
-        else None
-    )
+    graded_record = market_grading.grade_fixture_markets(fixture)
+    goal_outcomes = graded_record.get("goal_markets", {})
 
     # 1X2
+    actual_1x2 = goal_outcomes.get("match_result", {}).get("outcome") if isinstance(goal_outcomes.get("match_result"), dict) else None
     selected_1x2 = _pick_and_grade(
         prediction_markets.get("match_result"),
-        _actual_match_result(fixture),
+        actual_1x2,
     )
-
     if selected_1x2 is not None:
         selected["match_result"] = selected_1x2
-
-    outcomes["match_result"] = (
-        market_grading.grade_match_result(
-            home,
-            away,
-        )
-    )
 
     # Double Chance
     selected_dc = _pick_and_grade(
         prediction_markets.get("double_chance"),
         _actual_double_chance(fixture),
     )
-
     if selected_dc is not None:
         selected["double_chance"] = selected_dc
 
-    outcomes["double_chance"] = (
-        market_grading.grade_double_chance(
-            home,
-            away,
-        )
-    )
-
     # BTTS
+    actual_btts = _actual_btts(fixture)
     selected_btts = _pick_and_grade(
         prediction_markets.get("btts"),
-        _actual_btts(fixture),
+        actual_btts,
     )
-
     if selected_btts is not None:
         selected["btts"] = selected_btts
 
-    outcomes["btts"] = (
-        market_grading.grade_btts(
-            home,
-            away,
-        )
-    )
-
     # Over / Under
     over_under_selected: Dict[str, Any] = {}
-
-    over_under_outcomes = (
-        market_grading.grade_over_under(
-            home,
-            away,
-        )
-    )
-
-    over_under = prediction_markets.get(
-        "over_under",
-        {},
-    )
+    over_under = prediction_markets.get("over_under", {})
+    match_goals = historical_match_policy.get_totals_and_btts_goals(fixture)
+    total = sum(match_goals) if match_goals is not None else None
 
     if isinstance(over_under, dict):
-        lines: Dict[
-            str,
-            Tuple[float, Dict[str, float]],
-        ] = {}
-
+        lines: Dict[str, Tuple[float, Dict[str, float]]] = {}
         for key, value in over_under.items():
-            if (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-            ):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
                 continue
-
             key_text = str(key)
-
-            if not (
-                key_text.startswith("over_")
-                or key_text.startswith("under_")
-            ):
+            if not (key_text.startswith("over_") or key_text.startswith("under_")):
                 continue
-
-            parts = key_text.split(
-                "_",
-                1,
-            )
-
+            parts = key_text.split("_", 1)
             if len(parts) != 2:
                 continue
-
             try:
-                line = float(
-                    parts[1].replace(
-                        "_",
-                        ".",
-                    )
-                )
+                line = float(parts[1].replace("_", "."))
             except ValueError:
                 continue
+            lines.setdefault(str(line), (line, {}))[1][key_text] = float(value)
 
-            lines.setdefault(
-                str(line),
-                (line, {}),
-            )[1][key_text] = float(value)
-
-        for line_key, (
-            line,
-            distribution,
-        ) in lines.items():
-            actual = _actual_binary_total(
-                total,
-                line,
-            )
+        for line_key, (line, distribution) in lines.items():
+            actual = _actual_binary_total(total, line)
             key_suffix = str(line).replace(".", "_")
             actual_key = f"{actual}_{key_suffix}" if actual in {"over", "under"} else None
-
-            picked = _pick_and_grade(
-                distribution,
-                actual_key,
-            )
-
+            picked = _pick_and_grade(distribution, actual_key)
             if picked is not None:
                 picked["actual"] = actual
-                over_under_selected[
-                    line_key
-                ] = picked
+                over_under_selected[line_key] = picked
 
     if over_under_selected:
-        selected["over_under"] = (
-            over_under_selected
-        )
-
-    outcomes["over_under"] = (
-        over_under_outcomes or {}
-    )
+        selected["over_under"] = over_under_selected
 
     # Team goals
     team_selected: Dict[str, Any] = {}
-
-    team_goals = prediction_markets.get(
-        "team_goals",
-        {},
-    )
-
-    if isinstance(team_goals, dict):
-        lines: Dict[
-            str,
-            Tuple[float, Dict[str, float]],
-        ] = {}
-
+    team_goals = prediction_markets.get("team_goals", {})
+    if isinstance(team_goals, dict) and match_goals is not None:
+        home_m, away_m = match_goals
+        lines: Dict[str, Tuple[float, Dict[str, float]]] = {}
         for key, value in team_goals.items():
-            if (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-            ):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
                 continue
-
-            parsed = _parse_goal_market_key(
-                key
-            )
-
+            parsed = _parse_goal_market_key(key)
             if parsed is None:
                 continue
-
             team, line, original_key = parsed
+            line_key = f"{team}_{str(line).replace('.', '_')}"
+            lines.setdefault(line_key, (line, {}))[1][original_key] = float(value)
 
-            line_key = (
-                f"{team}_{str(line).replace('.', '_')}"
-            )
-
-            lines.setdefault(
-                line_key,
-                (line, {}),
-            )[1][original_key] = float(
-                value
-            )
-
-        for line_key, (
-            line,
-            distribution,
-        ) in lines.items():
-            team = line_key.split(
-                "_",
-                1,
-            )[0]
-
-            actual_goals = (
-                home
-                if team == "home"
-                else away
-            )
-
-            actual = _actual_binary_total(
-                actual_goals,
-                line,
-            )
+        for line_key, (line, distribution) in lines.items():
+            team = line_key.split("_", 1)[0]
+            actual_goals = home_m if team == "home" else away_m
+            actual = _actual_binary_total(actual_goals, line)
             key_suffix = str(line).replace(".", "_")
             actual_key = f"{team}_{actual}_{key_suffix}" if actual in {"over", "under"} else None
-
-            picked = _pick_and_grade(
-                distribution,
-                actual_key,
-            )
-
+            picked = _pick_and_grade(distribution, actual_key)
             if picked is not None:
                 picked["actual"] = actual
-                team_selected[
-                    line_key
-                ] = picked
+                team_selected[line_key] = picked
 
     if team_selected:
-        selected["team_goals"] = (
-            team_selected
-        )
+        selected["team_goals"] = team_selected
 
-    outcomes["team_goals"] = (
-        market_grading.grade_team_goals(
-            home,
-            away,
-        )
-        or {}
-    )
+    # Scoreline
+    scorelines = prediction_markets.get("top_scorelines") or prediction_markets.get("scoreline")
+    actual_score = f"{match_goals[0]}-{match_goals[1]}" if match_goals is not None else None
 
-    # Correct score / top scorelines
-    scorelines = prediction_markets.get(
-        "top_scorelines"
-    )
-
-    if not isinstance(scorelines, list):
-        scorelines = prediction_markets.get(
-            "scoreline"
-        )
-
-    if (
-        isinstance(scorelines, list)
-        and scorelines
-    ):
+    if isinstance(scorelines, list) and scorelines:
         clean_scores = {
-            str(item.get("score")):
-                _safe_float(
-                    item.get("probability")
-                )
+            str(item.get("score")): _safe_float(item.get("probability"))
             for item in scorelines
-            if (
-                isinstance(item, dict)
-                and item.get("score") is not None
-                and _safe_float(
-                    item.get("probability")
-                ) is not None
-            )
+            if isinstance(item, dict) and item.get("score") is not None and _safe_float(item.get("probability")) is not None
         }
-
-        actual_score = (
-            f"{home}-{away}"
-            if home is not None
-            and away is not None
-            else None
-        )
-
-        picked = _pick_and_grade(
-            clean_scores,
-            actual_score,
-        )
-
+        picked = _pick_and_grade(clean_scores, actual_score)
         if picked is not None:
             selected["scoreline"] = picked
-
     elif isinstance(scorelines, dict):
-        actual_score = (
-            f"{home}-{away}"
-            if home is not None
-            and away is not None
-            else None
-        )
-
-        picked = _pick_and_grade(
-            scorelines,
-            actual_score,
-        )
-
+        picked = _pick_and_grade(scorelines, actual_score)
         if picked is not None:
             selected["scoreline"] = picked
-
-    outcomes["scoreline"] = (
-        market_grading.grade_scoreline(
-            home,
-            away,
-        )
-    )
 
     return {
         "selected": selected,
-        "outcomes": outcomes,
+        "outcomes": goal_outcomes,
     }
 
 

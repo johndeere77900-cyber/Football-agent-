@@ -560,6 +560,10 @@ def get_league_fixtures_with_metadata(league_id, season, start_page=1, max_budge
     if total > start_page:
         for p in range(start_page + 1, total + 1):
             p_data = get_league_fixtures_page(league_id, season, page=p, **kwargs)
+            if p_data["expected_pages"] != total:
+                raise APIFootballError(
+                    f"Inconsistent pagination metadata across multi-page fetch: expected {total}, got {p_data['expected_pages']} on page {p}"
+                )
             raw_pages.append(p_data["fixtures"])
             pages_completed += 1
 

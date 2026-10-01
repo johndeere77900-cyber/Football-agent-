@@ -260,17 +260,37 @@ def test_rejected_count_survives_resumed_sync_football_and_basketball(isolated_d
     assert st["status"] == "INCOMPLETE"
 
 
-def test_empty_api_response_remains_incomplete(isolated_db):
-    # An API response that returns no valid fixtures/games must leave the dataset INCOMPLETE
+def test_empty_page_acquisition_scenarios_football_and_basketball(isolated_db):
+    fix1 = sample_football_fixture(1301)
+    bg1 = sample_basketball_game(8301)
+
+    # A. Empty first page -> INCOMPLETE
     def mock_empty_p1(league_id, season, page=1, max_budget=None):
         return {"fixtures": [], "page": 1, "expected_pages": 1}
 
     with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_p1):
-        rep = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+        rep_fb_empty = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    assert rep_fb_empty["status"] == "INCOMPLETE"
 
-    assert rep["status"] == "INCOMPLETE"
-    st = storage.get_historical_dataset_status(39, 2024, sport="football")
-    assert st["status"] == "INCOMPLETE"
+    # B. Valid 1-page dataset -> COMPLETE
+    def mock_valid_1p(league_id, season, page=1, max_budget=None):
+        return {"fixtures": [fix1], "page": 1, "expected_pages": 1}
+
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_valid_1p):
+        rep_fb_valid = historical_sync.sync_historical_fixtures(league_id=39, season=2024, refresh=True)
+    assert rep_fb_valid["status"] == "COMPLETE"
+    assert rep_fb_valid["final_stored_count"] == 1
+
+    # C. Basketball valid multi-page dataset -> COMPLETE
+    def mock_b_multi(league_id, season, page=1, max_budget=None):
+        if page == 1:
+            return {"games": [bg1], "page": 1, "expected_pages": 2}
+        return {"games": [sample_basketball_game(8302)], "page": 2, "expected_pages": 2}
+
+    with patch("basketball_api.get_league_games_page", side_effect=mock_b_multi):
+        rep_bb_multi = historical_sync.sync_historical_basketball_games(league_id=12, season=2024, refresh=True)
+    assert rep_bb_multi["status"] == "COMPLETE"
+    assert rep_bb_multi["final_stored_count"] == 2
 
 
 def test_changing_pagination_totals_fails_closed(isolated_db):

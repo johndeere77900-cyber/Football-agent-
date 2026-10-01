@@ -45,7 +45,9 @@ API-Football payloads contain both top-level `goals` and nested `score` objects:
 - `score.penalty`: `{home, away}` — Goals scored during penalty shootouts. **Penalty shootout kicks are never counted as match goals** for 1X2, Totals, BTTS, Elo, or form calculations.
 6. **Multi-Sport Identity**:
    - Manifests are keyed by `(sport, league_id, season)` preventing collision between football league 12 and basketball league 12.
-7. **Backtest Experiment Recording**:
+7. **Empty-Page Acquisition Policy**:
+   - An API response returning an empty payload list (`response: []`) cannot mark a dataset as `COMPLETE`. `valid_fixtures_count > 0` and `final_stored_count > 0` are strictly required, ensuring empty queries remain `INCOMPLETE`.
+8. **Backtest Experiment Recording**:
    - Backtest results, market-level metrics (Brier score, log loss, calibration/ECE), sample sizes, and seed details are permanently recorded in `backtest_runs` and `backtest_market_metrics`.
 
 ## CLI Commands

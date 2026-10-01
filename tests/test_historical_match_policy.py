@@ -124,6 +124,44 @@ def test_backtest_actual_outcome_consumer_semantics():
     assert backtest._actual_btts(aet_fix) == "yes"
 
 
+def test_all_consumers_agree_on_aet_pen_settlement():
+    import backtest
+    import market_grading
+
+    aet_fixture = {
+        "fixture": {"id": 99, "date": "2025-01-01T15:00:00+00:00", "status": {"short": "AET"}},
+        "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+        "goals": {"home": 2, "away": 1},
+        "score": {"fulltime": {"home": 1, "away": 1}},
+    }
+
+    # 1. backtest._actual_match_result()
+    act_backtest_1x2 = backtest._actual_match_result(aet_fixture)
+
+    # 2. grade_fixture_markets() match_result
+    graded = market_grading.grade_fixture_markets(aet_fixture)["goal_markets"]
+    act_grading_1x2 = graded["match_result"]["outcome"]
+
+    # 3. backtest._grade_prediction_markets() match_result
+    pred_markets = {
+        "match_result": {"draw": 0.8, "home_win": 0.1, "away_win": 0.1},
+        "over_under": {"over_2_5": 0.7, "under_2_5": 0.3},
+    }
+    graded_backtest = backtest._grade_prediction_markets(pred_markets, aet_fixture)
+    sel_1x2 = graded_backtest["selected"]["match_result"]
+
+    # ALL THREE MUST AGREE ON REGULATION 1X2 ("draw")
+    assert act_backtest_1x2 == "draw"
+    assert act_grading_1x2 == "draw"
+    assert sel_1x2["actual"] == "draw"
+    assert sel_1x2["won"] is True
+
+    # OVER/UNDER MUST USE MATCH GOALS (2+1 = 3 > 2.5 => over)
+    assert graded["over_under"]["over_2_5"]["outcome"] == "over"
+    assert graded_backtest["selected"]["over_under"]["2.5"]["actual"] == "over"
+    assert graded_backtest["selected"]["over_under"]["2.5"]["won"] is True
+
+
 def test_historical_features_and_h2h_consumer_semantics():
     import historical_features
     import historical_h2h
