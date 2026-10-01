@@ -1665,7 +1665,7 @@ def run_real_backtest(
 
     log: List[Dict[str, Any]] = []
     market_summary = _new_market_summary()
-    prior_prediction_samples: List[Dict[str, Any]] = []
+    prior_raw_predictions_by_id: Dict[Any, Dict[str, Any]] = {}
 
     correct = 0
     graded = 0
@@ -1676,8 +1676,32 @@ def run_real_backtest(
         )
         cutoff = _fixture_date(candidate)
 
+        for prev_f in finished:
+            prev_date = _fixture_date(prev_f)
+            if prev_date >= cutoff:
+                break
+            prev_id = _fixture_id(prev_f)
+            if prev_id not in prior_raw_predictions_by_id:
+                prev_hist = _historical_prediction_for_fixture(
+                    fixtures,
+                    prev_f,
+                    min_prior_matches=min_prior_matches,
+                    calibrator=None,
+                    league_id=league_id,
+                    season=season,
+                )
+                if prev_hist is not None:
+                    prev_pred = prev_hist["prediction"]
+                    prev_act = _actual_match_result(prev_f)
+                    if prev_act in ("home_win", "draw", "away_win") and isinstance(prev_pred, dict):
+                        prior_raw_predictions_by_id[prev_id] = {
+                            "raw_probabilities": prev_pred.get("raw_probabilities", {}),
+                            "actual": prev_act,
+                            "timestamp": prev_date,
+                        }
+
         calibrator = calibration.train_walk_forward_calibrator(
-            prior_prediction_samples,
+            list(prior_raw_predictions_by_id.values()),
             cutoff,
             sport="football",
         )
@@ -1778,12 +1802,12 @@ def run_real_backtest(
             candidate
         )
 
-        if match_result in ("home_win", "draw", "away_win"):
-            prior_prediction_samples.append({
+        if match_result in ("home_win", "draw", "away_win") and fixture_id is not None:
+            prior_raw_predictions_by_id[fixture_id] = {
                 "raw_probabilities": prediction.get("raw_probabilities", {}),
                 "actual": match_result,
                 "timestamp": cutoff,
-            })
+            }
 
         predicted = (
             primary.get("pick")
@@ -2225,7 +2249,7 @@ def run_basketball_backtest(
     acts_ml = []
     preds_tot = []
     acts_tot = []
-    prior_prediction_samples: List[Dict[str, Any]] = []
+    prior_raw_predictions_by_id: Dict[Any, Dict[str, Any]] = {}
 
     correct = 0
     graded = 0
@@ -2238,8 +2262,32 @@ def run_basketball_backtest(
         if not home_id or not away_id or not cutoff:
             continue
 
+        for prev_g in finished:
+            prev_date = str(prev_g.get("date", ""))
+            if prev_date >= cutoff:
+                break
+            prev_id = prev_g.get("id")
+            if prev_id not in prior_raw_predictions_by_id:
+                prev_h_id = prev_g.get("teams", {}).get("home", {}).get("id")
+                prev_a_id = prev_g.get("teams", {}).get("away", {}).get("id")
+                if prev_h_id and prev_a_id:
+                    p_h_stats = historical_basketball_features.reconstruct_basketball_team_stats(games, prev_h_id, prev_date)
+                    p_a_stats = historical_basketball_features.reconstruct_basketball_team_stats(games, prev_a_id, prev_date)
+                    if p_h_stats and p_a_stats:
+                        prev_pred = basketball_model.predict_game(prev_g, home_stats_override=p_h_stats, away_stats_override=p_a_stats, calibrator=None)
+                        if not prev_pred.get("insufficient_data"):
+                            p_h_pts, p_a_pts = historical_match_policy.get_basketball_match_points(prev_g)
+                            if p_h_pts is not None and p_a_pts is not None:
+                                p_act = "home_win" if p_h_pts > p_a_pts else ("away_win" if p_a_pts > p_h_pts else "draw")
+                                if p_act in ("home_win", "away_win"):
+                                    prior_raw_predictions_by_id[prev_id] = {
+                                        "raw_probabilities": prev_pred.get("raw_probabilities", {}),
+                                        "actual": p_act,
+                                        "timestamp": prev_date,
+                                    }
+
         calibrator = calibration.train_walk_forward_calibrator(
-            prior_prediction_samples,
+            list(prior_raw_predictions_by_id.values()),
             cutoff,
             sport="basketball",
         )
@@ -2266,12 +2314,12 @@ def run_basketball_backtest(
 
         actual_outcome = "home_win" if h_pts > a_pts else ("away_win" if a_pts > h_pts else "draw")
 
-        if actual_outcome in ("home_win", "away_win"):
-            prior_prediction_samples.append({
+        if actual_outcome in ("home_win", "away_win") and candidate.get("id") is not None:
+            prior_raw_predictions_by_id[candidate.get("id")] = {
                 "raw_probabilities": pred.get("raw_probabilities", {}),
                 "actual": actual_outcome,
                 "timestamp": cutoff,
-            })
+            }
         ml_markets = pred["markets"]["moneyline"]
         p_home = ml_markets["home_win"]
         p_away = ml_markets["away_win"]

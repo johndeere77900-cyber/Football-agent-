@@ -445,6 +445,9 @@ def init_db():
                         league_id BIGINT NOT NULL,
                         season INTEGER NOT NULL,
                         dataset_identity TEXT,
+                        model_version TEXT,
+                        feature_version TEXT,
+                        calibration_version TEXT,
                         dataset_fixture_count INTEGER NOT NULL,
                         sample_size INTEGER NOT NULL,
                         min_prior_matches INTEGER NOT NULL,
@@ -463,6 +466,9 @@ def init_db():
                     )
                     """
                 )
+                cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS model_version TEXT")
+                cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS feature_version TEXT")
+                cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS calibration_version TEXT")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS backtest_market_metrics (
@@ -760,6 +766,9 @@ def init_db():
                     league_id INTEGER NOT NULL,
                     season INTEGER NOT NULL,
                     dataset_identity TEXT,
+                    model_version TEXT,
+                    feature_version TEXT,
+                    calibration_version TEXT,
                     dataset_fixture_count INTEGER NOT NULL,
                     sample_size INTEGER NOT NULL,
                     min_prior_matches INTEGER NOT NULL,
@@ -778,6 +787,9 @@ def init_db():
                 )
                 """
             )
+            _ensure_column_sqlite(conn, "backtest_runs", "model_version", "TEXT")
+            _ensure_column_sqlite(conn, "backtest_runs", "feature_version", "TEXT")
+            _ensure_column_sqlite(conn, "backtest_runs", "calibration_version", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS backtest_market_metrics (
@@ -1152,6 +1164,9 @@ def save_backtest_run(run_data, market_metrics=None):
     league_id = _validate_positive_int(run_data.get("league_id"), "league_id")
     season = _validate_positive_int(run_data.get("season"), "season")
     dataset_identity = run_data.get("dataset_identity") or f"{sport}_{league_id}_{season}"
+    model_version = run_data.get("model_version") or getattr(config, "MODEL_VERSION", "v3.0.0")
+    feature_version = run_data.get("feature_version") or getattr(config, "FEATURE_VERSION", "v3.0.0")
+    calibration_version = run_data.get("calibration_version") or getattr(config, "CALIBRATION_VERSION", "v3.0.0")
     dataset_fixture_count = _validate_non_negative_int(run_data.get("dataset_fixture_count", 0), "dataset_fixture_count")
     sample_size = _validate_positive_int(run_data.get("sample_size", 1), "sample_size")
     min_prior_matches = _validate_non_negative_int(run_data.get("min_prior_matches", 0), "min_prior_matches")
@@ -1177,25 +1192,30 @@ def save_backtest_run(run_data, market_metrics=None):
                     cur.execute(
                         """
                         INSERT INTO backtest_runs (
-                            run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
-                            sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
-                            accuracy, brier_score, log_loss, ece, enrichment_status,
-                            started_at, completed_at, evaluation_json, code_version
+                            run_id, sport, league_id, season, dataset_identity,
+                            model_version, feature_version, calibration_version,
+                            dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
+                            selected_count, graded_count, accuracy, brier_score, log_loss, ece,
+                            enrichment_status, started_at, completed_at, evaluation_json, code_version
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (run_id) DO UPDATE SET
                             accuracy = EXCLUDED.accuracy,
                             brier_score = EXCLUDED.brier_score,
                             log_loss = EXCLUDED.log_loss,
                             ece = EXCLUDED.ece,
+                            model_version = EXCLUDED.model_version,
+                            feature_version = EXCLUDED.feature_version,
+                            calibration_version = EXCLUDED.calibration_version,
                             evaluation_json = EXCLUDED.evaluation_json,
                             completed_at = EXCLUDED.completed_at
                         """,
                         (
-                            run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
-                            sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
-                            accuracy, brier_score, log_loss, ece, enrichment_status,
-                            started_at, completed_at, eval_json_str, code_version,
+                            run_id, sport, league_id, season, dataset_identity,
+                            model_version, feature_version, calibration_version,
+                            dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
+                            selected_count, graded_count, accuracy, brier_score, log_loss, ece,
+                            enrichment_status, started_at, completed_at, eval_json_str, code_version,
                         ),
                     )
 
@@ -1225,25 +1245,30 @@ def save_backtest_run(run_data, market_metrics=None):
             conn.execute(
                 """
                 INSERT INTO backtest_runs (
-                    run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
-                    sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
-                    accuracy, brier_score, log_loss, ece, enrichment_status,
-                    started_at, completed_at, evaluation_json, code_version
+                    run_id, sport, league_id, season, dataset_identity,
+                    model_version, feature_version, calibration_version,
+                    dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
+                    selected_count, graded_count, accuracy, brier_score, log_loss, ece,
+                    enrichment_status, started_at, completed_at, evaluation_json, code_version
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (run_id) DO UPDATE SET
                     accuracy = excluded.accuracy,
                     brier_score = excluded.brier_score,
                     log_loss = excluded.log_loss,
                     ece = excluded.ece,
+                    model_version = excluded.model_version,
+                    feature_version = excluded.feature_version,
+                    calibration_version = excluded.calibration_version,
                     evaluation_json = excluded.evaluation_json,
                     completed_at = excluded.completed_at
                 """,
                 (
-                    run_id, sport, league_id, season, dataset_identity, dataset_fixture_count,
-                    sample_size, min_prior_matches, sample_seed, selected_count, graded_count,
-                    accuracy, brier_score, log_loss, ece, enrichment_status,
-                    started_at, completed_at, eval_json_str, code_version,
+                    run_id, sport, league_id, season, dataset_identity,
+                    model_version, feature_version, calibration_version,
+                    dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
+                    selected_count, graded_count, accuracy, brier_score, log_loss, ece,
+                    enrichment_status, started_at, completed_at, eval_json_str, code_version,
                 ),
             )
 

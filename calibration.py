@@ -164,6 +164,23 @@ def fit_isotonic_scaling(samples: List[Tuple[float, int]]) -> Optional[IsotonicC
     return IsotonicCalibrator(x_thresholds=x_thresh, y_values=y_calib)
 
 
+def _parse_utc_datetime(ts_val: Any) -> Optional[datetime]:
+    """Parse a timestamp into a timezone-aware UTC datetime. Reject timezone-naive or malformed inputs."""
+    if not ts_val or isinstance(ts_val, bool):
+        return None
+    ts_str = str(ts_val).strip()
+    if not ts_str:
+        return None
+    try:
+        iso_str = ts_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            return None
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 def filter_samples_by_cutoff(
     samples: List[Dict[str, Any]],
     cutoff_timestamp: str,
@@ -171,8 +188,10 @@ def filter_samples_by_cutoff(
     """
     Reject/exclude every sample where sample_timestamp >= cutoff_timestamp.
     Only samples strictly earlier than cutoff_timestamp (sample_timestamp < cutoff_timestamp) are eligible.
+    Both timestamps are parsed as timezone-aware UTC datetimes.
     """
-    if not cutoff_timestamp:
+    cutoff_dt = _parse_utc_datetime(cutoff_timestamp)
+    if cutoff_dt is None:
         return []
 
     eligible = []
@@ -180,11 +199,12 @@ def filter_samples_by_cutoff(
         if not isinstance(s, dict):
             continue
 
-        ts = str(s.get("timestamp") or s.get("date") or "")
-        if not ts:
+        ts_val = s.get("timestamp") or s.get("date") or s.get("prediction_timestamp")
+        sample_dt = _parse_utc_datetime(ts_val)
+        if sample_dt is None:
             continue
 
-        if ts < str(cutoff_timestamp):
+        if sample_dt < cutoff_dt:
             eligible.append(s)
 
     return eligible
@@ -232,10 +252,7 @@ def train_walk_forward_calibrator(
         cal_a = fit_platt_scaling(away_samples)
 
         if cal_h is None or cal_d is None or cal_a is None:
-            # Fall back to default PlattCalibrators if fitting doesn't converge or has 0 variance
-            cal_h = cal_h or PlattCalibrator(1.0, 0.0)
-            cal_d = cal_d or PlattCalibrator(1.0, 0.0)
-            cal_a = cal_a or PlattCalibrator(1.0, 0.0)
+            return None
 
         return MulticlassPlattCalibrator(cal_h, cal_d, cal_a)
 
@@ -293,16 +310,29 @@ def apply_calibration_layer(
     try:
         if sport_clean == "football":
             if "match_result" in raw_markets and isinstance(raw_markets["match_result"], dict):
-                if isinstance(calibrator, MulticlassPlattCalibrator):
+                if hasattr(calibrator, "calibrate_1x2"):
                     calibrated_markets["match_result"] = calibrator.calibrate_1x2(raw_markets["match_result"])
+                else:
+                    raise ValueError("Calibrator lacks calibrate_1x2 method for football.")
 
         elif sport_clean == "basketball":
             if "moneyline" in raw_markets and isinstance(raw_markets["moneyline"], dict):
                 ml = raw_markets["moneyline"]
+                p_home = ml.get("home_win")
+                p_away = ml.get("away_win")
+                if p_home is None or p_away is None or isinstance(p_home, bool) or isinstance(p_away, bool):
+                    raise ValueError("Basketball moneyline missing or invalid home_win/away_win.")
+                p_home = float(p_home)
+                p_away = float(p_away)
+                if not math.isfinite(p_home) or not math.isfinite(p_away):
+                    raise ValueError("Basketball moneyline probabilities must be finite.")
+
                 if hasattr(calibrator, "calibrate"):
-                    c_home = calibrator.calibrate(ml.get("home_win", 0.5))
+                    c_home = calibrator.calibrate(p_home)
                     c_away = 1.0 - c_home
                     calibrated_markets["moneyline"] = {"home_win": c_home, "away_win": c_away}
+                else:
+                    raise ValueError("Calibrator lacks calibrate method for basketball.")
 
         status = "APPLIED"
 

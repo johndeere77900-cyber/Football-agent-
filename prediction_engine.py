@@ -547,6 +547,14 @@ def predict_from_features(
         cutoff_timestamp=data_cutoff_timestamp,
     )
 
+    if calib_meta["calibration_status"] == "ERROR_FALLBACK_RAW":
+        for m_key, m_val in m_analysis.items():
+            if isinstance(m_val, dict):
+                for o_key, o_val in m_val.items():
+                    if isinstance(o_val, dict):
+                        o_val["edge"] = None
+                        o_val["ev"] = None
+
     odds_status = market_analysis.check_odds_chronology_and_staleness(odds_timestamp, data_cutoff_timestamp) if odds_data else "MISSING"
 
     # 5. UNCERTAINTY
@@ -613,6 +621,9 @@ def predict_from_features(
             ),
         },
     )
+
+    if calib_meta["calibration_status"] == "ERROR_FALLBACK_RAW":
+        res["status"] = "CALIBRATION_ERROR"
 
     return res
 

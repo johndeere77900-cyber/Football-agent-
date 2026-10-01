@@ -48,7 +48,7 @@ def test_basketball_odds_and_ev():
     out = market_analysis.calculate_outcome_market_analysis(
         calibrated_prob=0.55,
         decimal_odds=1.91,
-        odds_timestamp="2026-03-30T12:00:00+00:00",
+        odds_timestamp="2026-03-30T11:55:00+00:00",
         cutoff_timestamp="2026-03-30T12:00:00+00:00",
     )
     assert out["odds_status"] == "AVAILABLE"

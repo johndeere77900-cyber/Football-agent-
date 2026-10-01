@@ -13,6 +13,23 @@ import config
 from probability_validation import validate_single_probability, ProbabilityValidationError
 
 
+def _parse_utc_datetime(ts_val: Any) -> Optional[datetime]:
+    """Parse a timestamp into a timezone-aware UTC datetime. Reject timezone-naive or malformed inputs."""
+    if not ts_val or isinstance(ts_val, bool):
+        return None
+    ts_str = str(ts_val).strip()
+    if not ts_str:
+        return None
+    try:
+        iso_str = ts_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            return None
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 def check_odds_chronology_and_staleness(
     odds_timestamp: Optional[str],
     cutoff_timestamp: Optional[str] = None,
@@ -21,42 +38,36 @@ def check_odds_chronology_and_staleness(
     Check odds timestamp against cutoff timestamp and freshness policy.
 
     Returns:
-    - 'AVAILABLE' if odds_timestamp <= cutoff_timestamp (or cutoff is None) and within max age.
-    - 'FUTURE' if cutoff_timestamp is provided and odds_timestamp > cutoff_timestamp.
-    - 'STALE' if odds_timestamp <= cutoff_timestamp but older than max age.
+    - 'AVAILABLE' if odds_timestamp < cutoff_timestamp (or cutoff is None) and within max age.
+    - 'FUTURE' if cutoff_timestamp is provided and odds_timestamp >= cutoff_timestamp.
+    - 'STALE' if odds_timestamp < cutoff_timestamp but older than max age.
     - 'MISSING' if odds_timestamp is missing or empty.
     """
     if not odds_timestamp:
         return "MISSING"
 
-    odds_ts_str = str(odds_timestamp).strip()
-    if not odds_ts_str:
+    dt_odds = _parse_utc_datetime(odds_timestamp)
+    if dt_odds is None:
         return "MISSING"
 
-    try:
-        iso_str = odds_ts_str.replace("Z", "+00:00")
-        dt_odds = datetime.fromisoformat(iso_str)
-
-        if cutoff_timestamp:
-            iso_cut = str(cutoff_timestamp).strip().replace("Z", "+00:00")
-            dt_ref = datetime.fromisoformat(iso_cut)
-            if dt_odds > dt_ref:
-                return "FUTURE"
-        else:
+    if cutoff_timestamp:
+        dt_ref = _parse_utc_datetime(cutoff_timestamp)
+        if dt_ref is None:
             dt_ref = datetime.now(timezone.utc)
-
-        diff_seconds = (dt_ref - dt_odds).total_seconds()
-        if diff_seconds < 0 and cutoff_timestamp:
+        if dt_odds >= dt_ref:
             return "FUTURE"
+    else:
+        dt_ref = datetime.now(timezone.utc)
 
-        max_age = float(getattr(config, "MAX_ODDS_AGE_HOURS", 24.0))
-        if diff_seconds / 3600.0 > max_age:
-            return "STALE"
+    diff_seconds = (dt_ref - dt_odds).total_seconds()
+    if diff_seconds <= 0 and cutoff_timestamp:
+        return "FUTURE"
 
-        return "AVAILABLE"
-
-    except (ValueError, TypeError):
+    max_age = float(getattr(config, "MAX_ODDS_AGE_HOURS", 24.0))
+    if diff_seconds / 3600.0 > max_age:
         return "STALE"
+
+    return "AVAILABLE"
 
 
 def is_odds_stale(odds_timestamp: Optional[str], cutoff_timestamp: Optional[str] = None) -> bool:
@@ -128,7 +139,7 @@ def calculate_outcome_market_analysis(
     status = check_odds_chronology_and_staleness(odds_timestamp, cutoff_timestamp)
 
     if status != "AVAILABLE":
-        implied_p = 1.0 / odds_val if status in ("STALE", "FUTURE") else None
+        implied_p = 1.0 / odds_val if status == "STALE" else None
         return {
             "odds": odds_val,
             "implied_probability": implied_p,
