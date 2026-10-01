@@ -868,6 +868,9 @@ def parse_operation_parameters(operation, text):
     quantity = parse_quantity(normalized, default=1)
     season = parse_season(normalized)
 
+    req_match = re.search(r"\b(req_[a-zA-Z0-9]+)\b", text)
+    extracted_req_id = req_match.group(1) if req_match else None
+
     params = {
         "raw_text": text,
         "sport": sport,
@@ -878,6 +881,7 @@ def parse_operation_parameters(operation, text):
         "quantity": quantity,
         "season": season,
         "sample": parse_quantity(normalized, default=20),
+        "request_id": extracted_req_id,
     }
 
     if operation == "backtest":
@@ -1147,16 +1151,27 @@ def handle_backtest_op(params, request_id):
         return f"⚠️ Backtest failed: {str(exc)[:200]}"
 
 
-def handle_backtest_status_op():
+def handle_backtest_status_op(params=None):
     """Execute /backtest_status operation."""
-    req = storage.get_latest_operation_request(operation="backtest")
+    if not isinstance(params, dict):
+        params = {}
+
+    target_req_id = params.get("request_id") or params.get("target_request_id")
+    req = None
+
+    if target_req_id:
+        req = storage.get_operation_request(target_req_id)
+        if not req:
+            return f"🧪 *BACKTEST STATUS*\nRequest ID `{target_req_id}` was not found."
+    else:
+        req = storage.get_latest_operation_request(operation="backtest")
 
     if not req:
         return "🧪 *BACKTEST STATUS*\nNo backtest requests recorded yet. Run `/backtest` to launch one."
 
     req_id = req["request_id"]
     sport = req.get("sport") or "football"
-    params = req.get("parameters") or {}
+    p_data = req.get("parameters") or {}
     status = req.get("status", "QUEUED")
     created_at = req.get("created_at", "N/A")
     started_at = req.get("started_at", "N/A")
@@ -1166,11 +1181,11 @@ def handle_backtest_status_op():
     err_msg = req.get("error_message")
 
     lines = [
-        "🧪 *LATEST BACKTEST STATUS*",
+        "🧪 *BACKTEST STATUS*",
         f"• *Request ID:* `{req_id}`",
         f"• *Sport:* {sport.title()}",
-        f"• *League ID:* {params.get('league_id', 'N/A')}",
-        f"• *Season:* {params.get('season', 'N/A')}",
+        f"• *League ID:* {p_data.get('league_id', 'N/A')}",
+        f"• *Season:* {p_data.get('season', 'N/A')}",
         f"• *Status:* {status}",
         f"• *Created:* {created_at}",
         f"• *Started:* {started_at or 'N/A'}",
@@ -1345,9 +1360,9 @@ def handle_data_status_op(params):
     return "\n".join(lines)
 
 
-def handle_logs_op():
-    """Execute /logs operation displaying bounded recent activity."""
-    logs = storage.get_recent_operation_logs(limit=10)
+def handle_logs_op(chat_id=None):
+    """Execute /logs operation displaying bounded recent activity scoped to chat_id."""
+    logs = storage.get_recent_operation_logs(limit=10, chat_id=chat_id)
     if not logs:
         return "📜 *OPERATIONAL LOGS*\nNo recent operation logs recorded."
 
@@ -1359,9 +1374,9 @@ def handle_logs_op():
     return "\n".join(lines)
 
 
-def handle_errors_op():
-    """Execute /errors operation displaying recent sanitized errors."""
-    errors = storage.get_recent_operation_errors(limit=10)
+def handle_errors_op(chat_id=None):
+    """Execute /errors operation displaying recent sanitized errors scoped to chat_id."""
+    errors = storage.get_recent_operation_errors(limit=10, chat_id=chat_id)
     if not errors:
         return "⚠️ *OPERATIONAL ERRORS*\nNo recent operational errors recorded."
 
@@ -1532,7 +1547,7 @@ def process_telegram_update(
         elif operation == "backtest":
             response_text = handle_backtest_op(params, actual_request_id)
         elif operation == "backtest_status":
-            response_text = handle_backtest_status_op()
+            response_text = handle_backtest_status_op(params)
         elif operation == "evaluate":
             response_text = handle_evaluate_op()
         elif operation == "health":
@@ -1542,9 +1557,9 @@ def process_telegram_update(
         elif operation == "data_status":
             response_text = handle_data_status_op(params)
         elif operation == "logs":
-            response_text = handle_logs_op()
+            response_text = handle_logs_op(current_chat)
         elif operation == "errors":
-            response_text = handle_errors_op()
+            response_text = handle_errors_op(current_chat)
         elif operation == "config":
             response_text = handle_config_op()
         elif operation == "retrain":

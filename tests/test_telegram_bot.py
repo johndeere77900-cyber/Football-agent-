@@ -478,3 +478,134 @@ def test_no_cross_market_safest_sorting(monkeypatch):
     assert len(results) == 2
     assert results[0]["fixture"]["fixture"]["id"] == 1
     assert results[1]["fixture"]["fixture"]["id"] == 2
+
+
+def test_unique_telegram_update_id_constraint():
+    telegram_bot.storage.init_db()
+
+    # Save first operation request
+    telegram_bot.storage.save_operation_request(
+        request_id="req_unique_1",
+        chat_id="chat_1",
+        operation="health",
+        telegram_update_id="upd_uniq_100",
+    )
+
+    # Save second operation request with SAME telegram_update_id
+    telegram_bot.storage.save_operation_request(
+        request_id="req_unique_2",
+        chat_id="chat_1",
+        operation="health",
+        telegram_update_id="upd_uniq_100",
+    )
+
+    # Re-running init_db triggers migration and unique index enforcement
+    telegram_bot.storage.init_db()
+
+    # The lookup by update_id returns the earliest stored request_id
+    found = telegram_bot.storage.get_operation_request_by_update_id("upd_uniq_100")
+    assert found is not None
+    assert found["request_id"] in ("req_unique_1", "req_unique_2")
+
+
+def test_db_error_propagation_get_operation_request(monkeypatch):
+    def bad_connect():
+        import sqlite3
+        raise sqlite3.OperationalError("Simulated database connection failure")
+
+    monkeypatch.setattr(telegram_bot.storage, "_connect", bad_connect)
+
+    import sqlite3
+    import pytest
+
+    with pytest.raises(sqlite3.OperationalError):
+        telegram_bot.storage.get_operation_request("req_123")
+
+    with pytest.raises(sqlite3.OperationalError):
+        telegram_bot.storage.get_operation_request_by_update_id("upd_123")
+
+
+def test_logs_and_errors_chat_scoping():
+    telegram_bot.storage.init_db()
+
+    # User A requests
+    telegram_bot.storage.save_operation_request(
+        request_id="req_user_a_1",
+        chat_id="chat_A",
+        operation="health",
+        status="COMPLETED",
+        result_summary={"message": "User A Health Log"},
+    )
+    telegram_bot.storage.save_operation_request(
+        request_id="req_user_a_err",
+        chat_id="chat_A",
+        operation="backtest",
+        status="FAILED",
+        error_code="USER_A_FAIL",
+        error_message="User A Error Message",
+    )
+
+    # User B requests
+    telegram_bot.storage.save_operation_request(
+        request_id="req_user_b_1",
+        chat_id="chat_B",
+        operation="health",
+        status="COMPLETED",
+        result_summary={"message": "User B Secret Log"},
+    )
+    telegram_bot.storage.save_operation_request(
+        request_id="req_user_b_err",
+        chat_id="chat_B",
+        operation="backtest",
+        status="FAILED",
+        error_code="USER_B_FAIL",
+        error_message="User B Secret Error",
+    )
+
+    logs_a = telegram_bot.handle_logs_op("chat_A")
+    assert "User A" in logs_a
+    assert "User B" not in logs_a
+
+    errors_a = telegram_bot.handle_errors_op("chat_A")
+    assert "User A Error Message" in errors_a
+    assert "User B Secret Error" not in errors_a
+
+
+def test_backtest_status_exact_request_id_lookup():
+    telegram_bot.storage.init_db()
+
+    # Save target request
+    telegram_bot.storage.save_operation_request(
+        request_id="req_bt_target_999",
+        chat_id="chat_1",
+        operation="backtest",
+        sport="basketball",
+        parameters={"league_id": 12, "season": 2024},
+        status="COMPLETED",
+        result_summary={"accuracy": 0.88, "correct": 88, "graded": 100},
+    )
+
+    # Save later request
+    telegram_bot.storage.save_operation_request(
+        request_id="req_bt_newer_000",
+        chat_id="chat_1",
+        operation="backtest",
+        sport="football",
+        parameters={"league_id": 39, "season": 2024},
+        status="FAILED",
+        error_message="Quota exceeded",
+    )
+
+    # Exact request lookup
+    res_exact = telegram_bot.handle_backtest_status_op({"request_id": "req_bt_target_999"})
+    assert "req_bt_target_999" in res_exact
+    assert "Basketball" in res_exact
+    assert "88.0%" in res_exact
+
+    # Non-existent request lookup
+    res_missing = telegram_bot.handle_backtest_status_op({"request_id": "req_nonexistent_000"})
+    assert "was not found" in res_missing
+
+    # Fallback to latest when no ID given
+    res_latest = telegram_bot.handle_backtest_status_op({})
+    assert "req_bt_newer_000" in res_latest

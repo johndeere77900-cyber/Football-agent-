@@ -515,8 +515,18 @@ def init_db():
                     )
                     """
                 )
+                # Migration: remove duplicate non-null telegram_update_id before creating partial unique index
                 cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_operation_requests_update_id ON operation_requests (telegram_update_id)"
+                    """
+                    DELETE FROM operation_requests a
+                    USING operation_requests b
+                    WHERE a.telegram_update_id IS NOT NULL
+                      AND a.telegram_update_id = b.telegram_update_id
+                      AND a.created_at > b.created_at
+                    """
+                )
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_requests_update_id_unique ON operation_requests (telegram_update_id) WHERE telegram_update_id IS NOT NULL"
                 )
             conn.commit()
 
@@ -859,8 +869,21 @@ def init_db():
                 )
                 """
             )
+            # Migration: remove duplicate non-null telegram_update_id before creating partial unique index
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_operation_requests_update_id ON operation_requests (telegram_update_id)"
+                """
+                DELETE FROM operation_requests
+                WHERE telegram_update_id IS NOT NULL
+                  AND rowid NOT IN (
+                      SELECT MIN(rowid)
+                      FROM operation_requests
+                      WHERE telegram_update_id IS NOT NULL
+                      GROUP BY telegram_update_id
+                  )
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_requests_update_id_unique ON operation_requests (telegram_update_id) WHERE telegram_update_id IS NOT NULL"
             )
             conn.commit()
 
@@ -3696,7 +3719,7 @@ def _row_to_operation_request(row):
 
 
 def get_operation_request(request_id):
-    """Retrieve an operation request by request_id."""
+    """Retrieve an operation request by request_id. DB errors propagate directly."""
     request_id = _validate_text(request_id, "request_id")
     conn, db_type = _connect()
 
@@ -3727,8 +3750,6 @@ def get_operation_request(request_id):
             ).fetchone()
 
         return _row_to_operation_request(row)
-    except Exception:
-        return None
     finally:
         conn.close()
 
@@ -3769,14 +3790,12 @@ def get_latest_operation_request(operation="backtest"):
             ).fetchone()
 
         return _row_to_operation_request(row)
-    except Exception:
-        return None
     finally:
         conn.close()
 
 
 def get_operation_request_by_update_id(telegram_update_id):
-    """Retrieve an operation request by telegram_update_id for update idempotency."""
+    """Retrieve an operation request by telegram_update_id for update idempotency. DB errors propagate directly."""
     if telegram_update_id is None or str(telegram_update_id).strip() == "":
         return None
 
@@ -3814,8 +3833,6 @@ def get_operation_request_by_update_id(telegram_update_id):
             ).fetchone()
 
         return _row_to_operation_request(row)
-    except Exception:
-        return None
     finally:
         conn.close()
 
@@ -3891,35 +3908,59 @@ def get_recent_operation_logs(limit=10, chat_id=None):
         conn.close()
 
 
-def get_recent_operation_errors(limit=10):
-    """Fetch recent operational errors for /errors operation."""
+def get_recent_operation_errors(limit=10, chat_id=None):
+    """Fetch recent operational errors for /errors operation, scoped to chat_id if provided."""
     conn, db_type = _connect()
 
     try:
         if db_type == "postgres":
             with conn.cursor() as cur:
-                cur.execute(
+                if chat_id:
+                    cur.execute(
+                        """
+                        SELECT completed_at, operation, request_id, error_code, error_message, github_run_id
+                        FROM operation_requests
+                        WHERE (status = 'FAILED' OR error_message IS NOT NULL) AND chat_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (str(chat_id), limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT completed_at, operation, request_id, error_code, error_message, github_run_id
+                        FROM operation_requests
+                        WHERE status = 'FAILED' OR error_message IS NOT NULL
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+                rows = cur.fetchall()
+        else:
+            if chat_id:
+                rows = conn.execute(
+                    """
+                    SELECT completed_at, operation, request_id, error_code, error_message, github_run_id
+                    FROM operation_requests
+                    WHERE (status = 'FAILED' OR error_message IS NOT NULL) AND chat_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (str(chat_id), limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
                     """
                     SELECT completed_at, operation, request_id, error_code, error_message, github_run_id
                     FROM operation_requests
                     WHERE status = 'FAILED' OR error_message IS NOT NULL
                     ORDER BY created_at DESC
-                    LIMIT %s
+                    LIMIT ?
                     """,
                     (limit,),
-                )
-                rows = cur.fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT completed_at, operation, request_id, error_code, error_message, github_run_id
-                FROM operation_requests
-                WHERE status = 'FAILED' OR error_message IS NOT NULL
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+                ).fetchall()
 
         errors = []
         for r in rows:
@@ -3933,8 +3974,6 @@ def get_recent_operation_errors(limit=10):
                 "github_run_id": gh_run,
             })
         return errors
-    except Exception:
-        return []
     finally:
         conn.close()
 
