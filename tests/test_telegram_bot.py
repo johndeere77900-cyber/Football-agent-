@@ -508,6 +508,54 @@ def test_unique_telegram_update_id_constraint():
     assert found["request_id"] in ("req_unique_1", "req_unique_2")
 
 
+def test_deterministic_migration_same_timestamp():
+    telegram_bot.storage.init_db()
+
+    conn, db_type = telegram_bot.storage._connect()
+    try:
+        same_ts = "2026-10-01T12:00:00+00:00"
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute("DROP INDEX IF EXISTS idx_operation_requests_update_id_unique")
+                cur.execute(
+                    """
+                    INSERT INTO operation_requests (request_id, telegram_update_id, chat_id, operation, status, created_at)
+                    VALUES ('req_dup_a', 'upd_same_ts_100', 'chat_1', 'health', 'COMPLETED', %s),
+                           ('req_dup_b', 'upd_same_ts_100', 'chat_1', 'health', 'COMPLETED', %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (same_ts, same_ts)
+                )
+            conn.commit()
+        else:
+            conn.execute("DROP INDEX IF EXISTS idx_operation_requests_update_id_unique")
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO operation_requests (request_id, telegram_update_id, chat_id, operation, status, created_at)
+                VALUES ('req_dup_a', 'upd_same_ts_100', 'chat_1', 'health', 'COMPLETED', ?),
+                       ('req_dup_b', 'upd_same_ts_100', 'chat_1', 'health', 'COMPLETED', ?)
+                """,
+                (same_ts, same_ts)
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+    telegram_bot.storage.init_db()
+
+    conn2, db_type2 = telegram_bot.storage._connect()
+    try:
+        if db_type2 == "postgres":
+            with conn2.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM operation_requests WHERE telegram_update_id = %s", ("upd_same_ts_100",))
+                count = cur.fetchone()[0]
+        else:
+            count = conn2.execute("SELECT COUNT(*) FROM operation_requests WHERE telegram_update_id = ?", ("upd_same_ts_100",)).fetchone()[0]
+        assert count == 1
+    finally:
+        conn2.close()
+
+
 def test_db_error_propagation_get_operation_request(monkeypatch):
     def bad_connect():
         import sqlite3

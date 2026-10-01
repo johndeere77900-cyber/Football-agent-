@@ -515,14 +515,22 @@ def init_db():
                     )
                     """
                 )
-                # Migration: remove duplicate non-null telegram_update_id before creating partial unique index
+                # Migration: remove duplicate non-null telegram_update_id deterministically before creating partial unique index
                 cur.execute(
                     """
-                    DELETE FROM operation_requests a
-                    USING operation_requests b
-                    WHERE a.telegram_update_id IS NOT NULL
-                      AND a.telegram_update_id = b.telegram_update_id
-                      AND a.created_at > b.created_at
+                    WITH duplicates AS (
+                        SELECT request_id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY telegram_update_id
+                                   ORDER BY created_at ASC, request_id ASC
+                               ) as rn
+                        FROM operation_requests
+                        WHERE telegram_update_id IS NOT NULL
+                    )
+                    DELETE FROM operation_requests
+                    WHERE request_id IN (
+                        SELECT request_id FROM duplicates WHERE rn > 1
+                    )
                     """
                 )
                 cur.execute(
