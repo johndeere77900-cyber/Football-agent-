@@ -1433,9 +1433,12 @@ def research_football(
         ):
             continue
 
-        probability = safest.get(
-            "probability"
-        )
+        by_market = safest.get("by_market", {})
+        probability = 0.0
+        if isinstance(by_market, dict) and by_market:
+            probability = max((v.get("probability", 0.0) for v in by_market.values() if isinstance(v, dict)), default=0.0)
+        elif "probability" in safest:
+            probability = safest.get("probability", 0.0)
 
         try:
             probability = float(
@@ -1600,9 +1603,12 @@ def research_basketball(
         ):
             continue
 
-        probability = safest.get(
-            "probability"
-        )
+        by_market = safest.get("by_market", {})
+        probability = 0.0
+        if isinstance(by_market, dict) and by_market:
+            probability = max((v.get("probability", 0.0) for v in by_market.values() if isinstance(v, dict)), default=0.0)
+        elif "probability" in safest:
+            probability = safest.get("probability", 0.0)
 
         try:
             probability = float(
@@ -1807,17 +1813,12 @@ def handle_prediction_command(text):
             safest,
             dict,
         ):
-            safest_label = safest.get(
-                "label",
-                "N/A",
-            )
-
-            probability = safest.get(
-                "probability",
-                item[
-                    "safest_probability"
-                ],
-            )
+            by_market = safest.get("by_market", {})
+            if isinstance(by_market, dict) and by_market:
+                safest_label = ", ".join(f"{v.get('label')}" for v in by_market.values() if isinstance(v, dict) and v.get("label"))
+            else:
+                safest_label = safest.get("label", "N/A")
+            probability = item["safest_probability"]
 
         else:
             safest_label = "N/A"

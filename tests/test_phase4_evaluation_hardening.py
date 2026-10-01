@@ -167,7 +167,6 @@ def test_empirical_baseline_no_target_outcome_leakage():
 
     assert base_a["leakage_safe"] is True
     assert base_b["leakage_safe"] is True
-    # The prior empirical distribution remains identical regardless of target outcome
     assert base_a["sample_count"] == 1
     assert base_b["sample_count"] == 1
 
@@ -176,11 +175,11 @@ def test_empirical_baseline_no_target_outcome_leakage():
 # 4. CROSS-MARKET SAFEST-PICK ISOLATION & MARKET SCOPING
 # ==============================================================================
 
-def test_market_scoped_safest_pick():
-    """Verify safest_pick performs market-scoped selection and is non-authoritative."""
+def test_market_scoped_safest_pick_no_cross_market_rankings():
+    """Verify safest_pick returns market-scoped selections without cross-market rankings."""
     candidates_dict = {
         "match_result": [("Home Win", 0.60), ("Draw", 0.25), ("Away Win", 0.15)],
-        "over_under": [("Over 2.5 Goals", 0.70), ("Under 2.5 Goals", 0.30)],
+        "over_under": [("Over 2.5 Goals", 0.85), ("Under 2.5 Goals", 0.15)],
         "btts": [("BTTS Yes", 0.55), ("BTTS No", 0.45)],
     }
     pick = confidence.safest_pick(candidates_dict)
@@ -189,10 +188,12 @@ def test_market_scoped_safest_pick():
     assert pick["is_authoritative"] is False
     assert pick["informational_only"] is True
     assert "by_market" in pick
+    # Confirm no top-level cross-market ranking overrides
+    assert "top_overall" not in pick
     assert pick["by_market"]["match_result"]["label"] == "Home Win"
     assert pick["by_market"]["match_result"]["probability"] == 0.60
     assert pick["by_market"]["over_under"]["label"] == "Over 2.5 Goals"
-    assert pick["by_market"]["over_under"]["probability"] == 0.70
+    assert pick["by_market"]["over_under"]["probability"] == 0.85
 
 
 def test_safest_pick_does_not_override_quality_gate():
@@ -268,24 +269,20 @@ def test_mixed_calibration_status_labeling():
 # 7. ODDS BASELINE STRICT CHRONOLOGY & VALIDITY
 # ==============================================================================
 
-def test_odds_baseline_rejects_missing_unknown_and_future_odds():
-    """Verify compute_odds_baseline excludes entries without explicit 'VALID' odds status."""
+def test_odds_baseline_rejects_missing_timestamps_and_invalid_chronology():
+    """Verify compute_odds_baseline requires BOTH VALID status AND explicit valid timestamps."""
     log_entries = [
         {
+            # VALID status BUT missing odds timestamp -> EXCLUDED
             "actual": "home_win",
             "prediction": {
                 "market_analysis": {"match_result": {"home_win": {"implied_probability": 0.50}}},
-                "uncertainty": {"odds_status": "FUTURE"},  # Excluded
+                "uncertainty": {"odds_status": "VALID", "odds_timestamp": None},
+                "data_cutoff_timestamp": "2025-01-01T12:00:00+00:00",
             },
         },
         {
-            "actual": "home_win",
-            "prediction": {
-                "market_analysis": {"match_result": {"home_win": {"implied_probability": 0.50}}},
-                "uncertainty": {"odds_status": "MISSING"},  # Excluded
-            },
-        },
-        {
+            # VALID status AND explicit timestamps AND odds_timestamp < cutoff_timestamp -> INCLUDED
             "actual": "home_win",
             "prediction": {
                 "market_analysis": {
@@ -364,7 +361,7 @@ def test_stability_diagnostics_probability_buckets_and_outcome_behavior():
     # Check probability buckets
     assert "70%+" in diag["performance_by_probability_bucket"]
     assert "<50%" in diag["performance_by_probability_bucket"]
-    assert diag["performance_by_probability_bucket"]["70% Jewish" if False else "70%+"]["sample_count"] == 1
+    assert diag["performance_by_probability_bucket"]["70%+"]["sample_count"] == 1
 
     # Check league/season breakdown
     assert "39_2024" in diag["league_season_breakdown"]

@@ -1252,13 +1252,17 @@ def compute_odds_baseline(
 ) -> Dict[str, Any]:
     """
     Compute odds implied probability baseline over entries with valid odds.
-    Only includes odds when odds_status is explicitly 'VALID' and point-in-time safe.
-    Unknown, missing, stale, or future odds chronology is excluded.
+    Requires BOTH odds_status == 'VALID' AND explicit odds_timestamp AND cutoff_timestamp.
+    Requires odds_timestamp < cutoff_timestamp strictly before cutoff.
+    Missing, unknown, or non-before chronology is excluded.
     """
     preds = []
     acts = []
 
     for entry in log_entries:
+        if not isinstance(entry, dict):
+            continue
+
         pred_rec = entry.get("prediction", {})
         if not isinstance(pred_rec, dict):
             continue
@@ -1266,16 +1270,20 @@ def compute_odds_baseline(
         unc = pred_rec.get("uncertainty", {}) if isinstance(pred_rec.get("uncertainty"), dict) else {}
         odds_status = unc.get("odds_status")
 
-        # Require explicit "VALID" odds status
+        # 1. Require explicit "VALID" odds status
         if odds_status != "VALID":
             continue
 
-        # Check chronology if timestamps are present
+        # 2. Require explicit odds timestamp AND prediction cutoff timestamp
         odds_ts = unc.get("odds_timestamp") or pred_rec.get("odds_timestamp")
-        cutoff_ts = pred_rec.get("data_cutoff_timestamp") or entry.get("date")
-        if odds_ts and cutoff_ts:
-            if not time_utils.is_strictly_before(odds_ts, cutoff_ts):
-                continue
+        cutoff_ts = pred_rec.get("data_cutoff_timestamp") or entry.get("date") or entry.get("data_cutoff_timestamp")
+
+        if not odds_ts or not cutoff_ts:
+            continue
+
+        # 3. Require odds_timestamp < cutoff_timestamp
+        if not time_utils.is_strictly_before(str(odds_ts), str(cutoff_ts)):
+            continue
 
         m_analysis = pred_rec.get("market_analysis", {}) if isinstance(pred_rec.get("market_analysis"), dict) else {}
         m_key = "match_result" if sport == "football" else "moneyline"
@@ -1673,7 +1681,7 @@ def evaluate_football_log_group(
     }
 
     baselines = {
-        "empirical": compute_empirical_baseline(log_subset, outcomes=("home_win", "draw", "away_win")),
+        "empirical": compute_point_in_time_empirical_baseline(log_subset, outcomes=("home_win", "draw", "away_win")),
         "odds_implied": compute_odds_baseline(log_subset, sport="football"),
     }
 
@@ -1778,7 +1786,7 @@ def evaluate_basketball_log_group(
     }
 
     baselines = {
-        "empirical": compute_empirical_baseline(log_subset, outcomes=("home_win", "away_win")),
+        "empirical": compute_point_in_time_empirical_baseline(log_subset, outcomes=("home_win", "away_win")),
         "odds_implied": compute_odds_baseline(log_subset, sport="basketball"),
     }
 

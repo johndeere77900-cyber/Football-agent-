@@ -56,15 +56,19 @@ def test_parse_quantity_reads_explicit_quantity():
 def test_safest_schema_uses_nested_probability():
     prediction = {
         "safest": {
-            "label": "Home Win",
-            "probability": 0.72,
+            "by_market": {
+                "match_result": {
+                    "label": "Home Win",
+                    "probability": 0.72,
+                }
+            }
         }
     }
 
     safest = prediction["safest"]
 
-    assert safest["label"] == "Home Win"
-    assert safest["probability"] == 0.72
+    assert safest["by_market"]["match_result"]["label"] == "Home Win"
+    assert safest["by_market"]["match_result"]["probability"] == 0.72
 
     # Regression guard against the old nonexistent key.
     assert "safest_probability" not in prediction

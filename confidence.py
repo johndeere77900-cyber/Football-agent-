@@ -129,11 +129,7 @@ def safest_pick(candidates):
     if not by_market:
         return None
 
-    top_overall = max(by_market.values(), key=lambda x: x["probability"])
-
     return {
-        "label": top_overall["label"],
-        "probability": top_overall["probability"],
         "by_market": by_market,
         "is_authoritative": False,
         "informational_only": True,

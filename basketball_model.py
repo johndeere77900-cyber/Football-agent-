@@ -497,4 +497,10 @@ def print_prediction(pred):
     print(f"  Confidence:      {c['emoji']} {c['label']} (pick: {c['top_pick']}, {c['top_probability']:.0%})")
 
     if s:
-        print(f"  >>> SAFEST PICK: {s['label']} ({s['probability']:.0%}) <<<")
+        if isinstance(s, dict) and "by_market" in s:
+            formatted_picks = ", ".join(f"{v['label']} ({v['probability']:.0%})" for v in s["by_market"].values() if isinstance(v, dict) and "label" in v)
+            print(f"  >>> SAFEST PICKS (BY MARKET): {formatted_picks} <<<")
+        elif isinstance(s, dict) and "label" in s:
+            print(f"  >>> SAFEST PICK: {s['label']} ({s['probability']:.0%}) <<<")
+        else:
+            print(f"  >>> SAFEST PICK: {s} <<<")
