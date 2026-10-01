@@ -1264,8 +1264,10 @@ def predict_fixture(
             "Prediction is missing match_result probabilities."
         )
 
+    cal_status = prediction.get("calibration_metadata", {}).get("calibration_status") if isinstance(prediction, dict) else "UNAVAILABLE"
     conf = confidence.confidence_flag(
-        match_result
+        match_result,
+        calibration_status=cal_status,
     )
 
     safest = confidence.safest_pick(
@@ -1486,10 +1488,13 @@ def print_prediction(pred):
         )
 
     if safest:
-        print(
-            f"  Safest generated market: "
-            f"{safest}"
-        )
+        if isinstance(safest, dict) and "by_market" in safest:
+            formatted_picks = ", ".join(f"{v['label']} ({v['probability']:.0%})" for v in safest["by_market"].values() if isinstance(v, dict) and "label" in v)
+            print(f"  Safest generated markets: {formatted_picks}")
+        elif isinstance(safest, dict) and "label" in safest:
+            print(f"  Safest generated market: {safest['label']} ({safest['probability']:.0%})")
+        else:
+            print(f"  Safest generated market: {safest}")
 
     elo_data = pred.get(
         "elo_cross_check"

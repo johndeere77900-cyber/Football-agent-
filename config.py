@@ -81,6 +81,9 @@ MAX_ODDS_AGE_HOURS = 24.0
 CONFIDENCE_HIGH_GAP = 0.20
 CONFIDENCE_MODERATE_GAP = 0.08
 
+# --- Evaluation Thresholds ----------------------------------------------------
+MIN_EVALUATION_SAMPLE_THRESHOLD = 30
+
 # --- Storage ------------------------------------------------------------
 DB_PATH = os.environ.get("FOOTBALL_AGENT_DB", "predictions.db")
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
