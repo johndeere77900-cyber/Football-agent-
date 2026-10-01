@@ -27,10 +27,6 @@ def parse_utc_datetime(ts_val: Any) -> Optional[datetime]:
     if not ts_str:
         return None
 
-    # Date-only string (e.g. "2026-01-01") represents UTC midnight
-    if len(ts_str) == 10 and ts_str.count("-") == 2:
-        ts_str = f"{ts_str}T00:00:00+00:00"
-
     try:
         iso_str = ts_str.replace("Z", "+00:00")
         dt = datetime.fromisoformat(iso_str)

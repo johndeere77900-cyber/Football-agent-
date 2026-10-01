@@ -337,7 +337,7 @@ def apply_calibration_layer(
         status = "APPLIED"
 
     except Exception:
-        calibrated_markets = dict(raw_markets)
+        calibrated_markets = {}
         status = "ERROR_FALLBACK_RAW"
 
     return {

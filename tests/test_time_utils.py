@@ -20,9 +20,10 @@ def test_time_utils_parse_utc_datetime_valid():
     assert dt2.hour == 12  # 07:00-05:00 is 12:00 UTC
 
 
-def test_time_utils_timezone_naive_rejection():
-    """Verify timezone-naive timestamps are rejected."""
-    assert time_utils.parse_utc_datetime("2025-01-01T12:00:00") is None
+def test_time_utils_timezone_naive_and_date_only_rejection():
+    """Verify timezone-naive datetime strings and date-only strings are rejected."""
+    assert time_utils.parse_utc_datetime("2026-01-01") is None
+    assert time_utils.parse_utc_datetime("2026-01-01T12:00:00") is None
 
 
 def test_time_utils_malformed_rejection():

@@ -178,10 +178,10 @@ def test_historical_features_and_h2h_consumer_semantics():
     fixtures = [pen_fix]
 
     # Verify penalties are excluded from team goal averages and H2H goals
-    avgs = historical_features.team_goal_averages(fixtures, 1, "2026-01-01")
+    avgs = historical_features.team_goal_averages(fixtures, 1, "2026-01-01T00:00:00+00:00")
     assert avgs["goals_for"] == 1.0
     assert avgs["goals_against"] == 1.0
 
-    snap = historical_h2h.historical_h2h_snapshot(fixtures, 1, 2, "2026-01-01")
+    snap = historical_h2h.historical_h2h_snapshot(fixtures, 1, 2, "2026-01-01T00:00:00+00:00")
     assert snap["goals_for"] == 1.0
     assert snap["goals_against"] == 1.0

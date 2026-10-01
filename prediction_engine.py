@@ -503,40 +503,43 @@ def predict_from_features(
     calib_meta = calibration_res["calibration_metadata"]
 
     # 3b. RE-VALIDATE CALIBRATED MARKETS
-    try:
-        calibrated_markets = probability_validation.validate_all_probabilities(
-            calibrated_markets,
-            sport="football",
-        )
-    except probability_validation.ProbabilityValidationError as exc:
-        unc_info = uncertainty.calculate_uncertainty(
-            feature_coverage=0.0,
-            sample_count=0,
-            top_probability=0.0,
-        )
-        gate_res = quality_gate.evaluate_quality_gate(
-            uncertainty_info=unc_info,
-            probability_valid=False,
-            model_error=True,
-        )
-        contract = prediction_contract.build_prediction_contract(
-            sport="football",
-            fixture_id=fixture_id,
-            league_id=league_id or 0,
-            season=season or 0,
-            raw_markets=validated_raw_markets,
-            calibrated_markets={},
-            calibration_metadata=calib_meta,
-            market_analysis={},
-            uncertainty_info=unc_info,
-            quality_gate_result=gate_res,
-            data_cutoff_timestamp=data_cutoff_timestamp,
-            prediction_timestamp=prediction_timestamp,
-        )
-        contract["status"] = "INVALID_CALIBRATED_PROBABILITY"
-        contract["insufficient_data"] = True
-        contract["reason"] = f"Calibrated probability validation error: {exc}"
-        return contract
+    if calib_meta["calibration_status"] == "APPLIED":
+        try:
+            calibrated_markets = probability_validation.validate_all_probabilities(
+                calibrated_markets,
+                sport="football",
+            )
+        except probability_validation.ProbabilityValidationError as exc:
+            unc_info = uncertainty.calculate_uncertainty(
+                feature_coverage=0.0,
+                sample_count=0,
+                top_probability=0.0,
+            )
+            gate_res = quality_gate.evaluate_quality_gate(
+                uncertainty_info=unc_info,
+                probability_valid=False,
+                model_error=True,
+            )
+            contract = prediction_contract.build_prediction_contract(
+                sport="football",
+                fixture_id=fixture_id,
+                league_id=league_id or 0,
+                season=season or 0,
+                raw_markets=validated_raw_markets,
+                calibrated_markets={},
+                calibration_metadata=calib_meta,
+                market_analysis={},
+                uncertainty_info=unc_info,
+                quality_gate_result=gate_res,
+                data_cutoff_timestamp=data_cutoff_timestamp,
+                prediction_timestamp=prediction_timestamp,
+            )
+            contract["status"] = "INVALID_CALIBRATED_PROBABILITY"
+            contract["insufficient_data"] = True
+            contract["reason"] = f"Calibrated probability validation error: {exc}"
+            return contract
+    elif calib_meta["calibration_status"] == "ERROR_FALLBACK_RAW":
+        calibrated_markets = {}
 
     # 4. MARKET ANALYSIS (ODDS / IMPLIED / EDGE / EV)
     m_analysis = market_analysis.analyze_market_odds(
