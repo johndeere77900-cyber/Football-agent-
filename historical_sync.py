@@ -596,35 +596,77 @@ def sync_historical_basketball_games(
     return report
 
 
+def check_acquisition_coverage(league_id: int, season: int, sport: str = "football") -> dict:
+    """
+    Check dataset coverage in Neon/storage and cache before starting acquisition.
+    Calculates remaining required requests to acquire only missing data.
+    """
+    dataset_info = storage.get_historical_dataset_status(league_id, season, sport=sport)
+    status = dataset_info.get("status", "INCOMPLETE")
+    fixture_count = dataset_info.get("fixture_count", 0)
+    expected_pages = dataset_info.get("expected_pages", 0)
+    pages_completed = dataset_info.get("pages_completed", 0)
+
+    if status == "COMPLETE":
+        required_requests = 0
+    elif expected_pages > 0:
+        required_requests = max(0, expected_pages - pages_completed)
+    else:
+        # Unknown total pages yet; minimum 1 request needed to query page 1 metadata
+        required_requests = 1
+
+    return {
+        "sport": sport,
+        "league_id": league_id,
+        "season": season,
+        "status": status,
+        "fixture_count": fixture_count,
+        "expected_pages": expected_pages,
+        "pages_completed": pages_completed,
+        "required_requests": required_requests,
+        "already_complete": (status == "COMPLETE"),
+    }
+
+
 def run_historical_queue(
-    season: int = 2024,
+    seasons: list = None,
+    season: int = None,
     with_enrichment: bool = False,
     refresh: bool = False,
 ) -> dict:
     """
-    Run historical data acquisition queue sequentially across all configured football leagues
-    in config.ALLOWED_LEAGUE_IDS plus basketball league 12.
+    Run historical data acquisition queue sequentially across target 5 seasons
+    and configured leagues. Checks coverage before acquiring missing data.
     """
-    queue_items = [
-        {"sport": "football", "league_id": lid} for lid in config.ALLOWED_LEAGUE_IDS
-    ] + [
-        {"sport": "basketball", "league_id": 12}
-    ]
+    if seasons is None:
+        if season is not None:
+            seasons = [season]
+        else:
+            seasons = getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024])
+
+    queue_items = []
+    for ssn in seasons:
+        for lid in config.ALLOWED_LEAGUE_IDS:
+            queue_items.append({"sport": "football", "league_id": lid, "season": ssn})
+        for lid in config.ALLOWED_BASKETBALL_LEAGUE_IDS:
+            queue_items.append({"sport": "basketball", "league_id": lid, "season": ssn})
 
     reports = []
     print(
-        f"Starting historical acquisition queue for season {season} ({len(queue_items)} datasets)...",
+        f"Starting target historical acquisition queue ({len(queue_items)} datasets across seasons {seasons})...",
         flush=True,
     )
 
     for item in queue_items:
         sport = item["sport"]
         league_id = item["league_id"]
+        season = item["season"]
 
-        dataset_info = storage.get_historical_dataset_status(league_id, season, sport=sport)
-        if dataset_info.get("status") == "COMPLETE" and not refresh:
+        # Check coverage before making requests
+        cov = check_acquisition_coverage(league_id, season, sport=sport)
+        if cov["already_complete"] and not refresh:
             print(
-                f"Queue: Skipping COMPLETE {sport} dataset for league {league_id} season {season}.",
+                f"Queue: Skipping COMPLETE {sport} dataset for league {league_id} season {season} (0 API requests required).",
                 flush=True,
             )
             reports.append({
@@ -638,7 +680,7 @@ def run_historical_queue(
             continue
 
         print(
-            f"Queue: Syncing {sport} dataset for league {league_id} season {season}...",
+            f"Queue: Syncing missing data for {sport} league {league_id} season {season} (est. required requests: {cov['required_requests']})...",
             flush=True,
         )
 
@@ -667,7 +709,7 @@ def run_historical_queue(
 
     print(f"Historical queue run complete. Processed {len(reports)} dataset(s).", flush=True)
     return {
-        "season": season,
+        "target_seasons": seasons,
         "processed_count": len(reports),
         "reports": reports,
     }

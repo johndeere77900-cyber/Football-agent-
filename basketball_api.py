@@ -643,49 +643,66 @@ def get_league_games_page(league_id, season, page=1, max_budget=None):
 
 def get_games_by_date(
     date_str,
-    league_id,
+    league_id=None,
 ):
     """
-    Return basketball games for one date and configured league.
+    Return basketball games for one date and optional configured league.
 
-    This is the canonical schedule function used by main.py and
-    telegram_bot.py.
+    Credit efficiency rule:
+    Always request full date (`params = {"date": date_str, "season": season}`) if uncached,
+    cache the response, and filter for `league_id` locally to cover all leagues in 1 call.
     """
-    parsed_date = _validate_date(
-        date_str
-    )
+    parsed_date = _validate_date(date_str)
 
-    league_id = _validate_positive_int(
-        league_id,
-        "league_id",
-    )
+    if league_id is not None:
+        league_id = _validate_positive_int(league_id, "league_id")
 
-    season = _season_for_date(
-        parsed_date
-    )
+    season = _season_for_date(parsed_date)
 
-    params = {
-        "date": date_str,
-        "league": league_id,
-        "season": season,
-    }
+    # Check for cached full-date response first
+    full_date_params = {"date": date_str, "season": season}
+    cached_full_date = _cache_get("games", full_date_params)
 
-    data = _get(
-        "games",
-        params,
-    )
+    if cached_full_date is not None:
+        response = cached_full_date.get("response", [])
+        if not isinstance(response, list):
+            return []
+        if league_id is not None:
+            filtered = []
+            for g in response:
+                if not isinstance(g, dict):
+                    continue
+                lg_obj = g.get("league")
+                if isinstance(lg_obj, dict) and lg_obj.get("id") is not None:
+                    if lg_obj.get("id") == league_id:
+                        filtered.append(g)
+                else:
+                    filtered.append(g)
+            return filtered
+        return response
 
-    response = data.get(
-        "response"
-    )
+    fetch_params = {"date": date_str, "season": season}
+    if league_id is not None:
+        fetch_params["league"] = league_id
 
-    if not isinstance(
-        response,
-        list,
-    ):
-        raise ValueError(
-            "API-Basketball games response must be a list."
-        )
+    data = _get("games", fetch_params)
+    response = data.get("response")
+
+    if not isinstance(response, list):
+        raise ValueError("API-Basketball games response must be a list.")
+
+    if league_id is not None:
+        filtered = []
+        for g in response:
+            if not isinstance(g, dict):
+                continue
+            lg_obj = g.get("league")
+            if isinstance(lg_obj, dict) and lg_obj.get("id") is not None:
+                if lg_obj.get("id") == league_id:
+                    filtered.append(g)
+            else:
+                filtered.append(g)
+        return filtered
 
     return response
 

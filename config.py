@@ -90,6 +90,9 @@ NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 REQUIRE_NEON = os.environ.get("REQUIRE_NEON", "false").lower() in ("true", "1", "yes")
 
+# --- Historical Seasons Target ----------------------------------------------
+TARGET_SEASONS = [2020, 2021, 2022, 2023, 2024]
+
 # --- League restriction (football) -----------------------------------------
 ALLOWED_LEAGUE_IDS = [39, 140, 135, 78, 61, 2, 3, 5, 1, 4]
 

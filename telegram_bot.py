@@ -502,13 +502,39 @@ def fixture_matches_team(fixture, team_query):
     return query in normalize_text(home) or query in normalize_text(away)
 
 
-def get_tracked_fixtures_for_date(date_str):
+def get_tracked_fixtures_for_date(date_str, league_id=None):
+    """
+    Return tracked football fixtures for date.
+    Fetches one date response and filters for allowed leagues locally (or a specific league_id).
+    """
     fixtures = api_football.get_fixtures_by_date(date_str)
     if not isinstance(fixtures, list):
         return []
+    target_leagues = {league_id} if league_id else set(config.ALLOWED_LEAGUE_IDS)
     return [
         fixture for fixture in fixtures
-        if isinstance(fixture, dict) and fixture.get("league", {}).get("id") in config.ALLOWED_LEAGUE_IDS
+        if isinstance(fixture, dict) and fixture.get("league", {}).get("id") in target_leagues
+    ]
+
+
+def get_tracked_basketball_games_for_date(date_str, league_id=None):
+    """
+    Return tracked basketball games for date.
+    Fetches one date response and filters for allowed basketball leagues locally.
+    """
+    try:
+        games = basketball_api.get_games_by_date(date_str) or []
+    except Exception as exc:
+        print(f"Basketball games fetch error for date {date_str}: {exc}")
+        return []
+
+    if not isinstance(games, list):
+        return []
+
+    target_leagues = {league_id} if league_id else set(config.ALLOWED_BASKETBALL_LEAGUE_IDS)
+    return [
+        g for g in games
+        if isinstance(g, dict) and g.get("league", {}).get("id") in target_leagues
     ]
 
 
@@ -776,6 +802,7 @@ VALID_OPERATIONS = {
     "errors",
     "retrain",
     "config",
+    "details",
 }
 
 
@@ -833,6 +860,13 @@ def resolve_operation(text):
     if any(k in normalized for k in ("config", "configuration", "show config", "environment config")):
         return "config", {}
 
+    if any(k in normalized for k in ("detail", "details", "detailed data", "detailed info")):
+        return "details", parse_operation_parameters("details", raw_text)
+
+    if " vs " in normalized or " versus " in normalized:
+        if not any(k in normalized for k in ("predict", "backtest", "forecast", "pick")):
+            return "details", parse_operation_parameters("details", raw_text)
+
     if any(k in normalized for k in ("fixtures", "schedule", "upcoming matches", "upcoming games")):
         return "fixtures", parse_operation_parameters("fixtures", raw_text)
 
@@ -865,7 +899,7 @@ def parse_operation_parameters(operation, text):
     if league_sport:
         sport = league_sport
 
-    quantity = parse_quantity(normalized, default=1)
+    quantity = parse_quantity(normalized, default=10 if operation == "fixtures" else 1)
     season = parse_season(normalized)
 
     req_match = re.search(r"\b(req_[a-zA-Z0-9]+)\b", text)
@@ -1077,23 +1111,49 @@ def handle_predict_op(params):
 
 
 def handle_fixtures_op(params):
-    """Execute fixtures list operation."""
+    """Execute fixtures/games list operation for Football or Basketball."""
+    sport = params.get("sport", "football")
     date_str = params.get("date")
     date_label = params.get("date_label", "today")
-    fixtures = get_tracked_fixtures_for_date(date_str)
+    league_id = params.get("league_id")
+    league_name = params.get("league_name")
+    quantity = params.get("quantity", 10)
 
-    if not fixtures:
-        return f"📅 No tracked football fixtures found scheduled for {date_label} ({date_str})."
+    if sport == "basketball":
+        games = get_tracked_basketball_games_for_date(date_str, league_id=league_id)
+        if not games:
+            title_lg = f" {league_name.upper()}" if league_name else " NBA"
+            return f"🏀 No tracked basketball games found scheduled for {date_label} ({date_str}){title_lg}."
 
-    lines = [f"📅 Tracked Football Fixtures for {date_label} ({date_str}):"]
-    for f in fixtures[:10]:
-        teams = f.get("teams", {})
-        h_name = teams.get("home", {}).get("name", "Home")
-        a_name = teams.get("away", {}).get("name", "Away")
-        league = f.get("league", {}).get("name", "Unknown")
-        lines.append(f"• {h_name} vs {a_name} ({league})")
+        title_lg = f" {league_name.upper()}" if league_name else " Basketball"
+        lines = [f"🏀 Tracked{title_lg} Games for {date_label} ({date_str}):"]
+        for g in games[:quantity]:
+            teams = g.get("teams", {})
+            h_name = teams.get("home", {}).get("name", "Home")
+            a_name = teams.get("away", {}).get("name", "Away")
+            lg_str = g.get("league", {}).get("name", "NBA")
+            time_str = g.get("time", "") or "time TBA"
+            lines.append(f"• {h_name} vs {a_name} — {time_str} ({lg_str})")
 
-    return "\n".join(lines)
+        return "\n".join(lines)
+
+    else:
+        fixtures = get_tracked_fixtures_for_date(date_str, league_id=league_id)
+        if not fixtures:
+            title_lg = f" {league_name.title()}" if league_name else " tracked"
+            return f"📅 No{title_lg} football fixtures found scheduled for {date_label} ({date_str})."
+
+        title_lg = f" {league_name.title()}" if league_name else " Tracked Football"
+        lines = [f"📅{title_lg} Fixtures for {date_label} ({date_str}):"]
+        for f in fixtures[:quantity]:
+            teams = f.get("teams", {})
+            h_name = teams.get("home", {}).get("name", "Home")
+            a_name = teams.get("away", {}).get("name", "Away")
+            league = f.get("league", {}).get("name", "Unknown")
+            time_str = format_fixture_time(f)
+            lines.append(f"• {h_name} vs {a_name} — {time_str} ({league})")
+
+        return "\n".join(lines)
 
 
 def handle_backtest_op(params, request_id):
@@ -1342,19 +1402,36 @@ def handle_model_status_op():
 
 
 def handle_data_status_op(params):
-    """Execute /data_status operation."""
-    sports_to_check = [("football", 39, 2024), ("basketball", 12, 2024)]
+    """Execute /data_status operation showing all configured datasets in Neon / database."""
+    datasets = storage.get_all_historical_datasets()
+
+    if not datasets:
+        # Fallback to configured target leagues if DB has no dataset entries yet
+        default_items = [("football", lid, 2024) for lid in config.ALLOWED_LEAGUE_IDS] + [("basketball", lid, 2024) for lid in config.ALLOWED_BASKETBALL_LEAGUE_IDS]
+        datasets = [storage.get_historical_dataset_status(lid, ssn, sport=sp) for sp, lid, ssn in default_items]
 
     lines = ["📊 *HISTORICAL DATASET STATUS*"]
 
-    for sp, lid, ssn in sports_to_check:
-        st = storage.get_historical_dataset_status(lid, ssn, sport=sp)
+    for st in datasets:
+        sp = st.get("sport", "football")
+        lid = st.get("league_id")
+        ssn = st.get("season")
+        status = st.get("status", "INCOMPLETE")
+        count = st.get("fixture_count", 0)
+        pages_comp = st.get("pages_completed", 0)
+        exp_pages = st.get("expected_pages", 0)
+        enrichment = st.get("enrichment_status", "NONE")
+
+        progress_str = f"{pages_comp}/{exp_pages} pages" if exp_pages > 0 else "0/0 pages"
+
         lines.append(
-            f"\n*{sp.title()} (League {lid}, {ssn}):*\n"
-            f"• Status: *{st['status']}*\n"
-            f"• Count: {st['fixture_count']}\n"
-            f"• Enrichment: {st['enrichment_status']}\n"
-            f"• Pages: {st['pages_completed']}/{st['expected_pages']}"
+            f"\n*{sp.title()} — League {lid} ({ssn}):*\n"
+            f"• Sport: {sp.title()}\n"
+            f"• League: {lid} | Season: {ssn}\n"
+            f"• Status: *{status}*\n"
+            f"• Fixture Count: {count}\n"
+            f"• Acquisition Progress: {progress_str}\n"
+            f"• Enrichment Status: {enrichment}"
         )
 
     return "\n".join(lines)
@@ -1386,6 +1463,182 @@ def handle_errors_op(chat_id=None):
         lines.append(f"• `[{ts}]` *{e['operation'].upper()}* [{e['error_category']}]: {e['message'][:100]}")
 
     return "\n".join(lines)
+
+
+def handle_details_op(params):
+    """
+    Execute detailed game data lookup for football or basketball.
+    Searches local DB/cache first. Calls API only when required.
+    """
+    raw_text = params.get("raw_text", "")
+    sport = params.get("sport", "football")
+    normalized = normalize_text(raw_text)
+
+    # Extract team names from "X vs Y" or "X versus Y" or text
+    match = re.search(r"(\b[\w\s']+\b)\s+(?:vs\.?|versus)\s+(\b[\w\s']+\b)", raw_text, re.IGNORECASE)
+    if match:
+        team_a = match.group(1).strip()
+        team_b = match.group(2).strip()
+        # Clean noise words
+        for noise in ("give me detailed data for", "show details for", "details for", "detail for", "show details", "details"):
+            team_a = re.sub(rf"^{noise}\s*", "", team_a, flags=re.IGNORECASE).strip()
+    else:
+        team_a = normalized
+        team_b = ""
+
+    # Search local database historical fixtures / games first
+    conn, db_type = storage._connect()
+    found_item = None
+    item_sport = sport
+
+    try:
+        if sport == "basketball" or "nba" in normalized or "lakers" in normalized or "celtics" in normalized:
+            item_sport = "basketball"
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT raw_json FROM historical_basketball_games WHERE LOWER(home_team) LIKE %s OR LOWER(away_team) LIKE %s ORDER BY game_date DESC LIMIT 50",
+                        (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
+                    )
+                    rows = cur.fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT raw_json FROM historical_basketball_games WHERE LOWER(home_team) LIKE ? OR LOWER(away_team) LIKE ? ORDER BY game_date DESC LIMIT 50",
+                    (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
+                ).fetchall()
+
+            for row in rows:
+                g = storage._json_loads(row[0])
+                if isinstance(g, dict):
+                    h_name = normalize_text(g.get("teams", {}).get("home", {}).get("name", ""))
+                    a_name = normalize_text(g.get("teams", {}).get("away", {}).get("name", ""))
+                    if team_b:
+                        if (normalize_text(team_a) in h_name or normalize_text(team_a) in a_name) and (normalize_text(team_b) in h_name or normalize_text(team_b) in a_name):
+                            found_item = g
+                            break
+                    else:
+                        if normalize_text(team_a) in h_name or normalize_text(team_a) in a_name:
+                            found_item = g
+                            break
+
+        if not found_item:
+            item_sport = "football"
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT raw_json FROM historical_fixtures WHERE LOWER(home_team) LIKE %s OR LOWER(away_team) LIKE %s ORDER BY kickoff_at DESC LIMIT 50",
+                        (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
+                    )
+                    rows = cur.fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT raw_json FROM historical_fixtures WHERE LOWER(home_team) LIKE ? OR LOWER(away_team) LIKE ? ORDER BY kickoff_at DESC LIMIT 50",
+                    (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
+                ).fetchall()
+
+            for row in rows:
+                f = storage._json_loads(row[0])
+                if isinstance(f, dict):
+                    h_name = normalize_text(f.get("teams", {}).get("home", {}).get("name", ""))
+                    a_name = normalize_text(f.get("teams", {}).get("away", {}).get("name", ""))
+                    if team_b:
+                        if (normalize_text(team_a) in h_name or normalize_text(team_a) in a_name) and (normalize_text(team_b) in h_name or normalize_text(team_b) in a_name):
+                            found_item = f;
+                            break
+                    else:
+                        if normalize_text(team_a) in h_name or normalize_text(team_a) in a_name:
+                            found_item = f
+                            break
+    finally:
+        conn.close()
+
+    # If not in local historical tables, check cache or call API for date
+    if not found_item:
+        date_str, _ = resolve_date(raw_text)
+        if item_sport == "basketball":
+            try:
+                games = basketball_api.get_games_by_date(date_str)
+            except Exception:
+                games = []
+            if isinstance(games, list):
+                for g in games:
+                    if not isinstance(g, dict):
+                        continue
+                    h_name = normalize_text(g.get("teams", {}).get("home", {}).get("name", ""))
+                    a_name = normalize_text(g.get("teams", {}).get("away", {}).get("name", ""))
+                    if team_b:
+                        if (normalize_text(team_a) in h_name or normalize_text(team_a) in a_name) and (normalize_text(team_b) in h_name or normalize_text(team_b) in a_name):
+                            found_item = g
+                            break
+                    elif normalize_text(team_a) in h_name or normalize_text(team_a) in a_name:
+                        found_item = g
+                        break
+        else:
+            try:
+                fixtures = api_football.get_fixtures_by_date(date_str)
+            except Exception:
+                fixtures = []
+            if isinstance(fixtures, list):
+                for f in fixtures:
+                    if not isinstance(f, dict):
+                        continue
+                    h_name = normalize_text(f.get("teams", {}).get("home", {}).get("name", ""))
+                    a_name = normalize_text(f.get("teams", {}).get("away", {}).get("name", ""))
+                    if team_b:
+                        if (normalize_text(team_a) in h_name or normalize_text(team_a) in a_name) and (normalize_text(team_b) in h_name or normalize_text(team_b) in a_name):
+                            found_item = f
+                            break
+                    elif normalize_text(team_a) in h_name or normalize_text(team_a) in a_name:
+                        found_item = f
+                        break
+
+    if not found_item:
+        q_label = f"{team_a} vs {team_b}" if team_b else team_a
+        return f"ℹ️ Could not find local fixture data for *{q_label}*. Try providing a date or exact team names."
+
+    # Format detailed response
+    teams = found_item.get("teams", {})
+    home_name = teams.get("home", {}).get("name", "Home")
+    away_name = teams.get("away", {}).get("name", "Away")
+    league_name = found_item.get("league", {}).get("name", "Unknown League")
+
+    if item_sport == "basketball":
+        game_date = found_item.get("date", "")[:10]
+        status = found_item.get("status", {}).get("long", "Scheduled")
+        scores = found_item.get("scores", {})
+        h_pts = scores.get("home", {}).get("total") if isinstance(scores.get("home"), dict) else None
+        a_pts = scores.get("away", {}).get("total") if isinstance(scores.get("away"), dict) else None
+        score_str = f"{h_pts} - {a_pts}" if (h_pts is not None and a_pts is not None) else "N/A"
+
+        return (
+            f"🏀 *DETAILED GAME DATA*\n"
+            f"• *Matchup:* {home_name} vs {away_name}\n"
+            f"• *League:* {league_name}\n"
+            f"• *Date:* {game_date}\n"
+            f"• *Status:* {status}\n"
+            f"• *Score:* {score_str}\n"
+            f"• *Game ID:* `{found_item.get('id', 'N/A')}`"
+        )
+    else:
+        kickoff = found_item.get("fixture", {}).get("date", "")[:10]
+        venue = found_item.get("fixture", {}).get("venue", {}).get("name", "N/A")
+        status = found_item.get("fixture", {}).get("status", {}).get("long", "Scheduled")
+        goals = found_item.get("goals", {})
+        h_g = goals.get("home")
+        a_g = goals.get("away")
+        score_str = f"{h_g} - {a_g}" if (h_g is not None and a_g is not None) else "N/A"
+        fid = found_item.get("fixture", {}).get("id", "N/A")
+
+        return (
+            f"⚽ *DETAILED FIXTURE DATA*\n"
+            f"• *Matchup:* {home_name} vs {away_name}\n"
+            f"• *League:* {league_name}\n"
+            f"• *Kickoff Date:* {kickoff}\n"
+            f"• *Venue:* {venue}\n"
+            f"• *Status:* {status}\n"
+            f"• *Score:* {score_str}\n"
+            f"• *Fixture ID:* `{fid}`"
+        )
 
 
 def handle_config_op():
@@ -1560,6 +1813,8 @@ def process_telegram_update(
             response_text = handle_logs_op(current_chat)
         elif operation == "errors":
             response_text = handle_errors_op(current_chat)
+        elif operation == "details":
+            response_text = handle_details_op(params)
         elif operation == "config":
             response_text = handle_config_op()
         elif operation == "retrain":

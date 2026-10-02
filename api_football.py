@@ -388,18 +388,58 @@ def _get(endpoint, params, max_budget=None):
 
 
 def get_fixtures_by_date(date_str, league_id=None):
-    """Return fixtures for a calendar date."""
-    date_str = _validate_date(date_str)
-    params = {"date": date_str}
+    """
+    Return fixtures for a calendar date.
 
+    Credit efficiency rule:
+    Always request the full-date query (`params = {"date": date_str}`) from the API
+    if uncached so that a single request covers ALL leagues for that date.
+    Cache the full response, then separate/filter for `league_id` locally.
+    """
+    date_str = _validate_date(date_str)
     if league_id is not None:
         league_id = _validate_positive_int_like(league_id, "league_id")
-        params["league"] = league_id
 
-    data = _get("fixtures", params)
+    # Check for cached full-date response first
+    full_date_key = _cache_key("fixtures", {"date": date_str})
+    cached_full_date = _cache_get(full_date_key, "fixtures", {"date": date_str})
+
+    if cached_full_date is not None:
+        response = cached_full_date.get("response", [])
+        if not isinstance(response, list):
+            return []
+        if league_id is not None:
+            filtered = []
+            for f in response:
+                if not isinstance(f, dict):
+                    continue
+                lg_obj = f.get("league")
+                if isinstance(lg_obj, dict) and lg_obj.get("id") is not None:
+                    if lg_obj.get("id") == league_id:
+                        filtered.append(f)
+                else:
+                    filtered.append(f)
+            return filtered
+        return response
+
+    # Fetch full date from API (no league param) to cover all leagues in 1 call
+    data = _get("fixtures", {"date": date_str})
     response = data.get("response", [])
     if not isinstance(response, list):
         return []
+
+    if league_id is not None:
+        filtered = []
+        for f in response:
+            if not isinstance(f, dict):
+                continue
+            lg_obj = f.get("league")
+            if isinstance(lg_obj, dict) and lg_obj.get("id") is not None:
+                if lg_obj.get("id") == league_id:
+                    filtered.append(f)
+            else:
+                filtered.append(f)
+        return filtered
     return response
 
 
