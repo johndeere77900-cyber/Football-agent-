@@ -383,12 +383,40 @@ def test_get_games_for_date_alias_matches_primary_function(
     ]
 
 
+def test_get_league_games_page_unpaginated_response_handling(isolated_cache, monkeypatch):
+    # Unpaginated response (missing or None 'paging') for page 1 defaults to current=1, total=1
+    monkeypatch.setattr(
+        basketball_api.requests,
+        "get",
+        lambda *args, **kwargs: FakeResponse(
+            payload={"get": "games", "parameters": {"league": "12", "season": "2024"}, "errors": [], "results": 2, "response": [{"id": 1}, {"id": 2}]}
+        ),
+    )
+    res = basketball_api.get_league_games_page(12, 2024, page=1)
+    assert res["games"] == [{"id": 1}, {"id": 2}]
+    assert res["page"] == 1
+    assert res["expected_pages"] == 1
+
+    # Unpaginated response with paging: None explicitly (using season 2025 to avoid cache key collision)
+    monkeypatch.setattr(
+        basketball_api.requests,
+        "get",
+        lambda *args, **kwargs: FakeResponse(
+            payload={"get": "games", "parameters": {"league": "12", "season": "2025"}, "errors": [], "results": 1, "paging": None, "response": [{"id": 3}]}
+        ),
+    )
+    res_none = basketball_api.get_league_games_page(12, 2025, page=1)
+    assert res_none["games"] == [{"id": 3}]
+    assert res_none["page"] == 1
+    assert res_none["expected_pages"] == 1
+
+
 def test_get_league_games_page_pagination_validation(isolated_cache, monkeypatch):
-    # A. Missing paging object
+    # A. Missing paging object when requesting page > 1 fails closed
     monkeypatch.setattr(basketball_api.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": []}))
     try:
         basketball_api.get_league_games_page(12, 2024, page=10)
-        assert False, "Expected APIBasketballError for missing paging"
+        assert False, "Expected APIBasketballError for missing paging when page > 1"
     except basketball_api.APIBasketballError:
         pass
 

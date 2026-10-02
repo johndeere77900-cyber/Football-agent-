@@ -605,23 +605,29 @@ def get_league_games_page(league_id, season, page=1, max_budget=None):
 
     paging = data.get("paging")
     if not isinstance(paging, dict):
-        raise APIBasketballError("Missing or invalid 'paging' object in API-Basketball response.")
+        if page == 1:
+            current = 1
+            total = 1
+        else:
+            raise APIBasketballError(
+                f"Missing or invalid 'paging' object in API-Basketball response for page {page}."
+            )
+    else:
+        current = paging.get("current")
+        total = paging.get("total")
 
-    current = paging.get("current")
-    total = paging.get("total")
-
-    if (
-        isinstance(current, bool)
-        or not isinstance(current, int)
-        or current < 1
-        or isinstance(total, bool)
-        or not isinstance(total, int)
-        or total < 1
-        or current > total
-    ):
-        raise APIBasketballError(
-            f"Malformed pagination metadata from API-Basketball: current={current!r}, total={total!r}"
-        )
+        if (
+            isinstance(current, bool)
+            or not isinstance(current, int)
+            or current < 1
+            or isinstance(total, bool)
+            or not isinstance(total, int)
+            or total < 1
+            or current > total
+        ):
+            raise APIBasketballError(
+                f"Malformed pagination metadata from API-Basketball: current={current!r}, total={total!r}"
+            )
 
     if current != page:
         raise APIBasketballError(
