@@ -14,6 +14,7 @@ import api_football
 import basketball_api
 import config
 import historical_sync
+import main
 import storage
 import telegram_bot
 
@@ -235,42 +236,65 @@ def test_historical_queue_explicit_single_and_multi_seasons(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 6. Structured Prediction Diagnostics Observability
+# 6. Structured Failure Stage Diagnostics & Zero Predictions Reporting
 # ---------------------------------------------------------------------------
 
-def test_research_football_structured_diagnostics(monkeypatch):
-    """Prove research_football records per-stage failure reasons and diagnostics when predictions fail or skip."""
+def test_prediction_failure_stage_classification(monkeypatch):
+    """
+    Prove:
+    1. season_team_stats failure is classified as season_team_stats.
+    2. recent_form failure is classified as recent_form.
+    3. Generic exception is classified as exception.
+    4. Zero predictions response includes structured diagnostics without exposing secrets.
+    """
     today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
-    sample_fixtures = [
-        {"fixture": {"id": 1, "status": {"short": "FT"}}, "league": {"id": 39, "season": 2024}, "teams": {"home": {"name": "A"}, "away": {"name": "B"}}},  # Finished -> fixture_validation
-        {"fixture": {"id": 2, "status": {"short": "NS"}}, "league": {"id": 39, "season": 2024}, "teams": {"home": {"name": "C"}, "away": {"name": "D"}}},  # Will return insufficient_data
-    ]
+    mock_fixture_1 = {"fixture": {"id": 1001, "date": f"{today_str}T15:00:00+00:00", "status": {"short": "NS"}}, "league": {"id": 39, "season": 2024}, "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}}}
+    mock_fixture_2 = {"fixture": {"id": 1002, "date": f"{today_str}T17:00:00+00:00", "status": {"short": "NS"}}, "league": {"id": 39, "season": 2024}, "teams": {"home": {"id": 3, "name": "Team C"}, "away": {"id": 4, "name": "Team D"}}}
+    mock_fixture_3 = {"fixture": {"id": 1003, "date": f"{today_str}T19:00:00+00:00", "status": {"short": "NS"}}, "league": {"id": 39, "season": 2024}, "teams": {"home": {"id": 5, "name": "Team E"}, "away": {"id": 6, "name": "Team F"}}}
 
-    monkeypatch.setattr(telegram_bot, "get_tracked_fixtures_for_date", lambda date_str, league_id=None: sample_fixtures)
+    monkeypatch.setattr(telegram_bot, "get_tracked_fixtures_for_date", lambda date_str, league_id=None: [mock_fixture_1, mock_fixture_2, mock_fixture_3])
     monkeypatch.setattr(telegram_bot.agent, "get_league_avg_goals", lambda lid, ssn: 2.5)
 
     def mock_predict(fixture, avg, fetch_odds=False):
-        return {"insufficient_data": True, "reason": "recent_form: insufficient history"}
+        fid = fixture["fixture"]["id"]
+        if fid == 1001:
+            return {"insufficient_data": True, "failure_stage": "season_team_stats", "reason": "Season team statistics incomplete."}
+        elif fid == 1002:
+            return {"insufficient_data": True, "failure_stage": "recent_form", "reason": "Recent form incomplete."}
+        else:
+            raise RuntimeError("Generic network exception with key=secret_12345")
 
     monkeypatch.setattr(telegram_bot.agent, "predict_fixture", mock_predict)
 
-    results = telegram_bot.research_football(today_str, quantity=5)
+    params = telegram_bot.parse_operation_parameters("predict", "predict Premier League today")
+    res = telegram_bot.handle_predict_op(params)
 
-    assert len(results) == 0
-    diag = getattr(telegram_bot.research_football, "last_diagnostics", {})
-
-    assert diag["fixtures_found"] == 2
-    assert diag["prediction_attempts"] == 1
-    assert diag["skipped_count"] == 2
-    assert diag["failure_counts_by_stage"]["fixture_validation"] == 1
-    assert diag["failure_counts_by_stage"]["recent_form"] == 1
-    assert "1" in diag["per_fixture_reasons"]
-    assert "2" in diag["per_fixture_reasons"]
+    assert "No football predictions could be produced" in res
+    assert "Diagnostic Breakdown:" in res
+    assert "Season Team Stats: 1" in res
+    assert "Recent Form: 1" in res
+    assert "Exception: 1" in res
+    # Secrets MUST be redacted
+    assert "secret_12345" not in res
+    assert "REDACTED" in res or "Generic network exception" in res
 
 
 # ---------------------------------------------------------------------------
-# 7. Zero Real API Calls Enforced
+# 7. Basketball Season Helper
+# ---------------------------------------------------------------------------
+
+def test_basketball_season_for_date():
+    """Verify API-Basketball 4-digit season year calculation."""
+    d_aug = datetime.date(2024, 8, 15)
+    d_jan = datetime.date(2025, 1, 15)
+
+    assert basketball_api._season_for_date(d_aug) == 2024
+    assert basketball_api._season_for_date(d_jan) == 2024
+
+
+# ---------------------------------------------------------------------------
+# 8. Zero Real API Calls Enforced
 # ---------------------------------------------------------------------------
 
 def test_zero_real_api_calls_enforced(monkeypatch):

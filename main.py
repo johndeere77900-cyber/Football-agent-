@@ -939,6 +939,7 @@ def _insufficient_prediction(
     fixture,
     is_live,
     reason="Validated prediction inputs were unavailable.",
+    failure_stage="insufficient_data",
 ):
     """Return a consistent non-prediction result."""
     (
@@ -961,6 +962,7 @@ def _insufficient_prediction(
         "safest": None,
         "is_live": bool(is_live),
         "insufficient_data": True,
+        "failure_stage": failure_stage,
         "reason": reason,
         "odds_comparison": None,
         "elo_cross_check": None,
@@ -1055,6 +1057,7 @@ def predict_fixture(
             fixture,
             is_live,
             "Season team statistics are incomplete.",
+            failure_stage="season_team_stats",
         )
 
     recent_home = _recent_feature(
@@ -1075,6 +1078,7 @@ def predict_fixture(
             fixture,
             is_live,
             "Recent team form data is incomplete.",
+            failure_stage="recent_form",
         )
 
     h2h = _h2h_feature(

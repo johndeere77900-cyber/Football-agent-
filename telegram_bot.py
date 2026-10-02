@@ -819,8 +819,14 @@ def research_football(date_str, quantity=1, fetch_odds=False, league_id=None):
         if prediction.get("insufficient_data"):
             diagnostics["skipped_count"] += 1
             stage_code = prediction.get("reason", "insufficient_data")
-            if "quality_gate" in str(stage_code).lower() or "calibration" in str(stage_code).lower():
+            explicit_stage = prediction.get("failure_stage")
+
+            if explicit_stage and isinstance(explicit_stage, str):
+                stage = explicit_stage
+            elif "quality_gate" in str(stage_code).lower() or "calibration" in str(stage_code).lower():
                 stage = "calibration_quality_gate"
+            elif "season" in str(stage_code).lower() or "stats" in str(stage_code).lower():
+                stage = "season_team_stats"
             elif "form" in str(stage_code).lower():
                 stage = "recent_form"
             elif "h2h" in str(stage_code).lower():
@@ -1225,7 +1231,30 @@ def handle_predict_op(params):
         results = research_basketball(date_str, quantity=quantity, league_id=league_id)
 
     if not results:
-        return f"📊 No {sport} predictions could be produced for {date_label} from available data."
+        base_msg = f"📊 No {sport} predictions could be produced for {date_label} ({date_str})."
+        diag = getattr(research_football, "last_diagnostics", {}) if sport == "football" else {}
+        if isinstance(diag, dict) and diag.get("fixtures_found", 0) > 0:
+            stage_counts = [f"{st.replace('_', ' ').title()}: {cnt}" for st, cnt in diag.get("failure_counts_by_stage", {}).items() if cnt > 0]
+            stage_str = ", ".join(stage_counts) if stage_counts else "None"
+
+            reasons_lines = []
+            for fid, reas in list(diag.get("per_fixture_reasons", {}).items())[:5]:
+                clean_reas = re.sub(r"(key|token|secret|auth|password)=[\w-]+", r"\1=REDACTED", str(reas), flags=re.IGNORECASE)
+                reasons_lines.append(f"• Fixture `{fid}`: {clean_reas}")
+
+            reasons_block = ("\n" + "\n".join(reasons_lines)) if reasons_lines else ""
+
+            return (
+                f"{base_msg}\n\n"
+                f"🔍 *Diagnostic Breakdown:*\n"
+                f"• Fixtures Found: {diag.get('fixtures_found', 0)}\n"
+                f"• Prediction Attempts: {diag.get('prediction_attempts', 0)}\n"
+                f"• Predictions Produced: {diag.get('predictions_produced', 0)}\n"
+                f"• Skipped: {diag.get('skipped_count', 0)}\n"
+                f"• Failure Stages: {stage_str}"
+                f"{reasons_block}"
+            )
+        return base_msg
 
     outputs = []
     for item in results:
