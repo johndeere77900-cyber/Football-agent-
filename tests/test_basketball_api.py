@@ -79,6 +79,7 @@ def test_get_games_by_date_builds_expected_request(
                 "response": [
                     {
                         "id": 1,
+                            "league": {"id": 12},
                     }
                 ]
             }
@@ -95,7 +96,7 @@ def test_get_games_by_date_builds_expected_request(
         12,
     )
 
-    assert result == [{"id": 1}]
+    assert result == [{"id": 1, "league": {"id": 12}}]
     assert len(calls) == 1
     assert calls[0]["params"] == {
         "date": "2026-09-28",
@@ -194,6 +195,7 @@ def test_network_failure_is_retried(
                 "response": [
                     {
                         "id": 123,
+                            "league": {"id": 12},
                     }
                 ]
             }
@@ -216,7 +218,7 @@ def test_network_failure_is_retried(
         12,
     )
 
-    assert result == [{"id": 123}]
+    assert result == [{"id": 123, "league": {"id": 12}}]
     assert len(calls) == 2
 
 

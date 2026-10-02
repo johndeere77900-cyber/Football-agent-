@@ -541,7 +541,7 @@ def get_tracked_basketball_games_for_date(date_str, league_id=None):
 def get_upcoming_fixtures(league_id=None, quantity=10, max_days_ahead=14):
     """
     Collect upcoming football fixtures across multiple forward calendar dates starting from today.
-    Stops requesting as soon as quantity games are collected. Reuses cached date responses.
+    Returns tuple: (fixtures_list, horizon_exhausted_bool)
     """
     today_dt = datetime.now(timezone.utc).date()
     collected = []
@@ -567,13 +567,14 @@ def get_upcoming_fixtures(league_id=None, quantity=10, max_days_ahead=14):
                 collected.append(f)
 
     collected.sort(key=lambda item: item.get("fixture", {}).get("date", ""))
-    return collected[:quantity]
+    horizon_exhausted = len(collected) < quantity
+    return collected[:quantity], horizon_exhausted
 
 
 def get_upcoming_basketball_games(league_id=None, quantity=10, max_days_ahead=14):
     """
     Collect upcoming basketball games across multiple forward calendar dates starting from today.
-    Stops requesting as soon as quantity games are collected. Reuses cached date responses.
+    Returns tuple: (games_list, horizon_exhausted_bool)
     """
     today_dt = datetime.now(timezone.utc).date()
     collected = []
@@ -599,7 +600,8 @@ def get_upcoming_basketball_games(league_id=None, quantity=10, max_days_ahead=14
                 collected.append(g)
 
     collected.sort(key=lambda item: str(item.get("date", "")) + str(item.get("time", "")))
-    return collected[:quantity]
+    horizon_exhausted = len(collected) < quantity
+    return collected[:quantity], horizon_exhausted
 
 
 def handle_count_question(text):
@@ -1184,15 +1186,17 @@ def handle_fixtures_op(params):
 
     if sport == "basketball":
         if is_next:
-            games = get_upcoming_basketball_games(league_id=league_id, quantity=quantity)
+            games, horizon_exhausted = get_upcoming_basketball_games(league_id=league_id, quantity=quantity)
             header_label = f"Next {quantity} Basketball Games" if quantity > 1 else "Next Basketball Game"
         else:
             games = get_tracked_basketball_games_for_date(date_str, league_id=league_id)[:quantity]
+            horizon_exhausted = False
             header_label = f"Basketball Games for {date_label} ({date_str})"
 
         if not games:
             title_lg = f" {league_name.upper()}" if league_name else " NBA"
-            return f"🏀 No tracked basketball games found for{title_lg}."
+            horizon_msg = " within 14-day horizon" if is_next else ""
+            return f"🏀 No tracked basketball games found for{title_lg}{horizon_msg}."
 
         title_lg = f" ({league_name.upper()})" if league_name else ""
         lines = [f"🏀 *{header_label}{title_lg}:*"]
@@ -1206,19 +1210,24 @@ def handle_fixtures_op(params):
             date_info = f"{g_date}, {time_str}" if g_date else time_str
             lines.append(f"• {h_name} vs {a_name} — {date_info} ({lg_str})")
 
+        if is_next and horizon_exhausted:
+            lines.append(f"\nℹ️ (Found {len(games)} qualifying games within 14-day safety horizon)")
+
         return "\n".join(lines)
 
     else:
         if is_next:
-            fixtures = get_upcoming_fixtures(league_id=league_id, quantity=quantity)
+            fixtures, horizon_exhausted = get_upcoming_fixtures(league_id=league_id, quantity=quantity)
             header_label = f"Next {quantity} Football Fixtures" if quantity > 1 else "Next Football Fixture"
         else:
             fixtures = get_tracked_fixtures_for_date(date_str, league_id=league_id)[:quantity]
+            horizon_exhausted = False
             header_label = f"Football Fixtures for {date_label} ({date_str})"
 
         if not fixtures:
             title_lg = f" {league_name.title()}" if league_name else " tracked"
-            return f"📅 No{title_lg} football fixtures found."
+            horizon_msg = " within 14-day horizon" if is_next else ""
+            return f"📅 No{title_lg} football fixtures found{horizon_msg}."
 
         title_lg = f" ({league_name.title()})" if league_name else ""
         lines = [f"📅 *{header_label}{title_lg}:*"]
@@ -1230,6 +1239,9 @@ def handle_fixtures_op(params):
             f_date = str(f.get("fixture", {}).get("date", ""))[:10]
             time_str = format_fixture_time(f)
             lines.append(f"• {h_name} vs {a_name} — {f_date}, {time_str} ({league})")
+
+        if is_next and horizon_exhausted:
+            lines.append(f"\nℹ️ (Found {len(fixtures)} qualifying fixtures within 14-day safety horizon)")
 
         return "\n".join(lines)
 
@@ -1612,13 +1624,13 @@ def handle_details_op(params):
     # Step 2 & 3: Upcoming scheduled fixture/game matching both teams
     if not found_item:
         if item_sport == "basketball":
-            upcoming = get_upcoming_basketball_games(quantity=50)
+            upcoming, _ = get_upcoming_basketball_games(quantity=50)
             for g in upcoming:
                 if _match_teams(g, team_a, team_b):
                     found_item = g
                     break
         else:
-            upcoming = get_upcoming_fixtures(quantity=50)
+            upcoming, _ = get_upcoming_fixtures(quantity=50)
             for f in upcoming:
                 if _match_teams(f, team_a, team_b):
                     found_item = f
@@ -1627,20 +1639,47 @@ def handle_details_op(params):
     # Step 4 & 5: Historical database record ONLY as fallback when no upcoming match exists
     if not found_item:
         conn, db_type = storage._connect()
+        p_a = f"%{team_a.lower()}%"
+        p_b = f"%{team_b.lower()}%" if team_b else ""
+
         try:
             if item_sport == "basketball":
-                if db_type == "postgres":
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "SELECT raw_json FROM historical_basketball_games WHERE LOWER(home_team) LIKE %s OR LOWER(away_team) LIKE %s ORDER BY game_date DESC LIMIT 50",
-                            (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
-                        )
-                        rows = cur.fetchall()
+                if team_b:
+                    if db_type == "postgres":
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                SELECT raw_json FROM historical_basketball_games
+                                WHERE (LOWER(home_team) LIKE %s AND LOWER(away_team) LIKE %s)
+                                   OR (LOWER(home_team) LIKE %s AND LOWER(away_team) LIKE %s)
+                                ORDER BY game_date DESC LIMIT 10
+                                """,
+                                (p_a, p_b, p_b, p_a),
+                            )
+                            rows = cur.fetchall()
+                    else:
+                        rows = conn.execute(
+                            """
+                            SELECT raw_json FROM historical_basketball_games
+                            WHERE (LOWER(home_team) LIKE ? AND LOWER(away_team) LIKE ?)
+                               OR (LOWER(home_team) LIKE ? AND LOWER(away_team) LIKE ?)
+                            ORDER BY game_date DESC LIMIT 10
+                            """,
+                            (p_a, p_b, p_b, p_a),
+                        ).fetchall()
                 else:
-                    rows = conn.execute(
-                        "SELECT raw_json FROM historical_basketball_games WHERE LOWER(home_team) LIKE ? OR LOWER(away_team) LIKE ? ORDER BY game_date DESC LIMIT 50",
-                        (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
-                    ).fetchall()
+                    if db_type == "postgres":
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT raw_json FROM historical_basketball_games WHERE LOWER(home_team) LIKE %s OR LOWER(away_team) LIKE %s ORDER BY game_date DESC LIMIT 10",
+                                (p_a, p_a),
+                            )
+                            rows = cur.fetchall()
+                    else:
+                        rows = conn.execute(
+                            "SELECT raw_json FROM historical_basketball_games WHERE LOWER(home_team) LIKE ? OR LOWER(away_team) LIKE ? ORDER BY game_date DESC LIMIT 10",
+                            (p_a, p_a),
+                        ).fetchall()
 
                 for row in rows:
                     g = storage._json_loads(row[0])
@@ -1648,18 +1687,42 @@ def handle_details_op(params):
                         found_item = g
                         break
             else:
-                if db_type == "postgres":
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "SELECT raw_json FROM historical_fixtures WHERE LOWER(home_team) LIKE %s OR LOWER(away_team) LIKE %s ORDER BY kickoff_at DESC LIMIT 50",
-                            (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
-                        )
-                        rows = cur.fetchall()
+                if team_b:
+                    if db_type == "postgres":
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                SELECT raw_json FROM historical_fixtures
+                                WHERE (LOWER(home_team) LIKE %s AND LOWER(away_team) LIKE %s)
+                                   OR (LOWER(home_team) LIKE %s AND LOWER(away_team) LIKE %s)
+                                ORDER BY kickoff_at DESC LIMIT 10
+                                """,
+                                (p_a, p_b, p_b, p_a),
+                            )
+                            rows = cur.fetchall()
+                    else:
+                        rows = conn.execute(
+                            """
+                            SELECT raw_json FROM historical_fixtures
+                            WHERE (LOWER(home_team) LIKE ? AND LOWER(away_team) LIKE ?)
+                               OR (LOWER(home_team) LIKE ? AND LOWER(away_team) LIKE ?)
+                            ORDER BY kickoff_at DESC LIMIT 10
+                            """,
+                            (p_a, p_b, p_b, p_a),
+                        ).fetchall()
                 else:
-                    rows = conn.execute(
-                        "SELECT raw_json FROM historical_fixtures WHERE LOWER(home_team) LIKE ? OR LOWER(away_team) LIKE ? ORDER BY kickoff_at DESC LIMIT 50",
-                        (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
-                    ).fetchall()
+                    if db_type == "postgres":
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT raw_json FROM historical_fixtures WHERE LOWER(home_team) LIKE %s OR LOWER(away_team) LIKE %s ORDER BY kickoff_at DESC LIMIT 10",
+                                (p_a, p_a),
+                            )
+                            rows = cur.fetchall()
+                    else:
+                        rows = conn.execute(
+                            "SELECT raw_json FROM historical_fixtures WHERE LOWER(home_team) LIKE ? OR LOWER(away_team) LIKE ? ORDER BY kickoff_at DESC LIMIT 10",
+                            (p_a, p_a),
+                        ).fetchall()
 
                 for row in rows:
                     f = storage._json_loads(row[0])

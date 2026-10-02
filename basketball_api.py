@@ -674,10 +674,12 @@ def get_games_by_date(
                     continue
                 lg_obj = g.get("league")
                 if isinstance(lg_obj, dict) and lg_obj.get("id") is not None:
-                    if lg_obj.get("id") == league_id:
+                    try:
+                        raw_id = int(lg_obj.get("id"))
+                    except (TypeError, ValueError):
+                        raw_id = None
+                    if raw_id == league_id:
                         filtered.append(g)
-                else:
-                    filtered.append(g)
             return filtered
         return response
 
@@ -695,10 +697,12 @@ def get_games_by_date(
                 continue
             lg_obj = g.get("league")
             if isinstance(lg_obj, dict) and lg_obj.get("id") is not None:
-                if lg_obj.get("id") == league_id:
+                try:
+                    raw_id = int(lg_obj.get("id"))
+                except (TypeError, ValueError):
+                    raw_id = None
+                if raw_id == league_id:
                     filtered.append(g)
-            else:
-                filtered.append(g)
         return filtered
 
     return response

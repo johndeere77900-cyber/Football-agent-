@@ -435,10 +435,12 @@ def get_fixtures_by_date(date_str, league_id=None):
                 continue
             lg_obj = f.get("league")
             if isinstance(lg_obj, dict) and lg_obj.get("id") is not None:
-                if lg_obj.get("id") == league_id:
+                try:
+                    raw_id = int(lg_obj.get("id"))
+                except (TypeError, ValueError):
+                    raw_id = None
+                if raw_id == league_id:
                     filtered.append(f)
-            else:
-                filtered.append(f)
         return filtered
     return response
 

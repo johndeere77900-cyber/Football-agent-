@@ -598,33 +598,39 @@ def sync_historical_basketball_games(
 
 def check_acquisition_coverage(league_id: int, season: int, sport: str = "football") -> dict:
     """
-    Check dataset coverage in Neon/storage and cache before starting acquisition.
-    Calculates remaining required requests to acquire only missing data.
+    Inspect database dataset status and persistent API cache to estimate required acquisition requests.
+    Clearly distinguishes database storage manifest state from API cache inspection.
     """
     dataset_info = storage.get_historical_dataset_status(league_id, season, sport=sport)
-    status = dataset_info.get("status", "INCOMPLETE")
-    fixture_count = dataset_info.get("fixture_count", 0)
+    db_status = dataset_info.get("status", "INCOMPLETE")
+    db_fixture_count = dataset_info.get("fixture_count", 0)
     expected_pages = dataset_info.get("expected_pages", 0)
     pages_completed = dataset_info.get("pages_completed", 0)
 
-    if status == "COMPLETE":
-        required_requests = 0
+    # Inspect persistent cache key for page 1
+    cache_key = f"fixtures_{league_id}_{season}_page_1" if sport == "football" else f"games_{league_id}_{season}_page_1"
+    cached_p1 = storage.get_api_cache(cache_key)
+    has_cached_page_1 = cached_p1 is not None
+
+    if db_status == "COMPLETE":
+        estimated_requests = 0
     elif expected_pages > 0:
-        required_requests = max(0, expected_pages - pages_completed)
+        estimated_requests = max(0, expected_pages - pages_completed)
     else:
-        # Unknown total pages yet; minimum 1 request needed to query page 1 metadata
-        required_requests = 1
+        estimated_requests = 1 if not has_cached_page_1 else 0
 
     return {
         "sport": sport,
         "league_id": league_id,
         "season": season,
-        "status": status,
-        "fixture_count": fixture_count,
+        "database_status": db_status,
+        "database_fixture_count": db_fixture_count,
         "expected_pages": expected_pages,
         "pages_completed": pages_completed,
-        "required_requests": required_requests,
-        "already_complete": (status == "COMPLETE"),
+        "persistent_cache_inspected": True,
+        "has_cached_page_1": has_cached_page_1,
+        "estimated_required_requests": estimated_requests,
+        "already_complete": (db_status == "COMPLETE"),
     }
 
 
@@ -642,7 +648,7 @@ def run_historical_queue(
         if season is not None:
             seasons = [season]
         else:
-            seasons = [2024]
+            seasons = list(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024]))
 
     queue_items = []
     for ssn in seasons:
@@ -680,7 +686,7 @@ def run_historical_queue(
             continue
 
         print(
-            f"Queue: Syncing missing data for {sport} league {league_id} season {season} (est. required requests: {cov['required_requests']})...",
+            f"Queue: Syncing missing data for {sport} league {league_id} season {season} (est. required requests: {cov['estimated_required_requests']})...",
             flush=True,
         )
 
@@ -721,7 +727,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--sport", choices=["football", "basketball"], default="football", help="Sport name")
     parser.add_argument("--league-id", type=int, help="League ID")
-    parser.add_argument("--season", type=int, default=2024, help="Season year (e.g. 2024 or 2025)")
+    parser.add_argument("--season", type=int, default=None, help="Season year (e.g. 2024 or 2025)")
     parser.add_argument(
         "--with-enrichment",
         action="store_true",

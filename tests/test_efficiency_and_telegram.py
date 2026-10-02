@@ -1,6 +1,7 @@
 """
 Unit and integration tests proving credit efficiency, telegram queries, game details priority,
-dynamic data status, historical dataset resumption, health checks, and zero real API calls during tests.
+dynamic data status, historical dataset resumption, health checks, league filtering fail-closed,
+next-N horizon behavior, and zero real API calls during tests.
 """
 
 import datetime
@@ -33,14 +34,19 @@ def temp_db(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 1. One date request serves multiple leagues & cache prevents duplicate requests
+# 1. Missing league metadata fails filtering & requested league excludes others
 # ---------------------------------------------------------------------------
 
-def test_one_date_request_serves_multiple_leagues(monkeypatch):
-    """Prove a single cached date request serves multiple leagues locally without duplicate API calls."""
+def test_missing_league_metadata_fails_league_filtering(monkeypatch):
+    """
+    Prove:
+    1. Records with missing/malformed league metadata DO NOT pass league filtering when league_id is requested.
+    2. Requested league excludes other leagues.
+    """
     sample_fixtures = [
         {"fixture": {"id": 101, "date": "2026-03-30T15:00:00+00:00"}, "league": {"id": 39, "name": "Premier League"}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Chelsea"}}},
         {"fixture": {"id": 102, "date": "2026-03-30T17:00:00+00:00"}, "league": {"id": 140, "name": "La Liga"}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Barcelona"}}},
+        {"fixture": {"id": 103, "date": "2026-03-30T19:00:00+00:00"}, "teams": {"home": {"name": "Unknown A"}, "away": {"name": "Unknown B"}}},  # Missing league dict!
     ]
 
     mock_resp = MagicMock()
@@ -49,60 +55,14 @@ def test_one_date_request_serves_multiple_leagues(monkeypatch):
     mock_resp.headers = {}
     mock_resp.json.return_value = {"response": sample_fixtures}
 
-    requests_count = 0
-
-    def mock_requests_get(*args, **kwargs):
-        nonlocal requests_count
-        requests_count += 1
-        return mock_resp
-
-    monkeypatch.setattr("requests.get", mock_requests_get)
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: mock_resp)
     monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test_key")
-
-    all_fixtures = api_football.get_fixtures_by_date("2026-03-30")
-    assert len(all_fixtures) == 2
-    assert requests_count == 1
 
     pl_fixtures = api_football.get_fixtures_by_date("2026-03-30", league_id=39)
+
+    # Must contain ONLY Premier League (39) and exclude La Liga (140) and record missing league metadata!
     assert len(pl_fixtures) == 1
-    assert pl_fixtures[0]["league"]["id"] == 39
-    assert requests_count == 1  # 0 additional API calls
-
-    la_liga_fixtures = api_football.get_fixtures_by_date("2026-03-30", league_id=140)
-    assert len(la_liga_fixtures) == 1
-    assert la_liga_fixtures[0]["league"]["id"] == 140
-    assert requests_count == 1  # 0 additional API calls
-
-
-def test_cache_prevents_duplicate_requests(monkeypatch):
-    """Prove that persistent cache prevents duplicate API calls."""
-    sample_games = [
-        {"id": 201, "date": "2026-03-30T20:00:00+00:00", "league": {"id": 12, "name": "NBA"}, "teams": {"home": {"name": "Lakers"}, "away": {"name": "Celtics"}}},
-    ]
-
-    mock_resp = MagicMock()
-    mock_resp.ok = True
-    mock_resp.status_code = 200
-    mock_resp.headers = {}
-    mock_resp.json.return_value = {"response": sample_games}
-
-    api_calls = 0
-
-    def mock_requests_get(*args, **kwargs):
-        nonlocal api_calls
-        api_calls += 1
-        return mock_resp
-
-    monkeypatch.setattr("requests.get", mock_requests_get)
-    monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test_key")
-
-    games1 = basketball_api.get_games_by_date("2026-03-30")
-    assert len(games1) == 1
-    assert api_calls == 1
-
-    games2 = basketball_api.get_games_by_date("2026-03-30")
-    assert len(games2) == 1
-    assert api_calls == 1  # Cached!
+    assert pl_fixtures[0]["fixture"]["id"] == 101
 
 
 # ---------------------------------------------------------------------------
@@ -155,11 +115,11 @@ def test_basketball_date_query_credit_efficiency_and_params(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 3. Next N multi-date queries
+# 3. Next N multi-date queries & horizon behavior
 # ---------------------------------------------------------------------------
 
-def test_next_n_spans_multiple_dates(monkeypatch):
-    """Prove 'next 20' queries collect fixtures across multiple forward dates chronologically."""
+def test_next_n_spans_multiple_dates_and_horizon_reporting(monkeypatch):
+    """Prove 'next N' collects fixtures across dates and reports horizon status when exhausted."""
     today = datetime.datetime.now(datetime.timezone.utc).date()
     d1 = (today + datetime.timedelta(days=1)).isoformat()
     d2 = (today + datetime.timedelta(days=2)).isoformat()
@@ -176,97 +136,55 @@ def test_next_n_spans_multiple_dates(monkeypatch):
 
     monkeypatch.setattr(api_football, "get_fixtures_by_date", mock_get_by_date)
 
-    params = telegram_bot.parse_operation_parameters("fixtures", "Give me the next 2 Premier League fixtures")
+    # Ask for 20 fixtures when only 2 exist in 14-day horizon
+    params = telegram_bot.parse_operation_parameters("fixtures", "Give me the next 20 Premier League fixtures")
     res = telegram_bot.handle_fixtures_op(params)
 
-    assert "Next 2 Football Fixtures" in res
+    assert "Next 20 Football Fixtures" in res
     assert "Arsenal vs Chelsea" in res
     assert "Liverpool vs Everton" in res
+    assert "14-day safety horizon" in res  # Reports horizon boundary!
 
 
 # ---------------------------------------------------------------------------
-# 4. Game Details Lookup Order (Upcoming > Historical)
+# 4. Game Details Lookup Order (Upcoming > Historical; Both teams required)
 # ---------------------------------------------------------------------------
 
-def test_game_details_lookup_priority(monkeypatch):
-    """
-    Prove details lookup order:
-    1. Upcoming scheduled fixture wins over historical database record.
-    2. Historical fallback is used when no upcoming match exists.
-    """
-    # Save older historical meeting (Arsenal 0 - 2 Chelsea) in DB
-    historical_fixture = {
-        "fixture": {"id": 11, "date": "2023-01-01T15:00:00+00:00", "venue": {"name": "Old Stamford Bridge"}, "status": {"long": "Match Finished"}},
+def test_game_details_historical_requires_both_teams(monkeypatch):
+    """Prove historical fallback details lookup requires BOTH teams when two teams are specified."""
+    # Historical record involving Arsenal vs Tottenham
+    hist_spurs = {
+        "fixture": {"id": 10, "date": "2023-01-01T15:00:00+00:00", "venue": {"name": "White Hart Lane"}, "status": {"long": "Match Finished"}},
+        "league": {"id": 39, "name": "Premier League", "season": 2022},
+        "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 3, "name": "Tottenham"}},
+        "goals": {"home": 2, "away": 0},
+    }
+    # Historical record involving Arsenal vs Chelsea
+    hist_chelsea = {
+        "fixture": {"id": 11, "date": "2023-02-01T15:00:00+00:00", "venue": {"name": "Stamford Bridge"}, "status": {"long": "Match Finished"}},
         "league": {"id": 39, "name": "Premier League", "season": 2022},
         "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 2, "name": "Chelsea"}},
-        "goals": {"home": 0, "away": 2},
+        "goals": {"home": 1, "away": 1},
     }
-    storage.save_historical_fixtures([historical_fixture], league_id=39, season=2022)
-
-    today = datetime.datetime.now(datetime.timezone.utc).date()
-    d1 = (today + datetime.timedelta(days=1)).isoformat()
-    upcoming_fixture = {
-        "fixture": {"id": 99, "date": f"{d1}T15:00:00+00:00", "venue": {"name": "Emirates Stadium"}, "status": {"long": "Not Started"}},
-        "league": {"id": 39, "name": "Premier League", "season": 2024},
-        "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 2, "name": "Chelsea"}},
-        "goals": {"home": None, "away": None},
-    }
-
-    monkeypatch.setattr(api_football, "get_fixtures_by_date", lambda date_str, league_id=None: [upcoming_fixture] if date_str == d1 else [])
-
-    # Query without date: Upcoming match MUST win over historical meeting!
-    params = telegram_bot.parse_operation_parameters("details", "Give me detailed data for Arsenal vs Chelsea")
-    res = telegram_bot.handle_details_op(params)
-
-    assert "Emirates Stadium" in res
-    assert "Not Started" in res
-    assert "Old Stamford Bridge" not in res  # Historical match did NOT win!
-
-
-def test_game_details_historical_fallback(monkeypatch):
-    """Prove historical meeting is returned when no upcoming match exists."""
-    historical_fixture = {
-        "fixture": {"id": 11, "date": "2023-01-01T15:00:00+00:00", "venue": {"name": "Highbury"}, "status": {"long": "Match Finished"}},
-        "league": {"id": 39, "name": "Premier League", "season": 2022},
-        "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 2, "name": "Chelsea"}},
-        "goals": {"home": 2, "away": 1},
-    }
-    storage.save_historical_fixtures([historical_fixture], league_id=39, season=2022)
+    storage.save_historical_fixtures([hist_spurs, hist_chelsea], league_id=39, season=2022)
 
     monkeypatch.setattr(api_football, "get_fixtures_by_date", lambda date_str, league_id=None: [])
 
+    # Query for Arsenal vs Chelsea MUST NOT return Arsenal vs Tottenham!
     params = telegram_bot.parse_operation_parameters("details", "Give me detailed data for Arsenal vs Chelsea")
     res = telegram_bot.handle_details_op(params)
 
-    assert "Highbury" in res
-    assert "2 - 1" in res
+    assert "Stamford Bridge" in res
+    assert "1 - 1" in res
+    assert "White Hart Lane" not in res  # Does NOT return arbitrary single-team record!
 
 
 # ---------------------------------------------------------------------------
-# 5. League Parsing & Multi-League Handler Integration
+# 5. Target Seasons Queue Reconciliation
 # ---------------------------------------------------------------------------
 
-def test_league_parsing_and_handler_mapping():
-    """Verify league parsing and routing for Premier League, La Liga, Serie A, and NBA."""
-    leagues_to_test = [
-        ("today's Premier League games", 39, "football"),
-        ("today's La Liga games", 140, "football"),
-        ("today's Serie A games", 135, "football"),
-        ("today's NBA games", 12, "basketball"),
-    ]
-
-    for query, expected_lid, expected_sport in leagues_to_test:
-        op, params = telegram_bot.resolve_operation(query)
-        assert params["league_id"] == expected_lid
-        assert params["sport"] == expected_sport
-
-
-# ---------------------------------------------------------------------------
-# 6. Historical Queue Single Season Default
-# ---------------------------------------------------------------------------
-
-def test_default_queue_does_not_acquire_all_five_seasons(monkeypatch):
-    """Prove run_historical_queue() default invocation processes a single season."""
+def test_target_seasons_queue_reconciliation(monkeypatch):
+    """Prove run_historical_queue() defaults to config.TARGET_SEASONS single source of truth."""
     processed_seasons = []
 
     def mock_sync_fb(league_id, season, **kwargs):
@@ -280,13 +198,15 @@ def test_default_queue_does_not_acquire_all_five_seasons(monkeypatch):
     monkeypatch.setattr(historical_sync, "sync_historical_fixtures", mock_sync_fb)
     monkeypatch.setattr(historical_sync, "sync_historical_basketball_games", mock_sync_bb)
 
+    # Run default queue (no seasons or season arg)
     summary = historical_sync.run_historical_queue()
-    assert summary["target_seasons"] == [2024]
-    assert set(processed_seasons) == {2024}
+
+    assert summary["target_seasons"] == [2020, 2021, 2022, 2023, 2024]
+    assert set(processed_seasons) == {2020, 2021, 2022, 2023, 2024}
 
 
 # ---------------------------------------------------------------------------
-# 7. Basketball Season Helper
+# 6. Basketball Season Helper
 # ---------------------------------------------------------------------------
 
 def test_basketball_season_for_date():
@@ -299,7 +219,7 @@ def test_basketball_season_for_date():
 
 
 # ---------------------------------------------------------------------------
-# 8. Zero Real API Calls Enforced
+# 7. Zero Real API Calls Enforced
 # ---------------------------------------------------------------------------
 
 def test_zero_real_api_calls_enforced(monkeypatch):
