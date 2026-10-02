@@ -99,8 +99,10 @@ def evaluate_quality_gate(
 
     is_pass = any(r in pass_triggers for r in dedup_reasons)
     decision = "PASS" if is_pass else "SIGNAL"
+    gate_status = "BLOCKED" if is_pass else "APPROVED"
 
     return {
         "decision": decision,
+        "gate_status": gate_status,
         "reason_codes": dedup_reasons if decision == "PASS" else [],
     }

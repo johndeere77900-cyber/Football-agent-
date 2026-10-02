@@ -1,6 +1,7 @@
 """
 Generates a clean, readable dashboard as a Markdown file (DASHBOARD.md).
-Uses the storage abstraction layer rather than direct database engine calls.
+Uses storage abstraction layer to summarize predictions, accuracy, historical dataset coverage,
+data provider telemetry, and operational logs.
 """
 
 from datetime import datetime, timezone
@@ -43,8 +44,34 @@ def _predictions_table(rows, emoji):
     return "\n".join(lines) + "\n"
 
 
+def _dataset_status_table():
+    datasets = storage.get_all_historical_datasets()
+    if not datasets:
+        return "_No historical datasets tracked in Neon/SQLite._\n"
+
+    lines = [
+        "| Sport | League ID | Season | Status | Fixture Count | Progress | Updated |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for d in datasets:
+        sport = d.get("sport", "football")
+        lid = d.get("league_id")
+        ssn = d.get("season")
+        st = d.get("status", "UNKNOWN")
+        fc = d.get("fixture_count", 0)
+        pages = f"{d.get('pages_completed', 0)}/{d.get('expected_pages', 0)}"
+        upd = str(d.get("updated_at", ""))[:10]
+        st_emoji = "🟢" if st == "COMPLETE" else ("🟡" if st == "INCOMPLETE" else "🔴")
+        lines.append(f"| {sport.upper()} | {lid} | {ssn} | {st_emoji} {st} | {fc} | {pages} | {upd} |")
+
+    return "\n".join(lines) + "\n"
+
+
 def generate():
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    storage.init_db()
+    storage.init_basketball_db()
 
     football_rows = storage.get_recent_predictions("football", limit=20)
     basketball_rows = storage.get_recent_predictions("basketball", limit=20)
@@ -82,6 +109,10 @@ _Last updated: {now}_
 ## 📈 Basketball Accuracy
 
 {_accuracy_block(basketball_acc, "Basketball Track Record")}
+
+## 🗃️ Historical Dataset Coverage (Neon / Storage)
+
+{_dataset_status_table()}
 
 ## 🧪 Historical & Backtest Experiment Health
 

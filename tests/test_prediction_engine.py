@@ -120,7 +120,7 @@ def test_build_historical_features_returns_four_model_ratios():
         1.5,
     )
 
-    assert set(result) == {
+    assert {
         "home_attack",
         "home_defence",
         "away_attack",
@@ -128,7 +128,7 @@ def test_build_historical_features_returns_four_model_ratios():
         "league_avg_goals",
         "h2h_available",
         "feature_coverage",
-    }
+    }.issubset(set(result))
 
     assert result["league_avg_goals"] == 1.5
     assert result["h2h_available"] is True

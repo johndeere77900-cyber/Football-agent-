@@ -350,6 +350,9 @@ def build_historical_features(
 
     feature_coverage = 1.0 if h2h_available else 0.85
 
+    recent_form_scope = "8_matches"
+    h2h_scope = "6_meetings" if h2h_available else "0_meetings"
+
     return {
         "home_attack": home_attack,
         "home_defence": home_defence,
@@ -358,6 +361,8 @@ def build_historical_features(
         "league_avg_goals": league_avg_goals,
         "h2h_available": h2h_available,
         "feature_coverage": feature_coverage,
+        "recent_form_scope": recent_form_scope,
+        "h2h_scope": h2h_scope,
     }
 
 

@@ -482,7 +482,7 @@ def get_head_to_head(team_a_id, team_b_id, last=10):
     return response
 
 
-def get_recent_form(team_id, last=8):
+def get_recent_form(team_id, last=8, league_id=None, season=None):
     team_id = _validate_positive_int_like(team_id, "team_id")
 
     if isinstance(last, bool) or not isinstance(last, int) or last <= 0:
@@ -493,6 +493,10 @@ def get_recent_form(team_id, last=8):
         "last": last,
         "status": "FT",
     }
+    if league_id is not None:
+        params["league"] = _validate_positive_int_like(league_id, "league_id")
+    if season is not None:
+        params["season"] = _validate_positive_int_like(season, "season")
 
     data = _get("fixtures", params)
     response = data.get("response", [])

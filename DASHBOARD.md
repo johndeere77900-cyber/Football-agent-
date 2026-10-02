@@ -1,6 +1,6 @@
 # 📊 Sports Prediction Dashboard
 
-_Last updated: 2026-10-01 22:25 UTC_
+_Last updated: 2026-10-02 15:31 UTC_
 
 ## ⚽ Recent Football Predictions
 
@@ -24,6 +24,11 @@ _No graded predictions yet._
 ### Basketball Track Record
 
 _No graded predictions yet._
+
+
+## 🗃️ Historical Dataset Coverage (Neon / Storage)
+
+_No historical datasets tracked in Neon/SQLite._
 
 
 ## 🧪 Historical & Backtest Experiment Health
