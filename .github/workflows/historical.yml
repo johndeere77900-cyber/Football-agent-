@@ -59,7 +59,7 @@ jobs:
             exit 1
           fi
 
-      - name: Historical Data Sync
+      - name: Historical Data Queue Sync
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
@@ -71,7 +71,10 @@ jobs:
           INPUT_WITH_ENRICHMENT: ${{ inputs.with_enrichment }}
           INPUT_REFRESH: ${{ inputs.refresh }}
         run: |
-          ARGS=("--historical-sync" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--season" "$INPUT_SEASON")
+          ARGS=("--historical-queue" "--sport" "$INPUT_SPORT" "--season" "$INPUT_SEASON")
+          if [ -n "$INPUT_LEAGUE_ID" ] && [ "$INPUT_LEAGUE_ID" != "all" ] && [ "$INPUT_LEAGUE_ID" != "ALL" ]; then
+            ARGS+=("--league" "$INPUT_LEAGUE_ID")
+          fi
           if [ "$INPUT_WITH_ENRICHMENT" = "true" ]; then
             ARGS+=("--with-enrichment")
           fi
@@ -93,7 +96,7 @@ jobs:
           echo "$STATUS_OUTPUT"
           EXACT_STATUS=$(echo "$STATUS_OUTPUT" | grep "Status:" | awk '{print $2}')
           echo "Extracted Exact Status: '$EXACT_STATUS'"
-          if [ "$EXACT_STATUS" != "COMPLETE" ]; then
-            echo "ERROR: Historical dataset status is '$EXACT_STATUS', expected 'COMPLETE'."
+          if [ "$EXACT_STATUS" != "COMPLETE" ] && [ "$EXACT_STATUS" != "INCOMPLETE" ]; then
+            echo "ERROR: Historical dataset status is '$EXACT_STATUS', expected 'COMPLETE' or 'INCOMPLETE'."
             exit 1
           fi

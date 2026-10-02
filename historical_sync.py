@@ -596,6 +596,134 @@ def sync_historical_basketball_games(
     return report
 
 
+def run_historical_queue(
+    sport: str = "football",
+    leagues: list = None,
+    seasons: list = None,
+    with_enrichment: bool = False,
+    refresh: bool = False,
+    historical_budget: int = None,
+) -> dict:
+    """
+    Sequentially process a queue of historical datasets (league/season pairs).
+
+    Invariants:
+    - Reuses `sync_historical_fixtures()` and `sync_historical_basketball_games()` unchanged.
+    - Defaults football leagues to `config.ALLOWED_LEAGUE_IDS` (basketball to `config.ALLOWED_BASKETBALL_LEAGUE_IDS`).
+    - Defaults seasons to [datetime.now(timezone.utc).year - 1] if not specified.
+    - Checks `historical_datasets` status before starting each dataset; skips COMPLETE datasets.
+    - Respects daily historical budget limit; stops cleanly when exhausted without overwriting partial progress.
+    """
+    sport = (sport or "football").lower()
+
+    if historical_budget is None:
+        if sport == "basketball":
+            historical_budget = int(getattr(config, "API_BASKETBALL_HISTORICAL_DAILY_BUDGET", 50))
+        else:
+            historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
+
+    if not leagues:
+        if sport == "basketball":
+            leagues = list(getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", [12]))
+        else:
+            leagues = list(getattr(config, "ALLOWED_LEAGUE_IDS", [39, 140, 135, 78, 61, 2, 3, 5, 1, 4]))
+
+    if not seasons:
+        seasons = [datetime.now(timezone.utc).year - 1]
+    elif isinstance(seasons, (int, str)):
+        seasons = [int(seasons)]
+    else:
+        seasons = [int(s) for s in seasons]
+
+    provider = "api_basketball" if sport == "basketball" else "api_football"
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    processed_reports = []
+    quota_exhausted = False
+
+    print(f"\n=== HISTORICAL QUEUE START ({sport.upper()}) ===")
+    print(f"Leagues: {leagues}")
+    print(f"Seasons: {seasons}")
+    print(f"Daily Historical Budget: {historical_budget}")
+    print(f"With Enrichment: {with_enrichment}, Refresh: {refresh}\n")
+
+    for league_id in leagues:
+        if quota_exhausted:
+            break
+        for season in seasons:
+            current_reqs = storage.get_api_request_count(provider, today_str)
+            if current_reqs >= historical_budget:
+                quota_exhausted = True
+                print(
+                    f"Historical daily budget ceiling reached ({current_reqs}/{historical_budget} requests used today). Stopping historical queue cleanly.",
+                    flush=True,
+                )
+                break
+
+            dataset_info = storage.get_historical_dataset_status(league_id, season, sport=sport)
+            if dataset_info["status"] == "COMPLETE" and not refresh:
+                print(f"Dataset already COMPLETE for {sport} league {league_id} season {season}; skipping queue item.", flush=True)
+                report = {
+                    "sport": sport,
+                    "league_id": league_id,
+                    "season": season,
+                    "status": "COMPLETE",
+                    "skipped_reason": "Dataset already COMPLETE",
+                    "api_requests_consumed": 0,
+                    "quota_budget_stopped": False,
+                }
+                processed_reports.append(report)
+                continue
+
+            if sport == "basketball":
+                report = sync_historical_basketball_games(
+                    league_id=league_id,
+                    season=season,
+                    refresh=refresh,
+                    historical_budget=historical_budget,
+                )
+            else:
+                report = sync_historical_fixtures(
+                    league_id=league_id,
+                    season=season,
+                    with_enrichment=with_enrichment,
+                    refresh=refresh,
+                    historical_budget=historical_budget,
+                )
+
+            processed_reports.append(report)
+
+            if report.get("quota_budget_stopped"):
+                quota_exhausted = True
+                print(
+                    f"Historical daily budget exhausted during acquisition for {sport} league {league_id} season {season}. Stopping queue cleanly.",
+                    flush=True,
+                )
+                break
+
+            after_reqs = storage.get_api_request_count(provider, today_str)
+            if after_reqs >= historical_budget:
+                quota_exhausted = True
+                print(
+                    f"Historical daily budget ceiling reached ({after_reqs}/{historical_budget} requests used today). Stopping historical queue cleanly.",
+                    flush=True,
+                )
+                break
+
+    print(f"\n=== HISTORICAL QUEUE END ({sport.upper()}) ===")
+    print(f"Total datasets evaluated/processed: {len(processed_reports)}")
+    print(f"Quota budget exhausted: {quota_exhausted}\n")
+
+    return {
+        "sport": sport,
+        "leagues": leagues,
+        "seasons": seasons,
+        "historical_budget": historical_budget,
+        "quota_budget_exhausted": quota_exhausted,
+        "datasets_processed": processed_reports,
+    }
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Historical Data Collector for API-Football/API-Basketball fixtures."

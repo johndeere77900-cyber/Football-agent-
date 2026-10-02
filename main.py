@@ -2501,6 +2501,22 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--historical-queue",
+        action="store_true",
+        help="Run historical acquisition queue for configured leagues/seasons.",
+    )
+
+    parser.add_argument(
+        "--leagues",
+        help="Comma-separated list of league IDs for queue processing.",
+    )
+
+    parser.add_argument(
+        "--seasons",
+        help="Comma-separated list of season years for queue processing.",
+    )
+
+    parser.add_argument(
         "--dataset-status",
         action="store_true",
         help="Check historical dataset status.",
@@ -2636,6 +2652,32 @@ def main():
         # Multi-sport Historical & Backtest commands
         # --------------------------------------------------------------
         import historical_sync
+
+        if args.historical_queue:
+            sport = args.sport or "football"
+            storage.init_db()
+
+            leagues = None
+            if args.leagues:
+                leagues = [int(x.strip()) for x in args.leagues.split(",") if x.strip()]
+            elif args.league is not None:
+                leagues = [args.league]
+
+            seasons = None
+            if args.seasons:
+                seasons = [int(x.strip()) for x in args.seasons.split(",") if x.strip()]
+            elif args.season is not None:
+                seasons = [args.season]
+
+            summary = historical_sync.run_historical_queue(
+                sport=sport,
+                leagues=leagues,
+                seasons=seasons,
+                with_enrichment=args.with_enrichment,
+                refresh=args.refresh,
+            )
+            print(f"Historical queue processing complete. Processed {len(summary.get('datasets_processed', []))} dataset(s).")
+            return 0
 
         if args.historical_sync:
             sport = args.sport or "football"
