@@ -459,3 +459,45 @@ def test_unknown_telegram_operation_does_not_trigger_predictions():
         res = telegram_bot.process_telegram_update("foobar random text 12345")
         assert "PREDICTION AGENT CONTROL CENTER" in res or "I control and monitor" in res
         assert mock_predict_op.call_count == 0  # ZERO prediction calls!
+
+
+def test_telegram_no_data_resolver_bypass(monkeypatch):
+    """
+    Prove Telegram DataResolver Integration:
+    get_tracked_fixtures_for_date exclusively uses DataResolver.get_fixtures_for_date
+    and DOES NOT fall back to direct api_football calls.
+    """
+    mock_get_fixtures = MagicMock()
+
+    with patch("data_resolver.DataResolver.get_fixtures_for_date", return_value=([], {"resolver_status": "NO_DATA"})) as mock_resolver_get, \
+         patch("api_football.get_fixtures_by_date", mock_get_fixtures):
+
+        fixtures = telegram_bot.get_tracked_fixtures_for_date("2026-04-01")
+        assert fixtures == []
+        assert mock_resolver_get.call_count == 1
+        assert mock_get_fixtures.call_count == 0  # ZERO direct bypass calls!
+
+
+def test_h2h_temporal_safety_rejects_future_matches():
+    """
+    Prove H2H Temporal Safety:
+    Matches occurring on or after cutoff_timestamp are REJECTED from H2H history calculations.
+    """
+    import historical_h2h
+
+    cutoff = "2025-01-10T15:00:00+00:00"
+
+    f_past = {
+        "fixture": {"id": 1, "date": "2024-12-01T15:00:00+00:00", "status": {"short": "FT"}},
+        "teams": {"home": {"id": 10}, "away": {"id": 20}},
+        "goals": {"home": 2, "away": 1},
+    }
+    f_future = {
+        "fixture": {"id": 2, "date": "2025-01-10T16:00:00+00:00", "status": {"short": "FT"}}, # 1 hour after cutoff!
+        "teams": {"home": {"id": 10}, "away": {"id": 20}},
+        "goals": {"home": 0, "away": 3},
+    }
+
+    matches = historical_h2h.historical_h2h_matches([f_past, f_future], home_team_id=10, away_team_id=20, cutoff=cutoff)
+    assert len(matches) == 1
+    assert matches[0]["fixture"]["id"] == 1  # Only past match included!

@@ -505,15 +505,11 @@ def fixture_matches_team(fixture, team_query):
 def get_tracked_fixtures_for_date(date_str, league_id=None):
     """
     Return tracked football fixtures for date using DataResolver (Primary API-Football -> Secondary Fallback).
-    Fetches one date response and filters for allowed leagues locally (or a specific league_id).
+    Exclusively uses DataResolver; does NOT bypass DataResolver with direct API-Football calls.
     """
-    try:
-        from data_resolver import DataResolver
-        resolver = DataResolver()
-        fixtures, _ = resolver.get_fixtures_for_date(date_str, league_id=league_id)
-    except Exception as exc:
-        print(f"DataResolver fixture resolution error for date {date_str}: {exc}")
-        fixtures = api_football.get_fixtures_by_date(date_str)
+    from data_resolver import DataResolver
+    resolver = DataResolver()
+    fixtures, _ = resolver.get_fixtures_for_date(date_str, league_id=league_id)
 
     if not isinstance(fixtures, list):
         return []
@@ -2233,7 +2229,7 @@ def process_telegram_update(
         elif operation == "greeting":
             response_text = handle_greeting_op()
         else:
-            response_text = handle_predict_op(params)
+            response_text = handle_greeting_op()
 
         # Mark request as COMPLETED
         current_req = storage.get_operation_request(actual_request_id)
