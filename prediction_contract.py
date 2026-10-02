@@ -91,6 +91,19 @@ def build_prediction_contract(
                 top_outcome = top_key
                 top_raw_p = ml.get(top_key)
 
+    is_blocked = quality_gate_result.get("decision") == "PASS"
+    has_insufficient = "insufficient_data" in quality_gate_result.get("reason_codes", []) or "insufficient_history" in quality_gate_result.get("reason_codes", [])
+    has_error = "model_error" in quality_gate_result.get("reason_codes", []) or "calibration_error" in quality_gate_result.get("reason_codes", [])
+
+    if has_error:
+        contract_status = "ERROR"
+    elif has_insufficient:
+        contract_status = "INSUFFICIENT_DATA"
+    elif is_blocked:
+        contract_status = "BLOCKED"
+    else:
+        contract_status = "VALID"
+
     contract = {
         "sport": sport_clean,
         "fixture_id": fixture_id,
@@ -121,10 +134,11 @@ def build_prediction_contract(
         "ev": top_ev,
         "uncertainty": uncertainty_info,
         "quality_gate": quality_gate_result.get("decision", "PASS"),
+        "quality_gate_status": quality_gate_result.get("gate_status", "BLOCKED"),
         "reason_codes": quality_gate_result.get("reason_codes", []),
         "feature_data_coverage": uncertainty_info.get("feature_coverage", 1.0),
-        "status": "VALID",
-        "insufficient_data": (quality_gate_result.get("decision") == "PASS" and "insufficient_data" in quality_gate_result.get("reason_codes", [])),
+        "status": contract_status,
+        "insufficient_data": is_blocked and has_insufficient,
     }
 
     if additional_metadata and isinstance(additional_metadata, dict):

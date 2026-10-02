@@ -62,6 +62,7 @@ AWAY_DISADVANTAGE_MULTIPLIER = 0.88
 LEAGUE_AVG_GOALS = {
     39: 1.40, 140: 1.30, 135: 1.35, 78: 1.55, 61: 1.35,
     2: 1.40, 3: 1.35, 5: 1.30, 1: 1.30, 4: 1.30,
+    88: 1.50, 94: 1.35,
 }
 LEAGUE_AVG_GOALS_FALLBACK = 1.35
 
@@ -90,8 +91,11 @@ NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 REQUIRE_NEON = os.environ.get("REQUIRE_NEON", "false").lower() in ("true", "1", "yes")
 
+# --- Historical Seasons Target ----------------------------------------------
+TARGET_SEASONS = [2020, 2021, 2022, 2023, 2024]
+
 # --- League restriction (football) -----------------------------------------
-ALLOWED_LEAGUE_IDS = [39, 140, 135, 78, 61, 2, 3, 5, 1, 4]
+ALLOWED_LEAGUE_IDS = [39, 140, 135, 78, 61, 2, 3, 5, 1, 4, 88, 94]
 
 LEAGUE_NAME_TO_ID = {
     "premier league": 39, "english premier league": 39, "epl": 39,
@@ -105,6 +109,8 @@ LEAGUE_NAME_TO_ID = {
     "world cup": 1, "fifa world cup": 1,
     "euro championship": 4, "uefa euro championship": 4,
     "european championship": 4, "euros": 4,
+    "eredivisie": 88, "dutch eredivisie": 88,
+    "primeira liga": 94, "portuguese primeira liga": 94, "liga portugal": 94,
 }
 
 LEAGUE_ID_TO_ODDS_SPORT_KEY = {
@@ -116,6 +122,8 @@ LEAGUE_ID_TO_ODDS_SPORT_KEY = {
     2: "soccer_uefa_champs_league",
     3: "soccer_uefa_europa_league",
     1: "soccer_fifa_world_cup",
+    88: "soccer_netherlands_eredivisie",
+    94: "soccer_portugal_primeira_liga",
 }
 
 # --- League restriction (basketball) ----------------------------------------

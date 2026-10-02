@@ -1450,6 +1450,70 @@ def get_latest_backtest_runs(sport=None, limit=10):
         conn.close()
 
 
+def get_all_historical_datasets():
+    """
+    Retrieve status for all historical datasets stored in Neon / local DB.
+    Returns list of dicts ordered by sport, league_id, season DESC.
+    """
+    conn, db_type = _connect()
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT sport, league_id, season, status, fixture_count, expected_pages,
+                           pages_completed, acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, error_reason
+                    FROM historical_datasets
+                    ORDER BY sport ASC, league_id ASC, season DESC
+                    """
+                )
+                rows = cur.fetchall()
+        else:
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT sport, league_id, season, status, fixture_count, expected_pages,
+                           pages_completed, acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, error_reason
+                    FROM historical_datasets
+                    ORDER BY sport ASC, league_id ASC, season DESC
+                    """
+                ).fetchall()
+            except sqlite3.OperationalError:
+                conn.close()
+                init_db()
+                conn, _ = _connect()
+                rows = conn.execute(
+                    """
+                    SELECT sport, league_id, season, status, fixture_count, expected_pages,
+                           pages_completed, acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, error_reason
+                    FROM historical_datasets
+                    ORDER BY sport ASC, league_id ASC, season DESC
+                    """
+                ).fetchall()
+
+        results = []
+        for r in rows:
+            results.append({
+                "sport": r[0],
+                "league_id": r[1],
+                "season": r[2],
+                "status": r[3],
+                "fixture_count": r[4],
+                "expected_pages": r[5] or 0,
+                "pages_completed": r[6] or 0,
+                "acquisition_complete": bool(r[7]),
+                "enrichment_status": r[8] or "NONE",
+                "rejected_count": r[9] or 0,
+                "empty_pages_count": r[10] or 0,
+                "completed_at": r[11],
+                "updated_at": r[12],
+                "error_reason": r[13],
+            })
+        return results
+    finally:
+        conn.close()
+
+
 def get_historical_dataset_status(league_id, season, sport="football"):
     """
     Get the dataset manifest status for a sport, league, and season.

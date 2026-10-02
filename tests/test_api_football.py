@@ -158,7 +158,7 @@ def test_network_failure_retries(
         return FakeResponse(
             payload={
                 "response": [
-                    {"fixture": {"id": 5}}
+                        {"fixture": {"id": 5}, "league": {"id": 39}}
                 ]
             }
         )
@@ -181,7 +181,7 @@ def test_network_failure_retries(
     )
 
     assert result == [
-        {"fixture": {"id": 5}}
+        {"fixture": {"id": 5}, "league": {"id": 39}}
     ]
 
     assert len(calls) == 2

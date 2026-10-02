@@ -198,9 +198,40 @@ def _valid_goal(value):
 # ----------------------------------------------------------------------
 
 
+_coverage_preflight_cache = {}
+
+
+def check_competition_coverage(league_id, season):
+    """
+    Preflight check for provider coverage for a league + season.
+    Cached per (league_id, season).
+    Only returns season_not_available if valid season list exists and season is explicitly prior to provider coverage.
+    """
+    cache_key = (league_id, season)
+    if cache_key in _coverage_preflight_cache:
+        return _coverage_preflight_cache[cache_key]
+
+    try:
+        seasons = api_football.get_league_coverage(league_id)
+    except Exception:
+        seasons = []
+
+    if isinstance(seasons, list) and seasons:
+        valid_season_years = [s.get("year") for s in seasons if isinstance(s, dict) and "year" in s and isinstance(s.get("year"), int)]
+        if valid_season_years and season not in valid_season_years:
+            if season < min(valid_season_years):
+                res = ("season_not_available", f"Season {season} is prior to provider coverage for league {league_id}.")
+                _coverage_preflight_cache[cache_key] = res
+                return res
+
+    res = ("coverage_available", "Coverage available.")
+    _coverage_preflight_cache[cache_key] = res
+    return res
+
+
 def get_league_avg_goals(league_id, season):
     """
-    Return the configured league scoring average.
+    Return the configured league scoring average using DataResolver (primary -> secondary).
 
     API standings are preferred. The calculation is:
 
@@ -219,7 +250,9 @@ def get_league_avg_goals(league_id, season):
     average = None
 
     try:
-        standings = api_football.get_league_standings(
+        from data_resolver import DataResolver
+        resolver = DataResolver()
+        standings, _ = resolver.get_standings(
             league_id,
             season,
         )
@@ -268,7 +301,7 @@ def get_league_avg_goals(league_id, season):
         if total_played > 0:
             average = total_goals / total_played
 
-    except requests.exceptions.RequestException:
+    except Exception:
         average = None
 
     if (
@@ -472,18 +505,33 @@ def _current_team_feature(
 def _recent_feature(
     team_id,
     last,
+    league_id=None,
+    season=None,
+    fixture_date=None,
 ):
     """
     Build recent-form features as per-match averages.
-
-    The API returns individual match scores. We aggregate them and
-    divide by the number of valid matches before passing the feature
-    to prediction_engine.
+    Passes league_id and season to restrict query scope where provider supports it.
+    Strictly filters out matches occurring on or after fixture_date or with missing/invalid kickoff dates.
     """
-    matches = api_football.get_recent_form(
-        team_id,
-        last=last,
-    )
+    try:
+        if league_id is not None or season is not None:
+            matches = api_football.get_recent_form(
+                team_id,
+                last=last,
+                league_id=league_id,
+                season=season,
+            )
+        else:
+            matches = api_football.get_recent_form(
+                team_id,
+                last=last,
+            )
+    except TypeError:
+        matches = api_football.get_recent_form(
+            team_id,
+            last=last,
+        )
 
     goals_for = []
     goals_against = []
@@ -491,6 +539,21 @@ def _recent_feature(
     for match in matches or []:
         if not isinstance(match, dict):
             continue
+
+        # Strict temporal safety: filter matches on/after fixture_date or without valid dates
+        fixture_dict = match.get("fixture")
+        if isinstance(fixture_dict, dict):
+            m_date = fixture_dict.get("date")
+            if fixture_date is not None:
+                if not m_date or not isinstance(m_date, str):
+                    continue
+                if time_utils.parse_utc_datetime(m_date) is None:
+                    continue
+                if not time_utils.is_strictly_before(m_date, fixture_date):
+                    continue
+            elif m_date and isinstance(m_date, str):
+                if time_utils.parse_utc_datetime(m_date) is None:
+                    continue
 
         home = (
             match
@@ -571,19 +634,20 @@ def _h2h_feature(
     home_id,
     away_id,
     last,
+    fixture_date=None,
 ):
     """
-    Build H2H features as per-meeting averages.
+    Build H2H features as per-meeting averages with strict temporal safety.
 
-    The returned perspective is always the requested home-team
-    perspective:
-        goals_for     = requested home team's goals
-        goals_against = requested home team's conceded goals
+    Requirements:
+    - Kickoff timestamp MUST be strictly BEFORE fixture_date.
+    - Excludes matches occurring on or after fixture_date or with missing/invalid dates.
+    - Perspective is always requested home team.
     """
     matches = api_football.get_head_to_head(
         home_id,
         away_id,
-                last=last,
+        last=last,
     )
 
     goals_for = []
@@ -592,6 +656,21 @@ def _h2h_feature(
     for match in matches or []:
         if not isinstance(match, dict):
             continue
+
+        # Strict H2H temporal safety: filter matches on/after fixture_date or without valid dates
+        fixture_dict = match.get("fixture")
+        if isinstance(fixture_dict, dict):
+            m_date = fixture_dict.get("date")
+            if fixture_date is not None:
+                if not m_date or not isinstance(m_date, str):
+                    continue
+                if time_utils.parse_utc_datetime(m_date) is None:
+                    continue
+                if not time_utils.is_strictly_before(m_date, fixture_date):
+                    continue
+            elif m_date and isinstance(m_date, str):
+                if time_utils.parse_utc_datetime(m_date) is None:
+                    continue
 
         home = (
             match
@@ -668,6 +747,7 @@ def _h2h_feature(
         "goals_against": (
             sum(goals_against) / meeting_count
         ),
+        "h2h_scope": "GENERAL H2H",
     }
 
 
@@ -939,6 +1019,8 @@ def _insufficient_prediction(
     fixture,
     is_live,
     reason="Validated prediction inputs were unavailable.",
+    failure_stage="insufficient_data",
+    provider_meta=None,
 ):
     """Return a consistent non-prediction result."""
     (
@@ -947,6 +1029,9 @@ def _insufficient_prediction(
         away_team,
         league,
     ) = _fixture_identity(fixture)
+
+    prov_meta = provider_meta or fixture.get("provider_provenance") or {}
+    now_utc = time_utils.format_utc_iso(datetime.now(timezone.utc))
 
     return {
         "fixture_id": fixture_data["id"],
@@ -961,9 +1046,18 @@ def _insufficient_prediction(
         "safest": None,
         "is_live": bool(is_live),
         "insufficient_data": True,
+        "failure_stage": failure_stage,
         "reason": reason,
         "odds_comparison": None,
         "elo_cross_check": None,
+        "provenance": {
+            "provider": prov_meta.get("data_source") or prov_meta.get("provider", "api_football"),
+            "fallback_used": prov_meta.get("fallback_used", False),
+            "fallback_reason": prov_meta.get("fallback_reason"),
+            "data_scope": f"league_{league.get('id')}_season_{league.get('season')}",
+            "retrieved_at": now_utc,
+            "as_of": now_utc,
+        },
     }
 
 
@@ -971,6 +1065,7 @@ def predict_fixture(
     fixture,
     league_avg_goals,
     fetch_odds=False,
+    provider_meta=None,
 ):
     """
     Generate one authoritative football prediction.
@@ -1021,6 +1116,19 @@ def predict_fixture(
         league_avg_goals
     )
 
+    prov_meta = provider_meta or fixture.get("provider_provenance") or {}
+    provider_name = prov_meta.get("provider") or prov_meta.get("data_source", "api_football")
+
+    # Enforce Provider ID Isolation: If fixture originates from secondary provider (football_data_org),
+    # its team IDs belong to secondary provider namespace and MUST NOT be passed to API-Football endpoints.
+    if provider_name == "football_data_org":
+        return _insufficient_prediction(
+            fixture,
+            is_live,
+            "Secondary provider fixture requires compatible team statistics features.",
+            failure_stage="season_team_stats",
+        )
+
     home_stats = (
         api_football.get_team_statistics(
             home_team["id"],
@@ -1055,16 +1163,23 @@ def predict_fixture(
             fixture,
             is_live,
             "Season team statistics are incomplete.",
+            failure_stage="season_team_stats",
         )
 
     recent_home = _recent_feature(
         home_team["id"],
         config.RECENT_FORM_MATCHES,
+        league_id=league["id"],
+        season=league["season"],
+        fixture_date=fixture_data.get("date"),
     )
 
     recent_away = _recent_feature(
         away_team["id"],
         config.RECENT_FORM_MATCHES,
+        league_id=league["id"],
+        season=league["season"],
+        fixture_date=fixture_data.get("date"),
     )
 
     if (
@@ -1075,12 +1190,14 @@ def predict_fixture(
             fixture,
             is_live,
             "Recent team form data is incomplete.",
+            failure_stage="recent_form",
         )
 
     h2h = _h2h_feature(
         home_team["id"],
         away_team["id"],
         config.HEAD_TO_HEAD_MATCHES,
+        fixture_date=fixture_data.get("date"),
     )
 
     home_elo = storage.get_team_rating(
@@ -1131,6 +1248,16 @@ def predict_fixture(
         raise ValueError(
             "prediction_engine returned an invalid result."
         )
+
+    prov_meta = provider_meta or {}
+    prediction["provenance"] = {
+        "provider": prov_meta.get("data_source") or prov_meta.get("provider", "api_football"),
+        "fallback_used": prov_meta.get("fallback_used", False),
+        "fallback_reason": prov_meta.get("fallback_reason"),
+        "data_scope": f"league_{league['id']}_season_{league['season']}",
+        "retrieved_at": now_utc,
+        "as_of": now_utc,
+    }
 
     if is_live:
         current_home_goals = (
@@ -1543,9 +1670,11 @@ def run_daily(
 
     storage.init_db()
 
-    fixtures = api_football.get_fixtures_by_date(
+    from data_resolver import DataResolver
+    resolver = DataResolver()
+    fixtures, resolver_meta = resolver.get_fixtures_for_date(
         date_str,
-        league_id,
+        league_id=league_id,
     )
 
     # Enforce the configured league allow-list even when the API
@@ -1632,6 +1761,7 @@ def run_daily(
                 fixture,
                 league_avg,
                 fetch_odds=fetch_odds,
+                provider_meta=resolver_meta,
             )
 
             if prediction["insufficient_data"]:

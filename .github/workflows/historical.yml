@@ -68,6 +68,7 @@ jobs:
       - name: Historical Data Sync
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           REQUIRE_NEON: "true"
           ENVIRONMENT: "production"

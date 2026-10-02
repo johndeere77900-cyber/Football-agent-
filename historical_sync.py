@@ -596,35 +596,86 @@ def sync_historical_basketball_games(
     return report
 
 
+def check_acquisition_coverage(league_id: int, season: int, sport: str = "football") -> dict:
+    """
+    Inspect database dataset status and persistent API cache to estimate required acquisition requests.
+    Clearly distinguishes database storage manifest state from API cache inspection.
+    """
+    dataset_info = storage.get_historical_dataset_status(league_id, season, sport=sport)
+    db_status = dataset_info.get("status", "INCOMPLETE")
+    db_fixture_count = dataset_info.get("fixture_count", 0)
+    expected_pages = dataset_info.get("expected_pages", 0)
+    pages_completed = dataset_info.get("pages_completed", 0)
+
+    # Inspect persistent cache key for page 1
+    cache_key = f"fixtures_{league_id}_{season}_page_1" if sport == "football" else f"games_{league_id}_{season}_page_1"
+    cached_p1 = storage.get_api_cache(cache_key)
+    has_cached_page_1 = cached_p1 is not None
+
+    if db_status == "COMPLETE":
+        estimated_requests = 0
+    elif expected_pages > 0:
+        estimated_requests = max(0, expected_pages - pages_completed)
+    else:
+        estimated_requests = 1 if not has_cached_page_1 else 0
+
+    return {
+        "sport": sport,
+        "league_id": league_id,
+        "season": season,
+        "database_status": db_status,
+        "database_fixture_count": db_fixture_count,
+        "expected_pages": expected_pages,
+        "pages_completed": pages_completed,
+        "persistent_cache_inspected": True,
+        "has_cached_page_1": has_cached_page_1,
+        "estimated_required_requests": estimated_requests,
+        "already_complete": (db_status == "COMPLETE"),
+    }
+
+
 def run_historical_queue(
-    season: int = 2024,
+    seasons: list = None,
+    season: int = None,
     with_enrichment: bool = False,
     refresh: bool = False,
 ) -> dict:
     """
-    Run historical data acquisition queue sequentially across all configured football leagues
-    in config.ALLOWED_LEAGUE_IDS plus basketball league 12.
+    Run historical data acquisition queue sequentially across target 5 seasons
+    and configured leagues. Checks coverage before acquiring missing data.
     """
-    queue_items = [
-        {"sport": "football", "league_id": lid} for lid in config.ALLOWED_LEAGUE_IDS
-    ] + [
-        {"sport": "basketball", "league_id": 12}
-    ]
+    if seasons is not None and isinstance(seasons, (list, tuple)) and seasons:
+        target_seasons = list(seasons)
+    elif season is not None:
+        target_seasons = [season]
+    else:
+        target_seasons = [2024]
+
+    seasons = target_seasons
+
+    queue_items = []
+    for ssn in seasons:
+        for lid in config.ALLOWED_LEAGUE_IDS:
+            queue_items.append({"sport": "football", "league_id": lid, "season": ssn})
+        for lid in config.ALLOWED_BASKETBALL_LEAGUE_IDS:
+            queue_items.append({"sport": "basketball", "league_id": lid, "season": ssn})
 
     reports = []
     print(
-        f"Starting historical acquisition queue for season {season} ({len(queue_items)} datasets)...",
+        f"Starting target historical acquisition queue ({len(queue_items)} datasets across seasons {seasons})...",
         flush=True,
     )
 
     for item in queue_items:
         sport = item["sport"]
         league_id = item["league_id"]
+        season = item["season"]
 
-        dataset_info = storage.get_historical_dataset_status(league_id, season, sport=sport)
-        if dataset_info.get("status") == "COMPLETE" and not refresh:
+        # Check coverage before making requests
+        cov = check_acquisition_coverage(league_id, season, sport=sport)
+        if cov["already_complete"] and not refresh:
             print(
-                f"Queue: Skipping COMPLETE {sport} dataset for league {league_id} season {season}.",
+                f"Queue: Skipping COMPLETE {sport} dataset for league {league_id} season {season} (0 API requests required).",
                 flush=True,
             )
             reports.append({
@@ -638,7 +689,7 @@ def run_historical_queue(
             continue
 
         print(
-            f"Queue: Syncing {sport} dataset for league {league_id} season {season}...",
+            f"Queue: Syncing missing data for {sport} league {league_id} season {season} (est. required requests: {cov['estimated_required_requests']})...",
             flush=True,
         )
 
@@ -667,7 +718,7 @@ def run_historical_queue(
 
     print(f"Historical queue run complete. Processed {len(reports)} dataset(s).", flush=True)
     return {
-        "season": season,
+        "target_seasons": seasons,
         "processed_count": len(reports),
         "reports": reports,
     }
@@ -679,7 +730,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--sport", choices=["football", "basketball"], default="football", help="Sport name")
     parser.add_argument("--league-id", type=int, help="League ID")
-    parser.add_argument("--season", type=int, default=2024, help="Season year (e.g. 2024 or 2025)")
+    parser.add_argument("--season", type=int, default=2024, help="Season year (default: 2024)")
     parser.add_argument(
         "--with-enrichment",
         action="store_true",
@@ -695,6 +746,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Run historical acquisition queue across all configured leagues",
     )
+    parser.add_argument(
+        "--seasons",
+        nargs="+",
+        type=int,
+        help="Explicit list of seasons for historical queue (e.g. --seasons 2020 2021 2022 2023 2024)",
+    )
 
     args = parser.parse_args()
 
@@ -702,6 +759,7 @@ if __name__ == "__main__":
 
     if args.historical_queue:
         run_historical_queue(
+            seasons=args.seasons,
             season=args.season,
             with_enrichment=args.with_enrichment,
             refresh=args.refresh,

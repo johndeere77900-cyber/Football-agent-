@@ -1,9 +1,6 @@
-name: Daily Football Predictions
+name: Daily Football Predictions (Manual Dispatch Only)
 
 on:
-  schedule:
-    - cron: '0 11 * * 3,6'
-
   workflow_dispatch:
     inputs:
       football_games:
@@ -61,6 +58,7 @@ jobs:
       - name: Grade yesterday's football predictions
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           ENVIRONMENT: production
@@ -73,9 +71,10 @@ jobs:
       # -------------------------------------------------------------------
 
       - name: Run football predictions
-        if: github.event_name == 'schedule' || github.event.inputs.football_games != ''
+        if: github.event.inputs.football_games != ''
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           ENVIRONMENT: production
@@ -124,7 +123,7 @@ jobs:
       # -------------------------------------------------------------------
 
       - name: Run basketball predictions
-        if: github.event_name == 'schedule' || github.event.inputs.basketball_games != ''
+        if: github.event.inputs.basketball_games != ''
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}

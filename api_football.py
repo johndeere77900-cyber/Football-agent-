@@ -388,19 +388,52 @@ def _get(endpoint, params, max_budget=None):
 
 
 def get_fixtures_by_date(date_str, league_id=None):
-    """Return fixtures for a calendar date."""
-    date_str = _validate_date(date_str)
-    params = {"date": date_str}
+    """
+    Return fixtures for a calendar date.
 
+    Credit efficiency rule:
+    Always request the full-date query (`params = {"date": date_str}`) from the API
+    if uncached so that a single request covers ALL leagues for that date.
+    Cache the full response, then separate/filter for `league_id` locally.
+    """
+    date_str = _validate_date(date_str)
     if league_id is not None:
         league_id = _validate_positive_int_like(league_id, "league_id")
-        params["league"] = league_id
 
-    data = _get("fixtures", params)
+    # Check for cached full-date response first
+    full_date_key = _cache_key("fixtures", {"date": date_str})
+    cached_full_date = _cache_get(full_date_key, "fixtures", {"date": date_str})
+
+    def _filter_league(items):
+        if league_id is None:
+            return items
+        filtered = []
+        for f in items:
+            if not isinstance(f, dict):
+                continue
+            lg_obj = f.get("league")
+            if isinstance(lg_obj, dict) and lg_obj.get("id") is not None:
+                try:
+                    raw_id = int(lg_obj.get("id"))
+                except (TypeError, ValueError):
+                    raw_id = None
+                if raw_id == league_id:
+                    filtered.append(f)
+        return filtered
+
+    if cached_full_date is not None:
+        response = cached_full_date.get("response", [])
+        if not isinstance(response, list):
+            return []
+        return _filter_league(response)
+
+    # Fetch full date from API (no league param) to cover all leagues in 1 call
+    data = _get("fixtures", {"date": date_str})
     response = data.get("response", [])
     if not isinstance(response, list):
         return []
-    return response
+
+    return _filter_league(response)
 
 
 def get_live_fixtures():
@@ -449,7 +482,7 @@ def get_head_to_head(team_a_id, team_b_id, last=10):
     return response
 
 
-def get_recent_form(team_id, last=8):
+def get_recent_form(team_id, last=8, league_id=None, season=None):
     team_id = _validate_positive_int_like(team_id, "team_id")
 
     if isinstance(last, bool) or not isinstance(last, int) or last <= 0:
@@ -460,6 +493,10 @@ def get_recent_form(team_id, last=8):
         "last": last,
         "status": "FT",
     }
+    if league_id is not None:
+        params["league"] = _validate_positive_int_like(league_id, "league_id")
+    if season is not None:
+        params["season"] = _validate_positive_int_like(season, "season")
 
     data = _get("fixtures", params)
     response = data.get("response", [])
