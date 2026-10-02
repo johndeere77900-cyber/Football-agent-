@@ -642,7 +642,7 @@ def run_historical_queue(
         if season is not None:
             seasons = [season]
         else:
-            seasons = getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024])
+            seasons = [2024]
 
     queue_items = []
     for ssn in seasons:
@@ -737,6 +737,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Run historical acquisition queue across all configured leagues",
     )
+    parser.add_argument(
+        "--seasons",
+        nargs="+",
+        type=int,
+        help="Explicit list of seasons for historical queue (e.g. --seasons 2020 2021 2022 2023 2024)",
+    )
 
     args = parser.parse_args()
 
@@ -744,6 +750,7 @@ if __name__ == "__main__":
 
     if args.historical_queue:
         run_historical_queue(
+            seasons=args.seasons,
             season=args.season,
             with_enrichment=args.with_enrichment,
             refresh=args.refresh,

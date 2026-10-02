@@ -681,11 +681,8 @@ def get_games_by_date(
             return filtered
         return response
 
-    fetch_params = {"date": date_str, "season": season}
-    if league_id is not None:
-        fetch_params["league"] = league_id
-
-    data = _get("games", fetch_params)
+    # Always fetch full date without 'league' param so 1 request caches all leagues for that date
+    data = _get("games", {"date": date_str, "season": season})
     response = data.get("response")
 
     if not isinstance(response, list):

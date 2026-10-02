@@ -99,7 +99,6 @@ def test_get_games_by_date_builds_expected_request(
     assert len(calls) == 1
     assert calls[0]["params"] == {
         "date": "2026-09-28",
-        "league": 12,
         "season": 2026,
     }
 

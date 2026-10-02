@@ -269,6 +269,79 @@ def test_data_status_shows_all_datasets(monkeypatch):
     assert "COMPLETE" in res
 
 
+def test_basketball_date_query_credit_efficiency_and_params(monkeypatch):
+    """
+    Prove:
+    1. First league-specific query makes exactly 1 API call.
+    2. Request parameters contain no 'league' parameter (strictly date + season).
+    3. Second query for a different league on the same date makes 0 additional API calls.
+    4. Both leagues are correctly filtered from the same cached response.
+    """
+    sample_games = [
+        {"id": 801, "date": "2026-03-30T20:00:00+00:00", "league": {"id": 12, "name": "NBA"}, "teams": {"home": {"name": "Lakers"}, "away": {"name": "Celtics"}}},
+        {"id": 802, "date": "2026-03-30T22:00:00+00:00", "league": {"id": 99, "name": "EuroLeague"}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Barca"}}},
+    ]
+
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.headers = {}
+    mock_resp.json.return_value = {"response": sample_games}
+
+    captured_params = []
+
+    def mock_requests_get(url, headers, params, timeout):
+        captured_params.append(params)
+        return mock_resp
+
+    monkeypatch.setattr("requests.get", mock_requests_get)
+    monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test_key")
+
+    # 1. First query for league 12 on 2026-03-30
+    nba_games = basketball_api.get_games_by_date("2026-03-30", league_id=12)
+    assert len(nba_games) == 1
+    assert nba_games[0]["id"] == 801
+    assert len(captured_params) == 1
+
+    # 2. Check API request params: MUST NOT contain 'league'
+    req_params = captured_params[0]
+    assert "league" not in req_params
+    assert req_params["date"] == "2026-03-30"
+    assert "season" in req_params
+
+    # 3. Second query for league 99 on same date -> 0 additional API calls!
+    euro_games = basketball_api.get_games_by_date("2026-03-30", league_id=99)
+    assert len(euro_games) == 1
+    assert euro_games[0]["id"] == 802
+    assert len(captured_params) == 1  # 0 additional API calls made!
+
+
+def test_default_queue_does_not_acquire_all_five_seasons(monkeypatch):
+    """
+    Prove run_historical_queue() default invocation processes a single season
+    and does NOT automatically schedule all 5 seasons.
+    """
+    processed_seasons = []
+
+    def mock_sync_fb(league_id, season, **kwargs):
+        processed_seasons.append(season)
+        return {"league_id": league_id, "season": season, "status": "COMPLETE", "api_requests_consumed": 0, "quota_budget_stopped": False}
+
+    def mock_sync_bb(league_id, season, **kwargs):
+        processed_seasons.append(season)
+        return {"sport": "basketball", "league_id": league_id, "season": season, "status": "COMPLETE", "api_requests_consumed": 0, "quota_budget_stopped": False}
+
+    monkeypatch.setattr(historical_sync, "sync_historical_fixtures", mock_sync_fb)
+    monkeypatch.setattr(historical_sync, "sync_historical_basketball_games", mock_sync_bb)
+
+    # Run default queue (no seasons argument)
+    summary = historical_sync.run_historical_queue()
+
+    # Must process strictly 1 season (2024), NOT all 5 target seasons
+    assert summary["target_seasons"] == [2024]
+    assert set(processed_seasons) == {2024}
+
+
 def test_zero_real_api_calls_enforced(monkeypatch):
     """Ensure tests execute without making real network HTTP calls."""
     def fail_network_call(*args, **kwargs):
