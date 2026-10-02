@@ -71,14 +71,16 @@ def test_partial_dataset_leaves_status_incomplete_and_backtest_refuses(temp_db):
 def test_quota_ceiling_stops_paginated_fetch_at_budget(temp_db, monkeypatch):
     monkeypatch.setattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 3)
 
-    # Mock page responses requiring 5 pages
+    current_page_call = 0
+
     def fake_get(endpoint, params, max_budget=None):
-        page = params.get("page", 1)
-        if page > 3:
+        nonlocal current_page_call
+        current_page_call += 1
+        if current_page_call > 3:
             raise api_football.APIFootballQuotaExhaustedError("Historical quota budget reached (3).")
         return {
-            "paging": {"current": page, "total": 5},
-            "response": [sample_fixture(9010 + page)],
+            "paging": {"current": current_page_call, "total": 5},
+            "response": [sample_fixture(9010 + current_page_call)],
         }
 
     with patch("api_football._get", side_effect=fake_get):
