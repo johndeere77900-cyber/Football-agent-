@@ -427,6 +427,30 @@ def test_get_league_games_page_pagination_validation(isolated_cache, monkeypatch
     assert len(res_multi["games"]) == 1
 
 
+def test_get_league_games_page_omits_page_param_in_http_request(isolated_cache, monkeypatch):
+    recorded_params = []
+
+    def fake_get(url, headers, params, timeout):
+        recorded_params.append(params)
+        return FakeResponse(
+            payload={
+                "response": [{"id": 101}],
+                "paging": {"current": 1, "total": 1},
+            }
+        )
+
+    monkeypatch.setattr(basketball_api.requests, "get", fake_get)
+
+    res = basketball_api.get_league_games_page(12, 2024, page=1)
+
+    assert res["games"] == [{"id": 101}]
+    assert res["expected_pages"] == 1
+    assert len(recorded_params) == 1
+    # Verify 'page' parameter was filtered out from HTTP GET request
+    assert "page" not in recorded_params[0]
+    assert recorded_params[0] == {"league": 12, "season": 2024}
+
+
 def test_get_game_result_returns_first_game(
     isolated_cache,
     monkeypatch,

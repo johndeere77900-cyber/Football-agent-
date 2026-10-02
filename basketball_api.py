@@ -479,6 +479,11 @@ def _get(endpoint, params, max_budget=None):
     backoff = RETRY_BACKOFF_SECONDS
     last_exception = None
 
+    # Filter out unsupported 'page' parameter for API-Basketball /games requests
+    http_params = dict(params)
+    if endpoint.rstrip("/") == "games" and "page" in http_params:
+        del http_params["page"]
+
     for attempt in range(1, MAX_RETRIES + 1):
         _check_and_consume_quota(endpoint, max_budget=max_budget)
 
@@ -486,7 +491,7 @@ def _get(endpoint, params, max_budget=None):
             response = requests.get(
                 url,
                 headers=_headers(),
-                params=params,
+                params=http_params,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
 
