@@ -538,6 +538,70 @@ def get_tracked_basketball_games_for_date(date_str, league_id=None):
     ]
 
 
+def get_upcoming_fixtures(league_id=None, quantity=10, max_days_ahead=14):
+    """
+    Collect upcoming football fixtures across multiple forward calendar dates starting from today.
+    Stops requesting as soon as quantity games are collected. Reuses cached date responses.
+    """
+    today_dt = datetime.now(timezone.utc).date()
+    collected = []
+    seen_ids = set()
+
+    for day_offset in range(max_days_ahead):
+        if len(collected) >= quantity:
+            break
+        d_str = (today_dt + timedelta(days=day_offset)).isoformat()
+        fixtures = get_tracked_fixtures_for_date(d_str, league_id=league_id)
+        if isinstance(fixtures, list):
+            for f in fixtures:
+                if not isinstance(f, dict):
+                    continue
+                fid = f.get("fixture", {}).get("id")
+                if fid and fid in seen_ids:
+                    continue
+                status_short = f.get("fixture", {}).get("status", {}).get("short", "")
+                if status_short in {"FT", "AET", "PEN", "CANC", "ABD"}:
+                    continue
+                if fid:
+                    seen_ids.add(fid)
+                collected.append(f)
+
+    collected.sort(key=lambda item: item.get("fixture", {}).get("date", ""))
+    return collected[:quantity]
+
+
+def get_upcoming_basketball_games(league_id=None, quantity=10, max_days_ahead=14):
+    """
+    Collect upcoming basketball games across multiple forward calendar dates starting from today.
+    Stops requesting as soon as quantity games are collected. Reuses cached date responses.
+    """
+    today_dt = datetime.now(timezone.utc).date()
+    collected = []
+    seen_ids = set()
+
+    for day_offset in range(max_days_ahead):
+        if len(collected) >= quantity:
+            break
+        d_str = (today_dt + timedelta(days=day_offset)).isoformat()
+        games = get_tracked_basketball_games_for_date(d_str, league_id=league_id)
+        if isinstance(games, list):
+            for g in games:
+                if not isinstance(g, dict):
+                    continue
+                gid = g.get("id")
+                if gid and gid in seen_ids:
+                    continue
+                status_short = g.get("status", {}).get("short", "")
+                if status_short in {"FT", "AOT", "CANC", "ABD"}:
+                    continue
+                if gid:
+                    seen_ids.add(gid)
+                collected.append(g)
+
+    collected.sort(key=lambda item: str(item.get("date", "")) + str(item.get("time", "")))
+    return collected[:quantity]
+
+
 def handle_count_question(text):
     normalized = normalize_text(text)
     if "how many" not in normalized and "number of" not in normalized:
@@ -679,8 +743,11 @@ def _save_basketball_prediction(item):
     return bool(inserted)
 
 
-def research_football(date_str, quantity=1, fetch_odds=False):
-    fixtures = get_tracked_fixtures_for_date(date_str)
+def research_football(date_str, quantity=1, fetch_odds=False, league_id=None):
+    if league_id is not None:
+        fixtures = get_tracked_fixtures_for_date(date_str, league_id=league_id)
+    else:
+        fixtures = get_tracked_fixtures_for_date(date_str)
     if not fixtures:
         return []
 
@@ -728,20 +795,11 @@ def research_football(date_str, quantity=1, fetch_odds=False):
     return predictions[:quantity]
 
 
-def research_basketball(date_str, quantity=1):
-    league_ids = getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", [])
-    if not league_ids:
-        return []
-
-    games = []
-    for league_id in league_ids:
-        try:
-            lg = basketball_api.get_games_by_date(date_str, league_id) or []
-            if isinstance(lg, list):
-                games.extend(lg)
-        except Exception as exc:
-            print(f"Basketball league {league_id} error: {exc}")
-
+def research_basketball(date_str, quantity=1, league_id=None):
+    if league_id is not None:
+        games = get_tracked_basketball_games_for_date(date_str, league_id=league_id)
+    else:
+        games = get_tracked_basketball_games_for_date(date_str)
     if not games:
         return []
 
@@ -902,6 +960,8 @@ def parse_operation_parameters(operation, text):
     quantity = parse_quantity(normalized, default=10 if operation == "fixtures" else 1)
     season = parse_season(normalized)
 
+    is_next_query = any(k in normalized for k in ("next", "upcoming")) and not any(k in normalized for k in ("today", "tomorrow", "tonight"))
+
     req_match = re.search(r"\b(req_[a-zA-Z0-9]+)\b", text)
     extracted_req_id = req_match.group(1) if req_match else None
 
@@ -913,6 +973,7 @@ def parse_operation_parameters(operation, text):
         "league_name": league_name,
         "league_id": league_id,
         "quantity": quantity,
+        "is_next_query": is_next_query,
         "season": season,
         "sample": parse_quantity(normalized, default=20),
         "request_id": extracted_req_id,
@@ -1093,11 +1154,12 @@ def handle_predict_op(params):
     date_str = params.get("date")
     date_label = params.get("date_label", "today")
     quantity = params.get("quantity", 1)
+    league_id = params.get("league_id")
 
     if sport == "football":
-        results = research_football(date_str, quantity=quantity)
+        results = research_football(date_str, quantity=quantity, league_id=league_id)
     else:
-        results = research_basketball(date_str, quantity=quantity)
+        results = research_basketball(date_str, quantity=quantity, league_id=league_id)
 
     if not results:
         return f"📊 No {sport} predictions could be produced for {date_label} from available data."
@@ -1118,40 +1180,56 @@ def handle_fixtures_op(params):
     league_id = params.get("league_id")
     league_name = params.get("league_name")
     quantity = params.get("quantity", 10)
+    is_next = params.get("is_next_query", False)
 
     if sport == "basketball":
-        games = get_tracked_basketball_games_for_date(date_str, league_id=league_id)
+        if is_next:
+            games = get_upcoming_basketball_games(league_id=league_id, quantity=quantity)
+            header_label = f"Next {quantity} Basketball Games" if quantity > 1 else "Next Basketball Game"
+        else:
+            games = get_tracked_basketball_games_for_date(date_str, league_id=league_id)[:quantity]
+            header_label = f"Basketball Games for {date_label} ({date_str})"
+
         if not games:
             title_lg = f" {league_name.upper()}" if league_name else " NBA"
-            return f"🏀 No tracked basketball games found scheduled for {date_label} ({date_str}){title_lg}."
+            return f"🏀 No tracked basketball games found for{title_lg}."
 
-        title_lg = f" {league_name.upper()}" if league_name else " Basketball"
-        lines = [f"🏀 Tracked{title_lg} Games for {date_label} ({date_str}):"]
-        for g in games[:quantity]:
+        title_lg = f" ({league_name.upper()})" if league_name else ""
+        lines = [f"🏀 *{header_label}{title_lg}:*"]
+        for g in games:
             teams = g.get("teams", {})
             h_name = teams.get("home", {}).get("name", "Home")
             a_name = teams.get("away", {}).get("name", "Away")
             lg_str = g.get("league", {}).get("name", "NBA")
+            g_date = str(g.get("date", ""))[:10]
             time_str = g.get("time", "") or "time TBA"
-            lines.append(f"• {h_name} vs {a_name} — {time_str} ({lg_str})")
+            date_info = f"{g_date}, {time_str}" if g_date else time_str
+            lines.append(f"• {h_name} vs {a_name} — {date_info} ({lg_str})")
 
         return "\n".join(lines)
 
     else:
-        fixtures = get_tracked_fixtures_for_date(date_str, league_id=league_id)
+        if is_next:
+            fixtures = get_upcoming_fixtures(league_id=league_id, quantity=quantity)
+            header_label = f"Next {quantity} Football Fixtures" if quantity > 1 else "Next Football Fixture"
+        else:
+            fixtures = get_tracked_fixtures_for_date(date_str, league_id=league_id)[:quantity]
+            header_label = f"Football Fixtures for {date_label} ({date_str})"
+
         if not fixtures:
             title_lg = f" {league_name.title()}" if league_name else " tracked"
-            return f"📅 No{title_lg} football fixtures found scheduled for {date_label} ({date_str})."
+            return f"📅 No{title_lg} football fixtures found."
 
-        title_lg = f" {league_name.title()}" if league_name else " Tracked Football"
-        lines = [f"📅{title_lg} Fixtures for {date_label} ({date_str}):"]
-        for f in fixtures[:quantity]:
+        title_lg = f" ({league_name.title()})" if league_name else ""
+        lines = [f"📅 *{header_label}{title_lg}:*"]
+        for f in fixtures:
             teams = f.get("teams", {})
             h_name = teams.get("home", {}).get("name", "Home")
             a_name = teams.get("away", {}).get("name", "Away")
             league = f.get("league", {}).get("name", "Unknown")
+            f_date = str(f.get("fixture", {}).get("date", ""))[:10]
             time_str = format_fixture_time(f)
-            lines.append(f"• {h_name} vs {a_name} — {time_str} ({league})")
+            lines.append(f"• {h_name} vs {a_name} — {f_date}, {time_str} ({league})")
 
         return "\n".join(lines)
 
@@ -1352,15 +1430,20 @@ def handle_health_op():
         db_status = "FAILED"
 
     fb_key = getattr(config, "API_FOOTBALL_KEY", None) or os.environ.get("API_FOOTBALL_KEY")
+    bk_key = getattr(config, "API_BASKETBALL_KEY", None) or os.environ.get("API_BASKETBALL_KEY") or fb_key
     fb_data = "CONFIGURED" if fb_key else "UNAVAILABLE"
-    bk_data = "CONFIGURED" if fb_key else "UNAVAILABLE"
+    bk_data = "CONFIGURED" if bk_key else "UNAVAILABLE"
 
-    ds_fb = storage.get_historical_dataset_status(39, 2024, sport="football")
-    ds_bk = storage.get_historical_dataset_status(12, 2024, sport="basketball")
+    all_ds = storage.get_all_historical_datasets()
+    if not all_ds:
+        all_ds = [storage.get_historical_dataset_status(lid, 2024, sport="football") for lid in config.ALLOWED_LEAGUE_IDS] + [storage.get_historical_dataset_status(lid, 2024, sport="basketball") for lid in config.ALLOWED_BASKETBALL_LEAGUE_IDS]
 
-    if ds_fb.get("status") == "COMPLETE" or ds_bk.get("status") == "COMPLETE":
+    complete_cnt = sum(1 for d in all_ds if d.get("status") == "COMPLETE")
+    total_fixtures = sum(d.get("fixture_count", 0) for d in all_ds)
+
+    if complete_cnt == len(all_ds) and total_fixtures > 0:
         ds_status = "VERIFIED"
-    elif ds_fb.get("fixture_count", 0) > 0 or ds_bk.get("fixture_count", 0) > 0:
+    elif total_fixtures > 0 or complete_cnt > 0:
         ds_status = "DEGRADED"
     else:
         ds_status = "UNAVAILABLE"
@@ -1465,136 +1548,130 @@ def handle_errors_op(chat_id=None):
     return "\n".join(lines)
 
 
+def _match_teams(item, team_a, team_b):
+    if not isinstance(item, dict):
+        return False
+    h_name = normalize_text(item.get("teams", {}).get("home", {}).get("name", ""))
+    a_name = normalize_text(item.get("teams", {}).get("away", {}).get("name", ""))
+    norm_a = normalize_text(team_a)
+    norm_b = normalize_text(team_b)
+
+    if norm_b:
+        return (norm_a in h_name or norm_a in a_name) and (norm_b in h_name or norm_b in a_name)
+    return norm_a in h_name or norm_a in a_name
+
+
 def handle_details_op(params):
     """
-    Execute detailed game data lookup for football or basketball.
-    Searches local DB/cache first. Calls API only when required.
+    Execute detailed game data lookup for football or basketball with strict lookup priority:
+    1. Explicit requested date, if supplied.
+    2. Upcoming scheduled fixture/game matching both teams.
+    3. Cached upcoming data / API lookup if required.
+    4. Historical database record ONLY as fallback when no upcoming match exists.
     """
     raw_text = params.get("raw_text", "")
     sport = params.get("sport", "football")
     normalized = normalize_text(raw_text)
 
-    # Extract team names from "X vs Y" or "X versus Y" or text
+    has_explicit_date = bool(re.search(r"\b\d{4}-\d{2}-\d{2}\b", normalized) or "today" in normalized or "tomorrow" in normalized)
+    explicit_date_str = None
+    if has_explicit_date:
+        try:
+            explicit_date_str, _ = resolve_date(raw_text)
+        except Exception:
+            explicit_date_str = None
+
     match = re.search(r"(\b[\w\s']+\b)\s+(?:vs\.?|versus)\s+(\b[\w\s']+\b)", raw_text, re.IGNORECASE)
     if match:
         team_a = match.group(1).strip()
         team_b = match.group(2).strip()
-        # Clean noise words
         for noise in ("give me detailed data for", "show details for", "details for", "detail for", "show details", "details"):
             team_a = re.sub(rf"^{noise}\s*", "", team_a, flags=re.IGNORECASE).strip()
     else:
         team_a = normalized
         team_b = ""
 
-    # Search local database historical fixtures / games first
-    conn, db_type = storage._connect()
+    item_sport = "basketball" if (sport == "basketball" or any(k in normalized for k in ("nba", "lakers", "celtics"))) else "football"
     found_item = None
-    item_sport = sport
 
-    try:
-        if sport == "basketball" or "nba" in normalized or "lakers" in normalized or "celtics" in normalized:
-            item_sport = "basketball"
-            if db_type == "postgres":
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT raw_json FROM historical_basketball_games WHERE LOWER(home_team) LIKE %s OR LOWER(away_team) LIKE %s ORDER BY game_date DESC LIMIT 50",
-                        (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
-                    )
-                    rows = cur.fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT raw_json FROM historical_basketball_games WHERE LOWER(home_team) LIKE ? OR LOWER(away_team) LIKE ? ORDER BY game_date DESC LIMIT 50",
-                    (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
-                ).fetchall()
-
-            for row in rows:
-                g = storage._json_loads(row[0])
-                if isinstance(g, dict):
-                    h_name = normalize_text(g.get("teams", {}).get("home", {}).get("name", ""))
-                    a_name = normalize_text(g.get("teams", {}).get("away", {}).get("name", ""))
-                    if team_b:
-                        if (normalize_text(team_a) in h_name or normalize_text(team_a) in a_name) and (normalize_text(team_b) in h_name or normalize_text(team_b) in a_name):
-                            found_item = g
-                            break
-                    else:
-                        if normalize_text(team_a) in h_name or normalize_text(team_a) in a_name:
-                            found_item = g
-                            break
-
-        if not found_item:
-            item_sport = "football"
-            if db_type == "postgres":
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT raw_json FROM historical_fixtures WHERE LOWER(home_team) LIKE %s OR LOWER(away_team) LIKE %s ORDER BY kickoff_at DESC LIMIT 50",
-                        (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
-                    )
-                    rows = cur.fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT raw_json FROM historical_fixtures WHERE LOWER(home_team) LIKE ? OR LOWER(away_team) LIKE ? ORDER BY kickoff_at DESC LIMIT 50",
-                    (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
-                ).fetchall()
-
-            for row in rows:
-                f = storage._json_loads(row[0])
-                if isinstance(f, dict):
-                    h_name = normalize_text(f.get("teams", {}).get("home", {}).get("name", ""))
-                    a_name = normalize_text(f.get("teams", {}).get("away", {}).get("name", ""))
-                    if team_b:
-                        if (normalize_text(team_a) in h_name or normalize_text(team_a) in a_name) and (normalize_text(team_b) in h_name or normalize_text(team_b) in a_name):
-                            found_item = f;
-                            break
-                    else:
-                        if normalize_text(team_a) in h_name or normalize_text(team_a) in a_name:
-                            found_item = f
-                            break
-    finally:
-        conn.close()
-
-    # If not in local historical tables, check cache or call API for date
-    if not found_item:
-        date_str, _ = resolve_date(raw_text)
+    # Step 1: Explicit requested date, if supplied
+    if explicit_date_str:
         if item_sport == "basketball":
-            try:
-                games = basketball_api.get_games_by_date(date_str)
-            except Exception:
-                games = []
-            if isinstance(games, list):
-                for g in games:
-                    if not isinstance(g, dict):
-                        continue
-                    h_name = normalize_text(g.get("teams", {}).get("home", {}).get("name", ""))
-                    a_name = normalize_text(g.get("teams", {}).get("away", {}).get("name", ""))
-                    if team_b:
-                        if (normalize_text(team_a) in h_name or normalize_text(team_a) in a_name) and (normalize_text(team_b) in h_name or normalize_text(team_b) in a_name):
-                            found_item = g
-                            break
-                    elif normalize_text(team_a) in h_name or normalize_text(team_a) in a_name:
+            games = get_tracked_basketball_games_for_date(explicit_date_str)
+            for g in games:
+                if _match_teams(g, team_a, team_b):
+                    found_item = g
+                    break
+        else:
+            fixtures = get_tracked_fixtures_for_date(explicit_date_str)
+            for f in fixtures:
+                if _match_teams(f, team_a, team_b):
+                    found_item = f
+                    break
+
+    # Step 2 & 3: Upcoming scheduled fixture/game matching both teams
+    if not found_item:
+        if item_sport == "basketball":
+            upcoming = get_upcoming_basketball_games(quantity=50)
+            for g in upcoming:
+                if _match_teams(g, team_a, team_b):
+                    found_item = g
+                    break
+        else:
+            upcoming = get_upcoming_fixtures(quantity=50)
+            for f in upcoming:
+                if _match_teams(f, team_a, team_b):
+                    found_item = f
+                    break
+
+    # Step 4 & 5: Historical database record ONLY as fallback when no upcoming match exists
+    if not found_item:
+        conn, db_type = storage._connect()
+        try:
+            if item_sport == "basketball":
+                if db_type == "postgres":
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT raw_json FROM historical_basketball_games WHERE LOWER(home_team) LIKE %s OR LOWER(away_team) LIKE %s ORDER BY game_date DESC LIMIT 50",
+                            (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
+                        )
+                        rows = cur.fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT raw_json FROM historical_basketball_games WHERE LOWER(home_team) LIKE ? OR LOWER(away_team) LIKE ? ORDER BY game_date DESC LIMIT 50",
+                        (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
+                    ).fetchall()
+
+                for row in rows:
+                    g = storage._json_loads(row[0])
+                    if _match_teams(g, team_a, team_b):
                         found_item = g
                         break
-        else:
-            try:
-                fixtures = api_football.get_fixtures_by_date(date_str)
-            except Exception:
-                fixtures = []
-            if isinstance(fixtures, list):
-                for f in fixtures:
-                    if not isinstance(f, dict):
-                        continue
-                    h_name = normalize_text(f.get("teams", {}).get("home", {}).get("name", ""))
-                    a_name = normalize_text(f.get("teams", {}).get("away", {}).get("name", ""))
-                    if team_b:
-                        if (normalize_text(team_a) in h_name or normalize_text(team_a) in a_name) and (normalize_text(team_b) in h_name or normalize_text(team_b) in a_name):
-                            found_item = f
-                            break
-                    elif normalize_text(team_a) in h_name or normalize_text(team_a) in a_name:
+            else:
+                if db_type == "postgres":
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT raw_json FROM historical_fixtures WHERE LOWER(home_team) LIKE %s OR LOWER(away_team) LIKE %s ORDER BY kickoff_at DESC LIMIT 50",
+                            (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
+                        )
+                        rows = cur.fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT raw_json FROM historical_fixtures WHERE LOWER(home_team) LIKE ? OR LOWER(away_team) LIKE ? ORDER BY kickoff_at DESC LIMIT 50",
+                        (f"%{team_a.lower()}%", f"%{team_a.lower()}%")
+                    ).fetchall()
+
+                for row in rows:
+                    f = storage._json_loads(row[0])
+                    if _match_teams(f, team_a, team_b):
                         found_item = f
                         break
+        finally:
+            conn.close()
 
     if not found_item:
         q_label = f"{team_a} vs {team_b}" if team_b else team_a
-        return f"ℹ️ Could not find local fixture data for *{q_label}*. Try providing a date or exact team names."
+        return f"ℹ️ Could not find fixture data for *{q_label}*."
 
     # Format detailed response
     teams = found_item.get("teams", {})
