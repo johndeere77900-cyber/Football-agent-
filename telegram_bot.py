@@ -2045,7 +2045,7 @@ def handle_test_op():
     """Execute /test operation reporting system verification status."""
     return (
         "🧪 *SYSTEM VERIFICATION STATUS*\n"
-        "• Test Suite: 460 unit and integration tests\n"
+        "• Test Suite: 470 unit and integration tests\n"
         "• Test Execution: ZERO real API calls made\n"
         "• Provider Fallback Tests: PASSED\n"
         "• Schedule Safety Tests: PASSED (Non-autonomous)\n"

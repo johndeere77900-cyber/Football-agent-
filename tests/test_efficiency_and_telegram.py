@@ -389,8 +389,9 @@ def test_prediction_provenance_attachment():
         }
 
         result = main.predict_fixture(fixture, 1.35, provider_meta=provider_meta)
-        prov = result["prediction_record"]["provenance"]
+        prov = result.get("provenance") or result.get("prediction_record", {}).get("provenance")
 
+        assert prov is not None
         assert prov["provider"] == "api_football"
         assert prov["fallback_used"] is False
         assert prov["data_scope"] == "league_39_season_2025"

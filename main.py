@@ -507,10 +507,12 @@ def _recent_feature(
     last,
     league_id=None,
     season=None,
+    fixture_date=None,
 ):
     """
     Build recent-form features as per-match averages.
     Passes league_id and season to restrict query scope where provider supports it.
+    Strictly filters out matches occurring on or after fixture_date or with missing/invalid kickoff dates.
     """
     try:
         if league_id is not None or season is not None:
@@ -537,6 +539,21 @@ def _recent_feature(
     for match in matches or []:
         if not isinstance(match, dict):
             continue
+
+        # Strict temporal safety: filter matches on/after fixture_date or without valid dates
+        fixture_dict = match.get("fixture")
+        if isinstance(fixture_dict, dict):
+            m_date = fixture_dict.get("date")
+            if fixture_date is not None:
+                if not m_date or not isinstance(m_date, str):
+                    continue
+                if time_utils.parse_utc_datetime(m_date) is None:
+                    continue
+                if not time_utils.is_strictly_before(m_date, fixture_date):
+                    continue
+            elif m_date and isinstance(m_date, str):
+                if time_utils.parse_utc_datetime(m_date) is None:
+                    continue
 
         home = (
             match
@@ -641,14 +658,19 @@ def _h2h_feature(
             continue
 
         # Strict H2H temporal safety: filter matches on/after fixture_date or without valid dates
-        m_date = match.get("fixture", {}).get("date") if isinstance(match.get("fixture"), dict) else None
-
-        if fixture_date is not None:
-            if not m_date or not isinstance(m_date, str) or not time_utils.is_strictly_before(m_date, fixture_date):
-                continue
-        elif m_date and isinstance(m_date, str):
-            if time_utils.parse_utc_datetime(m_date) is None:
-                continue
+        fixture_dict = match.get("fixture")
+        if isinstance(fixture_dict, dict):
+            m_date = fixture_dict.get("date")
+            if fixture_date is not None:
+                if not m_date or not isinstance(m_date, str):
+                    continue
+                if time_utils.parse_utc_datetime(m_date) is None:
+                    continue
+                if not time_utils.is_strictly_before(m_date, fixture_date):
+                    continue
+            elif m_date and isinstance(m_date, str):
+                if time_utils.parse_utc_datetime(m_date) is None:
+                    continue
 
         home = (
             match
@@ -1149,6 +1171,7 @@ def predict_fixture(
         config.RECENT_FORM_MATCHES,
         league_id=league["id"],
         season=league["season"],
+        fixture_date=fixture_data.get("date"),
     )
 
     recent_away = _recent_feature(
@@ -1156,6 +1179,7 @@ def predict_fixture(
         config.RECENT_FORM_MATCHES,
         league_id=league["id"],
         season=league["season"],
+        fixture_date=fixture_data.get("date"),
     )
 
     if (
