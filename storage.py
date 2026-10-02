@@ -495,6 +495,47 @@ def init_db():
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_backtest_market_metrics_run_id ON backtest_market_metrics (run_id)"
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS operation_requests (
+                        request_id TEXT PRIMARY KEY,
+                        telegram_update_id TEXT,
+                        chat_id TEXT NOT NULL,
+                        operation TEXT NOT NULL,
+                        sport TEXT,
+                        parameters_json JSONB,
+                        status TEXT NOT NULL DEFAULT 'QUEUED',
+                        github_run_id TEXT,
+                        created_at TEXT NOT NULL,
+                        started_at TEXT,
+                        completed_at TEXT,
+                        error_code TEXT,
+                        error_message TEXT,
+                        result_summary_json JSONB
+                    )
+                    """
+                )
+                # Migration: remove duplicate non-null telegram_update_id deterministically before creating partial unique index
+                cur.execute(
+                    """
+                    WITH duplicates AS (
+                        SELECT request_id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY telegram_update_id
+                                   ORDER BY created_at ASC, request_id ASC
+                               ) as rn
+                        FROM operation_requests
+                        WHERE telegram_update_id IS NOT NULL
+                    )
+                    DELETE FROM operation_requests
+                    WHERE request_id IN (
+                        SELECT request_id FROM duplicates WHERE rn > 1
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_requests_update_id_unique ON operation_requests (telegram_update_id) WHERE telegram_update_id IS NOT NULL"
+                )
             conn.commit()
 
         else:
@@ -815,6 +856,42 @@ def init_db():
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_backtest_market_metrics_run_id ON backtest_market_metrics (run_id)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS operation_requests (
+                    request_id TEXT PRIMARY KEY,
+                    telegram_update_id TEXT,
+                    chat_id TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    sport TEXT,
+                    parameters_json TEXT,
+                    status TEXT NOT NULL DEFAULT 'QUEUED',
+                    github_run_id TEXT,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    error_code TEXT,
+                    error_message TEXT,
+                    result_summary_json TEXT
+                )
+                """
+            )
+            # Migration: remove duplicate non-null telegram_update_id before creating partial unique index
+            conn.execute(
+                """
+                DELETE FROM operation_requests
+                WHERE telegram_update_id IS NOT NULL
+                  AND rowid NOT IN (
+                      SELECT MIN(rowid)
+                      FROM operation_requests
+                      WHERE telegram_update_id IS NOT NULL
+                      GROUP BY telegram_update_id
+                  )
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_requests_update_id_unique ON operation_requests (telegram_update_id) WHERE telegram_update_id IS NOT NULL"
             )
             conn.commit()
 
@@ -3448,6 +3525,511 @@ def save_historical_enrichment(enriched_fixtures, source="api_football"):
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+# ----------------------------------------------------------------------
+# Operation Request / Durable Job Storage
+# ----------------------------------------------------------------------
+
+
+def save_operation_request(
+    request_id,
+    chat_id,
+    operation,
+    telegram_update_id=None,
+    sport=None,
+    parameters=None,
+    status="QUEUED",
+    github_run_id=None,
+    error_code=None,
+    error_message=None,
+    result_summary=None,
+):
+    """
+    Save an operation request record atomically.
+
+    Handles duplicate telegram_update_id gracefully via ON CONFLICT DO NOTHING,
+    preserving original request and returning the existing request_id.
+    """
+    request_id = _validate_text(request_id, "request_id")
+    chat_id = str(chat_id)
+    operation = _validate_text(operation, "operation").lower()
+    status = _validate_text(status, "status").upper()
+    if status not in ("QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"):
+        status = "QUEUED"
+
+    update_id_str = str(telegram_update_id).strip() if telegram_update_id is not None and str(telegram_update_id).strip() != "" else None
+
+    # Check if duplicate update_id already exists to preserve original request
+    if update_id_str:
+        existing = get_operation_request_by_update_id(update_id_str)
+        if existing:
+            return existing["request_id"]
+
+    created_at = _utc_now()
+    started_at = created_at if status == "RUNNING" else None
+    completed_at = created_at if status in ("COMPLETED", "FAILED", "CANCELLED") else None
+
+    params_json = _json_dumps(parameters, "parameters") if parameters is not None else None
+    summary_json = _json_dumps(result_summary, "result_summary") if result_summary is not None else None
+
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                if update_id_str:
+                    cur.execute(
+                        """
+                        INSERT INTO operation_requests (
+                            request_id, telegram_update_id, chat_id, operation, sport,
+                            parameters_json, status, github_run_id, created_at, started_at,
+                            completed_at, error_code, error_message, result_summary_json
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (telegram_update_id) WHERE telegram_update_id IS NOT NULL DO NOTHING
+                        """,
+                        (
+                            request_id,
+                            update_id_str,
+                            chat_id,
+                            operation,
+                            sport.lower() if isinstance(sport, str) else None,
+                            params_json,
+                            status,
+                            str(github_run_id) if github_run_id is not None else None,
+                            created_at,
+                            started_at,
+                            completed_at,
+                            error_code,
+                            error_message,
+                            summary_json,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO operation_requests (
+                            request_id, telegram_update_id, chat_id, operation, sport,
+                            parameters_json, status, github_run_id, created_at, started_at,
+                            completed_at, error_code, error_message, result_summary_json
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (request_id) DO NOTHING
+                        """,
+                        (
+                            request_id,
+                            None,
+                            chat_id,
+                            operation,
+                            sport.lower() if isinstance(sport, str) else None,
+                            params_json,
+                            status,
+                            str(github_run_id) if github_run_id is not None else None,
+                            created_at,
+                            started_at,
+                            completed_at,
+                            error_code,
+                            error_message,
+                            summary_json,
+                        ),
+                    )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO operation_requests (
+                    request_id, telegram_update_id, chat_id, operation, sport,
+                    parameters_json, status, github_run_id, created_at, started_at,
+                    completed_at, error_code, error_message, result_summary_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    update_id_str,
+                    chat_id,
+                    operation,
+                    sport.lower() if isinstance(sport, str) else None,
+                    params_json,
+                    status,
+                    str(github_run_id) if github_run_id is not None else None,
+                    created_at,
+                    started_at,
+                    completed_at,
+                    error_code,
+                    error_message,
+                    summary_json,
+                ),
+            )
+            conn.commit()
+
+        if update_id_str:
+            found = get_operation_request_by_update_id(update_id_str)
+            if found:
+                return found["request_id"]
+
+        return request_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def update_operation_request(
+    request_id,
+    status=None,
+    github_run_id=None,
+    error_code=None,
+    error_message=None,
+    result_summary=None,
+):
+    """Update an existing operation request state."""
+    request_id = _validate_text(request_id, "request_id")
+    conn, db_type = _connect()
+
+    try:
+        now_str = _utc_now()
+        existing = get_operation_request(request_id)
+        if not existing:
+            return False
+
+        new_status = (status.upper() if isinstance(status, str) else existing["status"])
+        started_at = existing["started_at"]
+        completed_at = existing["completed_at"]
+
+        if new_status == "RUNNING" and not started_at:
+            started_at = now_str
+        elif new_status in ("COMPLETED", "FAILED", "CANCELLED") and not completed_at:
+            completed_at = now_str
+
+        gh_run_id = str(github_run_id) if github_run_id is not None else existing["github_run_id"]
+        err_code = error_code if error_code is not None else existing["error_code"]
+        err_msg = error_message if error_message is not None else existing["error_message"]
+        res_summary = result_summary if result_summary is not None else existing["result_summary"]
+        summary_json = _json_dumps(res_summary, "result_summary") if res_summary is not None else None
+
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE operation_requests
+                    SET status = %s,
+                        github_run_id = %s,
+                        started_at = %s,
+                        completed_at = %s,
+                        error_code = %s,
+                        error_message = %s,
+                        result_summary_json = %s
+                    WHERE request_id = %s
+                    """,
+                    (new_status, gh_run_id, started_at, completed_at, err_code, err_msg, summary_json, request_id),
+                )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                UPDATE operation_requests
+                SET status = ?,
+                    github_run_id = ?,
+                    started_at = ?,
+                    completed_at = ?,
+                    error_code = ?,
+                    error_message = ?,
+                    result_summary_json = ?
+                WHERE request_id = ?
+                """,
+                (new_status, gh_run_id, started_at, completed_at, err_code, err_msg, summary_json, request_id),
+            )
+            conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _row_to_operation_request(row):
+    if not row:
+        return None
+    return {
+        "request_id": row[0],
+        "telegram_update_id": row[1],
+        "chat_id": row[2],
+        "operation": row[3],
+        "sport": row[4],
+        "parameters": _json_loads(row[5]),
+        "status": row[6],
+        "github_run_id": row[7],
+        "created_at": row[8],
+        "started_at": row[9],
+        "completed_at": row[10],
+        "error_code": row[11],
+        "error_message": row[12],
+        "result_summary": _json_loads(row[13]),
+    }
+
+
+def get_operation_request(request_id):
+    """Retrieve an operation request by request_id. DB errors propagate directly."""
+    request_id = _validate_text(request_id, "request_id")
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT request_id, telegram_update_id, chat_id, operation, sport,
+                           parameters_json, status, github_run_id, created_at, started_at,
+                           completed_at, error_code, error_message, result_summary_json
+                    FROM operation_requests
+                    WHERE request_id = %s
+                    """,
+                    (request_id,),
+                )
+                row = cur.fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT request_id, telegram_update_id, chat_id, operation, sport,
+                       parameters_json, status, github_run_id, created_at, started_at,
+                       completed_at, error_code, error_message, result_summary_json
+                FROM operation_requests
+                WHERE request_id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+
+        return _row_to_operation_request(row)
+    finally:
+        conn.close()
+
+
+def get_latest_operation_request(operation="backtest"):
+    """Retrieve the latest operation request for a given operation type."""
+    operation = _validate_text(operation, "operation").lower()
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT request_id, telegram_update_id, chat_id, operation, sport,
+                           parameters_json, status, github_run_id, created_at, started_at,
+                           completed_at, error_code, error_message, result_summary_json
+                    FROM operation_requests
+                    WHERE operation = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (operation,),
+                )
+                row = cur.fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT request_id, telegram_update_id, chat_id, operation, sport,
+                       parameters_json, status, github_run_id, created_at, started_at,
+                       completed_at, error_code, error_message, result_summary_json
+                FROM operation_requests
+                WHERE operation = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (operation,),
+            ).fetchone()
+
+        return _row_to_operation_request(row)
+    finally:
+        conn.close()
+
+
+def get_operation_request_by_update_id(telegram_update_id):
+    """Retrieve an operation request by telegram_update_id for update idempotency. DB errors propagate directly."""
+    if telegram_update_id is None or str(telegram_update_id).strip() == "":
+        return None
+
+    update_id_str = str(telegram_update_id).strip()
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT request_id, telegram_update_id, chat_id, operation, sport,
+                           parameters_json, status, github_run_id, created_at, started_at,
+                           completed_at, error_code, error_message, result_summary_json
+                    FROM operation_requests
+                    WHERE telegram_update_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (update_id_str,),
+                )
+                row = cur.fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT request_id, telegram_update_id, chat_id, operation, sport,
+                       parameters_json, status, github_run_id, created_at, started_at,
+                       completed_at, error_code, error_message, result_summary_json
+                FROM operation_requests
+                WHERE telegram_update_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (update_id_str,),
+            ).fetchone()
+
+        return _row_to_operation_request(row)
+    finally:
+        conn.close()
+
+
+def get_recent_operation_logs(limit=10, chat_id=None):
+    """Fetch concise recent activity log for /logs operation."""
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                if chat_id:
+                    cur.execute(
+                        """
+                        SELECT created_at, operation, status, request_id, result_summary_json, error_message
+                        FROM operation_requests
+                        WHERE chat_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (str(chat_id), limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT created_at, operation, status, request_id, result_summary_json, error_message
+                        FROM operation_requests
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+                rows = cur.fetchall()
+        else:
+            if chat_id:
+                rows = conn.execute(
+                    """
+                    SELECT created_at, operation, status, request_id, result_summary_json, error_message
+                    FROM operation_requests
+                    WHERE chat_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (str(chat_id), limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT created_at, operation, status, request_id, result_summary_json, error_message
+                    FROM operation_requests
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+
+        logs = []
+        for r in rows:
+            created_at, op, st, req_id, summary_raw, err_msg = r
+            summary = _json_loads(summary_raw)
+            msg = err_msg if st == "FAILED" else (summary.get("message") if isinstance(summary, dict) and "message" in summary else f"Operation {op} {st.lower()}")
+            logs.append({
+                "timestamp": created_at,
+                "operation": op,
+                "status": st,
+                "request_id": req_id,
+                "message": msg or "N/A",
+            })
+        return logs
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def get_recent_operation_errors(limit=10, chat_id=None):
+    """Fetch recent operational errors for /errors operation, scoped to chat_id if provided."""
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                if chat_id:
+                    cur.execute(
+                        """
+                        SELECT completed_at, operation, request_id, error_code, error_message, github_run_id
+                        FROM operation_requests
+                        WHERE (status = 'FAILED' OR error_message IS NOT NULL) AND chat_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (str(chat_id), limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT completed_at, operation, request_id, error_code, error_message, github_run_id
+                        FROM operation_requests
+                        WHERE status = 'FAILED' OR error_message IS NOT NULL
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+                rows = cur.fetchall()
+        else:
+            if chat_id:
+                rows = conn.execute(
+                    """
+                    SELECT completed_at, operation, request_id, error_code, error_message, github_run_id
+                    FROM operation_requests
+                    WHERE (status = 'FAILED' OR error_message IS NOT NULL) AND chat_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (str(chat_id), limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT completed_at, operation, request_id, error_code, error_message, github_run_id
+                    FROM operation_requests
+                    WHERE status = 'FAILED' OR error_message IS NOT NULL
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+
+        errors = []
+        for r in rows:
+            ts, op, req_id, code, msg, gh_run = r
+            errors.append({
+                "timestamp": ts,
+                "operation": op,
+                "request_id": req_id,
+                "error_category": code or "OPERATIONAL_ERROR",
+                "message": msg or "Unknown error",
+                "github_run_id": gh_run,
+            })
+        return errors
     finally:
         conn.close()
 
