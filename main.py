@@ -659,7 +659,7 @@ def _recent_feature(
 
     if matches and league_id is not None and season is not None:
         try:
-            storage.save_historical_fixtures(matches, league_id, season)
+            storage.save_historical_fixtures(matches, league_id, season, cutoff=fixture_date, require_completed=True)
         except Exception:
             pass
 
@@ -1184,13 +1184,14 @@ def predict_fixture(
     h2h_snapshot = None
     data_source = "internal_db"
 
+    min_matches = getattr(config, "MIN_HISTORICAL_SAMPLE", 5)
     if db_fixtures:
         historical_snapshot = historical_features.historical_feature_snapshot(
             db_fixtures,
             home_team["id"],
             away_team["id"],
             cutoff,
-            minimum_matches=1,
+            minimum_matches=min_matches,
         )
         recent_snapshot = historical_features.fixture_recent_form(
             db_fixtures,
@@ -1198,7 +1199,7 @@ def predict_fixture(
             away_team["id"],
             cutoff,
             window=config.RECENT_FORM_MATCHES,
-            minimum_matches=1,
+            minimum_matches=min_matches,
         )
         h2h_snapshot = historical_h2h.historical_h2h_snapshot(
             db_fixtures,

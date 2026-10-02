@@ -911,7 +911,7 @@ def init_db():
 # ----------------------------------------------------------------------
 
 
-def validate_historical_basketball_game(item, target_league_id=None, target_season=None):
+def validate_historical_basketball_game(item, target_league_id=None, target_season=None, cutoff=None, require_completed=False):
     """
     Validate a raw historical basketball game item against ingestion rules.
     """
@@ -925,6 +925,11 @@ def validate_historical_basketball_game(item, target_league_id=None, target_seas
     date_str = item.get("date")
     if not date_str or not isinstance(date_str, str):
         return False, "missing_game_date", None
+
+    import time_utils
+    if cutoff is not None:
+        if not time_utils.is_strictly_before(date_str, cutoff):
+            return False, "game_date_not_before_cutoff", None
 
     teams_obj = item.get("teams")
     if not isinstance(teams_obj, dict):
@@ -974,6 +979,10 @@ def validate_historical_basketball_game(item, target_league_id=None, target_seas
     status_short = item.get("status", {}).get("short") if isinstance(item.get("status"), dict) else None
     scores_obj = item.get("scores")
 
+    is_completed = status_short in ("FT", "AOT")
+    if require_completed and not is_completed:
+        return False, f"game_not_completed (status={status_short})", None
+
     h_pts = None
     a_pts = None
     if isinstance(scores_obj, dict):
@@ -992,7 +1001,6 @@ def validate_historical_basketball_game(item, target_league_id=None, target_seas
             if a_pts is None or a_pts < 0:
                 return False, "invalid_or_negative_away_points", None
 
-    is_completed = status_short in ("FT", "AOT")
     if is_completed:
         if h_pts is None or a_pts is None:
             return False, f"completed_game_missing_points (status={status_short})", None
@@ -1002,7 +1010,7 @@ def validate_historical_basketball_game(item, target_league_id=None, target_seas
     return True, "valid", normalized
 
 
-def save_historical_basketball_games(games, league_id, season, source="api_basketball"):
+def save_historical_basketball_games(games, league_id, season, source="api_basketball", cutoff=None, require_completed=False):
     """
     Save historical API-Basketball games into persistent storage.
     """
@@ -1020,7 +1028,7 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
 
     for item in games:
         is_valid, reason, norm_item = validate_historical_basketball_game(
-            item, target_league_id=league_id, target_season=season
+            item, target_league_id=league_id, target_season=season, cutoff=cutoff, require_completed=require_completed
         )
         if not is_valid:
             rejected_count += 1
@@ -3128,20 +3136,17 @@ def _parse_strict_int(val):
     return None
 
 
-def validate_historical_fixture(item, target_league_id=None, target_season=None):
+def validate_historical_fixture(item, target_league_id=None, target_season=None, cutoff=None, require_completed=False):
     """
     Validate a raw historical fixture item against ingestion integrity rules.
 
     Checks:
     - Fixture ID: present, positive int, non-boolean, strict integer.
     - Kickoff Timestamp: present, valid ISO-8601 string, must be timezone-aware (rejects naive), normalized to UTC ISO-8601.
+    - Temporal cutoff: if cutoff is provided, kickoff must be strictly before cutoff.
     - Team Structure: home & away team IDs present, positive strict int, home_id != away_id, names non-empty strings.
     - Dataset Identity: if payload contains league.id or league.season, matches target_league_id / target_season.
-      (Note: Missing league metadata in payload is accepted as non-conflicting, as top-level params identify target).
-    - Results: non-negative strict integer goals (no floats/booleans/negatives/missing goals for completed FT/AET/PEN fixtures).
-
-    Returns:
-        (is_valid: bool, reason: str, normalized_item: dict or None)
+    - Results: non-negative strict integer goals for completed FT/AET/PEN fixtures.
     """
     if not isinstance(item, dict):
         return False, "fixture_item_not_dict", None
@@ -3169,6 +3174,11 @@ def validate_historical_fixture(item, target_league_id=None, target_season=None)
         norm_kickoff = dt_utc.isoformat()
     except (ValueError, TypeError):
         return False, "malformed_kickoff_timestamp", None
+
+    import time_utils
+    if cutoff is not None:
+        if not time_utils.is_strictly_before(norm_kickoff, cutoff):
+            return False, "kickoff_not_before_cutoff", None
 
     # C. TEAM STRUCTURE
     teams_obj = item.get("teams")
@@ -3223,6 +3233,10 @@ def validate_historical_fixture(item, target_league_id=None, target_season=None)
     status_short = fixture_obj.get("status", {}).get("short") if isinstance(fixture_obj.get("status"), dict) else None
     goals_obj = item.get("goals")
 
+    is_completed = status_short in ("FT", "AET", "PEN")
+    if require_completed and not is_completed:
+        return False, f"fixture_not_completed (status={status_short})", None
+
     h_goals = None
     a_goals = None
     if isinstance(goals_obj, dict):
@@ -3239,7 +3253,6 @@ def validate_historical_fixture(item, target_league_id=None, target_season=None)
             if a_goals is None or a_goals < 0:
                 return False, "invalid_or_negative_away_goals", None
 
-    is_completed = status_short in ("FT", "AET", "PEN")
     if is_completed:
         if h_goals is None or a_goals is None:
             return False, f"completed_fixture_missing_goals (status={status_short})", None
@@ -3272,7 +3285,7 @@ def validate_historical_fixture(item, target_league_id=None, target_season=None)
     return True, "valid", normalized
 
 
-def save_historical_fixtures(fixtures, league_id, season, source="api_football"):
+def save_historical_fixtures(fixtures, league_id, season, source="api_football", cutoff=None, require_completed=False):
     """
     Save historical API-Football fixtures into persistent storage.
 
@@ -3300,7 +3313,7 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football")
 
     for item in fixtures:
         is_valid, reason, norm_item = validate_historical_fixture(
-            item, target_league_id=league_id, target_season=season
+            item, target_league_id=league_id, target_season=season, cutoff=cutoff, require_completed=require_completed
         )
         if not is_valid:
             rejected_count += 1
