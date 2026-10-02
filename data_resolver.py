@@ -6,13 +6,19 @@ Implements strict primary -> secondary fallback strategy:
 2. Secondary Fallback: football-data.org (football_data_api.py)
 
 Result Status Codes:
-- PRIMARY_SUCCESS: Primary provider returned valid, sufficient data.
+- PRIMARY_SUCCESS: Primary provider returned valid, sufficient data (including valid empty fixture lists).
 - PRIMARY_INSUFFICIENT: Primary provider response was missing or malformed.
 - PRIMARY_UNAVAILABLE: Primary provider failed (exception / rate limit).
 - SECONDARY_SUCCESS: Secondary provider returned valid fallback data.
 - SECONDARY_INSUFFICIENT: Secondary provider response was missing or malformed.
 - NO_DATA: Neither provider supplied usable data.
 - ERROR: Operational error occurred.
+
+Data Sufficiency States:
+- VALID_DATA: Usable records returned.
+- VALID_EMPTY: Valid empty payload (0 matches scheduled on date).
+- INSUFFICIENT_MALFORMED: Payload present but records failed structural validation.
+- PROVIDER_ERROR: Provider returned None or raised error.
 
 Provider Identity & Namespace Safety:
 - Every record includes provider provenance metadata.
@@ -165,11 +171,18 @@ def _normalize_football_data_standing(row):
 def validate_fixtures_sufficiency(fixtures_list):
     """
     Validate fixture list sufficiency.
-    Returns (is_sufficient: bool, clean_list: list).
-    Valid empty lists (0 scheduled matches on a date) are sufficient.
+    Returns tuple: (status_code: str, clean_list: list)
+    status_code is one of:
+      - VALID_EMPTY: [] (confirmed zero matches)
+      - VALID_DATA: non-empty list of valid records
+      - INSUFFICIENT_MALFORMED: non-empty list, but records failed validation
+      - PROVIDER_ERROR: None or non-list
     """
-    if not isinstance(fixtures_list, list):
-        return False, []
+    if fixtures_list is None or not isinstance(fixtures_list, list):
+        return "PROVIDER_ERROR", []
+
+    if len(fixtures_list) == 0:
+        return "VALID_EMPTY", []
 
     clean = []
     for f in fixtures_list:
@@ -180,16 +193,27 @@ def validate_fixtures_sufficiency(fixtures_list):
         if isinstance(fix_obj, dict) and isinstance(teams_obj, dict):
             clean.append(f)
 
-    return True, clean
+    if not clean:
+        return "INSUFFICIENT_MALFORMED", []
+
+    return "VALID_DATA", clean
 
 
 def validate_standings_sufficiency(standings_list):
     """
     Validate standings list sufficiency.
-    Must contain valid non-empty team entries.
+    Returns tuple: (status_code: str, clean_list: list)
+    status_code is one of:
+      - VALID_EMPTY: [] (confirmed empty table)
+      - VALID_DATA: non-empty list of valid records
+      - INSUFFICIENT_MALFORMED: records failed validation
+      - PROVIDER_ERROR: None or non-list
     """
-    if not isinstance(standings_list, list) or not standings_list:
-        return False, []
+    if standings_list is None or not isinstance(standings_list, list):
+        return "PROVIDER_ERROR", []
+
+    if len(standings_list) == 0:
+        return "VALID_EMPTY", []
 
     clean = []
     for row in standings_list:
@@ -199,7 +223,10 @@ def validate_standings_sufficiency(standings_list):
         if isinstance(team_obj, dict) and team_obj.get("name"):
             clean.append(row)
 
-    return (len(clean) > 0), clean
+    if not clean:
+        return "INSUFFICIENT_MALFORMED", []
+
+    return "VALID_DATA", clean
 
 
 class DataResolver:
@@ -228,8 +255,8 @@ class DataResolver:
                 except TypeError:
                     data = api_football.get_fixtures_by_date(date_str, league_id)
 
-                is_suff, clean_data = validate_fixtures_sufficiency(data)
-                if is_suff:
+                suff_code, clean_data = validate_fixtures_sufficiency(data)
+                if suff_code in ("VALID_DATA", "VALID_EMPTY"):
                     normalized = [_normalize_api_football_fixture(item) for item in clean_data]
                     meta = {
                         "data_source": "api_football",
@@ -242,8 +269,8 @@ class DataResolver:
                     }
                     return normalized, meta
                 else:
-                    primary_status = "PRIMARY_INSUFFICIENT"
-                    fallback_reason = "Primary provider payload failed sufficiency validation"
+                    primary_status = "PRIMARY_INSUFFICIENT" if suff_code == "INSUFFICIENT_MALFORMED" else "PRIMARY_UNAVAILABLE"
+                    fallback_reason = f"Primary provider payload status: {suff_code}"
             except Exception as exc:
                 primary_status = "PRIMARY_UNAVAILABLE"
                 fallback_reason = f"Primary provider error: {str(exc)[:100]}"
@@ -284,8 +311,8 @@ class DataResolver:
                         if norm_match:
                             all_matches.append(norm_match)
 
-            is_suff, clean_matches = validate_fixtures_sufficiency(all_matches)
-            if is_suff:
+            suff_code, clean_matches = validate_fixtures_sufficiency(all_matches)
+            if suff_code in ("VALID_DATA", "VALID_EMPTY"):
                 meta = {
                     "data_source": "football_data_org",
                     "provider": "football_data_org",
@@ -303,7 +330,7 @@ class DataResolver:
                     "provider_type": "none",
                     "primary_attempted": primary_attempted,
                     "fallback_used": True,
-                    "fallback_reason": "Secondary provider payload insufficient",
+                    "fallback_reason": f"Secondary provider payload status: {suff_code}",
                     "resolver_status": "SECONDARY_INSUFFICIENT",
                 }
                 return [], meta
@@ -337,8 +364,8 @@ class DataResolver:
                 except TypeError:
                     standings = api_football.get_league_standings(league_id)
 
-                is_suff, clean_standings = validate_standings_sufficiency(standings)
-                if is_suff:
+                suff_code, clean_standings = validate_standings_sufficiency(standings)
+                if suff_code in ("VALID_DATA", "VALID_EMPTY"):
                     meta = {
                         "data_source": "api_football",
                         "provider": "api_football",
@@ -350,7 +377,7 @@ class DataResolver:
                     }
                     return clean_standings, meta
                 else:
-                    fallback_reason = "Primary standings payload insufficient"
+                    fallback_reason = f"Primary standings payload status: {suff_code}"
             except Exception as exc:
                 fallback_reason = f"Primary standings error: {str(exc)[:100]}"
                 logger.warning(f"Primary standings query failed for league {league_id}: {exc}")
@@ -371,8 +398,8 @@ class DataResolver:
         try:
             raw_table = football_data_api.get_competition_standings(comp_code, season)
             normalized = [_normalize_football_data_standing(row) for row in raw_table]
-            is_suff, clean_normalized = validate_standings_sufficiency(normalized)
-            if is_suff:
+            suff_code, clean_normalized = validate_standings_sufficiency(normalized)
+            if suff_code in ("VALID_DATA", "VALID_EMPTY"):
                 meta = {
                     "data_source": "football_data_org",
                     "provider": "football_data_org",
@@ -390,7 +417,7 @@ class DataResolver:
                     "provider_type": "none",
                     "primary_attempted": primary_attempted,
                     "fallback_used": True,
-                    "fallback_reason": "Secondary standings payload insufficient",
+                    "fallback_reason": f"Secondary standings payload status: {suff_code}",
                     "resolver_status": "SECONDARY_INSUFFICIENT",
                 }
                 return [], meta
