@@ -198,6 +198,37 @@ def _valid_goal(value):
 # ----------------------------------------------------------------------
 
 
+_coverage_preflight_cache = {}
+
+
+def check_competition_coverage(league_id, season):
+    """
+    Preflight check for provider coverage for a league + season.
+    Cached per (league_id, season).
+    Only returns season_not_available if valid season list exists and season is explicitly prior to provider coverage.
+    """
+    cache_key = (league_id, season)
+    if cache_key in _coverage_preflight_cache:
+        return _coverage_preflight_cache[cache_key]
+
+    try:
+        seasons = api_football.get_league_coverage(league_id)
+    except Exception:
+        seasons = []
+
+    if isinstance(seasons, list) and seasons:
+        valid_season_years = [s.get("year") for s in seasons if isinstance(s, dict) and "year" in s and isinstance(s.get("year"), int)]
+        if valid_season_years and season not in valid_season_years:
+            if season < min(valid_season_years):
+                res = ("season_not_available", f"Season {season} is prior to provider coverage for league {league_id}.")
+                _coverage_preflight_cache[cache_key] = res
+                return res
+
+    res = ("coverage_available", "Coverage available.")
+    _coverage_preflight_cache[cache_key] = res
+    return res
+
+
 def get_league_avg_goals(league_id, season):
     """
     Return the configured league scoring average.
