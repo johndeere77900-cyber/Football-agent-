@@ -441,6 +441,44 @@ def _extract_average_goals(
         return None
 
 
+def _estimate_avg_cards_from_db(db_fixtures, team_id, cutoff):
+    """
+    Calculate observed yellow cards per played match from stored DB historical fixtures.
+    """
+    import historical_match_policy
+    import market_grading
+
+    total_yellow = 0.0
+    match_count = 0
+
+    for fixture in db_fixtures or []:
+        if not historical_match_policy.is_finished_match(fixture, sport="football"):
+            continue
+
+        fixture_date = fixture.get("fixture", {}).get("date")
+        if cutoff and not time_utils.is_strictly_before(fixture_date, cutoff):
+            continue
+
+        home_id = fixture.get("teams", {}).get("home", {}).get("id")
+        away_id = fixture.get("teams", {}).get("away", {}).get("id")
+
+        if team_id not in (home_id, away_id):
+            continue
+
+        stats = market_grading.extract_fixture_statistics(fixture)
+        if home_id == team_id and stats.get("home_yellow_cards") is not None:
+            total_yellow += stats["home_yellow_cards"]
+            match_count += 1
+        elif away_id == team_id and stats.get("away_yellow_cards") is not None:
+            total_yellow += stats["away_yellow_cards"]
+            match_count += 1
+
+    if match_count == 0:
+        return None
+
+    return total_yellow / match_count
+
+
 def _current_team_feature(
     team_stats,
     name,
@@ -618,6 +656,12 @@ def _recent_feature(
         return None
 
     match_count = len(goals_for)
+
+    if matches and league_id is not None and season is not None:
+        try:
+            storage.save_historical_fixtures(matches, league_id, season)
+        except Exception:
+            pass
 
     return {
         "matches": match_count,
@@ -1129,76 +1173,125 @@ def predict_fixture(
             failure_stage="season_team_stats",
         )
 
-    home_stats = (
-        api_football.get_team_statistics(
+    import historical_features
+    import historical_h2h
+
+    cutoff = fixture_data.get("date")
+    db_fixtures = storage.get_historical_fixtures(league["id"], league["season"])
+
+    historical_snapshot = None
+    recent_snapshot = None
+    h2h_snapshot = None
+    data_source = "internal_db"
+
+    if db_fixtures:
+        historical_snapshot = historical_features.historical_feature_snapshot(
+            db_fixtures,
             home_team["id"],
-            league["id"],
-            league["season"],
-        )
-    )
-
-    away_stats = (
-        api_football.get_team_statistics(
             away_team["id"],
-            league["id"],
-            league["season"],
+            cutoff,
+            minimum_matches=1,
         )
-    )
-
-    home_feature = _current_team_feature(
-        home_stats,
-        "season_home",
-    )
-
-    away_feature = _current_team_feature(
-        away_stats,
-        "season_away",
-    )
-
-    if (
-        home_feature is None
-        or away_feature is None
-    ):
-        return _insufficient_prediction(
-            fixture,
-            is_live,
-            "Season team statistics are incomplete.",
-            failure_stage="season_team_stats",
+        recent_snapshot = historical_features.fixture_recent_form(
+            db_fixtures,
+            home_team["id"],
+            away_team["id"],
+            cutoff,
+            window=config.RECENT_FORM_MATCHES,
+            minimum_matches=1,
+        )
+        h2h_snapshot = historical_h2h.historical_h2h_snapshot(
+            db_fixtures,
+            home_team["id"],
+            away_team["id"],
+            cutoff,
+            window=config.HEAD_TO_HEAD_MATCHES,
+            minimum_matches=0,
         )
 
-    recent_home = _recent_feature(
-        home_team["id"],
-        config.RECENT_FORM_MATCHES,
-        league_id=league["id"],
-        season=league["season"],
-        fixture_date=fixture_data.get("date"),
-    )
+    if historical_snapshot is not None and recent_snapshot is not None:
+        home_feature = historical_snapshot["home"]
+        away_feature = historical_snapshot["away"]
+        recent_home = recent_snapshot["home"]
+        recent_away = recent_snapshot["away"]
+        h2h = h2h_snapshot
 
-    recent_away = _recent_feature(
-        away_team["id"],
-        config.RECENT_FORM_MATCHES,
-        league_id=league["id"],
-        season=league["season"],
-        fixture_date=fixture_data.get("date"),
-    )
-
-    if (
-        recent_home is None
-        or recent_away is None
-    ):
-        return _insufficient_prediction(
-            fixture,
-            is_live,
-            "Recent team form data is incomplete.",
-            failure_stage="recent_form",
+        db_league_avg = historical_features.historical_league_avg_goals(db_fixtures, cutoff)
+        if db_league_avg is not None and db_league_avg > 0:
+            league_avg_goals = db_league_avg
+    else:
+        # Fall back to external provider API when DB history is insufficient
+        data_source = provider_name
+        home_stats = (
+            api_football.get_team_statistics(
+                home_team["id"],
+                league["id"],
+                league["season"],
+            )
         )
 
-    h2h = _h2h_feature(
-        home_team["id"],
-        away_team["id"],
-        config.HEAD_TO_HEAD_MATCHES,
-        fixture_date=fixture_data.get("date"),
-    )
+        away_stats = (
+            api_football.get_team_statistics(
+                away_team["id"],
+                league["id"],
+                league["season"],
+            )
+        )
+
+        home_feature = _current_team_feature(
+            home_stats,
+            "season_home",
+        )
+
+        away_feature = _current_team_feature(
+            away_stats,
+            "season_away",
+        )
+
+        if (
+            home_feature is None
+            or away_feature is None
+        ):
+            return _insufficient_prediction(
+                fixture,
+                is_live,
+                "Season team statistics are incomplete.",
+                failure_stage="season_team_stats",
+            )
+
+        recent_home = _recent_feature(
+            home_team["id"],
+            config.RECENT_FORM_MATCHES,
+            league_id=league["id"],
+            season=league["season"],
+            fixture_date=fixture_data.get("date"),
+        )
+
+        recent_away = _recent_feature(
+            away_team["id"],
+            config.RECENT_FORM_MATCHES,
+            league_id=league["id"],
+            season=league["season"],
+            fixture_date=fixture_data.get("date"),
+        )
+
+        if (
+            recent_home is None
+            or recent_away is None
+        ):
+            return _insufficient_prediction(
+                fixture,
+                is_live,
+                "Recent team form data is incomplete.",
+                failure_stage="recent_form",
+            )
+
+        h2h = _h2h_feature(
+            home_team["id"],
+            away_team["id"],
+            config.HEAD_TO_HEAD_MATCHES,
+            fixture_date=fixture_data.get("date"),
+        )
 
     home_elo = storage.get_team_rating(
         home_team["id"]
@@ -1251,7 +1344,7 @@ def predict_fixture(
 
     prov_meta = provider_meta or {}
     prediction["provenance"] = {
-        "provider": prov_meta.get("data_source") or prov_meta.get("provider", "api_football"),
+        "provider": data_source,
         "fallback_used": prov_meta.get("fallback_used", False),
         "fallback_reason": prov_meta.get("fallback_reason"),
         "data_scope": f"league_{league['id']}_season_{league['season']}",
@@ -1358,13 +1451,15 @@ def predict_fixture(
 
         markets["is_live"] = False
 
-        home_cards = _estimate_avg_cards(
-            home_stats
-        )
+        home_cards = None
+        away_cards = None
 
-        away_cards = _estimate_avg_cards(
-            away_stats
-        )
+        if data_source == "internal_db" and db_fixtures:
+            home_cards = _estimate_avg_cards_from_db(db_fixtures, home_team["id"], cutoff)
+            away_cards = _estimate_avg_cards_from_db(db_fixtures, away_team["id"], cutoff)
+        elif "home_stats" in locals() and "away_stats" in locals():
+            home_cards = _estimate_avg_cards(home_stats)
+            away_cards = _estimate_avg_cards(away_stats)
 
         if (
             home_cards is not None

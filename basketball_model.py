@@ -220,8 +220,22 @@ def predict_game(
         home_stats = home_stats_override
         away_stats = away_stats_override
     else:
-        home_stats = basketball_api.get_team_statistics(home_id, league_id, season)
-        away_stats = basketball_api.get_team_statistics(away_id, league_id, season)
+        import storage
+        import historical_basketball_features
+        cutoff_date = data_cutoff_timestamp or game.get("date")
+        db_games = storage.get_historical_basketball_games(league_id, season)
+        if db_games and cutoff_date:
+            h_reconstructed = historical_basketball_features.reconstruct_basketball_team_stats(db_games, home_id, cutoff_date)
+            a_reconstructed = historical_basketball_features.reconstruct_basketball_team_stats(db_games, away_id, cutoff_date)
+            if h_reconstructed is not None and a_reconstructed is not None:
+                home_stats = h_reconstructed
+                away_stats = a_reconstructed
+            else:
+                home_stats = basketball_api.get_team_statistics(home_id, league_id, season)
+                away_stats = basketball_api.get_team_statistics(away_id, league_id, season)
+        else:
+            home_stats = basketball_api.get_team_statistics(home_id, league_id, season)
+            away_stats = basketball_api.get_team_statistics(away_id, league_id, season)
 
     home_for, home_against = _extract_scoring(home_stats)
     away_for, away_against = _extract_scoring(away_stats)
