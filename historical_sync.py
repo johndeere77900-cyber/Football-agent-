@@ -596,13 +596,90 @@ def sync_historical_basketball_games(
     return report
 
 
+def run_historical_queue(
+    season: int = 2024,
+    with_enrichment: bool = False,
+    refresh: bool = False,
+) -> dict:
+    """
+    Run historical data acquisition queue sequentially across all configured football leagues
+    in config.ALLOWED_LEAGUE_IDS plus basketball league 12.
+    """
+    queue_items = [
+        {"sport": "football", "league_id": lid} for lid in config.ALLOWED_LEAGUE_IDS
+    ] + [
+        {"sport": "basketball", "league_id": 12}
+    ]
+
+    reports = []
+    print(
+        f"Starting historical acquisition queue for season {season} ({len(queue_items)} datasets)...",
+        flush=True,
+    )
+
+    for item in queue_items:
+        sport = item["sport"]
+        league_id = item["league_id"]
+
+        dataset_info = storage.get_historical_dataset_status(league_id, season, sport=sport)
+        if dataset_info.get("status") == "COMPLETE" and not refresh:
+            print(
+                f"Queue: Skipping COMPLETE {sport} dataset for league {league_id} season {season}.",
+                flush=True,
+            )
+            reports.append({
+                "sport": sport,
+                "league_id": league_id,
+                "season": season,
+                "status": "COMPLETE",
+                "skipped_reason": "Dataset already COMPLETE",
+                "api_requests_consumed": 0,
+            })
+            continue
+
+        print(
+            f"Queue: Syncing {sport} dataset for league {league_id} season {season}...",
+            flush=True,
+        )
+
+        if sport == "basketball":
+            report = sync_historical_basketball_games(
+                league_id=league_id,
+                season=season,
+                refresh=refresh,
+            )
+        else:
+            report = sync_historical_fixtures(
+                league_id=league_id,
+                season=season,
+                with_enrichment=with_enrichment,
+                refresh=refresh,
+            )
+
+        reports.append(report)
+
+        if report.get("quota_budget_stopped"):
+            print(
+                f"Queue: API quota/budget exhausted during {sport} league {league_id} season {season}. Stopping queue execution.",
+                flush=True,
+            )
+            break
+
+    print(f"Historical queue run complete. Processed {len(reports)} dataset(s).", flush=True)
+    return {
+        "season": season,
+        "processed_count": len(reports),
+        "reports": reports,
+    }
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Historical Data Collector for API-Football/API-Basketball fixtures."
     )
     parser.add_argument("--sport", choices=["football", "basketball"], default="football", help="Sport name")
-    parser.add_argument("--league-id", type=int, required=True, help="League ID")
-    parser.add_argument("--season", type=int, required=True, help="Season year (e.g. 2024 or 2025)")
+    parser.add_argument("--league-id", type=int, help="League ID")
+    parser.add_argument("--season", type=int, default=2024, help="Season year (e.g. 2024 or 2025)")
     parser.add_argument(
         "--with-enrichment",
         action="store_true",
@@ -613,18 +690,33 @@ if __name__ == "__main__":
         action="store_true",
         help="Explicitly re-fetch and refresh dataset even if status is COMPLETE",
     )
+    parser.add_argument(
+        "--historical-queue",
+        action="store_true",
+        help="Run historical acquisition queue across all configured leagues",
+    )
 
     args = parser.parse_args()
 
     storage.init_db()
 
-    if args.sport == "basketball":
+    if args.historical_queue:
+        run_historical_queue(
+            season=args.season,
+            with_enrichment=args.with_enrichment,
+            refresh=args.refresh,
+        )
+    elif args.sport == "basketball":
+        if args.league_id is None:
+            parser.error("--league-id is required when --historical-queue is not set")
         sync_historical_basketball_games(
             league_id=args.league_id,
             season=args.season,
             refresh=args.refresh,
         )
     else:
+        if args.league_id is None:
+            parser.error("--league-id is required when --historical-queue is not set")
         sync_historical_fixtures(
             league_id=args.league_id,
             season=args.season,

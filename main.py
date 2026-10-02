@@ -2501,6 +2501,12 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--historical-queue",
+        action="store_true",
+        help="Run historical acquisition queue across configured leagues.",
+    )
+
+    parser.add_argument(
         "--dataset-status",
         action="store_true",
         help="Check historical dataset status.",
@@ -2636,6 +2642,17 @@ def main():
         # Multi-sport Historical & Backtest commands
         # --------------------------------------------------------------
         import historical_sync
+
+        if args.historical_queue:
+            season = args.season if args.season is not None else 2024
+            storage.init_db()
+
+            summary = historical_sync.run_historical_queue(
+                season=season,
+                with_enrichment=args.with_enrichment,
+                refresh=args.refresh,
+            )
+            return 0
 
         if args.historical_sync:
             sport = args.sport or "football"

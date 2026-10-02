@@ -338,11 +338,13 @@ def test_pagination_multi_page_and_deduplication(tmp_path, monkeypatch):
     storage.init_db()
 
     calls = []
+    call_count = 0
 
     def fake_get(url, headers, params, timeout):
+        nonlocal call_count
+        call_count += 1
         calls.append(params)
-        page = params.get("page", 1)
-        if page == 1:
+        if call_count == 1:
             return FakeResponse(
                 payload={
                     "paging": {"current": 1, "total": 2},

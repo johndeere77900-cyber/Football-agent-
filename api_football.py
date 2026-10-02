@@ -263,6 +263,11 @@ def _get(endpoint, params, max_budget=None):
     url = f"{config.API_FOOTBALL_BASE_URL}/{endpoint.lstrip('/')}"
     backoff = RETRY_BACKOFF_SECONDS
 
+    # Filter out unsupported 'page' parameter for API-Football /fixtures requests
+    http_params = dict(params)
+    if endpoint.rstrip("/") == "fixtures" and "page" in http_params:
+        del http_params["page"]
+
     for attempt in range(1, MAX_RETRIES + 1):
         # Quota check before every actual network attempt
         _check_and_consume_quota(endpoint, max_budget=max_budget)
@@ -271,7 +276,7 @@ def _get(endpoint, params, max_budget=None):
             response = requests.get(
                 url,
                 headers=_headers(),
-                params=params,
+                params=http_params,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
         except requests.RequestException as exc:
@@ -515,6 +520,15 @@ def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
 
     current = paging.get("current")
     total = paging.get("total")
+
+    if (
+        isinstance(total, bool)
+        or not isinstance(total, int)
+        or total < 1
+    ):
+        raise APIFootballError(
+            f"Malformed pagination metadata from API-Football: total={total!r}"
+        )
 
     if (
         isinstance(current, bool)
