@@ -987,6 +987,7 @@ def _insufficient_prediction(
     is_live,
     reason="Validated prediction inputs were unavailable.",
     failure_stage="insufficient_data",
+    provider_meta=None,
 ):
     """Return a consistent non-prediction result."""
     (
@@ -995,6 +996,9 @@ def _insufficient_prediction(
         away_team,
         league,
     ) = _fixture_identity(fixture)
+
+    prov_meta = provider_meta or fixture.get("provider_provenance") or {}
+    now_utc = time_utils.format_utc_iso(datetime.now(timezone.utc))
 
     return {
         "fixture_id": fixture_data["id"],
@@ -1013,6 +1017,14 @@ def _insufficient_prediction(
         "reason": reason,
         "odds_comparison": None,
         "elo_cross_check": None,
+        "provenance": {
+            "provider": prov_meta.get("data_source") or prov_meta.get("provider", "api_football"),
+            "fallback_used": prov_meta.get("fallback_used", False),
+            "fallback_reason": prov_meta.get("fallback_reason"),
+            "data_scope": f"league_{league.get('id')}_season_{league.get('season')}",
+            "retrieved_at": now_utc,
+            "as_of": now_utc,
+        },
     }
 
 
@@ -1070,6 +1082,19 @@ def predict_fixture(
     league_avg_goals = float(
         league_avg_goals
     )
+
+    prov_meta = provider_meta or fixture.get("provider_provenance") or {}
+    provider_name = prov_meta.get("provider") or prov_meta.get("data_source", "api_football")
+
+    # Enforce Provider ID Isolation: If fixture originates from secondary provider (football_data_org),
+    # its team IDs belong to secondary provider namespace and MUST NOT be passed to API-Football endpoints.
+    if provider_name == "football_data_org":
+        return _insufficient_prediction(
+            fixture,
+            is_live,
+            "Secondary provider fixture requires compatible team statistics features.",
+            failure_stage="season_team_stats",
+        )
 
     home_stats = (
         api_football.get_team_statistics(

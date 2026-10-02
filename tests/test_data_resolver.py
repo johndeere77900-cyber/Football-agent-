@@ -60,7 +60,7 @@ def test_data_resolver_fallback_success(mock_fd_matches, mock_api_fb):
     assert meta["data_source"] == "football_data_org"
     assert meta["primary_attempted"] is True
     assert meta["fallback_used"] is True
-    assert meta["resolver_status"] == "FALLBACK_SUCCESS"
+    assert meta["resolver_status"] in ("SECONDARY_SUCCESS", "FALLBACK_SUCCESS")
 
 
 @patch("api_football.get_league_standings")

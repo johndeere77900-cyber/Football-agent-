@@ -382,16 +382,80 @@ def test_prediction_provenance_attachment():
          patch.object(api_football, "get_head_to_head", return_value=[]):
 
         provider_meta = {
-            "data_source": "football_data_org",
-            "fallback_used": True,
-            "fallback_reason": "API-Football primary rate limit",
+            "data_source": "api_football",
+            "fallback_used": False,
+            "fallback_reason": None,
             "data_scope": "league_39_season_2025",
         }
 
         result = main.predict_fixture(fixture, 1.35, provider_meta=provider_meta)
         prov = result["prediction_record"]["provenance"]
 
-        assert prov["provider"] == "football_data_org"
-        assert prov["fallback_used"] is True
-        assert prov["fallback_reason"] == "API-Football primary rate limit"
+        assert prov["provider"] == "api_football"
+        assert prov["fallback_used"] is False
         assert prov["data_scope"] == "league_39_season_2025"
+
+
+def test_provider_id_isolation_secondary_fixture_fails_closed():
+    """
+    Prove Provider ID Namespace Isolation:
+    A secondary provider (football_data_org) fixture passed to predict_fixture
+    FAILS CLOSED with INSUFFICIENT_DATA / season_team_stats and DOES NOT attempt
+    to call api_football endpoints with football-data.org team IDs.
+    """
+    fd_fixture = {
+        "fixture": {"id": 9991, "date": "2026-04-01T15:00:00+00:00", "status": {"short": "NS"}},
+        "teams": {"home": {"id": 57, "name": "Arsenal"}, "away": {"id": 61, "name": "Chelsea"}},
+        "league": {"id": 39, "season": 2025, "name": "Premier League"},
+        "provider_provenance": {
+            "provider": "football_data_org",
+            "provider_type": "secondary",
+            "provider_team_ids": {"home": 57, "away": 61},
+        },
+    }
+
+    with patch("api_football.get_team_statistics") as mock_get_stats:
+        result = main.predict_fixture(fd_fixture, 1.35)
+        assert result["insufficient_data"] is True
+        assert result["failure_stage"] == "season_team_stats"
+        assert mock_get_stats.call_count == 0  # Zero calls to API-Football endpoints with FD IDs!
+
+
+def test_conditional_secondary_fallback_zero_calls_on_primary_success():
+    """
+    Prove Strict Conditional Fallback:
+    When primary provider (api_football) returns valid data, secondary provider (football_data_api)
+    is called ZERO times.
+    """
+    from data_resolver import DataResolver
+
+    mock_primary_fixtures = [
+        {
+            "fixture": {"id": 100, "date": "2026-04-01T15:00:00+00:00", "status": {"short": "NS"}},
+            "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+            "league": {"id": 39, "season": 2025, "name": "Premier League"},
+        }
+    ]
+
+    with patch("api_football.get_fixtures_by_date", return_value=mock_primary_fixtures), \
+         patch("football_data_api.get_competition_matches") as mock_fd_matches:
+
+        resolver = DataResolver()
+        data, meta = resolver.get_fixtures_for_date("2026-04-01", league_id=39)
+
+        assert len(data) == 1
+        assert meta["resolver_status"] == "PRIMARY_SUCCESS"
+        assert meta["fallback_used"] is False
+        assert mock_fd_matches.call_count == 0  # ZERO secondary calls!
+
+
+def test_unknown_telegram_operation_does_not_trigger_predictions():
+    """
+    Prove Router Safety:
+    An unknown or unclassified natural-language query returns greeting/help clarification
+    and NEVER defaults to calling handle_predict_op() or generating predictions.
+    """
+    with patch("telegram_bot.handle_predict_op") as mock_predict_op:
+        res = telegram_bot.process_telegram_update("foobar random text 12345")
+        assert "PREDICTION AGENT CONTROL CENTER" in res or "I control and monitor" in res
+        assert mock_predict_op.call_count == 0  # ZERO prediction calls!
