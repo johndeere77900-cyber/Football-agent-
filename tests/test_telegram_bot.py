@@ -508,6 +508,33 @@ def test_unique_telegram_update_id_constraint():
     assert found["request_id"] in ("req_unique_1", "req_unique_2")
 
 
+def test_atomic_duplicate_update_id_handling():
+    telegram_bot.storage.init_db()
+
+    first_req_id = telegram_bot.storage.save_operation_request(
+        request_id="req_orig_100",
+        chat_id="chat_1",
+        operation="health",
+        telegram_update_id="upd_atomic_100",
+    )
+    assert first_req_id == "req_orig_100"
+
+    second_req_id = telegram_bot.storage.save_operation_request(
+        request_id="req_duplicate_200",
+        chat_id="chat_1",
+        operation="health",
+        telegram_update_id="upd_atomic_100",
+    )
+    assert second_req_id == "req_orig_100"
+
+    stored = telegram_bot.storage.get_operation_request("req_orig_100")
+    assert stored is not None
+    assert stored["telegram_update_id"] == "upd_atomic_100"
+
+    dup_stored = telegram_bot.storage.get_operation_request("req_duplicate_200")
+    assert dup_stored is None
+
+
 def test_deterministic_migration_same_timestamp():
     telegram_bot.storage.init_db()
 

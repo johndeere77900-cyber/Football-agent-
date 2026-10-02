@@ -3547,13 +3547,26 @@ def save_operation_request(
     error_message=None,
     result_summary=None,
 ):
-    """Save an operation request record."""
+    """
+    Save an operation request record atomically.
+
+    Handles duplicate telegram_update_id gracefully via ON CONFLICT DO NOTHING,
+    preserving original request and returning the existing request_id.
+    """
     request_id = _validate_text(request_id, "request_id")
     chat_id = str(chat_id)
     operation = _validate_text(operation, "operation").lower()
     status = _validate_text(status, "status").upper()
     if status not in ("QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"):
         status = "QUEUED"
+
+    update_id_str = str(telegram_update_id).strip() if telegram_update_id is not None and str(telegram_update_id).strip() != "" else None
+
+    # Check if duplicate update_id already exists to preserve original request
+    if update_id_str:
+        existing = get_operation_request_by_update_id(update_id_str)
+        if existing:
+            return existing["request_id"]
 
     created_at = _utc_now()
     started_at = created_at if status == "RUNNING" else None
@@ -3567,33 +3580,62 @@ def save_operation_request(
     try:
         if db_type == "postgres":
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO operation_requests (
-                        request_id, telegram_update_id, chat_id, operation, sport,
-                        parameters_json, status, github_run_id, created_at, started_at,
-                        completed_at, error_code, error_message, result_summary_json
+                if update_id_str:
+                    cur.execute(
+                        """
+                        INSERT INTO operation_requests (
+                            request_id, telegram_update_id, chat_id, operation, sport,
+                            parameters_json, status, github_run_id, created_at, started_at,
+                            completed_at, error_code, error_message, result_summary_json
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (telegram_update_id) WHERE telegram_update_id IS NOT NULL DO NOTHING
+                        """,
+                        (
+                            request_id,
+                            update_id_str,
+                            chat_id,
+                            operation,
+                            sport.lower() if isinstance(sport, str) else None,
+                            params_json,
+                            status,
+                            str(github_run_id) if github_run_id is not None else None,
+                            created_at,
+                            started_at,
+                            completed_at,
+                            error_code,
+                            error_message,
+                            summary_json,
+                        ),
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (request_id) DO NOTHING
-                    """,
-                    (
-                        request_id,
-                        str(telegram_update_id) if telegram_update_id is not None else None,
-                        chat_id,
-                        operation,
-                        sport.lower() if isinstance(sport, str) else None,
-                        params_json,
-                        status,
-                        str(github_run_id) if github_run_id is not None else None,
-                        created_at,
-                        started_at,
-                        completed_at,
-                        error_code,
-                        error_message,
-                        summary_json,
-                    ),
-                )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO operation_requests (
+                            request_id, telegram_update_id, chat_id, operation, sport,
+                            parameters_json, status, github_run_id, created_at, started_at,
+                            completed_at, error_code, error_message, result_summary_json
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (request_id) DO NOTHING
+                        """,
+                        (
+                            request_id,
+                            None,
+                            chat_id,
+                            operation,
+                            sport.lower() if isinstance(sport, str) else None,
+                            params_json,
+                            status,
+                            str(github_run_id) if github_run_id is not None else None,
+                            created_at,
+                            started_at,
+                            completed_at,
+                            error_code,
+                            error_message,
+                            summary_json,
+                        ),
+                    )
             conn.commit()
         else:
             conn.execute(
@@ -3607,7 +3649,7 @@ def save_operation_request(
                 """,
                 (
                     request_id,
-                    str(telegram_update_id) if telegram_update_id is not None else None,
+                    update_id_str,
                     chat_id,
                     operation,
                     sport.lower() if isinstance(sport, str) else None,
@@ -3623,6 +3665,12 @@ def save_operation_request(
                 ),
             )
             conn.commit()
+
+        if update_id_str:
+            found = get_operation_request_by_update_id(update_id_str)
+            if found:
+                return found["request_id"]
+
         return request_id
     except Exception:
         conn.rollback()
