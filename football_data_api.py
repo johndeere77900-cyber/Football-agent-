@@ -48,10 +48,13 @@ def _cache_key(endpoint, params):
     return "football_data_org_" + json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
+import hashlib
+
 def _cache_path(cache_key):
     cache_dir = getattr(config, "CACHE_DIR", ".api_cache")
     os.makedirs(cache_dir, exist_ok=True)
-    return os.path.join(cache_dir, cache_key + ".json")
+    safe_key = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()
+    return os.path.join(cache_dir, safe_key + ".json")
 
 
 def _cache_get(cache_key):

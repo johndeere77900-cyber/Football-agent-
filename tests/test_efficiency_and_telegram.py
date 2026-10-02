@@ -308,3 +308,90 @@ def test_zero_real_api_calls_enforced(monkeypatch):
     params = telegram_bot.parse_operation_parameters("data_status", "/data_status")
     res = telegram_bot.handle_data_status_op(params)
     assert "HISTORICAL DATASET STATUS" in res
+
+
+def test_workflow_schedule_safety_no_autonomous_predictions():
+    """
+    Prove that no GitHub Actions workflow YAML file in the repository contains active cron schedule triggers.
+    Sport's Edge is strictly non-autonomous and only executes predictions when explicitly requested by the user.
+    """
+    import os
+    import glob
+
+    workflows_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".github", "workflows")
+    if not os.path.exists(workflows_dir):
+        pytest.skip(".github/workflows directory not found")
+
+    yaml_files = glob.glob(os.path.join(workflows_dir, "*.yml")) + glob.glob(os.path.join(workflows_dir, "*.yaml"))
+    assert yaml_files, "No workflow YAML files found in .github/workflows/"
+
+    for filepath in yaml_files:
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        filename = os.path.basename(filepath)
+        assert "schedule:" not in content, f"Workflow '{filename}' contains an active 'schedule:' trigger! Autonomous predictions are strictly prohibited."
+        assert "cron:" not in content, f"Workflow '{filename}' contains an active 'cron:' schedule! Autonomous predictions are strictly prohibited."
+
+
+def test_telegram_control_center_extended_operations():
+    """Prove Telegram Control Center supports /status, /provider_status, /api_usage, /coverage, /predictions, /accuracy, /test."""
+    res_status = telegram_bot.process_telegram_update("/status")
+    assert "PREDICTION CONTROL CENTER HEALTH" in res_status
+    assert "MODEL & FEATURE STATUS" in res_status
+
+    res_provider = telegram_bot.process_telegram_update("/provider_status")
+    assert "DATA PROVIDER TELEMETRY" in res_provider
+    assert "API-Football" in res_provider
+    assert "football-data.org" in res_provider
+
+    res_api = telegram_bot.process_telegram_update("/api_usage")
+    assert "DATA PROVIDER TELEMETRY" in res_api
+
+    res_cov = telegram_bot.process_telegram_update("/coverage")
+    assert "SUPPORTED COMPETITION COVERAGE" in res_cov
+    assert "Eredivisie (88)" in res_cov
+    assert "Primeira Liga (94)" in res_cov
+
+    res_preds = telegram_bot.process_telegram_update("/predictions")
+    assert "RECENT PREDICTION RECORDS" in res_preds
+
+    res_acc = telegram_bot.process_telegram_update("/accuracy")
+    assert "ACCURACY REPORT" in res_acc
+
+    res_test = telegram_bot.process_telegram_update("/test")
+    assert "SYSTEM VERIFICATION STATUS" in res_test
+    assert "ZERO real API calls made" in res_test
+
+
+def test_prediction_provenance_attachment():
+    """Prove predict_fixture attaches explicit DataResolver provenance metadata."""
+    fixture = {
+        "fixture": {"id": 8801, "date": "2026-04-01T15:00:00+00:00", "status": {"short": "NS"}},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+        "league": {"id": 39, "season": 2025, "name": "Premier League"},
+    }
+
+    mock_stats = {
+        "fixtures": {"played": {"total": 10}},
+        "goals": {"for": {"average": {"total": "1.8"}}, "against": {"average": {"total": "0.9"}}},
+    }
+
+    with patch.object(api_football, "get_team_statistics", return_value=mock_stats), \
+         patch.object(api_football, "get_recent_form", return_value=[{"teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 2, "away": 0}}]), \
+         patch.object(api_football, "get_head_to_head", return_value=[]):
+
+        provider_meta = {
+            "data_source": "football_data_org",
+            "fallback_used": True,
+            "fallback_reason": "API-Football primary rate limit",
+            "data_scope": "league_39_season_2025",
+        }
+
+        result = main.predict_fixture(fixture, 1.35, provider_meta=provider_meta)
+        prov = result["prediction_record"]["provenance"]
+
+        assert prov["provider"] == "football_data_org"
+        assert prov["fallback_used"] is True
+        assert prov["fallback_reason"] == "API-Football primary rate limit"
+        assert prov["data_scope"] == "league_39_season_2025"

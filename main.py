@@ -231,7 +231,7 @@ def check_competition_coverage(league_id, season):
 
 def get_league_avg_goals(league_id, season):
     """
-    Return the configured league scoring average.
+    Return the configured league scoring average using DataResolver (primary -> secondary).
 
     API standings are preferred. The calculation is:
 
@@ -250,7 +250,9 @@ def get_league_avg_goals(league_id, season):
     average = None
 
     try:
-        standings = api_football.get_league_standings(
+        from data_resolver import DataResolver
+        resolver = DataResolver()
+        standings, _ = resolver.get_standings(
             league_id,
             season,
         )
@@ -299,7 +301,7 @@ def get_league_avg_goals(league_id, season):
         if total_played > 0:
             average = total_goals / total_played
 
-    except requests.exceptions.RequestException:
+    except Exception:
         average = None
 
     if (
@@ -503,18 +505,31 @@ def _current_team_feature(
 def _recent_feature(
     team_id,
     last,
+    league_id=None,
+    season=None,
 ):
     """
     Build recent-form features as per-match averages.
-
-    The API returns individual match scores. We aggregate them and
-    divide by the number of valid matches before passing the feature
-    to prediction_engine.
+    Passes league_id and season to restrict query scope where provider supports it.
     """
-    matches = api_football.get_recent_form(
-        team_id,
-        last=last,
-    )
+    try:
+        if league_id is not None or season is not None:
+            matches = api_football.get_recent_form(
+                team_id,
+                last=last,
+                league_id=league_id,
+                season=season,
+            )
+        else:
+            matches = api_football.get_recent_form(
+                team_id,
+                last=last,
+            )
+    except TypeError:
+        matches = api_football.get_recent_form(
+            team_id,
+            last=last,
+        )
 
     goals_for = []
     goals_against = []
@@ -699,6 +714,7 @@ def _h2h_feature(
         "goals_against": (
             sum(goals_against) / meeting_count
         ),
+        "h2h_scope": "GENERAL H2H",
     }
 
 
@@ -1004,6 +1020,7 @@ def predict_fixture(
     fixture,
     league_avg_goals,
     fetch_odds=False,
+    provider_meta=None,
 ):
     """
     Generate one authoritative football prediction.
@@ -1094,11 +1111,15 @@ def predict_fixture(
     recent_home = _recent_feature(
         home_team["id"],
         config.RECENT_FORM_MATCHES,
+        league_id=league["id"],
+        season=league["season"],
     )
 
     recent_away = _recent_feature(
         away_team["id"],
         config.RECENT_FORM_MATCHES,
+        league_id=league["id"],
+        season=league["season"],
     )
 
     if (
@@ -1166,6 +1187,16 @@ def predict_fixture(
         raise ValueError(
             "prediction_engine returned an invalid result."
         )
+
+    prov_meta = provider_meta or {}
+    prediction["provenance"] = {
+        "provider": prov_meta.get("data_source") or prov_meta.get("provider", "api_football"),
+        "fallback_used": prov_meta.get("fallback_used", False),
+        "fallback_reason": prov_meta.get("fallback_reason"),
+        "data_scope": f"league_{league['id']}_season_{league['season']}",
+        "retrieved_at": now_utc,
+        "as_of": now_utc,
+    }
 
     if is_live:
         current_home_goals = (
@@ -1578,9 +1609,11 @@ def run_daily(
 
     storage.init_db()
 
-    fixtures = api_football.get_fixtures_by_date(
+    from data_resolver import DataResolver
+    resolver = DataResolver()
+    fixtures, resolver_meta = resolver.get_fixtures_for_date(
         date_str,
-        league_id,
+        league_id=league_id,
     )
 
     # Enforce the configured league allow-list even when the API
@@ -1667,6 +1700,7 @@ def run_daily(
                 fixture,
                 league_avg,
                 fetch_odds=fetch_odds,
+                provider_meta=resolver_meta,
             )
 
             if prediction["insufficient_data"]:

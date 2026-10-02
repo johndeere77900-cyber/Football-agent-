@@ -125,8 +125,11 @@ class DataResolver:
         if not self.force_fallback:
             primary_attempted = True
             try:
-                data = api_football.get_fixtures_by_date(date_str, league_id=league_id)
-                if data:
+                try:
+                    data = api_football.get_fixtures_by_date(date_str, league_id=league_id)
+                except TypeError:
+                    data = api_football.get_fixtures_by_date(date_str, league_id)
+                if data is not None:
                     meta = {
                         "data_source": "api_football",
                         "primary_attempted": True,
@@ -193,8 +196,11 @@ class DataResolver:
         if not self.force_fallback:
             primary_attempted = True
             try:
-                standings = api_football.get_league_standings(league_id, season)
-                if standings:
+                try:
+                    standings = api_football.get_league_standings(league_id, season)
+                except TypeError:
+                    standings = api_football.get_league_standings(league_id)
+                if standings is not None:
                     meta = {
                         "data_source": "api_football",
                         "primary_attempted": True,
