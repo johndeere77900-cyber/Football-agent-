@@ -404,33 +404,11 @@ def get_fixtures_by_date(date_str, league_id=None):
     full_date_key = _cache_key("fixtures", {"date": date_str})
     cached_full_date = _cache_get(full_date_key, "fixtures", {"date": date_str})
 
-    if cached_full_date is not None:
-        response = cached_full_date.get("response", [])
-        if not isinstance(response, list):
-            return []
-        if league_id is not None:
-            filtered = []
-            for f in response:
-                if not isinstance(f, dict):
-                    continue
-                lg_obj = f.get("league")
-                if isinstance(lg_obj, dict) and lg_obj.get("id") is not None:
-                    if lg_obj.get("id") == league_id:
-                        filtered.append(f)
-                else:
-                    filtered.append(f)
-            return filtered
-        return response
-
-    # Fetch full date from API (no league param) to cover all leagues in 1 call
-    data = _get("fixtures", {"date": date_str})
-    response = data.get("response", [])
-    if not isinstance(response, list):
-        return []
-
-    if league_id is not None:
+    def _filter_league(items):
+        if league_id is None:
+            return items
         filtered = []
-        for f in response:
+        for f in items:
             if not isinstance(f, dict):
                 continue
             lg_obj = f.get("league")
@@ -442,7 +420,20 @@ def get_fixtures_by_date(date_str, league_id=None):
                 if raw_id == league_id:
                     filtered.append(f)
         return filtered
-    return response
+
+    if cached_full_date is not None:
+        response = cached_full_date.get("response", [])
+        if not isinstance(response, list):
+            return []
+        return _filter_league(response)
+
+    # Fetch full date from API (no league param) to cover all leagues in 1 call
+    data = _get("fixtures", {"date": date_str})
+    response = data.get("response", [])
+    if not isinstance(response, list):
+        return []
+
+    return _filter_league(response)
 
 
 def get_live_fixtures():

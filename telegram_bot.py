@@ -750,26 +750,86 @@ def research_football(date_str, quantity=1, fetch_odds=False, league_id=None):
         fixtures = get_tracked_fixtures_for_date(date_str, league_id=league_id)
     else:
         fixtures = get_tracked_fixtures_for_date(date_str)
-    if not fixtures:
+
+    diagnostics = {
+        "fixtures_found": len(fixtures) if isinstance(fixtures, list) else 0,
+        "prediction_attempts": 0,
+        "predictions_produced": 0,
+        "skipped_count": 0,
+        "failure_counts_by_stage": {
+            "fixture_validation": 0,
+            "league_average": 0,
+            "season_team_stats": 0,
+            "recent_form": 0,
+            "h2h": 0,
+            "elo": 0,
+            "prediction_engine": 0,
+            "calibration_quality_gate": 0,
+            "exception": 0,
+            "insufficient_data": 0,
+        },
+        "per_fixture_reasons": {},
+    }
+
+    if not fixtures or not isinstance(fixtures, list):
+        research_football.last_diagnostics = diagnostics
         return []
 
     predictions = []
     for fixture in fixtures:
-        status = fixture.get("fixture", {}).get("status", {}).get("short", "")
+        fid = fixture.get("fixture", {}).get("id", "unknown") if isinstance(fixture, dict) else "unknown"
+        status = fixture.get("fixture", {}).get("status", {}).get("short", "") if isinstance(fixture, dict) else ""
+
         if status in {"FT", "AET", "PEN", "CANC", "PST", "ABD", "AWD", "WO"}:
+            diagnostics["skipped_count"] += 1
+            diagnostics["failure_counts_by_stage"]["fixture_validation"] += 1
+            diagnostics["per_fixture_reasons"][str(fid)] = f"fixture_validation: status {status}"
             continue
+
+        diagnostics["prediction_attempts"] += 1
 
         try:
-            league = fixture.get("league", {})
-            league_id = league.get("id")
+            league = fixture.get("league", {}) if isinstance(fixture, dict) else {}
+            l_id = league.get("id")
             season = league.get("season")
-            league_avg = agent.get_league_avg_goals(league_id, season)
+
+            try:
+                league_avg = agent.get_league_avg_goals(l_id, season)
+            except Exception as exc:
+                diagnostics["skipped_count"] += 1
+                diagnostics["failure_counts_by_stage"]["league_average"] += 1
+                diagnostics["per_fixture_reasons"][str(fid)] = f"league_average error: {str(exc)[:100]}"
+                continue
+
             prediction = agent.predict_fixture(fixture, league_avg, fetch_odds=fetch_odds)
+
         except Exception as exc:
-            print(f"Skipping football fixture because prediction failed: {exc}")
+            diagnostics["skipped_count"] += 1
+            diagnostics["failure_counts_by_stage"]["exception"] += 1
+            diagnostics["per_fixture_reasons"][str(fid)] = f"exception: {str(exc)[:100]}"
+            print(f"Skipping football fixture {fid} because prediction failed: {exc}", flush=True)
             continue
 
-        if not isinstance(prediction, dict) or prediction.get("insufficient_data"):
+        if not isinstance(prediction, dict):
+            diagnostics["skipped_count"] += 1
+            diagnostics["failure_counts_by_stage"]["prediction_engine"] += 1
+            diagnostics["per_fixture_reasons"][str(fid)] = "prediction_engine: non-dict response"
+            continue
+
+        if prediction.get("insufficient_data"):
+            diagnostics["skipped_count"] += 1
+            stage_code = prediction.get("reason", "insufficient_data")
+            if "quality_gate" in str(stage_code).lower() or "calibration" in str(stage_code).lower():
+                stage = "calibration_quality_gate"
+            elif "form" in str(stage_code).lower():
+                stage = "recent_form"
+            elif "h2h" in str(stage_code).lower():
+                stage = "h2h"
+            else:
+                stage = "insufficient_data"
+
+            diagnostics["failure_counts_by_stage"][stage] = diagnostics["failure_counts_by_stage"].get(stage, 0) + 1
+            diagnostics["per_fixture_reasons"][str(fid)] = f"{stage}: {stage_code}"
             continue
 
         safest = prediction.get("safest")
@@ -789,11 +849,12 @@ def research_football(date_str, quantity=1, fetch_odds=False, league_id=None):
         try:
             _save_football_prediction(item)
         except Exception as exc:
-            print(f"Football prediction save error: {exc}")
+            print(f"Football prediction save error: {exc}", flush=True)
 
         predictions.append(item)
+        diagnostics["predictions_produced"] += 1
 
-    # Return predictions in original fixture schedule order (no cross-market safest ranking)
+    research_football.last_diagnostics = diagnostics
     return predictions[:quantity]
 
 

@@ -1,7 +1,7 @@
 """
 Unit and integration tests proving credit efficiency, telegram queries, game details priority,
 dynamic data status, historical dataset resumption, health checks, league filtering fail-closed,
-next-N horizon behavior, and zero real API calls during tests.
+next-N horizon behavior, historical queue safety, research diagnostics, and zero real API calls during tests.
 """
 
 import datetime
@@ -34,19 +34,20 @@ def temp_db(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 1. Missing league metadata fails filtering & requested league excludes others
+# 1. Missing/malformed league metadata fails filtering in cached & fresh data
 # ---------------------------------------------------------------------------
 
-def test_missing_league_metadata_fails_league_filtering(monkeypatch):
+def test_cached_football_league_filtering_fails_closed_on_missing_league(monkeypatch):
     """
     Prove:
-    1. Records with missing/malformed league metadata DO NOT pass league filtering when league_id is requested.
-    2. Requested league excludes other leagues.
+    1. Cached full-date responses containing items with missing or malformed league metadata DO NOT pass league filtering when league_id is requested.
+    2. Only exact league_id matches are returned.
     """
     sample_fixtures = [
         {"fixture": {"id": 101, "date": "2026-03-30T15:00:00+00:00"}, "league": {"id": 39, "name": "Premier League"}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Chelsea"}}},
         {"fixture": {"id": 102, "date": "2026-03-30T17:00:00+00:00"}, "league": {"id": 140, "name": "La Liga"}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Barcelona"}}},
         {"fixture": {"id": 103, "date": "2026-03-30T19:00:00+00:00"}, "teams": {"home": {"name": "Unknown A"}, "away": {"name": "Unknown B"}}},  # Missing league dict!
+        {"fixture": {"id": 104, "date": "2026-03-30T21:00:00+00:00"}, "league": {"id": "invalid_id"}, "teams": {"home": {"name": "Unknown C"}, "away": {"name": "Unknown D"}}},  # Malformed league id!
     ]
 
     mock_resp = MagicMock()
@@ -58,9 +59,12 @@ def test_missing_league_metadata_fails_league_filtering(monkeypatch):
     monkeypatch.setattr("requests.get", lambda *args, **kwargs: mock_resp)
     monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test_key")
 
-    pl_fixtures = api_football.get_fixtures_by_date("2026-03-30", league_id=39)
+    # Call 1: Populates full-date cache
+    all_fixtures = api_football.get_fixtures_by_date("2026-03-30")
+    assert len(all_fixtures) == 4
 
-    # Must contain ONLY Premier League (39) and exclude La Liga (140) and record missing league metadata!
+    # Call 2: Hit cached response for specific league 39 -> MUST FAIL CLOSED for missing/malformed/non-matching items!
+    pl_fixtures = api_football.get_fixtures_by_date("2026-03-30", league_id=39)
     assert len(pl_fixtures) == 1
     assert pl_fixtures[0]["fixture"]["id"] == 101
 
@@ -152,14 +156,12 @@ def test_next_n_spans_multiple_dates_and_horizon_reporting(monkeypatch):
 
 def test_game_details_historical_requires_both_teams(monkeypatch):
     """Prove historical fallback details lookup requires BOTH teams when two teams are specified."""
-    # Historical record involving Arsenal vs Tottenham
     hist_spurs = {
         "fixture": {"id": 10, "date": "2023-01-01T15:00:00+00:00", "venue": {"name": "White Hart Lane"}, "status": {"long": "Match Finished"}},
         "league": {"id": 39, "name": "Premier League", "season": 2022},
         "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 3, "name": "Tottenham"}},
         "goals": {"home": 2, "away": 0},
     }
-    # Historical record involving Arsenal vs Chelsea
     hist_chelsea = {
         "fixture": {"id": 11, "date": "2023-02-01T15:00:00+00:00", "venue": {"name": "Stamford Bridge"}, "status": {"long": "Match Finished"}},
         "league": {"id": 39, "name": "Premier League", "season": 2022},
@@ -180,11 +182,11 @@ def test_game_details_historical_requires_both_teams(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 5. Target Seasons Queue Reconciliation
+# 5. Historical Queue Safety: Default Single Season vs Explicit Seasons
 # ---------------------------------------------------------------------------
 
-def test_target_seasons_queue_reconciliation(monkeypatch):
-    """Prove run_historical_queue() defaults to config.TARGET_SEASONS single source of truth."""
+def test_historical_queue_default_is_single_season(monkeypatch):
+    """Prove run_historical_queue() defaults to single safe season [2024] when no seasons/season passed."""
     processed_seasons = []
 
     def mock_sync_fb(league_id, season, **kwargs):
@@ -198,24 +200,73 @@ def test_target_seasons_queue_reconciliation(monkeypatch):
     monkeypatch.setattr(historical_sync, "sync_historical_fixtures", mock_sync_fb)
     monkeypatch.setattr(historical_sync, "sync_historical_basketball_games", mock_sync_bb)
 
-    # Run default queue (no seasons or season arg)
+    # Default call -> MUST process strictly [2024]
     summary = historical_sync.run_historical_queue()
 
-    assert summary["target_seasons"] == [2020, 2021, 2022, 2023, 2024]
-    assert set(processed_seasons) == {2020, 2021, 2022, 2023, 2024}
+    assert summary["target_seasons"] == [2024]
+    assert set(processed_seasons) == {2024}
+
+
+def test_historical_queue_explicit_single_and_multi_seasons(monkeypatch):
+    """Prove explicit season=2023 and explicit seasons=[2020, 2021] process exact requested seasons."""
+    processed_seasons = []
+
+    def mock_sync_fb(league_id, season, **kwargs):
+        processed_seasons.append(season)
+        return {"league_id": league_id, "season": season, "status": "COMPLETE", "api_requests_consumed": 0, "quota_budget_stopped": False}
+
+    def mock_sync_bb(league_id, season, **kwargs):
+        processed_seasons.append(season)
+        return {"sport": "basketball", "league_id": league_id, "season": season, "status": "COMPLETE", "api_requests_consumed": 0, "quota_budget_stopped": False}
+
+    monkeypatch.setattr(historical_sync, "sync_historical_fixtures", mock_sync_fb)
+    monkeypatch.setattr(historical_sync, "sync_historical_basketball_games", mock_sync_bb)
+
+    # Explicit single season
+    s1 = historical_sync.run_historical_queue(season=2023)
+    assert s1["target_seasons"] == [2023]
+
+    processed_seasons.clear()
+
+    # Explicit multi-seasons
+    s2 = historical_sync.run_historical_queue(seasons=[2020, 2021])
+    assert s2["target_seasons"] == [2020, 2021]
+    assert set(processed_seasons) == {2020, 2021}
 
 
 # ---------------------------------------------------------------------------
-# 6. Basketball Season Helper
+# 6. Structured Prediction Diagnostics Observability
 # ---------------------------------------------------------------------------
 
-def test_basketball_season_for_date():
-    """Verify API-Basketball 4-digit season year calculation."""
-    d_aug = datetime.date(2024, 8, 15)
-    d_jan = datetime.date(2025, 1, 15)
+def test_research_football_structured_diagnostics(monkeypatch):
+    """Prove research_football records per-stage failure reasons and diagnostics when predictions fail or skip."""
+    today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
-    assert basketball_api._season_for_date(d_aug) == 2024
-    assert basketball_api._season_for_date(d_jan) == 2024
+    sample_fixtures = [
+        {"fixture": {"id": 1, "status": {"short": "FT"}}, "league": {"id": 39, "season": 2024}, "teams": {"home": {"name": "A"}, "away": {"name": "B"}}},  # Finished -> fixture_validation
+        {"fixture": {"id": 2, "status": {"short": "NS"}}, "league": {"id": 39, "season": 2024}, "teams": {"home": {"name": "C"}, "away": {"name": "D"}}},  # Will return insufficient_data
+    ]
+
+    monkeypatch.setattr(telegram_bot, "get_tracked_fixtures_for_date", lambda date_str, league_id=None: sample_fixtures)
+    monkeypatch.setattr(telegram_bot.agent, "get_league_avg_goals", lambda lid, ssn: 2.5)
+
+    def mock_predict(fixture, avg, fetch_odds=False):
+        return {"insufficient_data": True, "reason": "recent_form: insufficient history"}
+
+    monkeypatch.setattr(telegram_bot.agent, "predict_fixture", mock_predict)
+
+    results = telegram_bot.research_football(today_str, quantity=5)
+
+    assert len(results) == 0
+    diag = getattr(telegram_bot.research_football, "last_diagnostics", {})
+
+    assert diag["fixtures_found"] == 2
+    assert diag["prediction_attempts"] == 1
+    assert diag["skipped_count"] == 2
+    assert diag["failure_counts_by_stage"]["fixture_validation"] == 1
+    assert diag["failure_counts_by_stage"]["recent_form"] == 1
+    assert "1" in diag["per_fixture_reasons"]
+    assert "2" in diag["per_fixture_reasons"]
 
 
 # ---------------------------------------------------------------------------

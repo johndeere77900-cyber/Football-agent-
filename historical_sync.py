@@ -644,11 +644,14 @@ def run_historical_queue(
     Run historical data acquisition queue sequentially across target 5 seasons
     and configured leagues. Checks coverage before acquiring missing data.
     """
-    if seasons is None:
-        if season is not None:
-            seasons = [season]
-        else:
-            seasons = list(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024]))
+    if seasons is not None and isinstance(seasons, (list, tuple)) and seasons:
+        target_seasons = list(seasons)
+    elif season is not None:
+        target_seasons = [season]
+    else:
+        target_seasons = [2024]
+
+    seasons = target_seasons
 
     queue_items = []
     for ssn in seasons:
@@ -727,7 +730,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--sport", choices=["football", "basketball"], default="football", help="Sport name")
     parser.add_argument("--league-id", type=int, help="League ID")
-    parser.add_argument("--season", type=int, default=None, help="Season year (e.g. 2024 or 2025)")
+    parser.add_argument("--season", type=int, default=2024, help="Season year (default: 2024)")
     parser.add_argument(
         "--with-enrichment",
         action="store_true",
