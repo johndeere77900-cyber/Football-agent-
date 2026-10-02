@@ -501,3 +501,39 @@ def test_h2h_temporal_safety_rejects_future_matches():
     matches = historical_h2h.historical_h2h_matches([f_past, f_future], home_team_id=10, away_team_id=20, cutoff=cutoff)
     assert len(matches) == 1
     assert matches[0]["fixture"]["id"] == 1  # Only past match included!
+
+
+def test_main_h2h_temporal_filtering_rules():
+    """
+    Prove main._h2h_feature temporal safety rules:
+    1. H2H before fixture date is allowed.
+    2. H2H after fixture date is excluded.
+    3. H2H on fixture date is excluded.
+    4. Missing/invalid H2H date is excluded.
+    5. Backtests/historical predictions cannot use future H2H data.
+    6. General H2H provenance remains explicitly GENERAL H2H.
+    """
+    fixture_date = "2025-01-10T15:00:00+00:00"
+
+    h2h_matches = [
+        # 1. Past match -> ALLOWED
+        {"fixture": {"id": 1, "date": "2024-12-01T15:00:00+00:00"}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 2, "away": 1}},
+        # 2. Match after fixture date -> EXCLUDED
+        {"fixture": {"id": 2, "date": "2025-01-11T15:00:00+00:00"}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 3, "away": 0}},
+        # 3. Match on exact fixture date/time -> EXCLUDED
+        {"fixture": {"id": 3, "date": "2025-01-10T15:00:00+00:00"}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 1, "away": 1}},
+        # 4. Match with missing date -> EXCLUDED
+        {"fixture": {"id": 4}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 1, "away": 0}},
+        # 5. Match with invalid date -> EXCLUDED
+        {"fixture": {"id": 5, "date": "invalid_date_string"}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 2, "away": 2}},
+    ]
+
+    with patch("api_football.get_head_to_head", return_value=h2h_matches):
+        feature = main._h2h_feature(10, 20, last=6, fixture_date=fixture_date)
+
+        assert feature is not None
+        assert feature["meetings"] == 1  # Only fixture #1 included!
+        assert feature["goals_for"] == 2.0
+        assert feature["goals_against"] == 1.0
+        # 6. Provenance explicitly says GENERAL H2H
+        assert feature["h2h_scope"] == "GENERAL H2H"

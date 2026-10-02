@@ -617,19 +617,20 @@ def _h2h_feature(
     home_id,
     away_id,
     last,
+    fixture_date=None,
 ):
     """
-    Build H2H features as per-meeting averages.
+    Build H2H features as per-meeting averages with strict temporal safety.
 
-    The returned perspective is always the requested home-team
-    perspective:
-        goals_for     = requested home team's goals
-        goals_against = requested home team's conceded goals
+    Requirements:
+    - Kickoff timestamp MUST be strictly BEFORE fixture_date.
+    - Excludes matches occurring on or after fixture_date or with missing/invalid dates.
+    - Perspective is always requested home team.
     """
     matches = api_football.get_head_to_head(
         home_id,
         away_id,
-                last=last,
+        last=last,
     )
 
     goals_for = []
@@ -638,6 +639,16 @@ def _h2h_feature(
     for match in matches or []:
         if not isinstance(match, dict):
             continue
+
+        # Strict H2H temporal safety: filter matches on/after fixture_date or without valid dates
+        m_date = match.get("fixture", {}).get("date") if isinstance(match.get("fixture"), dict) else None
+
+        if fixture_date is not None:
+            if not m_date or not isinstance(m_date, str) or not time_utils.is_strictly_before(m_date, fixture_date):
+                continue
+        elif m_date and isinstance(m_date, str):
+            if time_utils.parse_utc_datetime(m_date) is None:
+                continue
 
         home = (
             match
@@ -1162,6 +1173,7 @@ def predict_fixture(
         home_team["id"],
         away_team["id"],
         config.HEAD_TO_HEAD_MATCHES,
+        fixture_date=fixture_data.get("date"),
     )
 
     home_elo = storage.get_team_rating(
