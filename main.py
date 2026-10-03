@@ -1190,9 +1190,6 @@ def predict_fixture(
     import historical_h2h
     import team_identity
 
-    cutoff = fixture_data.get("date")
-    db_fixtures = storage.get_historical_fixtures(league["id"], league["season"])
-
     c_home_id = team_identity.resolve_canonical_team_id(home_team["name"], provider_name, home_team["id"], league_id=league["id"])
     c_away_id = team_identity.resolve_canonical_team_id(away_team["name"], provider_name, away_team["id"], league_id=league["id"])
 
@@ -1204,6 +1201,29 @@ def predict_fixture(
             failure_stage="unresolved_team_identity",
             provider_meta=provider_meta,
         )
+
+    cutoff = fixture_data.get("date")
+
+    # PERMANENT ACCUMULATION: Always store newly discovered fixture payload in permanent database (require_completed=False)
+    try:
+        storage.save_historical_fixtures([fixture], league["id"], league["season"], source=provider_name, require_completed=False)
+        if fixture.get("statistics"):
+            storage.save_historical_enrichment([fixture], source=provider_name)
+    except Exception as exc:
+        print(f"Warning: Raw fixture persistence error: {exc}")
+
+    # DATABASE FIRST: Retrieve team-centric history directly from stored database using canonical IDs
+    home_db_matches = storage.get_team_historical_fixtures(c_home_id, cutoff=cutoff, limit=30)
+    away_db_matches = storage.get_team_historical_fixtures(c_away_id, cutoff=cutoff, limit=30)
+
+    # Combine unique DB fixtures for both teams
+    seen_fids = set()
+    db_fixtures = []
+    for f in home_db_matches + away_db_matches + storage.get_historical_fixtures(league["id"], league["season"]):
+        fid = f.get("fixture", {}).get("id")
+        if fid and fid not in seen_fids:
+            seen_fids.add(fid)
+            db_fixtures.append(f)
 
     historical_snapshot = None
     recent_snapshot = None
@@ -1376,7 +1396,7 @@ def predict_fixture(
         )
 
     prov_meta = provider_meta or {}
-    prediction["provenance"] = {
+    provenance_info = {
         "provider": data_source,
         "fallback_used": prov_meta.get("fallback_used", False),
         "fallback_reason": prov_meta.get("fallback_reason"),
@@ -1384,6 +1404,7 @@ def predict_fixture(
         "retrieved_at": now_utc,
         "as_of": now_utc,
     }
+    prediction["provenance"] = provenance_info
 
     if is_live:
         current_home_goals = (
@@ -1569,6 +1590,7 @@ def predict_fixture(
         "insufficient_data": False,
         "odds_comparison": odds_comparison,
         "elo_cross_check": elo_probabilities,
+        "provenance": provenance_info,
         "feature_snapshot": {
             "season": {
                 "home": home_feature,

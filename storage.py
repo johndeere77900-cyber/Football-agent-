@@ -1086,6 +1086,87 @@ def init_db():
         conn.close()
 
 
+def get_team_historical_fixtures(canonical_team_id, cutoff=None, limit=30, league_id=None):
+    """
+    Retrieve stored historical fixtures for a team by canonical_team_id across all competitions or specific league.
+    Returns chronological list of reconstructed fixture dicts.
+    """
+    if not canonical_team_id:
+        return []
+
+    conn, db_type = _connect()
+
+    try:
+        where_clauses = ["(canonical_home_id = %s OR canonical_away_id = %s)"]
+        query_params = [canonical_team_id, canonical_team_id]
+
+        if cutoff:
+            where_clauses.append("kickoff_at < %s")
+            query_params.append(cutoff)
+
+        if league_id:
+            where_clauses.append("league_id = %s")
+            query_params.append(league_id)
+
+        where_str = " AND ".join(where_clauses)
+
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT raw_json, canonical_home_id, canonical_away_id
+                    FROM historical_fixtures
+                    WHERE {where_str}
+                    ORDER BY kickoff_at DESC
+                    LIMIT %s
+                    """,
+                    query_params + [limit],
+                )
+                rows = cur.fetchall()
+        else:
+            q_sqlite = where_str.replace("%s", "?")
+            try:
+                rows = conn.execute(
+                    f"""
+                    SELECT raw_json, canonical_home_id, canonical_away_id
+                    FROM historical_fixtures
+                    WHERE {q_sqlite}
+                    ORDER BY kickoff_at DESC
+                    LIMIT ?
+                    """,
+                    query_params + [limit],
+                ).fetchall()
+            except sqlite3.OperationalError:
+                conn.close()
+                init_db()
+                conn, _ = _connect()
+                rows = conn.execute(
+                    f"""
+                    SELECT raw_json, canonical_home_id, canonical_away_id
+                    FROM historical_fixtures
+                    WHERE {q_sqlite}
+                    ORDER BY kickoff_at DESC
+                    LIMIT ?
+                    """,
+                    query_params + [limit],
+                ).fetchall()
+
+        fixtures = []
+        for row in reversed(rows):  # Return chronological order (oldest to newest)
+            payload = _json_loads(row[0])
+            if isinstance(payload, dict):
+                if row[1]:
+                    payload["canonical_home_id"] = row[1]
+                if row[2]:
+                    payload["canonical_away_id"] = row[2]
+                fixtures.append(payload)
+
+        return fixtures
+
+    finally:
+        conn.close()
+
+
 # ----------------------------------------------------------------------
 # Historical Basketball Storage Functions
 # ----------------------------------------------------------------------
