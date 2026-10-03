@@ -472,14 +472,16 @@ class DataResolver:
         }
         return [], meta
 
-    def get_team_recent_matches(self, team_id, last=10, league_id=None, season=None, team_name=None):
+    def get_team_recent_matches(self, team_id, last=10, league_id=None, season=None, team_name=None, canonical_team_id=None):
         """
         Retrieve team historical matches using the 3-tier fallback hierarchy:
         1. API-Football
         2. football-data.org
         3. SoccerData
-        Reconciles records across providers at the field level.
+        Resolves identities safely using canonical team IDs and team names rather than raw provider team IDs.
         """
+        import team_identity
+
         records = []
 
         # Tier 1: API-Football
@@ -500,8 +502,17 @@ class DataResolver:
                     for m in fd_matches:
                         norm = _normalize_football_data_match(m, league_id, season)
                         if norm:
-                            p_ids = norm.get("provider_provenance", {}).get("provider_team_ids", {})
-                            if p_ids.get("home") == team_id or p_ids.get("away") == team_id:
+                            h_name = norm.get("teams", {}).get("home", {}).get("name", "")
+                            a_name = norm.get("teams", {}).get("away", {}).get("name", "")
+                            fd_home_id = norm.get("teams", {}).get("home", {}).get("id")
+                            fd_away_id = norm.get("teams", {}).get("away", {}).get("id")
+
+                            c_h = team_identity.resolve_canonical_team_id(h_name, "football_data_org", fd_home_id, league_id=league_id)
+                            c_a = team_identity.resolve_canonical_team_id(a_name, "football_data_org", fd_away_id, league_id=league_id)
+
+                            if canonical_team_id and (c_h == canonical_team_id or c_a == canonical_team_id):
+                                records.append(norm)
+                            elif team_name and (team_name.lower() in h_name.lower() or team_name.lower() in a_name.lower()):
                                 records.append(norm)
                 except Exception as exc:
                     logger.warning(f"football-data.org recent matches query failed for league {league_id}: {exc}")

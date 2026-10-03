@@ -233,20 +233,28 @@ except Exception as exc:
 def get_team_historical_matches(team_name, season=None, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT):
     """
     Retrieve team-centric historical matches using available SoccerData sources.
+    Iterates over known available MatchHistory leagues if no specific league is supplied.
 
     Returns tuple: (status_code, matches_list, metadata)
     """
     if not team_name:
         return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata"}
 
-    status, matches, meta = get_match_history_games(None, season, timeout_seconds=timeout_seconds)
-    if status == "SOURCE_AVAILABLE" and matches:
-        team_lower = team_name.lower().strip()
-        filtered = [
-            m for m in matches
-            if team_lower in m["teams"]["home"]["name"].lower() or team_lower in m["teams"]["away"]["name"].lower()
-        ]
-        if filtered:
-            return "SOURCE_AVAILABLE", filtered, {"status": "SOURCE_AVAILABLE", "count": len(filtered), "source": "soccerdata_match_history"}
+    team_lower = team_name.lower().strip()
+    available_leagues = ['ENG-Premier League', 'ESP-La Liga', 'FRA-Ligue 1', 'GER-Bundesliga', 'ITA-Serie A']
+    collected_matches = []
+
+    for lcode in available_leagues:
+        status, matches, meta = get_match_history_games(lcode, season, timeout_seconds=timeout_seconds)
+        if status == "SOURCE_AVAILABLE" and matches:
+            filtered = [
+                m for m in matches
+                if team_lower in m["teams"]["home"]["name"].lower() or team_lower in m["teams"]["away"]["name"].lower()
+            ]
+            if filtered:
+                collected_matches.extend(filtered)
+
+    if collected_matches:
+        return "SOURCE_AVAILABLE", collected_matches, {"status": "SOURCE_AVAILABLE", "count": len(collected_matches), "source": "soccerdata_match_history"}
 
     return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata"}

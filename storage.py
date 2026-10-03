@@ -1086,6 +1086,40 @@ def init_db():
         conn.close()
 
 
+def get_missing_enrichment_fields(fixture_ids, required_fields=None):
+    """
+    Check which statistical fields (e.g. xG, shots, corners, cards) are missing for given fixture IDs.
+    Returns dict mapping fixture_id -> list of missing field names.
+    """
+    if required_fields is None:
+        required_fields = ["xG", "shots", "corners", "cards"]
+
+    stored = get_historical_enrichment(fixture_ids)
+    missing_map = {}
+
+    for fid in fixture_ids:
+        try:
+            num_fid = int(fid)
+        except (TypeError, ValueError):
+            continue
+
+        item = stored.get(num_fid)
+        missing = []
+        if not item or not isinstance(item, dict):
+            missing = list(required_fields)
+        else:
+            stats = item.get("statistics") or item.get("stats") or {}
+            if not isinstance(stats, dict):
+                missing = list(required_fields)
+            else:
+                for field in required_fields:
+                    if stats.get(field) is None:
+                        missing.append(field)
+        missing_map[num_fid] = missing
+
+    return missing_map
+
+
 def get_team_historical_fixtures(canonical_team_id, cutoff=None, limit=30, league_id=None):
     """
     Retrieve stored historical fixtures for a team by canonical_team_id across all competitions or specific league.
