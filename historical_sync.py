@@ -288,10 +288,35 @@ def sync_historical_fixtures(
                 last_error_reason = f"football_data_org_error: {str(exc)[:100]}"
                 print(f"Secondary acquisition error via football-data.org: {exc}", flush=True)
 
+        # Trigger tertiary fallback (SoccerData) if secondary fallback failed or returned zero valid fixtures
+        if total_valid_fixtures == 0 or acquisition_failed:
+            print(f"Secondary fallback failed/incomplete for league {league_id} season {season}. Attempting tertiary acquisition via SoccerData...", flush=True)
+            import data_resolver
+            import soccerdata_provider
+
+            sd_code = data_resolver.LEAGUE_TO_SD_CODE.get(league_id)
+            if sd_code:
+                try:
+                    sd_status, sd_matches, sd_meta = soccerdata_provider.get_match_history_games(sd_code, season)
+                    if sd_status == "SOURCE_AVAILABLE" and sd_matches:
+                        fixtures_received.extend(sd_matches)
+                        save_result = storage.save_historical_fixtures(sd_matches, league_id, season, source="soccerdata")
+
+                        total_valid_fixtures += save_result.get("valid", 0)
+                        total_newly_stored += save_result.get("inserted", 0)
+                        total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
+                        total_rejected_count += save_result.get("rejected_count", 0)
+                        acquisition_failed = False
+                        last_error_reason = None
+                except Exception as exc:
+                    acquisition_failed = True
+                    last_error_reason = f"soccerdata_error: {str(exc)[:100]}"
+                    print(f"Tertiary acquisition error via SoccerData: {exc}", flush=True)
+
         if acquisition_failed or not acquisition_complete or total_valid_fixtures == 0 or storage.get_historical_fixture_count(league_id, season) == 0:
             acquisition_failed = True
             if not last_error_reason:
-                last_error_reason = "secondary_provider_returned_no_fixtures"
+                last_error_reason = "fallback_providers_returned_no_fixtures"
             storage.mark_historical_dataset_incomplete(
                 league_id,
                 season,
@@ -303,7 +328,7 @@ def sync_historical_fixtures(
                 rejected_count=total_rejected_count,
                 empty_pages_count=total_empty_pages_count,
                 error_reason=last_error_reason,
-                source="football_data_org",
+                source="soccerdata" if total_valid_fixtures > 0 else "football_data_org",
             )
 
     valid_fixtures_count = total_valid_fixtures
