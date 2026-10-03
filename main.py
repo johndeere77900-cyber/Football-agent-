@@ -2795,6 +2795,13 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--seasons",
+        nargs="+",
+        type=int,
+        help="Explicit list of seasons for historical queue (e.g. --seasons 2020 2021 2022 2023 2024)",
+    )
+
+    parser.add_argument(
         "--sample",
         type=int,
         default=20,
@@ -2902,11 +2909,11 @@ def main():
         import historical_sync
 
         if args.historical_queue:
-            season = args.season if args.season is not None else 2024
             storage.init_db()
 
             summary = historical_sync.run_historical_queue(
-                season=season,
+                seasons=getattr(args, "seasons", None),
+                season=args.season,
                 with_enrichment=args.with_enrichment,
                 refresh=args.refresh,
             )

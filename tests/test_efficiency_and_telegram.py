@@ -186,8 +186,8 @@ def test_game_details_historical_requires_both_teams(monkeypatch):
 # 5. Historical Queue Safety: Default Single Season vs Explicit Seasons
 # ---------------------------------------------------------------------------
 
-def test_historical_queue_default_is_single_season(monkeypatch):
-    """Prove run_historical_queue() defaults to single safe season [2024] when no seasons/season passed."""
+def test_historical_queue_default_is_target_seasons(monkeypatch):
+    """Prove run_historical_queue() defaults to config.TARGET_SEASONS [2020, 2021, 2022, 2023, 2024] when no seasons/season passed."""
     processed_seasons = []
 
     def mock_sync_fb(league_id, season, **kwargs):
@@ -201,11 +201,11 @@ def test_historical_queue_default_is_single_season(monkeypatch):
     monkeypatch.setattr(historical_sync, "sync_historical_fixtures", mock_sync_fb)
     monkeypatch.setattr(historical_sync, "sync_historical_basketball_games", mock_sync_bb)
 
-    # Default call -> MUST process strictly [2024]
+    # Default call -> MUST process config.TARGET_SEASONS
     summary = historical_sync.run_historical_queue()
 
-    assert summary["target_seasons"] == [2024]
-    assert set(processed_seasons) == {2024}
+    assert summary["target_seasons"] == config.TARGET_SEASONS
+    assert set(processed_seasons) == set(config.TARGET_SEASONS)
 
 
 def test_historical_queue_explicit_single_and_multi_seasons(monkeypatch):

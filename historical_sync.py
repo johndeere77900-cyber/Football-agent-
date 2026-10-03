@@ -787,7 +787,7 @@ def run_historical_queue(
     elif season is not None:
         target_seasons = [season]
     else:
-        target_seasons = [2024]
+        target_seasons = list(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024]))
 
     seasons = target_seasons
 
@@ -868,7 +868,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--sport", choices=["football", "basketball"], default="football", help="Sport name")
     parser.add_argument("--league-id", type=int, help="League ID")
-    parser.add_argument("--season", type=int, default=2024, help="Season year (default: 2024)")
+    parser.add_argument("--season", type=int, default=None, help="Season year (default: TARGET_SEASONS for queue, 2024 for single dataset)")
     parser.add_argument(
         "--with-enrichment",
         action="store_true",
@@ -905,17 +905,19 @@ if __name__ == "__main__":
     elif args.sport == "basketball":
         if args.league_id is None:
             parser.error("--league-id is required when --historical-queue is not set")
+        season_val = args.season if args.season is not None else 2024
         sync_historical_basketball_games(
             league_id=args.league_id,
-            season=args.season,
+            season=season_val,
             refresh=args.refresh,
         )
     else:
         if args.league_id is None:
             parser.error("--league-id is required when --historical-queue is not set")
+        season_val = args.season if args.season is not None else 2024
         sync_historical_fixtures(
             league_id=args.league_id,
-            season=args.season,
+            season=season_val,
             with_enrichment=args.with_enrichment,
             refresh=args.refresh,
         )
