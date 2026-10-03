@@ -103,11 +103,12 @@ def test_queue_sequential_processing_all_configured_leagues(temp_db, monkeypatch
 def test_queue_stops_cleanly_on_quota_exhaustion(temp_db, monkeypatch):
     monkeypatch.setattr(config, "ALLOWED_LEAGUE_IDS", [39, 140, 135])
 
-    # First league (39) succeeds
-    # Second league (140) hits quota exhaustion
+    # First football league (39) succeeds
+    # Second football league (140) hits quota exhaustion
     def mock_football_sync(league_id, season, with_enrichment=False, refresh=False):
         if league_id == 39:
             return {
+                "sport": "football",
                 "league_id": 39,
                 "season": 2024,
                 "status": "COMPLETE",
@@ -116,25 +117,84 @@ def test_queue_stops_cleanly_on_quota_exhaustion(temp_db, monkeypatch):
             }
         elif league_id == 140:
             return {
+                "sport": "football",
                 "league_id": 140,
                 "season": 2024,
                 "status": "INCOMPLETE",
                 "api_requests_consumed": 0,
                 "quota_budget_stopped": True,
             }
-        raise RuntimeError("Should not reach league 135 or basketball 12")
+        raise RuntimeError("sync_historical_fixtures should not be called for football league 135 after football quota exhaustion")
 
-    with patch("historical_sync.sync_historical_fixtures", side_effect=mock_football_sync), \
-         patch("historical_sync.sync_historical_basketball_games") as mock_bb:
+    def mock_basketball_sync(league_id, season, refresh=False):
+        return {
+            "sport": "basketball",
+            "league_id": league_id,
+            "season": season,
+            "status": "COMPLETE",
+            "api_requests_consumed": 2,
+            "quota_budget_stopped": False,
+        }
+
+    with patch("historical_sync.sync_historical_fixtures", side_effect=mock_football_sync) as mock_fb, \
+         patch("historical_sync.sync_historical_basketball_games", side_effect=mock_basketball_sync) as mock_bb:
 
         summary = historical_sync.run_historical_queue(season=2024)
 
-    # Queue should stop immediately when league 140 returns quota_budget_stopped: True
-    assert summary["processed_count"] == 2
-    assert summary["reports"][0]["league_id"] == 39
-    assert summary["reports"][1]["league_id"] == 140
-    assert summary["reports"][1]["quota_budget_stopped"] is True
-    mock_bb.assert_not_called()
+    # Queue should call sync_historical_fixtures for football 39 & 140, and call sync_historical_basketball_games for basketball 12
+    assert mock_fb.call_count == 2
+    assert mock_bb.call_count == 1
+    assert summary["processed_count"] == 4
+
+    fb_reports = [r for r in summary["reports"] if r.get("sport") == "football" or "league_id" in r and r.get("sport") != "basketball"]
+    bb_report = [r for r in summary["reports"] if r.get("sport") == "basketball"][0]
+
+    assert bb_report["status"] == "COMPLETE"
+    assert bb_report["api_requests_consumed"] == 2
+
+    # Football 135 should be skipped cleanly with quota_budget_stopped=True
+    fb_135 = [r for r in fb_reports if r.get("league_id") == 135][0]
+    assert fb_135["status"] == "INCOMPLETE"
+    assert fb_135["quota_budget_stopped"] is True
+    assert fb_135["api_requests_consumed"] == 0
+
+
+def test_queue_sport_budget_independence(temp_db, monkeypatch):
+    """Verify that football quota exhaustion does not starve basketball acquisition, and vice versa."""
+    monkeypatch.setattr(config, "ALLOWED_LEAGUE_IDS", [39, 140])
+    monkeypatch.setattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", [12])
+
+    def mock_football_sync(league_id, season, with_enrichment=False, refresh=False):
+        return {
+            "sport": "football",
+            "league_id": league_id,
+            "season": season,
+            "status": "INCOMPLETE",
+            "api_requests_consumed": 0,
+            "quota_budget_stopped": True,
+        }
+
+    def mock_basketball_sync(league_id, season, refresh=False):
+        return {
+            "sport": "basketball",
+            "league_id": league_id,
+            "season": season,
+            "status": "COMPLETE",
+            "api_requests_consumed": 15,
+            "quota_budget_stopped": False,
+        }
+
+    with patch("historical_sync.sync_historical_fixtures", side_effect=mock_football_sync) as mock_fb, \
+         patch("historical_sync.sync_historical_basketball_games", side_effect=mock_basketball_sync) as mock_bb:
+
+        summary = historical_sync.run_historical_queue(seasons=[2021, 2022])
+
+    # Football 39 (2021) returns quota_budget_stopped=True on first call
+    # Football 140 (2021), 39 (2022), 140 (2022) should be skipped without additional sync_historical_fixtures calls
+    assert mock_fb.call_count == 1
+
+    # Basketball 12 for 2021 and 2022 should BOTH run and succeed because basketball budget is independent!
+    assert mock_bb.call_count == 2
 
 
 def test_queue_resumes_from_first_unfinished_dataset(temp_db, monkeypatch):
