@@ -197,7 +197,7 @@ def team_goal_averages(fixtures, team_id, cutoff, canonical_team_id=None):
             continue
         home_goals, away_goals = goals
 
-        if canonical_team_id and (c_home or fixture.get("canonical_away_id")):
+        if canonical_team_id is not None:
             is_home = (c_home == canonical_team_id)
         else:
             is_home = (home_id == team_id)
@@ -369,7 +369,7 @@ def team_recent_form(
             continue
         home_goals, away_goals = goals
 
-        if canonical_team_id and (c_home or fixture.get("canonical_away_id")):
+        if canonical_team_id is not None:
             is_home = (c_home == canonical_team_id)
         else:
             is_home = (home_id == team_id)
@@ -395,6 +395,24 @@ def team_recent_form(
 
     matches = len(recent)
 
+    def _is_fixture_win(f):
+        f_goals = historical_match_policy.get_football_match_goals(f)
+        if f_goals is None:
+            return False
+        h_goals, a_goals = f_goals
+        if canonical_team_id is not None:
+            if f.get("canonical_home_id") == canonical_team_id:
+                return h_goals > a_goals
+            elif f.get("canonical_away_id") == canonical_team_id:
+                return a_goals > h_goals
+            return False
+        else:
+            if f["teams"]["home"]["id"] == team_id:
+                return h_goals > a_goals
+            elif f["teams"]["away"]["id"] == team_id:
+                return a_goals > h_goals
+            return False
+
     return {
         "matches": matches,
         "window": window,
@@ -408,18 +426,7 @@ def team_recent_form(
         "form_sequence": [
             (
                 "W"
-                if (
-                    (
-                        historical_match_policy.get_football_match_goals(fixture)[0]
-                        > historical_match_policy.get_football_match_goals(fixture)[1]
-                        and fixture["teams"]["home"]["id"] == team_id
-                    )
-                    or (
-                        historical_match_policy.get_football_match_goals(fixture)[1]
-                        > historical_match_policy.get_football_match_goals(fixture)[0]
-                        and fixture["teams"]["away"]["id"] == team_id
-                    )
-                )
+                if _is_fixture_win(fixture)
                 else "D"
                 if historical_match_policy.get_football_match_goals(fixture)[0] == historical_match_policy.get_football_match_goals(fixture)[1]
                 else "L"
@@ -475,4 +482,4 @@ def fixture_recent_form(
         "window": window,
         "home": home,
         "away": away,
-        }
+    }

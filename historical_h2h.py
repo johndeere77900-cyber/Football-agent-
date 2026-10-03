@@ -48,7 +48,9 @@ def historical_h2h_matches(
     """
     Return all valid historical meetings between the requested teams.
 
-    Matches by canonical team IDs if present, falling back to numeric team IDs.
+    Matches by canonical team IDs if supplied. Unresolved fixtures or fixtures
+    without matching canonical IDs are excluded when canonical IDs are supplied.
+    If canonical IDs are None, falls back to numeric team IDs (legacy mode).
     Requirements:
     - completed fixture
     - valid final goals
@@ -111,7 +113,7 @@ def _requested_team_result(
         raise ValueError("Fixture has missing or invalid goals.")
     fixture_home_goals, fixture_away_goals = goals
 
-    if canonical_home_id and canonical_away_id and (c_home or fixture.get("canonical_away_id")):
+    if canonical_home_id is not None and canonical_away_id is not None:
         is_home = (c_home == canonical_home_id)
         is_away = (c_home == canonical_away_id)
     else:
@@ -159,7 +161,7 @@ def _requested_team_goals(
         raise ValueError("Fixture has missing or invalid goals.")
     fixture_home_goals, fixture_away_goals = goals
 
-    if canonical_home_id and canonical_away_id and (c_home or fixture.get("canonical_away_id")):
+    if canonical_home_id is not None and canonical_away_id is not None:
         is_home = (c_home == canonical_home_id)
         is_away = (c_home == canonical_away_id)
     else:
@@ -331,4 +333,4 @@ def historical_h2h_snapshot(
             _fixture_date(fixture)
             for fixture in recent
         ],
-  }
+    }
