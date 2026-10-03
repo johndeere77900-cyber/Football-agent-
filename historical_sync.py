@@ -118,74 +118,136 @@ def sync_historical_fixtures(
     total_empty_pages_count = dataset_info.get("empty_pages_count", 0) if not refresh else 0
     all_rejection_reasons = {}
 
-    current_page = start_p
-    while True:
-        try:
-            page_meta = api_football.get_league_fixtures_page(
-                league_id, season, page=current_page, max_budget=historical_budget
-            )
-            page_fixtures = page_meta.get("fixtures", [])
-            page_expected = page_meta.get("expected_pages")
+    # Preflight coverage check for primary provider (API-Football)
+    import main as main_mod
+    cov_status, cov_reason = main_mod.check_competition_coverage(league_id, season)
+    primary_available = (cov_status == "coverage_available")
 
-            if expected_pages == 0:
-                expected_pages = page_expected
-            elif page_expected != expected_pages:
-                acquisition_failed = True
-                last_error_reason = "pagination_metadata_mismatch"
-                print(
-                    f"Pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
-                    flush=True,
+    if primary_available:
+        current_page = start_p
+        while True:
+            try:
+                page_meta = api_football.get_league_fixtures_page(
+                    league_id, season, page=current_page, max_budget=historical_budget
                 )
+                page_fixtures = page_meta.get("fixtures", [])
+                page_expected = page_meta.get("expected_pages")
+
+                if expected_pages == 0:
+                    expected_pages = page_expected
+                elif page_expected != expected_pages:
+                    acquisition_failed = True
+                    last_error_reason = "pagination_metadata_mismatch"
+                    print(
+                        f"Pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
+                        flush=True,
+                    )
+                    break
+
+                if not page_fixtures:
+                    total_empty_pages_count += 1
+
+                fixtures_received.extend(page_fixtures)
+
+                # Persist valid fixtures from this page immediately
+                save_result = storage.save_historical_fixtures(page_fixtures, league_id, season, source="api_football")
+                total_valid_fixtures += save_result.get("valid", 0)
+                total_newly_stored += save_result.get("inserted", 0)
+                total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
+                total_rejected_count += save_result.get("rejected_count", 0)
+
+                for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
+                    all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
+
+                pages_completed = current_page
+                current_stored_count = storage.get_historical_fixture_count(league_id, season)
+
+                if current_page >= expected_pages:
+                    acquisition_complete = True
+
+                # Update progress in manifest immediately
+                storage.mark_historical_dataset_incomplete(
+                    league_id,
+                    season,
+                    fixture_count=current_stored_count,
+                    sport="football",
+                    expected_pages=expected_pages,
+                    pages_completed=pages_completed,
+                    acquisition_complete=acquisition_complete,
+                    rejected_count=total_rejected_count,
+                    empty_pages_count=total_empty_pages_count,
+                    error_reason=last_error_reason,
+                    source="api_football",
+                )
+                if acquisition_complete or current_page >= expected_pages:
+                    break
+                current_page += 1
+
+            except api_football.APIFootballQuotaExhaustedError as exc:
+                quota_budget_stopped = True
+                last_error_reason = "quota_budget_exhausted_during_acquisition"
+                print(f"API Quota exhausted during fixture fetch on page {current_page}: {exc}", flush=True)
                 break
+            except Exception as exc:
+                acquisition_failed = True
+                last_error_reason = "api_error_during_acquisition"
+                print(f"API acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
+                break
+    else:
+        # Secondary fallback: football-data.org
+        print(f"API-Football unavailable for league {league_id} season {season} ({cov_reason}). Attempting secondary acquisition via football-data.org...", flush=True)
+        import data_resolver
+        import football_data_api
 
-            if not page_fixtures:
-                total_empty_pages_count += 1
+        comp_code = data_resolver.LEAGUE_TO_FD_CODE.get(league_id)
+        if not comp_code:
+            acquisition_failed = True
+            last_error_reason = f"league_{league_id}_not_supported_by_football_data_org"
+            print(f"Secondary fallback failed: League {league_id} not supported by football-data.org.", flush=True)
+        else:
+            try:
+                fd_matches = football_data_api.get_competition_matches(comp_code, season=season)
+                normalized_fd_matches = []
+                for m in fd_matches or []:
+                    norm_m = data_resolver._normalize_football_data_match(m, league_id, season)
+                    if norm_m:
+                        normalized_fd_matches.append(norm_m)
 
-            fixtures_received.extend(page_fixtures)
+                fixtures_received.extend(normalized_fd_matches)
+                save_result = storage.save_historical_fixtures(normalized_fd_matches, league_id, season, source="football_data_org")
 
-            # Persist valid fixtures from this page immediately
-            save_result = storage.save_historical_fixtures(page_fixtures, league_id, season)
-            total_valid_fixtures += save_result.get("valid", 0)
-            total_newly_stored += save_result.get("inserted", 0)
-            total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
-            total_rejected_count += save_result.get("rejected_count", 0)
+                total_valid_fixtures += save_result.get("valid", 0)
+                total_newly_stored += save_result.get("inserted", 0)
+                total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
+                total_rejected_count += save_result.get("rejected_count", 0)
 
-            for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
-                all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
+                for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
+                    all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
 
-            pages_completed = current_page
-            current_stored_count = storage.get_historical_fixture_count(league_id, season)
-
-            if current_page >= expected_pages:
+                expected_pages = 1
+                pages_completed = 1
                 acquisition_complete = True
+                current_stored_count = storage.get_historical_fixture_count(league_id, season)
 
-            # Update progress in manifest immediately with cumulative rejected_count and empty_pages_count
+            except Exception as exc:
+                acquisition_failed = True
+                last_error_reason = f"football_data_org_error: {str(exc)[:100]}"
+                print(f"Secondary acquisition error via football-data.org: {exc}", flush=True)
+
+        if acquisition_failed or not acquisition_complete:
             storage.mark_historical_dataset_incomplete(
                 league_id,
                 season,
-                fixture_count=current_stored_count,
+                fixture_count=storage.get_historical_fixture_count(league_id, season),
                 sport="football",
                 expected_pages=expected_pages,
                 pages_completed=pages_completed,
-                acquisition_complete=acquisition_complete,
+                acquisition_complete=False,
                 rejected_count=total_rejected_count,
                 empty_pages_count=total_empty_pages_count,
                 error_reason=last_error_reason,
+                source="football_data_org",
             )
-            if acquisition_complete or current_page >= expected_pages:
-                break
-            current_page += 1
-
-        except api_football.APIFootballQuotaExhaustedError as exc:
-            quota_budget_stopped = True
-            last_error_reason = "quota_budget_exhausted_during_acquisition"
-            print(f"API Quota exhausted during fixture fetch on page {current_page}: {exc}", flush=True)
-            break
-        except Exception as exc:
-            acquisition_failed = True
-            last_error_reason = "api_error_during_acquisition"
-            print(f"API acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
-            break
 
     valid_fixtures_count = total_valid_fixtures
     newly_stored = total_newly_stored

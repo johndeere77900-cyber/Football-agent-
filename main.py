@@ -1161,7 +1161,7 @@ def predict_fixture(
     )
 
     prov_meta = provider_meta or fixture.get("provider_provenance") or {}
-    provider_name = prov_meta.get("provider") or prov_meta.get("data_source", "api_football")
+    provider_name = prov_meta.get("provider") or prov_meta.get("data_source") or fixture.get("source", "api_football")
 
     # Enforce Provider ID Isolation: If fixture originates from secondary provider (football_data_org),
     # its team IDs belong to secondary provider namespace and MUST NOT be passed to API-Football endpoints.
@@ -1175,9 +1175,13 @@ def predict_fixture(
 
     import historical_features
     import historical_h2h
+    import team_identity
 
     cutoff = fixture_data.get("date")
     db_fixtures = storage.get_historical_fixtures(league["id"], league["season"])
+
+    c_home_id = team_identity.resolve_canonical_team_id(home_team["name"], provider_name, home_team["id"], league_id=league["id"])
+    c_away_id = team_identity.resolve_canonical_team_id(away_team["name"], provider_name, away_team["id"], league_id=league["id"])
 
     historical_snapshot = None
     recent_snapshot = None
@@ -1192,6 +1196,8 @@ def predict_fixture(
             away_team["id"],
             cutoff,
             minimum_matches=min_matches,
+            canonical_home_id=c_home_id,
+            canonical_away_id=c_away_id,
         )
         recent_snapshot = historical_features.fixture_recent_form(
             db_fixtures,
@@ -1200,6 +1206,8 @@ def predict_fixture(
             cutoff,
             window=config.RECENT_FORM_MATCHES,
             minimum_matches=min_matches,
+            canonical_home_id=c_home_id,
+            canonical_away_id=c_away_id,
         )
         h2h_snapshot = historical_h2h.historical_h2h_snapshot(
             db_fixtures,
@@ -1208,6 +1216,8 @@ def predict_fixture(
             cutoff,
             window=config.HEAD_TO_HEAD_MATCHES,
             minimum_matches=0,
+            canonical_home_id=c_home_id,
+            canonical_away_id=c_away_id,
         )
 
     if historical_snapshot is not None and recent_snapshot is not None:

@@ -42,10 +42,13 @@ def historical_h2h_matches(
     home_team_id,
     away_team_id,
     cutoff,
+    canonical_home_id=None,
+    canonical_away_id=None,
 ):
     """
     Return all valid historical meetings between the requested teams.
 
+    Matches by canonical team IDs if present, falling back to numeric team IDs.
     Requirements:
     - completed fixture
     - valid final goals
@@ -68,11 +71,21 @@ def historical_h2h_matches(
 
         home_id = fixture.get("teams", {}).get("home", {}).get("id")
         away_id = fixture.get("teams", {}).get("away", {}).get("id")
+        c_home = fixture.get("canonical_home_id")
+        c_away = fixture.get("canonical_away_id")
 
-        if {home_id, away_id} != {home_team_id, away_team_id}:
-            continue
+        matched = False
+        if canonical_home_id and canonical_away_id:
+            if c_home or c_away:
+                if {c_home, c_away} == {canonical_home_id, canonical_away_id}:
+                    matched = True
+            elif {home_id, away_id} == {home_team_id, away_team_id}:
+                matched = True
+        elif {home_id, away_id} == {home_team_id, away_team_id}:
+            matched = True
 
-        matches.append(fixture)
+        if matched:
+            matches.append(fixture)
 
     return sorted(
         matches,
@@ -84,6 +97,8 @@ def _requested_team_result(
     fixture,
     requested_home_team_id,
     requested_away_team_id,
+    canonical_home_id=None,
+    canonical_away_id=None,
 ):
     """
     Return the result from the requested fixture's home-team perspective.
@@ -92,16 +107,24 @@ def _requested_team_result(
         "W", "D", or "L"
     """
     fixture_home_id = fixture["teams"]["home"]["id"]
+    c_home = fixture.get("canonical_home_id")
 
     goals = historical_match_policy.get_h2h_form_goals(fixture)
     if goals is None:
         raise ValueError("Fixture has missing or invalid goals.")
     fixture_home_goals, fixture_away_goals = goals
 
-    if fixture_home_id == requested_home_team_id:
+    if canonical_home_id and canonical_away_id and (c_home or fixture.get("canonical_away_id")):
+        is_home = (c_home == canonical_home_id)
+        is_away = (c_home == canonical_away_id)
+    else:
+        is_home = (fixture_home_id == requested_home_team_id)
+        is_away = (fixture_home_id == requested_away_team_id)
+
+    if is_home:
         requested_home_goals = fixture_home_goals
         requested_away_goals = fixture_away_goals
-    elif fixture_home_id == requested_away_team_id:
+    elif is_away:
         requested_home_goals = fixture_away_goals
         requested_away_goals = fixture_home_goals
     else:
@@ -122,6 +145,8 @@ def _requested_team_goals(
     fixture,
     requested_home_team_id,
     requested_away_team_id,
+    canonical_home_id=None,
+    canonical_away_id=None,
 ):
     """
     Return goals from the requested fixture's home-team perspective.
@@ -130,16 +155,26 @@ def _requested_team_goals(
         (goals_for, goals_against)
     """
     fixture_home_id = fixture["teams"]["home"]["id"]
+    c_home = fixture.get("canonical_home_id")
 
     goals = historical_match_policy.get_h2h_form_goals(fixture)
     if goals is None:
         raise ValueError("Fixture has missing or invalid goals.")
     fixture_home_goals, fixture_away_goals = goals
 
-    if fixture_home_id == requested_home_team_id:
+    is_home = (
+        (canonical_home_id and c_home == canonical_home_id)
+        or (fixture_home_id == requested_home_team_id)
+    )
+    is_away = (
+        (canonical_away_id and c_home == canonical_away_id)
+        or (fixture_home_id == requested_away_team_id)
+    )
+
+    if is_home:
         return fixture_home_goals, fixture_away_goals
 
-    if fixture_home_id == requested_away_team_id:
+    if is_away:
         return fixture_away_goals, fixture_home_goals
 
     raise ValueError(
@@ -153,6 +188,8 @@ def h2h_minimum_history(
     away_team_id,
     cutoff,
     minimum_matches,
+    canonical_home_id=None,
+    canonical_away_id=None,
 ):
     """
     Check whether the requested teams have enough historical H2H meetings.
@@ -167,6 +204,8 @@ def h2h_minimum_history(
         home_team_id,
         away_team_id,
         cutoff,
+        canonical_home_id=canonical_home_id,
+        canonical_away_id=canonical_away_id,
     )
 
     return len(matches) >= minimum_matches
@@ -179,6 +218,8 @@ def historical_h2h_snapshot(
     cutoff,
     window=6,
     minimum_matches=0,
+    canonical_home_id=None,
+    canonical_away_id=None,
 ):
     """
     Build a historical H2H feature snapshot as of cutoff.
@@ -205,6 +246,8 @@ def historical_h2h_snapshot(
         home_team_id,
         away_team_id,
         cutoff,
+        canonical_home_id=canonical_home_id,
+        canonical_away_id=canonical_away_id,
     )
 
     if len(matches) < minimum_matches:
@@ -234,12 +277,16 @@ def historical_h2h_snapshot(
             fixture,
             home_team_id,
             away_team_id,
+            canonical_home_id=canonical_home_id,
+            canonical_away_id=canonical_away_id,
         )
 
         gf, ga = _requested_team_goals(
             fixture,
             home_team_id,
             away_team_id,
+            canonical_home_id=canonical_home_id,
+            canonical_away_id=canonical_away_id,
         )
 
         goals_for += gf
