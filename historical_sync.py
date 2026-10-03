@@ -12,6 +12,7 @@ Key invariants:
 """
 
 import argparse
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -734,6 +735,81 @@ def sync_historical_basketball_games(
     return report
 
 
+def run_safe_preflight(seasons: list, queue_items: list) -> None:
+    """
+    Execute a SAFE PREFLIGHT check before consuming historical API quota.
+    Confirms database connectivity, active backend, configured leagues,
+    requested target seasons, dataset statuses, and API request counters.
+    """
+    print("\n==================================================", flush=True)
+    print("SAFE PREFLIGHT CHECK", flush=True)
+    print("==================================================", flush=True)
+
+    # 1. Confirm database connectivity and active storage backend
+    is_neon_active = storage.is_neon()
+    neon_url = getattr(config, "NEON_DATABASE_URL", None) or os.environ.get("NEON_DATABASE_URL")
+    print(f"Database Storage Backend: {'PostgreSQL (Neon)' if is_neon_active else 'SQLite Fallback'}", flush=True)
+    print(f"  NEON_DATABASE_URL configured: {bool(neon_url and neon_url.strip())}", flush=True)
+
+    try:
+        storage.init_db()
+        print("  Database connectivity & schema initialized successfully.", flush=True)
+    except Exception as exc:
+        print(f"  Database initialization ERROR: {exc}", flush=True)
+        raise
+
+    # 2. Confirm configured football league IDs
+    fb_leagues = getattr(config, "ALLOWED_LEAGUE_IDS", [])
+    print(f"Configured Football League IDs ({len(fb_leagues)}): {fb_leagues}", flush=True)
+
+    # 3. Confirm basketball league ID
+    bb_leagues = getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", [])
+    print(f"Configured Basketball League IDs ({len(bb_leagues)}): {bb_leagues}", flush=True)
+
+    # 4. Confirm requested seasons
+    print(f"Requested Target Seasons: {seasons}", flush=True)
+
+    # 5. Confirm current API request counters
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    fb_reqs = storage.get_api_request_count("api_football", today_str)
+    fb_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
+    bb_reqs = storage.get_api_request_count("api_basketball", today_str)
+    bb_budget = int(getattr(config, "API_BASKETBALL_HISTORICAL_DAILY_BUDGET", 50))
+
+    print(f"API Request Counters Today ({today_str}):", flush=True)
+    print(f"  API-Football: {fb_reqs}/{fb_budget} requests used today", flush=True)
+    print(f"  API-Basketball: {bb_reqs}/{bb_budget} requests used today", flush=True)
+
+    # 6. Confirm dataset statuses for target datasets
+    complete_count = 0
+    incomplete_count = 0
+    print("\nTarget Dataset Manifest Statuses:", flush=True)
+    for item in queue_items:
+        sport = item["sport"]
+        league_id = item["league_id"]
+        season = item["season"]
+        st = storage.get_historical_dataset_status(league_id, season, sport=sport)
+        status_val = st.get("status", "INCOMPLETE")
+        f_count = st.get("fixture_count", 0)
+        p_completed = st.get("pages_completed", 0)
+        e_pages = st.get("expected_pages", 0)
+        if status_val == "COMPLETE":
+            complete_count += 1
+        else:
+            incomplete_count += 1
+        print(
+            f"  [{sport.upper()}] League {league_id} Season {season}: Status={status_val}, Fixtures/Games={f_count}, Pages={p_completed}/{e_pages}",
+            flush=True,
+        )
+
+    print(
+        f"\nPreflight Summary: {len(queue_items)} total datasets ({complete_count} COMPLETE [0 API calls], {incomplete_count} INCOMPLETE).",
+        flush=True,
+    )
+    print("Verification: No dataset marked COMPLETE will be re-fetched.", flush=True)
+    print("==================================================\n", flush=True)
+
+
 def check_acquisition_coverage(league_id: int, season: int, sport: str = "football") -> dict:
     """
     Inspect database dataset status and persistent API cache to estimate required acquisition requests.
@@ -791,14 +867,33 @@ def run_historical_queue(
 
     seasons = target_seasons
 
+    all_football_items = [
+        {"sport": "football", "league_id": lid, "season": ssn}
+        for ssn in seasons
+        for lid in config.ALLOWED_LEAGUE_IDS
+    ]
+    all_basketball_items = [
+        {"sport": "basketball", "league_id": lid, "season": ssn}
+        for ssn in seasons
+        for lid in config.ALLOWED_BASKETBALL_LEAGUE_IDS
+    ]
+
     queue_items = []
-    for ssn in seasons:
-        for lid in config.ALLOWED_LEAGUE_IDS:
-            queue_items.append({"sport": "football", "league_id": lid, "season": ssn})
-        for lid in config.ALLOWED_BASKETBALL_LEAGUE_IDS:
-            queue_items.append({"sport": "basketball", "league_id": lid, "season": ssn})
+    i, j = 0, 0
+    while i < len(all_football_items) or j < len(all_basketball_items):
+        if i < len(all_football_items):
+            queue_items.append(all_football_items[i])
+            i += 1
+        if j < len(all_basketball_items):
+            queue_items.append(all_basketball_items[j])
+            j += 1
+
+    # Execute Safe Preflight Check
+    run_safe_preflight(seasons, queue_items)
 
     reports = []
+    quota_stopped_sports = set()
+
     print(
         f"Starting target historical acquisition queue ({len(queue_items)} datasets across seasons {seasons})...",
         flush=True,
@@ -826,6 +921,37 @@ def run_historical_queue(
             })
             continue
 
+        if sport in quota_stopped_sports:
+            print(
+                f"Queue: Skipping {sport} league {league_id} season {season} because {sport} historical daily budget ceiling was reached.",
+                flush=True,
+            )
+            dataset_info = storage.get_historical_dataset_status(league_id, season, sport=sport)
+            final_count = dataset_info["fixture_count"] or (
+                storage.get_historical_basketball_game_count(league_id, season) if sport == "basketball"
+                else storage.get_historical_fixture_count(league_id, season)
+            )
+            reports.append({
+                "sport": sport,
+                "league_id": league_id,
+                "season": season,
+                "status": "INCOMPLETE",
+                "existing_before": final_count,
+                "fixtures_received": 0,
+                "valid_fixtures": 0,
+                "duplicates_skipped": 0,
+                "newly_stored": 0,
+                "already_existing_skipped": 0,
+                "pages_completed": dataset_info.get("pages_completed", 0),
+                "expected_pages": dataset_info.get("expected_pages", 0),
+                "rejected_count": dataset_info.get("rejected_count", 0),
+                "empty_pages_count": dataset_info.get("empty_pages_count", 0),
+                "api_requests_consumed": 0,
+                "quota_budget_stopped": True,
+                "final_stored_count": final_count,
+            })
+            continue
+
         print(
             f"Queue: Syncing missing data for {sport} league {league_id} season {season} (est. required requests: {cov['estimated_required_requests']})...",
             flush=True,
@@ -848,11 +974,11 @@ def run_historical_queue(
         reports.append(report)
 
         if report.get("quota_budget_stopped"):
+            quota_stopped_sports.add(sport)
             print(
-                f"Queue: API quota/budget exhausted during {sport} league {league_id} season {season}. Stopping queue execution.",
+                f"Queue: API quota/budget exhausted for {sport} during league {league_id} season {season}. {sport.capitalize()} acquisitions paused for this run.",
                 flush=True,
             )
-            break
 
     print(f"Historical queue run complete. Processed {len(reports)} dataset(s).", flush=True)
     return {
