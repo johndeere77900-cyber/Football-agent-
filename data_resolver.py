@@ -322,12 +322,12 @@ def reconcile_fixture_records(records):
             })
             result["disputed_score"] = True
 
-    # Reconcile match statistics (shots, corners, xG, cards)
+    # Reconcile match statistics (shots, shots_on_target, corners, yellow_cards, red_cards, possession, xG)
     stats = result.get("statistics") or {}
     if not isinstance(stats, dict):
         stats = {}
 
-    stat_keys = ["shots", "shots_on_target", "corners", "cards", "xG"]
+    stat_keys = ["shots", "shots_on_target", "corners", "yellow_cards", "red_cards", "cards", "possession", "xG"]
     for key in stat_keys:
         if stats.get(key) is not None:
             field_provenance[f"stats_{key}"] = primary_prov
