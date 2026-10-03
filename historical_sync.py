@@ -121,7 +121,7 @@ def sync_historical_fixtures(
     # Preflight coverage check for primary provider (API-Football)
     import main as main_mod
     cov_status, cov_reason = main_mod.check_competition_coverage(league_id, season)
-    primary_available = (cov_status == "coverage_available")
+    primary_available = (cov_status != "season_not_available")
 
     if primary_available:
         current_page = start_p
@@ -190,11 +190,24 @@ def sync_historical_fixtures(
                 break
             except Exception as exc:
                 acquisition_failed = True
-                last_error_reason = "api_error_during_acquisition"
-                print(f"API acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
+                last_error_reason = f"api_error_during_acquisition: {str(exc)[:100]}"
+                print(f"Primary acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
                 break
-    else:
-        # Secondary fallback: football-data.org
+
+    # Trigger secondary fallback if primary was unavailable, failed, or produced zero valid fixtures without quota exhaustion
+    should_attempt_secondary = (
+        not primary_available
+        or (
+            acquisition_failed
+            and not quota_budget_stopped
+            and total_valid_fixtures == 0
+        )
+    )
+
+    if should_attempt_secondary:
+        # Reset state for secondary fallback attempt
+        acquisition_failed = False
+        last_error_reason = None
         print(f"API-Football unavailable for league {league_id} season {season} ({cov_reason}). Attempting secondary acquisition via football-data.org...", flush=True)
         import data_resolver
         import football_data_api
@@ -206,7 +219,17 @@ def sync_historical_fixtures(
             print(f"Secondary fallback failed: League {league_id} not supported by football-data.org.", flush=True)
         else:
             try:
-                fd_matches = football_data_api.get_competition_matches(comp_code, season=season)
+                fd_res = football_data_api.get_competition_matches(comp_code, season=season)
+                if isinstance(fd_res, dict):
+                    fd_matches = fd_res.get("matches", [])
+                    fd_meta = fd_res.get("metadata", {})
+                elif isinstance(fd_res, list):
+                    fd_matches = fd_res
+                    fd_meta = {}
+                else:
+                    fd_matches = []
+                    fd_meta = {}
+
                 normalized_fd_matches = []
                 for m in fd_matches or []:
                     norm_m = data_resolver._normalize_football_data_match(m, league_id, season)
@@ -226,7 +249,34 @@ def sync_historical_fixtures(
 
                 expected_pages = 1
                 pages_completed = 1
-                acquisition_complete = True
+
+                # Secondary completeness verification rules
+                meta_comp = fd_meta.get("competition_code")
+                meta_season = fd_meta.get("season")
+                meta_count = fd_meta.get("count")
+
+                comp_valid = (meta_comp is None or meta_comp == comp_code)
+                season_valid = (meta_season is None or str(meta_season) == str(season))
+                count_valid = (meta_count is None or len(fd_matches) == meta_count)
+
+                if not comp_valid:
+                    acquisition_failed = True
+                    last_error_reason = f"secondary_competition_mismatch ({meta_comp} != {comp_code})"
+                elif not season_valid:
+                    acquisition_failed = True
+                    last_error_reason = f"secondary_season_mismatch ({meta_season} != {season})"
+                elif not count_valid:
+                    acquisition_failed = True
+                    last_error_reason = f"secondary_count_mismatch (retrieved {len(fd_matches)} != reported {meta_count})"
+                elif save_result.get("rejected_count", 0) > 0:
+                    acquisition_failed = True
+                    last_error_reason = f"secondary_provider_has_rejected_fixtures ({save_result.get('rejected_count')})"
+                elif len(normalized_fd_matches) == 0:
+                    acquisition_failed = True
+                    last_error_reason = "secondary_provider_returned_no_fixtures"
+                else:
+                    acquisition_complete = True
+
                 current_stored_count = storage.get_historical_fixture_count(league_id, season)
 
             except Exception as exc:
@@ -273,16 +323,18 @@ def sync_historical_fixtures(
             )
         else:
             all_stored = storage.get_historical_fixtures(league_id, season)
-            finished_ids = [
+            # CRITICAL: Only API-Football fixtures may be sent to api_football.get_enriched_fixtures()
+            finished_primary_ids = [
                 item.get("fixture", {}).get("id")
                 for item in all_stored
                 if isinstance(item, dict)
-                and item.get("fixture", {}).get("status", {}).get("short") == "FT"
+                and item.get("source", item.get("provider_provenance", {}).get("provider", "api_football")) == "api_football"
+                and item.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN")
                 and item.get("fixture", {}).get("id") is not None
             ]
 
-            stored_enrichment = storage.get_historical_enrichment(finished_ids)
-            missing_enrichment_ids = [fid for fid in finished_ids if fid not in stored_enrichment]
+            stored_enrichment = storage.get_historical_enrichment(finished_primary_ids, source="api_football")
+            missing_enrichment_ids = [fid for fid in finished_primary_ids if fid not in stored_enrichment]
 
             if missing_enrichment_ids:
                 try:
@@ -290,7 +342,7 @@ def sync_historical_fixtures(
                         missing_enrichment_ids, max_budget=historical_budget
                     )
                     if enriched_batch:
-                        enrichment_stored = storage.save_historical_enrichment(enriched_batch)
+                        enrichment_stored = storage.save_historical_enrichment(enriched_batch, source="api_football")
                 except api_football.APIFootballQuotaExhaustedError:
                     quota_budget_stopped = True
                     last_error_reason = "quota_budget_exhausted_during_enrichment"
@@ -338,11 +390,28 @@ def sync_historical_fixtures(
         and final_stored_count > 0
     )
 
+    # Determine exact source semantics for dataset manifest
+    stored_fixtures_all = storage.get_historical_fixtures(league_id, season)
+    sources_found = set()
+    for f in stored_fixtures_all:
+        if isinstance(f, dict):
+            src = f.get("source") or f.get("provider_provenance", {}).get("provider")
+            if src:
+                sources_found.add(src)
+
+    if len(sources_found) > 1:
+        manifest_source = "mixed"
+    elif len(sources_found) == 1:
+        manifest_source = list(sources_found)[0]
+    else:
+        manifest_source = "football_data_org" if should_attempt_secondary else "api_football"
+
     if is_fully_complete:
         storage.mark_historical_dataset_complete(
             league_id,
             season,
             fixture_count=final_stored_count,
+            source=manifest_source,
             sport="football",
             expected_pages=expected_pages,
             pages_completed=pages_completed,
@@ -357,6 +426,7 @@ def sync_historical_fixtures(
             league_id,
             season,
             fixture_count=final_stored_count,
+            source=manifest_source,
             sport="football",
             expected_pages=expected_pages,
             pages_completed=pages_completed,

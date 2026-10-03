@@ -205,7 +205,11 @@ def check_competition_coverage(league_id, season):
     """
     Preflight check for provider coverage for a league + season.
     Cached per (league_id, season).
-    Only returns season_not_available if valid season list exists and season is explicitly prior to provider coverage.
+    Explicitly checks whether the requested season is present in provider's coverage list.
+    Returns:
+    - ("coverage_available", msg) if season is explicitly listed as covered
+    - ("season_not_available", msg) if season is present in coverage list as not available or absent from list
+    - ("UNKNOWN", msg) if coverage response is empty or malformed
     """
     cache_key = (league_id, season)
     if cache_key in _coverage_preflight_cache:
@@ -213,18 +217,27 @@ def check_competition_coverage(league_id, season):
 
     try:
         seasons = api_football.get_league_coverage(league_id)
-    except Exception:
-        seasons = []
+    except Exception as exc:
+        res = ("UNKNOWN", f"Provider coverage call failed: {exc}")
+        _coverage_preflight_cache[cache_key] = res
+        return res
 
-    if isinstance(seasons, list) and seasons:
-        valid_season_years = [s.get("year") for s in seasons if isinstance(s, dict) and "year" in s and isinstance(s.get("year"), int)]
-        if valid_season_years and season not in valid_season_years:
-            if season < min(valid_season_years):
-                res = ("season_not_available", f"Season {season} is prior to provider coverage for league {league_id}.")
-                _coverage_preflight_cache[cache_key] = res
-                return res
+    if not isinstance(seasons, list) or not seasons:
+        res = ("UNKNOWN", f"Empty or malformed coverage metadata for league {league_id}.")
+        _coverage_preflight_cache[cache_key] = res
+        return res
 
-    res = ("coverage_available", "Coverage available.")
+    valid_season_years = [s.get("year") for s in seasons if isinstance(s, dict) and isinstance(s.get("year"), int)]
+    if not valid_season_years:
+        res = ("UNKNOWN", f"No valid season years found in coverage metadata for league {league_id}.")
+        _coverage_preflight_cache[cache_key] = res
+        return res
+
+    if season in valid_season_years:
+        res = ("coverage_available", "Coverage available.")
+    else:
+        res = ("season_not_available", f"Season {season} is not available in provider coverage for league {league_id}.")
+
     _coverage_preflight_cache[cache_key] = res
     return res
 

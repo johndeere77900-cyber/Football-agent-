@@ -75,11 +75,8 @@ def historical_h2h_matches(
         c_away = fixture.get("canonical_away_id")
 
         matched = False
-        if canonical_home_id and canonical_away_id:
-            if c_home or c_away:
-                if {c_home, c_away} == {canonical_home_id, canonical_away_id}:
-                    matched = True
-            elif {home_id, away_id} == {home_team_id, away_team_id}:
+        if canonical_home_id is not None and canonical_away_id is not None:
+            if {c_home, c_away} == {canonical_home_id, canonical_away_id}:
                 matched = True
         elif {home_id, away_id} == {home_team_id, away_team_id}:
             matched = True

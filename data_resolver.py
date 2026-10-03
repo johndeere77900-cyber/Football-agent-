@@ -297,7 +297,8 @@ class DataResolver:
             all_matches = []
             for code in codes_to_query:
                 lid = FD_CODE_TO_LEAGUE.get(code)
-                matches = football_data_api.get_competition_matches(code)
+                fd_res = football_data_api.get_competition_matches(code)
+                matches = fd_res.get("matches", []) if isinstance(fd_res, dict) else (fd_res if isinstance(fd_res, list) else [])
                 for m in matches:
                     utc_date = m.get("utcDate", "")
                     if utc_date.startswith(date_str):

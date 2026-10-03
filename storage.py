@@ -410,11 +410,29 @@ def init_db():
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS historical_fixture_enrichment (
-                        fixture_id BIGINT PRIMARY KEY,
+                        fixture_id BIGINT NOT NULL,
                         raw_json JSONB NOT NULL,
                         fetched_at TEXT NOT NULL,
-                        source TEXT NOT NULL DEFAULT 'api_football'
+                        source TEXT NOT NULL DEFAULT 'api_football',
+                        PRIMARY KEY (source, fixture_id)
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint WHERE conname = 'historical_fixture_enrichment_pkey'
+                        ) AND NOT EXISTS (
+                            SELECT 1 FROM pg_constraint c
+                            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                            WHERE c.conname = 'historical_fixture_enrichment_pkey' AND a.attname = 'source'
+                        ) THEN
+                            ALTER TABLE historical_fixture_enrichment DROP CONSTRAINT historical_fixture_enrichment_pkey;
+                            ALTER TABLE historical_fixture_enrichment ADD PRIMARY KEY (source, fixture_id);
+                        END IF;
+                    END $$;
                     """
                 )
                 cur.execute(
@@ -808,13 +826,48 @@ def init_db():
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS historical_fixture_enrichment (
-                    fixture_id INTEGER PRIMARY KEY,
+                    fixture_id INTEGER NOT NULL,
                     raw_json TEXT NOT NULL,
                     fetched_at TEXT NOT NULL,
-                    source TEXT NOT NULL DEFAULT 'api_football'
+                    source TEXT NOT NULL DEFAULT 'api_football',
+                    PRIMARY KEY (source, fixture_id)
                 )
                 """
             )
+
+            hfe_info = conn.execute("PRAGMA table_info(historical_fixture_enrichment)").fetchall()
+            hfe_pk_cols = [row[1] for row in hfe_info if row[5] > 0]
+            if hfe_pk_cols and "source" not in hfe_pk_cols:
+                try:
+                    conn.execute("ALTER TABLE historical_fixture_enrichment RENAME TO historical_fixture_enrichment_old")
+                    conn.execute(
+                        """
+                        CREATE TABLE historical_fixture_enrichment (
+                            fixture_id INTEGER NOT NULL,
+                            raw_json TEXT NOT NULL,
+                            fetched_at TEXT NOT NULL,
+                            source TEXT NOT NULL DEFAULT 'api_football',
+                            PRIMARY KEY (source, fixture_id)
+                        )
+                        """
+                    )
+                    old_hfe_cols = {row[1] for row in conn.execute("PRAGMA table_info(historical_fixture_enrichment_old)").fetchall()}
+                    src_expr = "COALESCE(source, 'api_football')" if "source" in old_hfe_cols else "'api_football'"
+
+                    conn.execute(
+                        f"""
+                        INSERT OR IGNORE INTO historical_fixture_enrichment (
+                            fixture_id, raw_json, fetched_at, source
+                        )
+                        SELECT fixture_id, raw_json, fetched_at, {src_expr}
+                        FROM historical_fixture_enrichment_old
+                        """
+                    )
+                    conn.execute("DROP TABLE historical_fixture_enrichment_old")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS historical_datasets (
@@ -3672,8 +3725,8 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
         a_id = item.get("teams", {}).get("away", {}).get("id")
         h_name = item.get("teams", {}).get("home", {}).get("name", "")
         a_name = item.get("teams", {}).get("away", {}).get("name", "")
-        c_home = team_identity.resolve_canonical_team_id(h_name, source, h_id, league_id=league_id, auto_register=False)
-        c_away = team_identity.resolve_canonical_team_id(a_name, source, a_id, league_id=league_id, auto_register=False)
+        c_home = team_identity.bootstrap_historical_team_identity(h_name, source, h_id, league_id=league_id)
+        c_away = team_identity.bootstrap_historical_team_identity(a_name, source, a_id, league_id=league_id)
         resolved_fixtures.append((fid, item, c_home, c_away))
 
     conn, db_type = _connect()
@@ -3871,7 +3924,7 @@ def save_historical_enrichment(enriched_fixtures, source="api_football"):
     Save historical fixture enrichment into persistent storage.
 
     Accepts dict (fixture_id -> fixture) or list of enriched fixtures.
-    Idempotent: ON CONFLICT DO NOTHING.
+    Idempotent: ON CONFLICT (source, fixture_id) DO NOTHING.
     Returns count of newly inserted enrichment records.
     """
     if isinstance(enriched_fixtures, dict):
@@ -3919,7 +3972,7 @@ def save_historical_enrichment(enriched_fixtures, source="api_football"):
                         """
                         INSERT INTO historical_fixture_enrichment (fixture_id, raw_json, fetched_at, source)
                         VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (fixture_id) DO NOTHING
+                        ON CONFLICT (source, fixture_id) DO NOTHING
                         """,
                         (fid, raw_json_str, now_str, source),
                     )
@@ -4454,9 +4507,9 @@ def get_recent_operation_errors(limit=10, chat_id=None):
         conn.close()
 
 
-def get_historical_enrichment(fixture_ids):
+def get_historical_enrichment(fixture_ids, source="api_football"):
     """
-    Retrieve stored historical fixture enrichment records for given fixture IDs.
+    Retrieve stored historical fixture enrichment records for given fixture IDs and source.
 
     Returns dict mapping fixture_id (int) -> enriched fixture dict.
     """
@@ -4488,34 +4541,36 @@ def get_historical_enrichment(fixture_ids):
                     """
                     SELECT fixture_id, raw_json
                     FROM historical_fixture_enrichment
-                    WHERE fixture_id = ANY(%s)
+                    WHERE source = %s AND fixture_id = ANY(%s)
                     """,
-                    (clean_ids,),
+                    (source, clean_ids),
                 )
                 rows = cur.fetchall()
         else:
             try:
                 placeholders = ",".join(["?"] * len(clean_ids))
+                query_params = [source] + clean_ids
                 rows = conn.execute(
                     f"""
                     SELECT fixture_id, raw_json
                     FROM historical_fixture_enrichment
-                    WHERE fixture_id IN ({placeholders})
+                    WHERE source = ? AND fixture_id IN ({placeholders})
                     """,
-                    clean_ids,
+                    query_params,
                 ).fetchall()
             except sqlite3.OperationalError:
                 conn.close()
                 init_db()
                 conn, _ = _connect()
                 placeholders = ",".join(["?"] * len(clean_ids))
+                query_params = [source] + clean_ids
                 rows = conn.execute(
                     f"""
                     SELECT fixture_id, raw_json
                     FROM historical_fixture_enrichment
-                    WHERE fixture_id IN ({placeholders})
+                    WHERE source = ? AND fixture_id IN ({placeholders})
                     """,
-                    clean_ids,
+                    query_params,
                 ).fetchall()
 
         for fid, raw in rows:

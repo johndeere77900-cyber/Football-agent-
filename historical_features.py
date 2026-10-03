@@ -124,8 +124,10 @@ def team_match_history(fixtures, team_id, cutoff, canonical_team_id=None):
     """
     Return a team's completed historical matches available at cutoff.
 
-    Matches by canonical_team_id if present/available, falling back to numeric team_id.
-    No match at or after cutoff is included.
+    Rules:
+    - If canonical_team_id is provided, match strictly by canonical team ID. Unresolved fixtures or fixtures without matching canonical IDs are excluded.
+    - If canonical_team_id is None, match by numeric team_id (legacy single-provider mode).
+    - Never allow cross-provider numeric team IDs to cross-match.
     """
     history = []
 
@@ -136,7 +138,7 @@ def team_match_history(fixtures, team_id, cutoff, canonical_team_id=None):
         c_away = fixture.get("canonical_away_id")
 
         matched = False
-        if canonical_team_id and (c_home or c_away):
+        if canonical_team_id is not None:
             if canonical_team_id in (c_home, c_away):
                 matched = True
         elif team_id in (home_id, away_id):

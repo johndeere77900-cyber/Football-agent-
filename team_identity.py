@@ -138,11 +138,6 @@ def resolve_canonical_team_id(
                 if len(candidate_ids) == 1:
                     target_canonical_id = list(candidate_ids)[0]
 
-    # Step 5: Auto-register new canonical identity ONLY if auto_register is explicitly True
-    if not target_canonical_id and auto_register:
-        slug = sanitize_canonical_slug(raw_name)
-        target_canonical_id = f"{sport}_team_{slug}"
-
     # FAIL CLOSED: If no trusted canonical identity is resolved, return None
     if not target_canonical_id:
         return None
@@ -159,3 +154,62 @@ def resolve_canonical_team_id(
     )
 
     return target_canonical_id
+
+
+def bootstrap_historical_team_identity(
+    raw_name: str,
+    provider: str,
+    provider_team_id: str | int,
+    league_id: int,
+    sport: str = "football",
+) -> str | None:
+    """
+    Controlled historical canonical team identity bootstrap mechanism.
+
+    Used ONLY during trusted historical ingestion.
+    Requirements:
+    - sport is known
+    - league/competition is known
+    - raw_name and normalized_name are valid
+    - competition context (league_id) is known
+    - generates a unique canonical identity for the team within that competition context
+      if no existing mapping or conflicting mapping exists.
+    """
+    if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
+        return None
+    if not league_id or not isinstance(league_id, int) or league_id <= 0:
+        return None
+
+    provider = str(provider).strip().lower()
+    p_team_id_str = str(provider_team_id).strip()
+    norm_name = normalize_team_name(raw_name)
+    if not norm_name:
+        return None
+
+    # First check if resolution succeeds via existing verified mapping or alias
+    resolved = resolve_canonical_team_id(
+        raw_name=raw_name,
+        provider=provider,
+        provider_team_id=p_team_id_str,
+        league_id=league_id,
+        sport=sport,
+        auto_register=False,
+    )
+    if resolved:
+        return resolved
+
+    # Otherwise, generate controlled canonical identity using competition-scoped slug
+    slug = sanitize_canonical_slug(raw_name)
+    canonical_id = f"{sport}_team_{league_id}_{slug}"
+
+    storage.save_team_identity(
+        sport=sport,
+        canonical_id=canonical_id,
+        provider=provider,
+        provider_team_id=p_team_id_str,
+        normalized_name=norm_name,
+        display_name=raw_name.strip(),
+        league_id=league_id,
+    )
+
+    return canonical_id
