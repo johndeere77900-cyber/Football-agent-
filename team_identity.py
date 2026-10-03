@@ -35,10 +35,10 @@ def normalize_team_name(name: str) -> str:
     nfkd = unicodedata.normalize("NFKD", name)
     no_accents = "".join([c for c in nfkd if not unicodedata.combining(c)])
 
-    # Lowercase
-    text = no_accents.lower()
+    # Lowercase and replace underscores/punctuation with space
+    text = no_accents.lower().replace("_", " ")
 
-    # Replace punctuation / non-alphanumeric with space
+    # Replace remaining punctuation / non-alphanumeric with space
     text = re.sub(r"[^\w\s]", " ", text)
 
     # Collapse multiple whitespace
@@ -77,17 +77,18 @@ def resolve_canonical_team_id(
     provider_team_id: str | int,
     league_id: int = None,
     sport: str = "football",
-    auto_register: bool = True,
+    auto_register: bool = False,
 ) -> str | None:
     """
-    Resolve canonical team identity deterministically.
+    Resolve canonical team identity deterministically. FAIL CLOSED if unresolved.
 
     Order:
-    1. Check existing provider mapping in DB (`team_identities`).
-    2. Check exact normalized_name + league_id in DB (`team_identities`).
-    3. Check configured canonical alias (`config.CANONICAL_TEAM_ALIASES`).
-    4. Check safe stripped name within same league_id.
-    5. Register new canonical identity if auto_register=True and name is unambiguous.
+    1. Check existing verified provider mapping in DB (`team_identities`).
+    2. Check exact normalized_name + same league_id context in DB (`team_identities`).
+    3. Check competition-aware alias in `config.CANONICAL_TEAM_ALIASES` matching (norm_name, league_id) or norm_name.
+    4. Check safe stripped name within same league_id context.
+    5. If auto_register is True, generate a new canonical identity.
+       Otherwise, if unresolved, FAIL CLOSED and return None.
     """
     if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
         return None
@@ -98,31 +99,34 @@ def resolve_canonical_team_id(
     if not norm_name:
         return None
 
-    # Step 1: Existing provider mapping in DB
+    # Step 1: Existing verified provider mapping in DB
     existing = storage.get_team_identity_by_provider(sport, provider, p_team_id_str)
     if existing:
         return existing["canonical_id"]
 
-    # Step 2: Check explicit alias in config
-    alias_dict = getattr(config, "CANONICAL_TEAM_ALIASES", {})
-    alias_key = norm_name
+    # Step 2: Exact normalized_name + league_id context lookup in DB
     target_canonical_id = None
-
-    if alias_key in alias_dict:
-        canonical_alias = alias_dict[alias_key]
-        target_canonical_id = f"{sport}_team_{sanitize_canonical_slug(canonical_alias)}"
-
-    # Step 3: Exact normalized name + league_id lookup in DB
-    if not target_canonical_id:
+    if league_id:
         matches = storage.get_team_identities_by_normalized_name(sport, norm_name, league_id)
         if matches:
-            # Verify no conflicting canonical IDs
             candidate_ids = {m["canonical_id"] for m in matches}
             if len(candidate_ids) == 1:
                 target_canonical_id = list(candidate_ids)[0]
             else:
-                # Ambiguous match across different teams -> fail closed
                 return None
+
+    # Step 3: Competition-aware alias check in config
+    if not target_canonical_id:
+        alias_dict = getattr(config, "CANONICAL_TEAM_ALIASES", {})
+        # Check (norm_name, league_id) tuple first if league_id is provided
+        canonical_alias = None
+        if league_id and (norm_name, league_id) in alias_dict:
+            canonical_alias = alias_dict[(norm_name, league_id)]
+        elif norm_name in alias_dict:
+            canonical_alias = alias_dict[norm_name]
+
+        if canonical_alias:
+            target_canonical_id = f"{sport}_team_{sanitize_canonical_slug(canonical_alias)}"
 
     # Step 4: Safe stripped name match within same league_id
     if not target_canonical_id and league_id:
@@ -134,14 +138,16 @@ def resolve_canonical_team_id(
                 if len(candidate_ids) == 1:
                     target_canonical_id = list(candidate_ids)[0]
 
-    # Step 5: Auto-register new canonical identity if non-existent
-    if not target_canonical_id:
-        if not auto_register:
-            return None
+    # Step 5: Auto-register new canonical identity ONLY if auto_register is explicitly True
+    if not target_canonical_id and auto_register:
         slug = sanitize_canonical_slug(raw_name)
         target_canonical_id = f"{sport}_team_{slug}"
 
-    # Persist the identity mapping for future deterministic lookups
+    # FAIL CLOSED: If no trusted canonical identity is resolved, return None
+    if not target_canonical_id:
+        return None
+
+    # Persist the newly resolved mapping for this provider team ID
     storage.save_team_identity(
         sport=sport,
         canonical_id=target_canonical_id,

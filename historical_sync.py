@@ -234,7 +234,10 @@ def sync_historical_fixtures(
                 last_error_reason = f"football_data_org_error: {str(exc)[:100]}"
                 print(f"Secondary acquisition error via football-data.org: {exc}", flush=True)
 
-        if acquisition_failed or not acquisition_complete:
+        if acquisition_failed or not acquisition_complete or total_valid_fixtures == 0 or storage.get_historical_fixture_count(league_id, season) == 0:
+            acquisition_failed = True
+            if not last_error_reason:
+                last_error_reason = "secondary_provider_returned_no_fixtures"
             storage.mark_historical_dataset_incomplete(
                 league_id,
                 season,

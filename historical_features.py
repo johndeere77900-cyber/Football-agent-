@@ -367,10 +367,10 @@ def team_recent_form(
             continue
         home_goals, away_goals = goals
 
-        is_home = (
-            (canonical_team_id and c_home == canonical_team_id)
-            or (home_id == team_id)
-        )
+        if canonical_team_id and (c_home or fixture.get("canonical_away_id")):
+            is_home = (c_home == canonical_team_id)
+        else:
+            is_home = (home_id == team_id)
 
         if is_home:
             team_goals = home_goals

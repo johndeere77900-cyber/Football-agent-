@@ -339,7 +339,8 @@ def init_db():
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS historical_fixtures (
-                        fixture_id BIGINT PRIMARY KEY,
+                        fixture_id BIGINT NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'api_football',
                         league_id BIGINT NOT NULL,
                         season INTEGER NOT NULL,
                         kickoff_at TEXT NOT NULL,
@@ -353,13 +354,30 @@ def init_db():
                         home_goals INTEGER,
                         away_goals INTEGER,
                         raw_json JSONB NOT NULL,
-                        source TEXT NOT NULL DEFAULT 'api_football',
-                        fetched_at TEXT NOT NULL
+                        fetched_at TEXT NOT NULL,
+                        PRIMARY KEY (source, fixture_id)
                     )
                     """
                 )
                 cur.execute("ALTER TABLE historical_fixtures ADD COLUMN IF NOT EXISTS canonical_home_id TEXT")
                 cur.execute("ALTER TABLE historical_fixtures ADD COLUMN IF NOT EXISTS canonical_away_id TEXT")
+                cur.execute(
+                    """
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint WHERE conname = 'historical_fixtures_pkey'
+                        ) AND NOT EXISTS (
+                            SELECT 1 FROM pg_constraint c
+                            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                            WHERE c.conname = 'historical_fixtures_pkey' AND a.attname = 'source'
+                        ) THEN
+                            ALTER TABLE historical_fixtures DROP CONSTRAINT historical_fixtures_pkey;
+                            ALTER TABLE historical_fixtures ADD PRIMARY KEY (source, fixture_id);
+                        END IF;
+                    END $$;
+                    """
+                )
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS team_identities (
@@ -684,7 +702,8 @@ def init_db():
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS historical_fixtures (
-                    fixture_id INTEGER PRIMARY KEY,
+                    fixture_id INTEGER NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'api_football',
                     league_id INTEGER NOT NULL,
                     season INTEGER NOT NULL,
                     kickoff_at TEXT NOT NULL,
@@ -698,13 +717,65 @@ def init_db():
                     home_goals INTEGER,
                     away_goals INTEGER,
                     raw_json TEXT NOT NULL,
-                    source TEXT NOT NULL DEFAULT 'api_football',
-                    fetched_at TEXT NOT NULL
+                    fetched_at TEXT NOT NULL,
+                    PRIMARY KEY (source, fixture_id)
                 )
                 """
             )
             _ensure_column_sqlite(conn, "historical_fixtures", "canonical_home_id", "TEXT")
             _ensure_column_sqlite(conn, "historical_fixtures", "canonical_away_id", "TEXT")
+
+            hf_info = conn.execute("PRAGMA table_info(historical_fixtures)").fetchall()
+            hf_pk_cols = [row[1] for row in hf_info if row[5] > 0]
+            if hf_pk_cols and "source" not in hf_pk_cols:
+                try:
+                    conn.execute("ALTER TABLE historical_fixtures RENAME TO historical_fixtures_old")
+                    conn.execute(
+                        """
+                        CREATE TABLE historical_fixtures (
+                            fixture_id INTEGER NOT NULL,
+                            source TEXT NOT NULL DEFAULT 'api_football',
+                            league_id INTEGER NOT NULL,
+                            season INTEGER NOT NULL,
+                            kickoff_at TEXT NOT NULL,
+                            status_short TEXT,
+                            home_team_id INTEGER,
+                            away_team_id INTEGER,
+                            canonical_home_id TEXT,
+                            canonical_away_id TEXT,
+                            home_team TEXT,
+                            away_team TEXT,
+                            home_goals INTEGER,
+                            away_goals INTEGER,
+                            raw_json TEXT NOT NULL,
+                            fetched_at TEXT NOT NULL,
+                            PRIMARY KEY (source, fixture_id)
+                        )
+                        """
+                    )
+                    old_hf_cols = {row[1] for row in conn.execute("PRAGMA table_info(historical_fixtures_old)").fetchall()}
+                    src_expr = "COALESCE(source, 'api_football')" if "source" in old_hf_cols else "'api_football'"
+                    c_home_expr = "canonical_home_id" if "canonical_home_id" in old_hf_cols else "NULL"
+                    c_away_expr = "canonical_away_id" if "canonical_away_id" in old_hf_cols else "NULL"
+
+                    conn.execute(
+                        f"""
+                        INSERT OR IGNORE INTO historical_fixtures (
+                            fixture_id, source, league_id, season, kickoff_at, status_short,
+                            home_team_id, away_team_id, canonical_home_id, canonical_away_id,
+                            home_team, away_team, home_goals, away_goals, raw_json, fetched_at
+                        )
+                        SELECT fixture_id, {src_expr}, league_id, season, kickoff_at, status_short,
+                               home_team_id, away_team_id, {c_home_expr}, {c_away_expr},
+                               home_team, away_team, home_goals, away_goals, raw_json, fetched_at
+                        FROM historical_fixtures_old
+                        """
+                    )
+                    conn.execute("DROP TABLE historical_fixtures_old")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS team_identities (
@@ -779,7 +850,6 @@ def init_db():
             col_names = [row[1] for row in tbl_info]
             pk_cols = [row[1] for row in tbl_info if row[5] > 0]
             if pk_cols and ("sport" not in pk_cols or "rejected_count" not in col_names or "empty_pages_count" not in col_names):
-                conn.execute("BEGIN TRANSACTION")
                 try:
                     conn.execute("ALTER TABLE historical_datasets RENAME TO historical_datasets_old")
                     conn.execute(
@@ -831,9 +901,9 @@ def init_db():
                         """
                     )
                     conn.execute("DROP TABLE historical_datasets_old")
-                    conn.execute("COMMIT")
+                    conn.commit()
                 except Exception:
-                    conn.execute("ROLLBACK")
+                    conn.rollback()
                     raise
 
             conn.execute(
@@ -3602,8 +3672,8 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
         a_id = item.get("teams", {}).get("away", {}).get("id")
         h_name = item.get("teams", {}).get("home", {}).get("name", "")
         a_name = item.get("teams", {}).get("away", {}).get("name", "")
-        c_home = team_identity.resolve_canonical_team_id(h_name, source, h_id, league_id=league_id)
-        c_away = team_identity.resolve_canonical_team_id(a_name, source, a_id, league_id=league_id)
+        c_home = team_identity.resolve_canonical_team_id(h_name, source, h_id, league_id=league_id, auto_register=False)
+        c_away = team_identity.resolve_canonical_team_id(a_name, source, a_id, league_id=league_id, auto_register=False)
         resolved_fixtures.append((fid, item, c_home, c_away))
 
     conn, db_type = _connect()
@@ -3628,17 +3698,17 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
                     cur.execute(
                         """
                         INSERT INTO historical_fixtures (
-                            fixture_id, league_id, season, kickoff_at, status_short,
+                            fixture_id, source, league_id, season, kickoff_at, status_short,
                             home_team_id, away_team_id, canonical_home_id, canonical_away_id,
-                            home_team, away_team, home_goals, away_goals, raw_json, source, fetched_at
+                            home_team, away_team, home_goals, away_goals, raw_json, fetched_at
                         )
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (fixture_id) DO NOTHING
+                        ON CONFLICT (source, fixture_id) DO NOTHING
                         """,
                         (
-                            fid, league_id, season, kickoff, status,
+                            fid, source, league_id, season, kickoff, status,
                             h_id, a_id, c_home, c_away, h_name, a_name,
-                            h_goals, a_goals, raw_json_str, source, now_str,
+                            h_goals, a_goals, raw_json_str, now_str,
                         ),
                     )
                     if cur.rowcount == 1:
@@ -3661,16 +3731,16 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
                 cursor = conn.execute(
                     """
                     INSERT OR IGNORE INTO historical_fixtures (
-                        fixture_id, league_id, season, kickoff_at, status_short,
+                        fixture_id, source, league_id, season, kickoff_at, status_short,
                         home_team_id, away_team_id, canonical_home_id, canonical_away_id,
-                        home_team, away_team, home_goals, away_goals, raw_json, source, fetched_at
+                        home_team, away_team, home_goals, away_goals, raw_json, fetched_at
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        fid, league_id, season, kickoff, status,
+                        fid, source, league_id, season, kickoff, status,
                         h_id, a_id, c_home, c_away, h_name, a_name,
-                        h_goals, a_goals, raw_json_str, source, now_str,
+                        h_goals, a_goals, raw_json_str, now_str,
                     ),
                 )
                 if cursor.rowcount == 1:

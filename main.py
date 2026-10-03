@@ -1183,6 +1183,15 @@ def predict_fixture(
     c_home_id = team_identity.resolve_canonical_team_id(home_team["name"], provider_name, home_team["id"], league_id=league["id"])
     c_away_id = team_identity.resolve_canonical_team_id(away_team["name"], provider_name, away_team["id"], league_id=league["id"])
 
+    if c_home_id is None or c_away_id is None:
+        return _insufficient_prediction(
+            fixture,
+            is_live,
+            f"Canonical team identity could not be established safely (home={c_home_id}, away={c_away_id}).",
+            failure_stage="unresolved_team_identity",
+            provider_meta=provider_meta,
+        )
+
     historical_snapshot = None
     recent_snapshot = None
     h2h_snapshot = None

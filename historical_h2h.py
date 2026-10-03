@@ -162,14 +162,12 @@ def _requested_team_goals(
         raise ValueError("Fixture has missing or invalid goals.")
     fixture_home_goals, fixture_away_goals = goals
 
-    is_home = (
-        (canonical_home_id and c_home == canonical_home_id)
-        or (fixture_home_id == requested_home_team_id)
-    )
-    is_away = (
-        (canonical_away_id and c_home == canonical_away_id)
-        or (fixture_home_id == requested_away_team_id)
-    )
+    if canonical_home_id and canonical_away_id and (c_home or fixture.get("canonical_away_id")):
+        is_home = (c_home == canonical_home_id)
+        is_away = (c_home == canonical_away_id)
+    else:
+        is_home = (fixture_home_id == requested_home_team_id)
+        is_away = (fixture_home_id == requested_away_team_id)
 
     if is_home:
         return fixture_home_goals, fixture_away_goals
