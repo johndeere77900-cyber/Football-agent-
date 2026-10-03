@@ -250,7 +250,9 @@ def sync_historical_fixtures(
                 expected_pages = 1
                 pages_completed = 1
 
-                # Secondary completeness verification rules
+                # Secondary completeness verification rules:
+                # Completeness cannot be verified for secondary provider football-data.org,
+                # so acquisition_complete is NEVER set to True for football_data_org datasets.
                 meta_comp = fd_meta.get("competition_code")
                 meta_season = fd_meta.get("season")
                 meta_count = fd_meta.get("count")
@@ -275,7 +277,8 @@ def sync_historical_fixtures(
                     acquisition_failed = True
                     last_error_reason = "secondary_provider_returned_no_fixtures"
                 else:
-                    acquisition_complete = True
+                    acquisition_failed = True
+                    last_error_reason = "secondary_provider_completeness_unverifiable"
 
                 current_stored_count = storage.get_historical_fixture_count(league_id, season)
 
