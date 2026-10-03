@@ -361,12 +361,17 @@ class DataResolver:
     def get_fixtures_for_date(self, date_str, league_id=None):
         """
         Retrieves fixtures for a given date ('YYYY-MM-DD').
-        Performs field-level reconciliation when multiple provider records exist.
-        Returns tuple: (fixtures_list, metadata)
+        Performs field-level reconciliation across Tier 1 (API-Football), Tier 2 (football-data.org),
+        and Tier 3 (SoccerData) when statistical or goal fields are incomplete.
+        Returns tuple: (reconciled_fixtures_list, metadata)
         """
+        import storage
+        import team_identity
+
         primary_attempted = False
+        fallback_used = False
         fallback_reason = None
-        collected_records_by_key = {}
+        primary_fixtures = []
 
         # Tier 1: API-Football (PRIMARY)
         if not self.force_fallback:
@@ -378,8 +383,7 @@ class DataResolver:
                     data = api_football.get_fixtures_by_date(date_str, league_id)
 
                 suff_code, clean_data = validate_fixtures_sufficiency(data)
-                if suff_code in ("VALID_DATA", "VALID_EMPTY"):
-                    normalized = [_normalize_api_football_fixture(item) for item in clean_data]
+                if suff_code == "VALID_EMPTY":
                     meta = {
                         "data_source": "api_football",
                         "provider": "api_football",
@@ -389,7 +393,9 @@ class DataResolver:
                         "fallback_reason": None,
                         "resolver_status": "PRIMARY_SUCCESS",
                     }
-                    return normalized, meta
+                    return [], meta
+                elif suff_code == "VALID_DATA":
+                    primary_fixtures = [_normalize_api_football_fixture(item) for item in clean_data]
                 else:
                     fallback_reason = f"Primary provider payload status: {suff_code}"
             except Exception as exc:
@@ -398,75 +404,139 @@ class DataResolver:
         else:
             fallback_reason = "Forced fallback requested"
 
-        # Tier 2: football-data.org (FALLBACK #2)
-        comp_code = LEAGUE_TO_FD_CODE.get(league_id) if league_id else None
+        # Check if finished primary fixtures require field-level enrichment from secondary/tertiary providers
+        needs_field_fallback = self.force_fallback or (primary_fixtures and any(
+            f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN") and
+            (not f.get("statistics") or f.get("goals", {}).get("home") is None)
+            for f in primary_fixtures
+        ))
+
         fd_matches = []
-        if comp_code or not league_id:
-            try:
-                codes_to_query = [comp_code] if comp_code else list(LEAGUE_TO_FD_CODE.values())
-                for code in codes_to_query:
-                    lid = FD_CODE_TO_LEAGUE.get(code)
-                    fd_res = football_data_api.get_competition_matches(code)
-                    matches = fd_res.get("matches", []) if isinstance(fd_res, dict) else (fd_res if isinstance(fd_res, list) else [])
-                    for m in matches:
-                        utc_date = m.get("utcDate", "")
-                        if utc_date.startswith(date_str):
-                            season = m.get("season", {}).get("startDate", "")[:4] or None
-                            if season:
-                                try:
-                                    season = int(season)
-                                except (TypeError, ValueError):
-                                    season = None
-                            norm_match = _normalize_football_data_match(m, lid, season)
-                            if norm_match:
-                                fd_matches.append(norm_match)
+        sd_matches = []
 
-                suff_code, clean_fd = validate_fixtures_sufficiency(fd_matches)
-                if suff_code in ("VALID_DATA", "VALID_EMPTY"):
-                    meta = {
-                        "data_source": "football_data_org",
-                        "provider": "football_data_org",
-                        "provider_type": "secondary",
-                        "primary_attempted": primary_attempted,
-                        "fallback_used": True,
-                        "fallback_reason": fallback_reason,
-                        "resolver_status": "SECONDARY_SUCCESS",
-                    }
-                    return clean_fd, meta
-                else:
-                    fallback_reason = f"Secondary provider payload status: {suff_code}"
-            except Exception as exc:
-                fallback_reason = f"Secondary provider error: {str(exc)[:100]}"
-                logger.error(f"Secondary provider (football_data_api) failed for date {date_str}: {exc}")
+        if not primary_fixtures or needs_field_fallback:
+            fallback_used = True
+            # Tier 2: football-data.org
+            comp_code = LEAGUE_TO_FD_CODE.get(league_id) if league_id else None
+            if comp_code or not league_id:
+                try:
+                    codes_to_query = [comp_code] if comp_code else list(LEAGUE_TO_FD_CODE.values())
+                    for code in codes_to_query:
+                        lid = FD_CODE_TO_LEAGUE.get(code) or league_id
+                        fd_res = football_data_api.get_competition_matches(code)
+                        matches = fd_res.get("matches", []) if isinstance(fd_res, dict) else (fd_res if isinstance(fd_res, list) else [])
+                        for m in matches:
+                            utc_date = m.get("utcDate", "")
+                            if utc_date.startswith(date_str):
+                                season = m.get("season", {}).get("startDate", "")[:4] or None
+                                if season:
+                                    try:
+                                        season = int(season)
+                                    except (TypeError, ValueError):
+                                        season = None
+                                norm_match = _normalize_football_data_match(m, lid, season)
+                                if norm_match:
+                                    fd_matches.append(norm_match)
+                except Exception as exc:
+                    logger.error(f"Secondary provider (football_data_api) failed for date {date_str}: {exc}")
 
-        # Tier 3: SoccerData (FALLBACK #3)
-        sd_code = LEAGUE_TO_SD_CODE.get(league_id) if league_id else None
-        if sd_code or not league_id:
+            # Tier 3: SoccerData if still missing stats/xG
+            if not primary_fixtures and not fd_matches:
+                sd_code = LEAGUE_TO_SD_CODE.get(league_id) if league_id else None
+                if sd_code or not league_id:
+                    try:
+                        sd_status, sd_games, sd_meta = soccerdata_provider.get_match_history_games(sd_code, None)
+                        if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                            sd_matches = [m for m in sd_games if str(m.get("fixture", {}).get("date", "")).startswith(date_str)]
+                    except Exception as exc:
+                        logger.error(f"Tertiary provider (SoccerData) failed for date {date_str}: {exc}")
+
+        # Field-Level Reconciliation Grouping by Team Identity / Date
+        reconciled_fixtures = []
+
+        if primary_fixtures:
+            for pf in primary_fixtures:
+                h_name = pf.get("teams", {}).get("home", {}).get("name", "")
+                a_name = pf.get("teams", {}).get("away", {}).get("name", "")
+                lid = pf.get("league", {}).get("id")
+
+                # Match corresponding secondary and tertiary records for this fixture
+                matching_fd = [
+                    m for m in fd_matches
+                    if h_name.lower() in m.get("teams", {}).get("home", {}).get("name", "").lower()
+                    or a_name.lower() in m.get("teams", {}).get("away", {}).get("name", "").lower()
+                ]
+                matching_sd = [
+                    m for m in sd_matches
+                    if h_name.lower() in m.get("teams", {}).get("home", {}).get("name", "").lower()
+                    or a_name.lower() in m.get("teams", {}).get("away", {}).get("name", "").lower()
+                ]
+
+                candidate_records = [pf] + matching_fd + matching_sd
+                merged = reconcile_fixture_records(candidate_records)
+                if merged:
+                    # Resolve Canonical Team Identities before returning
+                    c_home = team_identity.bootstrap_historical_team_identity(h_name, "api_football", pf.get("teams", {}).get("home", {}).get("id"), league_id=lid)
+                    c_away = team_identity.bootstrap_historical_team_identity(a_name, "api_football", pf.get("teams", {}).get("away", {}).get("id"), league_id=lid)
+                    merged["canonical_home_id"] = c_home
+                    merged["canonical_away_id"] = c_away
+                    reconciled_fixtures.append(merged)
+        elif fd_matches or sd_matches:
+            fallback_records = fd_matches + sd_matches
+            for ff in fallback_records:
+                h_name = ff.get("teams", {}).get("home", {}).get("name", "")
+                a_name = ff.get("teams", {}).get("away", {}).get("name", "")
+                lid = ff.get("league", {}).get("id")
+                c_home = team_identity.bootstrap_historical_team_identity(h_name, ff.get("provider_provenance", {}).get("provider", "fallback"), ff.get("teams", {}).get("home", {}).get("id"), league_id=lid)
+                c_away = team_identity.bootstrap_historical_team_identity(a_name, ff.get("provider_provenance", {}).get("provider", "fallback"), ff.get("teams", {}).get("away", {}).get("id"), league_id=lid)
+                ff["canonical_home_id"] = c_home
+                ff["canonical_away_id"] = c_away
+                reconciled_fixtures.append(ff)
+
+        if reconciled_fixtures:
+            # Persist newly reconciled fixtures permanently into PostgreSQL
             try:
-                sd_status, sd_matches, sd_meta = soccerdata_provider.get_match_history_games(sd_code, None)
-                if sd_status == "SOURCE_AVAILABLE" and sd_matches:
-                    date_filtered = [m for m in sd_matches if str(m.get("fixture", {}).get("date", "")).startswith(date_str)]
-                    suff_code, clean_sd = validate_fixtures_sufficiency(date_filtered)
-                    if suff_code in ("VALID_DATA", "VALID_EMPTY"):
-                        meta = {
-                            "data_source": "soccerdata",
-                            "provider": "soccerdata",
-                            "provider_type": "tertiary",
-                            "primary_attempted": primary_attempted,
-                            "fallback_used": True,
-                            "fallback_reason": fallback_reason,
-                            "resolver_status": "TERTIARY_SUCCESS",
-                        }
-                        return clean_sd, meta
+                for rf in reconciled_fixtures:
+                    lid = rf.get("league", {}).get("id") or league_id or 0
+                    ssn = rf.get("league", {}).get("season") or 2024
+                    storage.save_historical_fixtures([rf], lid, ssn, source=rf.get("provider_provenance", {}).get("provider", "api_football"), require_completed=False)
+                    if rf.get("statistics"):
+                        storage.save_historical_enrichment([rf], source=rf.get("provider_provenance", {}).get("provider", "api_football"))
             except Exception as exc:
-                logger.error(f"Tertiary provider (SoccerData) failed for date {date_str}: {exc}")
+                logger.warning(f"Error persisting reconciled fixtures to DB: {exc}")
+
+            primary_prov = reconciled_fixtures[0].get("provider_provenance", {}).get("provider", "api_football")
+            if "soccerdata" in primary_prov:
+                norm_provider_name = "soccerdata"
+            else:
+                norm_provider_name = primary_prov
+
+            if primary_fixtures and not fallback_used:
+                resolver_status = "PRIMARY_SUCCESS"
+            elif fd_matches and not primary_fixtures:
+                resolver_status = "SECONDARY_SUCCESS"
+            elif sd_matches and not primary_fixtures and not fd_matches:
+                resolver_status = "TERTIARY_SUCCESS"
+            else:
+                resolver_status = "PRIMARY_SUCCESS" if primary_fixtures else "SECONDARY_SUCCESS"
+
+            meta = {
+                "data_source": norm_provider_name,
+                "provider": norm_provider_name,
+                "provider_type": "primary" if norm_provider_name == "api_football" else "fallback",
+                "primary_attempted": primary_attempted,
+                "fallback_used": fallback_used,
+                "fallback_reason": fallback_reason,
+                "resolver_status": resolver_status,
+            }
+            return reconciled_fixtures, meta
 
         meta = {
             "data_source": "none",
             "provider": "none",
             "provider_type": "none",
             "primary_attempted": primary_attempted,
-            "fallback_used": True,
+            "fallback_used": fallback_used,
             "fallback_reason": fallback_reason,
             "resolver_status": "NO_DATA",
         }
