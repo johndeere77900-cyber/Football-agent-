@@ -205,7 +205,11 @@ def check_competition_coverage(league_id, season):
     """
     Preflight check for provider coverage for a league + season.
     Cached per (league_id, season).
-    Only returns season_not_available if valid season list exists and season is explicitly prior to provider coverage.
+    Explicitly checks whether the requested season is present in provider's coverage list.
+    Returns:
+    - ("coverage_available", msg) if season is explicitly listed as covered
+    - ("season_not_available", msg) if season is present in coverage list as not available or absent from list
+    - ("UNKNOWN", msg) if coverage response is empty or malformed
     """
     cache_key = (league_id, season)
     if cache_key in _coverage_preflight_cache:
@@ -213,18 +217,27 @@ def check_competition_coverage(league_id, season):
 
     try:
         seasons = api_football.get_league_coverage(league_id)
-    except Exception:
-        seasons = []
+    except Exception as exc:
+        res = ("UNKNOWN", f"Provider coverage call failed: {exc}")
+        _coverage_preflight_cache[cache_key] = res
+        return res
 
-    if isinstance(seasons, list) and seasons:
-        valid_season_years = [s.get("year") for s in seasons if isinstance(s, dict) and "year" in s and isinstance(s.get("year"), int)]
-        if valid_season_years and season not in valid_season_years:
-            if season < min(valid_season_years):
-                res = ("season_not_available", f"Season {season} is prior to provider coverage for league {league_id}.")
-                _coverage_preflight_cache[cache_key] = res
-                return res
+    if not isinstance(seasons, list) or not seasons:
+        res = ("UNKNOWN", f"Empty or malformed coverage metadata for league {league_id}.")
+        _coverage_preflight_cache[cache_key] = res
+        return res
 
-    res = ("coverage_available", "Coverage available.")
+    valid_season_years = [s.get("year") for s in seasons if isinstance(s, dict) and isinstance(s.get("year"), int)]
+    if not valid_season_years:
+        res = ("UNKNOWN", f"No valid season years found in coverage metadata for league {league_id}.")
+        _coverage_preflight_cache[cache_key] = res
+        return res
+
+    if season in valid_season_years:
+        res = ("coverage_available", "Coverage available.")
+    else:
+        res = ("season_not_available", f"Season {season} is not available in provider coverage for league {league_id}.")
+
     _coverage_preflight_cache[cache_key] = res
     return res
 
@@ -1161,7 +1174,7 @@ def predict_fixture(
     )
 
     prov_meta = provider_meta or fixture.get("provider_provenance") or {}
-    provider_name = prov_meta.get("provider") or prov_meta.get("data_source", "api_football")
+    provider_name = prov_meta.get("provider") or prov_meta.get("data_source") or fixture.get("source", "api_football")
 
     # Enforce Provider ID Isolation: If fixture originates from secondary provider (football_data_org),
     # its team IDs belong to secondary provider namespace and MUST NOT be passed to API-Football endpoints.
@@ -1175,9 +1188,22 @@ def predict_fixture(
 
     import historical_features
     import historical_h2h
+    import team_identity
 
     cutoff = fixture_data.get("date")
     db_fixtures = storage.get_historical_fixtures(league["id"], league["season"])
+
+    c_home_id = team_identity.resolve_canonical_team_id(home_team["name"], provider_name, home_team["id"], league_id=league["id"])
+    c_away_id = team_identity.resolve_canonical_team_id(away_team["name"], provider_name, away_team["id"], league_id=league["id"])
+
+    if c_home_id is None or c_away_id is None:
+        return _insufficient_prediction(
+            fixture,
+            is_live,
+            f"Canonical team identity could not be established safely (home={c_home_id}, away={c_away_id}).",
+            failure_stage="unresolved_team_identity",
+            provider_meta=provider_meta,
+        )
 
     historical_snapshot = None
     recent_snapshot = None
@@ -1192,6 +1218,8 @@ def predict_fixture(
             away_team["id"],
             cutoff,
             minimum_matches=min_matches,
+            canonical_home_id=c_home_id,
+            canonical_away_id=c_away_id,
         )
         recent_snapshot = historical_features.fixture_recent_form(
             db_fixtures,
@@ -1200,6 +1228,8 @@ def predict_fixture(
             cutoff,
             window=config.RECENT_FORM_MATCHES,
             minimum_matches=min_matches,
+            canonical_home_id=c_home_id,
+            canonical_away_id=c_away_id,
         )
         h2h_snapshot = historical_h2h.historical_h2h_snapshot(
             db_fixtures,
@@ -1208,6 +1238,8 @@ def predict_fixture(
             cutoff,
             window=config.HEAD_TO_HEAD_MATCHES,
             minimum_matches=0,
+            canonical_home_id=c_home_id,
+            canonical_away_id=c_away_id,
         )
 
     if historical_snapshot is not None and recent_snapshot is not None:

@@ -189,7 +189,27 @@ def get_competition_matches(comp_code, season=None):
     if season is not None:
         params["season"] = season
     data = _get(f"competitions/{comp_code}/matches", params=params)
-    return data.get("matches", []) if isinstance(data, dict) else []
+    if not isinstance(data, dict):
+        return {"matches": [], "metadata": {}}
+
+    matches = data.get("matches", [])
+    if not isinstance(matches, list):
+        matches = []
+
+    res_set = data.get("resultSet", {}) if isinstance(data.get("resultSet"), dict) else {}
+    comp_obj = data.get("competition", {}) if isinstance(data.get("competition"), dict) else {}
+    filters_obj = data.get("filters", {}) if isinstance(data.get("filters"), dict) else {}
+
+    metadata = {
+        "count": res_set.get("count"),
+        "played": res_set.get("played"),
+        "first": res_set.get("first"),
+        "last": res_set.get("last"),
+        "competition_code": comp_obj.get("code"),
+        "season": filters_obj.get("season") or season,
+    }
+
+    return {"matches": matches, "metadata": metadata}
 
 
 def get_competition_standings(comp_code, season=None):

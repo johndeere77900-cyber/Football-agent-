@@ -120,25 +120,37 @@ def historical_league_avg_goals(
     return total_goals / (2 * match_count)
 
 
-def team_match_history(fixtures, team_id, cutoff):
+def team_match_history(fixtures, team_id, cutoff, canonical_team_id=None):
     """
     Return a team's completed historical matches available at cutoff.
 
-    No match at or after cutoff is included.
+    Rules:
+    - If canonical_team_id is provided, match strictly by canonical team ID. Unresolved fixtures or fixtures without matching canonical IDs are excluded.
+    - If canonical_team_id is None, match by numeric team_id (legacy single-provider mode).
+    - Never allow cross-provider numeric team IDs to cross-match.
     """
     history = []
 
     for fixture in prior_completed_fixtures(fixtures, cutoff):
         home_id = fixture.get("teams", {}).get("home", {}).get("id")
         away_id = fixture.get("teams", {}).get("away", {}).get("id")
+        c_home = fixture.get("canonical_home_id")
+        c_away = fixture.get("canonical_away_id")
 
-        if team_id in (home_id, away_id):
+        matched = False
+        if canonical_team_id is not None:
+            if canonical_team_id in (c_home, c_away):
+                matched = True
+        elif team_id in (home_id, away_id):
+            matched = True
+
+        if matched:
             history.append(fixture)
 
     return history
 
 
-def _team_history_with_valid_goals(fixtures, team_id, cutoff):
+def _team_history_with_valid_goals(fixtures, team_id, cutoff, canonical_team_id=None):
     """
     Return prior team matches that have usable numeric final goals.
 
@@ -148,6 +160,7 @@ def _team_history_with_valid_goals(fixtures, team_id, cutoff):
         fixtures,
         team_id,
         cutoff,
+        canonical_team_id=canonical_team_id,
     )
 
     valid = []
@@ -159,7 +172,7 @@ def _team_history_with_valid_goals(fixtures, team_id, cutoff):
     return valid
 
 
-def team_goal_averages(fixtures, team_id, cutoff):
+def team_goal_averages(fixtures, team_id, cutoff, canonical_team_id=None):
     """
     Calculate goals-for and goals-against averages for one team using only
     its prior completed matches.
@@ -170,6 +183,7 @@ def team_goal_averages(fixtures, team_id, cutoff):
         fixtures,
         team_id,
         cutoff,
+        canonical_team_id=canonical_team_id,
     )
 
     goals_for = []
@@ -177,12 +191,18 @@ def team_goal_averages(fixtures, team_id, cutoff):
 
     for fixture in history:
         home_id = fixture["teams"]["home"]["id"]
+        c_home = fixture.get("canonical_home_id")
         goals = historical_match_policy.get_football_match_goals(fixture)
         if goals is None:
             continue
         home_goals, away_goals = goals
 
-        if home_id == team_id:
+        if canonical_team_id and (c_home or fixture.get("canonical_away_id")):
+            is_home = (c_home == canonical_team_id)
+        else:
+            is_home = (home_id == team_id)
+
+        if is_home:
             goals_for.append(home_goals)
             goals_against.append(away_goals)
         else:
@@ -199,7 +219,7 @@ def team_goal_averages(fixtures, team_id, cutoff):
     }
 
 
-def has_minimum_history(fixtures, team_id, cutoff, minimum_matches):
+def has_minimum_history(fixtures, team_id, cutoff, minimum_matches, canonical_team_id=None):
     """Check whether a team individually has enough prior valid matches."""
     if minimum_matches < 0:
         raise ValueError("minimum_matches cannot be negative.")
@@ -208,6 +228,7 @@ def has_minimum_history(fixtures, team_id, cutoff, minimum_matches):
         fixtures,
         team_id,
         cutoff,
+        canonical_team_id=canonical_team_id,
     )
 
     return len(history) >= minimum_matches
@@ -219,6 +240,8 @@ def fixture_has_minimum_history(
     away_team_id,
     cutoff,
     minimum_matches=5,
+    canonical_home_id=None,
+    canonical_away_id=None,
 ):
     """
     Validate minimum historical coverage for BOTH teams independently.
@@ -229,6 +252,7 @@ def fixture_has_minimum_history(
             home_team_id,
             cutoff,
             minimum_matches,
+            canonical_team_id=canonical_home_id,
         )
         and
         has_minimum_history(
@@ -236,6 +260,7 @@ def fixture_has_minimum_history(
             away_team_id,
             cutoff,
             minimum_matches,
+            canonical_team_id=canonical_away_id,
         )
     )
 
@@ -246,6 +271,8 @@ def historical_feature_snapshot(
     away_team_id,
     cutoff,
     minimum_matches=0,
+    canonical_home_id=None,
+    canonical_away_id=None,
 ):
     """
     Build a leakage-safe historical feature snapshot for a fixture.
@@ -259,6 +286,8 @@ def historical_feature_snapshot(
         away_team_id,
         cutoff,
         minimum_matches,
+        canonical_home_id=canonical_home_id,
+        canonical_away_id=canonical_away_id,
     ):
         return None
 
@@ -266,12 +295,14 @@ def historical_feature_snapshot(
         fixtures,
         home_team_id,
         cutoff,
+        canonical_team_id=canonical_home_id,
     )
 
     away = team_goal_averages(
         fixtures,
         away_team_id,
         cutoff,
+        canonical_team_id=canonical_away_id,
     )
 
     if home is None or away is None:
@@ -293,6 +324,7 @@ def team_recent_form(
     cutoff,
     window=8,
     minimum_matches=0,
+    canonical_team_id=None,
 ):
     """
     Calculate a team's recent form strictly as of the historical cutoff.
@@ -314,6 +346,7 @@ def team_recent_form(
         fixtures,
         team_id,
         cutoff,
+        canonical_team_id=canonical_team_id,
     )
 
     recent = history[-window:]
@@ -330,12 +363,18 @@ def team_recent_form(
 
     for fixture in recent:
         home_id = fixture["teams"]["home"]["id"]
+        c_home = fixture.get("canonical_home_id")
         goals = historical_match_policy.get_football_match_goals(fixture)
         if goals is None:
             continue
         home_goals, away_goals = goals
 
-        if home_id == team_id:
+        if canonical_team_id and (c_home or fixture.get("canonical_away_id")):
+            is_home = (c_home == canonical_team_id)
+        else:
+            is_home = (home_id == team_id)
+
+        if is_home:
             team_goals = home_goals
             opponent_goals = away_goals
         else:
@@ -401,6 +440,8 @@ def fixture_recent_form(
     cutoff,
     window=8,
     minimum_matches=0,
+    canonical_home_id=None,
+    canonical_away_id=None,
 ):
     """
     Return independent historical recent-form snapshots for both teams.
@@ -414,6 +455,7 @@ def fixture_recent_form(
         cutoff,
         window=window,
         minimum_matches=minimum_matches,
+        canonical_team_id=canonical_home_id,
     )
 
     away = team_recent_form(
@@ -422,6 +464,7 @@ def fixture_recent_form(
         cutoff,
         window=window,
         minimum_matches=minimum_matches,
+        canonical_team_id=canonical_away_id,
     )
 
     if home is None or away is None:

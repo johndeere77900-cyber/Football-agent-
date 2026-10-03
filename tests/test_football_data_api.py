@@ -30,12 +30,14 @@ def test_get_competition_matches_cached(mock_get):
     mock_get.return_value = mock_resp
 
     with patch.object(football_data_api, "_headers", return_value={"X-Auth-Token": "test-key"}):
-        matches1 = football_data_api.get_competition_matches("PL", season=2024)
+        res1 = football_data_api.get_competition_matches("PL", season=2024)
+        matches1 = res1.get("matches", []) if isinstance(res1, dict) else res1
         assert len(matches1) == 1
         assert matches1[0]["id"] == 101
 
         # Second call should use cache and not hit network again
-        matches2 = football_data_api.get_competition_matches("PL", season=2024)
+        res2 = football_data_api.get_competition_matches("PL", season=2024)
+        matches2 = res2.get("matches", []) if isinstance(res2, dict) else res2
         assert len(matches2) == 1
         assert mock_get.call_count == 1
 
