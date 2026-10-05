@@ -559,30 +559,44 @@ def _recent_feature(
     league_id=None,
     season=None,
     fixture_date=None,
+    team_name=None,
 ):
     """
-    Build recent-form features as per-match averages.
-    Passes league_id and season to restrict query scope where provider supports it.
+    Build recent-form features as per-match averages using DataResolver.
     Strictly filters out matches occurring on or after fixture_date or with missing/invalid kickoff dates.
     """
     try:
-        if league_id is not None or season is not None:
-            matches = api_football.get_recent_form(
-                team_id,
-                last=last,
-                league_id=league_id,
-                season=season,
-            )
-        else:
-            matches = api_football.get_recent_form(
-                team_id,
-                last=last,
-            )
-    except TypeError:
-        matches = api_football.get_recent_form(
+        from data_resolver import DataResolver
+        resolver = DataResolver()
+        matches = resolver.get_team_recent_matches(
             team_id,
             last=last,
+            league_id=league_id,
+            season=season,
+            team_name=team_name,
         )
+    except Exception:
+        matches = None
+
+    if not matches:
+        try:
+            if league_id is not None or season is not None:
+                matches = api_football.get_recent_form(
+                    team_id,
+                    last=last,
+                    league_id=league_id,
+                    season=season,
+                )
+            else:
+                matches = api_football.get_recent_form(
+                    team_id,
+                    last=last,
+                )
+        except TypeError:
+            matches = api_football.get_recent_form(
+                team_id,
+                last=last,
+            )
 
     goals_for = []
     goals_against = []
@@ -649,7 +663,7 @@ def _recent_feature(
         home_id = home.get("id")
         away_id = away.get("id")
 
-        if home_id == team_id:
+        if home_id == team_id or (team_name and team_name.lower() in str(home.get("name", "")).lower()):
             goals_for.append(
                 float(home_goals)
             )
@@ -657,7 +671,7 @@ def _recent_feature(
                 float(away_goals)
             )
 
-        elif away_id == team_id:
+        elif away_id == team_id or (team_name and team_name.lower() in str(away.get("name", "")).lower()):
             goals_for.append(
                 float(away_goals)
             )
