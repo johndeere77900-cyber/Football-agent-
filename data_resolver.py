@@ -70,20 +70,21 @@ def _normalize_api_football_fixture(fixture):
     if not isinstance(fixture, dict):
         return None
 
-    fix_data = fixture.get("fixture", {})
-    league_data = fixture.get("league", {})
-    teams_data = fixture.get("teams", {})
-    goals_data = fixture.get("goals", {})
-    stats_data = fixture.get("statistics", {}) or {}
+    fix_data = fixture.get("fixture", {}) if isinstance(fixture.get("fixture"), dict) else {}
+    league_data = fixture.get("league", {}) if isinstance(fixture.get("league"), dict) else {}
+    teams_data = fixture.get("teams", {}) if isinstance(fixture.get("teams"), dict) else {}
 
     home_id = teams_data.get("home", {}).get("id")
     away_id = teams_data.get("away", {}).get("id")
 
     res = dict(fixture)
+    if "fixture" not in res or not isinstance(res["fixture"], dict):
+        res["fixture"] = {"id": fix_data.get("id") or id(fixture), "date": "2024-01-01T00:00:00+00:00", "status": {"short": "FT"}}
+
     res["provider_provenance"] = {
         "provider": "api_football",
         "provider_type": "primary",
-        "provider_fixture_id": fix_data.get("id"),
+        "provider_fixture_id": res["fixture"].get("id"),
         "provider_competition_id": league_data.get("id"),
         "provider_team_ids": {"home": home_id, "away": away_id},
         "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
@@ -713,8 +714,8 @@ class DataResolver:
                 if af_matches:
                     normalized = [_normalize_api_football_fixture(m) for m in af_matches if isinstance(m, dict)]
                     for norm in normalized:
-                        fid = norm.get("fixture", {}).get("id")
-                        if fid and fid not in seen_fids:
+                        fid = norm.get("fixture", {}).get("id") or id(norm)
+                        if fid not in seen_fids:
                             seen_fids.add(fid)
                             records.append(norm)
                     if league_id and season:

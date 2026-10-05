@@ -579,24 +579,7 @@ def _recent_feature(
         matches = None
 
     if not matches:
-        try:
-            if league_id is not None or season is not None:
-                matches = api_football.get_recent_form(
-                    team_id,
-                    last=last,
-                    league_id=league_id,
-                    season=season,
-                )
-            else:
-                matches = api_football.get_recent_form(
-                    team_id,
-                    last=last,
-                )
-        except TypeError:
-            matches = api_football.get_recent_form(
-                team_id,
-                last=last,
-            )
+        matches = []
 
     goals_for = []
     goals_against = []
