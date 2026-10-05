@@ -187,7 +187,7 @@ def test_game_details_historical_requires_both_teams(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_historical_queue_default_is_target_seasons(monkeypatch):
-    """Prove run_historical_queue() defaults to config.TARGET_SEASONS [2020, 2021, 2022, 2023, 2024] when no seasons/season passed."""
+    """Prove run_historical_queue() defaults to config.TARGET_SEASONS [2022, 2023, 2024] when no seasons/season passed."""
     processed_seasons = []
 
     def mock_sync_fb(league_id, season, **kwargs):
