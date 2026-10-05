@@ -368,10 +368,10 @@ def test_main_cli_historical_queue_dispatches_correct_seasons(temp_db, monkeypat
     main.main()
     assert captured_calls[-1] == {"seasons": None, "season": None}
 
-    # 2. --seasons 2020 2021 2022 2023 2024
-    monkeypatch.setattr(sys, "argv", ["main.py", "--historical-queue", "--seasons", "2020", "2021", "2022", "2023", "2024"])
+    # 2. --seasons 2022 2023 2024
+    monkeypatch.setattr(sys, "argv", ["main.py", "--historical-queue", "--seasons", "2022", "2023", "2024"])
     main.main()
-    assert captured_calls[-1] == {"seasons": [2020, 2021, 2022, 2023, 2024], "season": None}
+    assert captured_calls[-1] == {"seasons": [2022, 2023, 2024], "season": None}
 
     # 3. --season 2023
     monkeypatch.setattr(sys, "argv", ["main.py", "--historical-queue", "--season", "2023"])
