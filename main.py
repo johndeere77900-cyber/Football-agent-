@@ -706,19 +706,21 @@ def _h2h_feature(
     away_id,
     last,
     fixture_date=None,
+    home_team_name=None,
+    away_team_name=None,
 ):
     """
-    Build H2H features as per-meeting averages with strict temporal safety.
-
-    Requirements:
-    - Kickoff timestamp MUST be strictly BEFORE fixture_date.
-    - Excludes matches occurring on or after fixture_date or with missing/invalid dates.
-    - Perspective is always requested home team.
+    Build H2H features as per-meeting averages with strict temporal safety using DataResolver.
     """
-    matches = api_football.get_head_to_head(
+    from data_resolver import DataResolver
+    resolver = DataResolver()
+
+    matches = resolver.get_head_to_head(
         home_id,
         away_id,
         last=last,
+        home_team_name=home_team_name,
+        away_team_name=away_team_name,
     )
 
     goals_for = []
@@ -1289,20 +1291,20 @@ def predict_fixture(
     else:
         # Fall back to external provider API when DB history is insufficient
         data_source = provider_name
-        home_stats = (
-            api_football.get_team_statistics(
-                home_team["id"],
-                league["id"],
-                league["season"],
-            )
+        from data_resolver import DataResolver
+        resolver = DataResolver()
+        home_stats = resolver.get_team_statistics(
+            home_team["id"],
+            league["id"],
+            league["season"],
+            team_name=home_team["name"],
         )
 
-        away_stats = (
-            api_football.get_team_statistics(
-                away_team["id"],
-                league["id"],
-                league["season"],
-            )
+        away_stats = resolver.get_team_statistics(
+            away_team["id"],
+            league["id"],
+            league["season"],
+            team_name=away_team["name"],
         )
 
         home_feature = _current_team_feature(
@@ -2058,8 +2060,11 @@ def run_grading():
     graded_count = 0
     skipped_count = 0
 
+    from data_resolver import DataResolver
+    resolver = DataResolver()
+
     try:
-        enriched_results = api_football.get_enriched_fixtures(pending_ids, batch_size=20)
+        enriched_results = resolver.get_enriched_fixtures(pending_ids, batch_size=20)
     except api_football.APIFootballQuotaExhaustedError:
         print("Daily API quota exhausted during grading batch fetch.")
         enriched_results = {}

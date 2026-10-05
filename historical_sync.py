@@ -125,10 +125,13 @@ def sync_historical_fixtures(
     primary_available = (cov_status != "season_not_available")
 
     if primary_available:
+        import data_resolver
+        resolver = data_resolver.DataResolver()
+
         current_page = start_p
         while True:
             try:
-                page_meta = api_football.get_league_fixtures_page(
+                page_meta = resolver.get_league_fixtures_page(
                     league_id, season, page=current_page, max_budget=historical_budget
                 )
                 page_fixtures = page_meta.get("fixtures", [])
@@ -367,11 +370,11 @@ def sync_historical_fixtures(
 
             if missing_enrichment_ids:
                 try:
-                    enriched_batch = api_football.get_enriched_fixtures(
+                    enriched_batch = resolver.get_enriched_fixtures(
                         missing_enrichment_ids, max_budget=historical_budget
                     )
                     if enriched_batch:
-                        enrichment_stored = storage.save_historical_enrichment(enriched_batch, source="api_football")
+                        enrichment_stored = len(enriched_batch)
                 except api_football.APIFootballQuotaExhaustedError:
                     quota_budget_stopped = True
                     last_error_reason = "quota_budget_exhausted_during_enrichment"

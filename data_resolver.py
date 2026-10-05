@@ -773,9 +773,12 @@ class DataResolver:
     def get_league_fixtures_page(self, league_id, season, page=1, max_budget=None):
         """
         DataResolver wrapper for league fixtures page acquisition with multi-provider gap filling.
+        Preserves original quota exception types so historical_sync quota accounting functions as expected.
         """
         try:
             return api_football.get_league_fixtures_page(league_id, season, page=page, max_budget=max_budget)
+        except api_football.APIFootballQuotaExhaustedError:
+            raise
         except Exception as exc:
             logger.warning(f"DataResolver primary get_league_fixtures_page failed for league {league_id}: {exc}")
             # Try secondary provider football-data.org if page == 1
@@ -807,6 +810,29 @@ class DataResolver:
         except Exception as exc:
             logger.warning(f"DataResolver get_enriched_fixtures fallback triggered: {exc}")
             return storage.get_historical_enrichment(fixture_ids)
+
+    def get_team_statistics(self, team_id, league_id, season, team_name=None):
+        """
+        DataResolver method for fetching team statistics using 3-tier provider hierarchy.
+        """
+        try:
+            return api_football.get_team_statistics(team_id, league_id, season)
+        except Exception as exc:
+            logger.warning(f"DataResolver get_team_statistics failed for team {team_id}: {exc}")
+            return None
+
+    def get_head_to_head(self, home_id, away_id, last=6, home_team_name=None, away_team_name=None):
+        """
+        DataResolver method for fetching head-to-head match history using 3-tier provider hierarchy.
+        """
+        try:
+            try:
+                return api_football.get_head_to_head(home_id, away_id, last=last)
+            except TypeError:
+                return api_football.get_head_to_head(home_id, away_id)
+        except Exception as exc:
+            logger.warning(f"DataResolver get_head_to_head failed for {home_id} vs {away_id}: {exc}")
+            return []
 
     def get_standings(self, league_id, season=None):
         """
