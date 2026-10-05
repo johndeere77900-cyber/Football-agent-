@@ -125,13 +125,10 @@ def sync_historical_fixtures(
     primary_available = (cov_status != "season_not_available")
 
     if primary_available:
-        import data_resolver
-        resolver = data_resolver.DataResolver()
-
         current_page = start_p
         while True:
             try:
-                page_meta = resolver.get_league_fixtures_page(
+                page_meta = api_football.get_league_fixtures_page(
                     league_id, season, page=current_page, max_budget=historical_budget
                 )
                 page_fixtures = page_meta.get("fixtures", [])
@@ -291,35 +288,10 @@ def sync_historical_fixtures(
                 last_error_reason = f"football_data_org_error: {str(exc)[:100]}"
                 print(f"Secondary acquisition error via football-data.org: {exc}", flush=True)
 
-        # Trigger tertiary fallback (SoccerData) if secondary fallback failed or returned zero valid fixtures
-        if total_valid_fixtures == 0 or acquisition_failed:
-            print(f"Secondary fallback failed/incomplete for league {league_id} season {season}. Attempting tertiary acquisition via SoccerData...", flush=True)
-            import data_resolver
-            import soccerdata_provider
-
-            sd_code = data_resolver.LEAGUE_TO_SD_CODE.get(league_id)
-            if sd_code:
-                try:
-                    sd_status, sd_matches, sd_meta = soccerdata_provider.get_match_history_games(sd_code, season)
-                    if sd_status == "SOURCE_AVAILABLE" and sd_matches:
-                        fixtures_received.extend(sd_matches)
-                        save_result = storage.save_historical_fixtures(sd_matches, league_id, season, source="soccerdata")
-
-                        total_valid_fixtures += save_result.get("valid", 0)
-                        total_newly_stored += save_result.get("inserted", 0)
-                        total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
-                        total_rejected_count += save_result.get("rejected_count", 0)
-                        acquisition_failed = False
-                        last_error_reason = None
-                except Exception as exc:
-                    acquisition_failed = True
-                    last_error_reason = f"soccerdata_error: {str(exc)[:100]}"
-                    print(f"Tertiary acquisition error via SoccerData: {exc}", flush=True)
-
         if acquisition_failed or not acquisition_complete or total_valid_fixtures == 0 or storage.get_historical_fixture_count(league_id, season) == 0:
             acquisition_failed = True
             if not last_error_reason:
-                last_error_reason = "fallback_providers_returned_no_fixtures"
+                last_error_reason = "secondary_provider_returned_no_fixtures"
             storage.mark_historical_dataset_incomplete(
                 league_id,
                 season,
@@ -331,7 +303,7 @@ def sync_historical_fixtures(
                 rejected_count=total_rejected_count,
                 empty_pages_count=total_empty_pages_count,
                 error_reason=last_error_reason,
-                source="soccerdata" if total_valid_fixtures > 0 else "football_data_org",
+                source="football_data_org",
             )
 
     valid_fixtures_count = total_valid_fixtures
@@ -370,11 +342,11 @@ def sync_historical_fixtures(
 
             if missing_enrichment_ids:
                 try:
-                    enriched_batch = resolver.get_enriched_fixtures(
+                    enriched_batch = api_football.get_enriched_fixtures(
                         missing_enrichment_ids, max_budget=historical_budget
                     )
                     if enriched_batch:
-                        enrichment_stored = len(enriched_batch)
+                        enrichment_stored = storage.save_historical_enrichment(enriched_batch, source="api_football")
                 except api_football.APIFootballQuotaExhaustedError:
                     quota_budget_stopped = True
                     last_error_reason = "quota_budget_exhausted_during_enrichment"

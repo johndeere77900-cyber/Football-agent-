@@ -559,27 +559,30 @@ def _recent_feature(
     league_id=None,
     season=None,
     fixture_date=None,
-    team_name=None,
 ):
     """
-    Build recent-form features as per-match averages using DataResolver.
+    Build recent-form features as per-match averages.
+    Passes league_id and season to restrict query scope where provider supports it.
     Strictly filters out matches occurring on or after fixture_date or with missing/invalid kickoff dates.
     """
     try:
-        from data_resolver import DataResolver
-        resolver = DataResolver()
-        matches = resolver.get_team_recent_matches(
+        if league_id is not None or season is not None:
+            matches = api_football.get_recent_form(
+                team_id,
+                last=last,
+                league_id=league_id,
+                season=season,
+            )
+        else:
+            matches = api_football.get_recent_form(
+                team_id,
+                last=last,
+            )
+    except TypeError:
+        matches = api_football.get_recent_form(
             team_id,
             last=last,
-            league_id=league_id,
-            season=season,
-            team_name=team_name,
         )
-    except Exception:
-        matches = None
-
-    if not matches:
-        matches = []
 
     goals_for = []
     goals_against = []
@@ -646,7 +649,7 @@ def _recent_feature(
         home_id = home.get("id")
         away_id = away.get("id")
 
-        if home_id == team_id or (team_name and team_name.lower() in str(home.get("name", "")).lower()):
+        if home_id == team_id:
             goals_for.append(
                 float(home_goals)
             )
@@ -654,7 +657,7 @@ def _recent_feature(
                 float(away_goals)
             )
 
-        elif away_id == team_id or (team_name and team_name.lower() in str(away.get("name", "")).lower()):
+        elif away_id == team_id:
             goals_for.append(
                 float(away_goals)
             )
@@ -689,21 +692,19 @@ def _h2h_feature(
     away_id,
     last,
     fixture_date=None,
-    home_team_name=None,
-    away_team_name=None,
 ):
     """
-    Build H2H features as per-meeting averages with strict temporal safety using DataResolver.
-    """
-    from data_resolver import DataResolver
-    resolver = DataResolver()
+    Build H2H features as per-meeting averages with strict temporal safety.
 
-    matches = resolver.get_head_to_head(
+    Requirements:
+    - Kickoff timestamp MUST be strictly BEFORE fixture_date.
+    - Excludes matches occurring on or after fixture_date or with missing/invalid dates.
+    - Perspective is always requested home team.
+    """
+    matches = api_football.get_head_to_head(
         home_id,
         away_id,
         last=last,
-        home_team_name=home_team_name,
-        away_team_name=away_team_name,
     )
 
     goals_for = []
@@ -1189,6 +1190,9 @@ def predict_fixture(
     import historical_h2h
     import team_identity
 
+    cutoff = fixture_data.get("date")
+    db_fixtures = storage.get_historical_fixtures(league["id"], league["season"])
+
     c_home_id = team_identity.resolve_canonical_team_id(home_team["name"], provider_name, home_team["id"], league_id=league["id"])
     c_away_id = team_identity.resolve_canonical_team_id(away_team["name"], provider_name, away_team["id"], league_id=league["id"])
 
@@ -1200,29 +1204,6 @@ def predict_fixture(
             failure_stage="unresolved_team_identity",
             provider_meta=provider_meta,
         )
-
-    cutoff = fixture_data.get("date")
-
-    # PERMANENT ACCUMULATION: Always store newly discovered fixture payload in permanent database (require_completed=False)
-    try:
-        storage.save_historical_fixtures([fixture], league["id"], league["season"], source=provider_name, require_completed=False)
-        if fixture.get("statistics"):
-            storage.save_historical_enrichment([fixture], source=provider_name)
-    except Exception as exc:
-        print(f"Warning: Raw fixture persistence error: {exc}")
-
-    # DATABASE FIRST: Retrieve team-centric history directly from stored database using canonical IDs
-    home_db_matches = storage.get_team_historical_fixtures(c_home_id, cutoff=cutoff, limit=30)
-    away_db_matches = storage.get_team_historical_fixtures(c_away_id, cutoff=cutoff, limit=30)
-
-    # Combine unique DB fixtures for both teams
-    seen_fids = set()
-    db_fixtures = []
-    for f in home_db_matches + away_db_matches + storage.get_historical_fixtures(league["id"], league["season"]):
-        fid = f.get("fixture", {}).get("id")
-        if fid and fid not in seen_fids:
-            seen_fids.add(fid)
-            db_fixtures.append(f)
 
     historical_snapshot = None
     recent_snapshot = None
@@ -1274,20 +1255,20 @@ def predict_fixture(
     else:
         # Fall back to external provider API when DB history is insufficient
         data_source = provider_name
-        from data_resolver import DataResolver
-        resolver = DataResolver()
-        home_stats = resolver.get_team_statistics(
-            home_team["id"],
-            league["id"],
-            league["season"],
-            team_name=home_team["name"],
+        home_stats = (
+            api_football.get_team_statistics(
+                home_team["id"],
+                league["id"],
+                league["season"],
+            )
         )
 
-        away_stats = resolver.get_team_statistics(
-            away_team["id"],
-            league["id"],
-            league["season"],
-            team_name=away_team["name"],
+        away_stats = (
+            api_football.get_team_statistics(
+                away_team["id"],
+                league["id"],
+                league["season"],
+            )
         )
 
         home_feature = _current_team_feature(
@@ -1395,7 +1376,7 @@ def predict_fixture(
         )
 
     prov_meta = provider_meta or {}
-    provenance_info = {
+    prediction["provenance"] = {
         "provider": data_source,
         "fallback_used": prov_meta.get("fallback_used", False),
         "fallback_reason": prov_meta.get("fallback_reason"),
@@ -1403,7 +1384,6 @@ def predict_fixture(
         "retrieved_at": now_utc,
         "as_of": now_utc,
     }
-    prediction["provenance"] = provenance_info
 
     if is_live:
         current_home_goals = (
@@ -1589,7 +1569,6 @@ def predict_fixture(
         "insufficient_data": False,
         "odds_comparison": odds_comparison,
         "elo_cross_check": elo_probabilities,
-        "provenance": provenance_info,
         "feature_snapshot": {
             "season": {
                 "home": home_feature,
@@ -2043,11 +2022,8 @@ def run_grading():
     graded_count = 0
     skipped_count = 0
 
-    from data_resolver import DataResolver
-    resolver = DataResolver()
-
     try:
-        enriched_results = resolver.get_enriched_fixtures(pending_ids, batch_size=20)
+        enriched_results = api_football.get_enriched_fixtures(pending_ids, batch_size=20)
     except api_football.APIFootballQuotaExhaustedError:
         print("Daily API quota exhausted during grading batch fetch.")
         enriched_results = {}

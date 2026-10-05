@@ -282,7 +282,7 @@ def test_football_live_prediction_api_fallback_and_persistence():
         assert pred["prediction_record"]["provenance"]["provider"] == "api_football"
 
         # Auto-persisted fallback fixtures to DB
-        assert storage.get_historical_fixture_count(league_id, season) >= 2
+        assert storage.get_historical_fixture_count(league_id, season) == 2
 
 
 # --- 12. DB-first features used when sufficient DB data exists ---
