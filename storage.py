@@ -4040,8 +4040,8 @@ def save_historical_enrichment(enriched_fixtures, source="api_football"):
 
     Accepts dict (fixture_id -> fixture) or list of enriched fixtures.
     Valid sources: "api_football", "football_data_org", "soccerdata", "reconciled".
-    Idempotent: ON CONFLICT (source, fixture_id) DO NOTHING.
-    Returns count of newly inserted enrichment records.
+    Performs an idempotent source-scoped upsert and allows improved enrichment records to replace stale records.
+    Returns count of newly inserted or updated enrichment records.
     """
     valid_sources = ("api_football", "football_data_org", "soccerdata", "reconciled")
     source_str = str(source).strip().lower()
@@ -4081,39 +4081,93 @@ def save_historical_enrichment(enriched_fixtures, source="api_football"):
 
     conn, db_type = _connect()
     now_str = _utc_now()
-    inserted_count = 0
+    written_count = 0
 
     try:
+        clean_ids = [fid for fid, _ in valid_items]
+        existing_payloads = {}
+
         if db_type == "postgres":
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT fixture_id, raw_json
+                    FROM historical_fixture_enrichment
+                    WHERE source = %s AND fixture_id = ANY(%s)
+                    """,
+                    (source, clean_ids),
+                )
+                for r_fid, r_raw in cur.fetchall():
+                    existing_payloads[r_fid] = _json_loads(r_raw)
+
                 for fid, item in valid_items:
                     raw_json_str = _json_dumps(item, "raw_json")
+                    prev_obj = existing_payloads.get(fid)
+                    is_changed = (prev_obj is None or prev_obj != item)
+
                     cur.execute(
                         """
-                        INSERT INTO historical_fixture_enrichment (fixture_id, raw_json, fetched_at, source)
+                        INSERT INTO historical_fixture_enrichment (
+                            fixture_id,
+                            raw_json,
+                            fetched_at,
+                            source
+                        )
                         VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (source, fixture_id) DO NOTHING
+                        ON CONFLICT (source, fixture_id)
+                        DO UPDATE SET
+                            raw_json = EXCLUDED.raw_json,
+                            fetched_at = EXCLUDED.fetched_at
                         """,
                         (fid, raw_json_str, now_str, source),
                     )
-                    if cur.rowcount == 1:
-                        inserted_count += 1
+                    if is_changed:
+                        written_count += 1
             conn.commit()
+
         else:
+            try:
+                placeholders = ",".join(["?"] * len(clean_ids))
+                rows = conn.execute(
+                    f"""
+                    SELECT fixture_id, raw_json
+                    FROM historical_fixture_enrichment
+                    WHERE source = ? AND fixture_id IN ({placeholders})
+                    """,
+                    [source] + clean_ids,
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+
+            for r_fid, r_raw in rows:
+                existing_payloads[r_fid] = _json_loads(r_raw)
+
             for fid, item in valid_items:
                 raw_json_str = _json_dumps(item, "raw_json")
-                cursor = conn.execute(
+                prev_obj = existing_payloads.get(fid)
+                is_changed = (prev_obj is None or prev_obj != item)
+
+                conn.execute(
                     """
-                    INSERT OR IGNORE INTO historical_fixture_enrichment (fixture_id, raw_json, fetched_at, source)
+                    INSERT INTO historical_fixture_enrichment (
+                        fixture_id,
+                        raw_json,
+                        fetched_at,
+                        source
+                    )
                     VALUES (?, ?, ?, ?)
+                    ON CONFLICT(source, fixture_id)
+                    DO UPDATE SET
+                        raw_json = excluded.raw_json,
+                        fetched_at = excluded.fetched_at
                     """,
                     (fid, raw_json_str, now_str, source),
                 )
-                if cursor.rowcount == 1:
-                    inserted_count += 1
+                if is_changed:
+                    written_count += 1
             conn.commit()
 
-        return inserted_count
+        return written_count
 
     except Exception:
         conn.rollback()

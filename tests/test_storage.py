@@ -397,24 +397,71 @@ def test_historical_fixtures_storage(temp_database):
 
 
 def test_historical_fixture_enrichment_storage(temp_database):
-    enriched_sample = {
-        3001: {
-            "fixture": {"id": 3001},
-            "statistics": [{"team": {"id": 100}, "statistics": [{"type": "Corner Kicks", "value": 5}]}],
+    # Test A — initial insert
+    initial = {
+        "fixture": {"id": 3001},
+        "statistics": {
+            "shots": {"home": 5, "away": 3}
         }
     }
-
-    inserted = storage.save_historical_enrichment(enriched_sample)
+    inserted = storage.save_historical_enrichment([initial], source="api_football")
     assert inserted == 1
 
-    # Idempotence
-    inserted_dup = storage.save_historical_enrichment(enriched_sample)
-    assert inserted_dup == 0
+    fetched_init = storage.get_historical_enrichment([3001], source="api_football")
+    assert 3001 in fetched_init
+    assert fetched_init[3001]["statistics"]["shots"]["home"] == 5
 
-    fetched = storage.get_historical_enrichment([3001, 3002])
-    assert 3001 in fetched
-    assert fetched[3001]["fixture"]["id"] == 3001
-    assert 3002 not in fetched
+    # Test B — same source improved record must replace the old row
+    improved = {
+        "fixture": {"id": 3001},
+        "statistics": {
+            "shots": {"home": 10, "away": 7},
+            "corners": {"home": 6, "away": 4}
+        }
+    }
+    updated = storage.save_historical_enrichment([improved], source="api_football")
+    assert updated == 1
+
+    fetched_improved = storage.get_historical_enrichment([3001], source="api_football")
+    assert fetched_improved[3001]["statistics"]["shots"]["home"] == 10
+    assert fetched_improved[3001]["statistics"]["corners"]["home"] == 6
+
+    # Test C — source isolation must remain intact
+    fallback_record = {
+        "fixture": {"id": 3001},
+        "statistics": {
+            "shots": {"home": 8, "away": 6}
+        }
+    }
+    fd_inserted = storage.save_historical_enrichment([fallback_record], source="football_data_org")
+    assert fd_inserted == 1
+
+    api_record = storage.get_historical_enrichment([3001], source="api_football")
+    fd_record = storage.get_historical_enrichment([3001], source="football_data_org")
+
+    assert api_record[3001]["statistics"]["shots"]["home"] == 10
+    assert fd_record[3001]["statistics"]["shots"]["home"] == 8
+
+    # Test D — source=None priority must remain intact
+    reconciled_rec = {
+        "fixture": {"id": 3001},
+        "statistics": {
+            "shots": {"home": 12, "away": 8}
+        },
+        "enrichment_provenance": {"record_type": "reconciled"}
+    }
+    rec_inserted = storage.save_historical_enrichment([reconciled_rec], source="reconciled")
+    assert rec_inserted == 1
+
+    priority_fetched = storage.get_historical_enrichment([3001])
+    assert priority_fetched[3001]["statistics"]["shots"]["home"] == 12
+
+    # Test E — identical payload remains idempotent
+    dup_inserted = storage.save_historical_enrichment([improved], source="api_football")
+    assert dup_inserted == 0
+
+    fetched_dup = storage.get_historical_enrichment([3001], source="api_football")
+    assert fetched_dup[3001]["statistics"]["shots"]["home"] == 10
 
 
 def test_historical_dataset_status_storage(temp_database):
