@@ -66,26 +66,95 @@ LEAGUE_TO_SD_CODE = {
 }
 
 
-def _normalize_api_football_fixture(fixture):
-    """Ensure API-Football fixture includes explicit provider identity metadata."""
+_synthetic_counter = 0
+
+def generate_synthetic_fixture_id(provider, home_name, away_name, date_str, league_id=None, season=None):
+    """Generate a deterministic synthetic fixture identity when provider lacks a numeric fixture ID."""
+    global _synthetic_counter
+    try:
+        import team_identity
+        norm_home = team_identity.normalize_team_name(home_name or "")
+        norm_away = team_identity.normalize_team_name(away_name or "")
+    except Exception:
+        norm_home = str(home_name or "").strip().lower()
+        norm_away = str(away_name or "").strip().lower()
+
+    if date_str:
+        d_str = str(date_str)[:10]
+        lid = str(league_id or "noleague")
+        ssn = str(season or "noseason")
+        raw = f"{provider}_{lid}_{ssn}_{d_str}_{norm_home}_{norm_away}"
+    else:
+        _synthetic_counter += 1
+        raw = f"{provider}_{league_id or 'noleague'}_{season or 'noseason'}_nodate_{_synthetic_counter}_{norm_home}_{norm_away}"
+
+    return raw.replace(" ", "_").replace("/", "_").lower()
+
+
+def _normalize_api_football_fixture(fixture, league_id=None, season=None):
+    """Ensure API-Football fixture includes explicit provider identity metadata and valid synthetic ID if missing."""
     if not isinstance(fixture, dict):
         return None
 
-    fix_data = fixture.get("fixture", {}) if isinstance(fixture.get("fixture"), dict) else {}
-    league_data = fixture.get("league", {}) if isinstance(fixture.get("league"), dict) else {}
-    teams_data = fixture.get("teams", {}) if isinstance(fixture.get("teams"), dict) else {}
-
-    home_id = teams_data.get("home", {}).get("id")
-    away_id = teams_data.get("away", {}).get("id")
-
     res = dict(fixture)
-    if "fixture" not in res or not isinstance(res["fixture"], dict):
-        res["fixture"] = {"id": fix_data.get("id") or id(fixture), "date": "2024-01-01T00:00:00+00:00", "status": {"short": "FT"}}
+    fix_data = res.get("fixture", {}) if isinstance(res.get("fixture"), dict) else {}
+    league_data = res.get("league", {}) if isinstance(res.get("league"), dict) else {}
+    teams_data = res.get("teams", {}) if isinstance(res.get("teams"), dict) else {}
+    goals_data = res.get("goals", {}) if isinstance(res.get("goals"), dict) else {}
+
+    if not league_data:
+        league_data = {"id": league_id, "season": season, "name": "League"}
+        res["league"] = league_data
+    else:
+        if not league_data.get("id") and league_id:
+            league_data["id"] = league_id
+        if not league_data.get("season") and season:
+            league_data["season"] = season
+        res["league"] = league_data
+
+    home_name = teams_data.get("home", {}).get("name") if isinstance(teams_data.get("home"), dict) else ""
+    away_name = teams_data.get("away", {}).get("name") if isinstance(teams_data.get("away"), dict) else ""
+    home_id = teams_data.get("home", {}).get("id") if isinstance(teams_data.get("home"), dict) else None
+    away_id = teams_data.get("away", {}).get("id") if isinstance(teams_data.get("away"), dict) else None
+
+    if not home_name and home_id is not None:
+        home_name = f"Team {home_id}"
+        if "teams" in res and isinstance(res["teams"], dict) and "home" in res["teams"] and isinstance(res["teams"]["home"], dict):
+            res["teams"]["home"]["name"] = home_name
+    if not away_name and away_id is not None:
+        away_name = f"Team {away_id}"
+        if "teams" in res and isinstance(res["teams"], dict) and "away" in res["teams"] and isinstance(res["teams"]["away"], dict):
+            res["teams"]["away"]["name"] = away_name
+
+    fid = fix_data.get("id")
+    raw_date = fix_data.get("date")
+
+    if "fixture" not in res or not isinstance(res.get("fixture"), dict):
+        st_short = "FT" if (goals_data.get("home") is not None and goals_data.get("away") is not None) else "NS"
+        fix_data = {"id": fid, "date": "2024-01-01T00:00:00+00:00", "status": {"short": st_short}}
+        res["fixture"] = fix_data
+    else:
+        fix_data = res["fixture"]
+        if "status" not in fix_data or not isinstance(fix_data.get("status"), dict):
+            st_short = "FT" if (goals_data.get("home") is not None and goals_data.get("away") is not None) else "NS"
+            fix_data["status"] = {"short": st_short}
+
+    if not fid:
+        fid = generate_synthetic_fixture_id(
+            "api_football",
+            home_name or str(home_id or ""),
+            away_name or str(away_id or ""),
+            raw_date,
+            league_data.get("id"),
+            league_data.get("season")
+        )
+        fix_data["id"] = fid
+        res["fixture"] = fix_data
 
     res["provider_provenance"] = {
         "provider": "api_football",
         "provider_type": "primary",
-        "provider_fixture_id": res["fixture"].get("id"),
+        "provider_fixture_id": fid,
         "provider_competition_id": league_data.get("id"),
         "provider_team_ids": {"home": home_id, "away": away_id},
         "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
@@ -220,23 +289,27 @@ def validate_fixtures_sufficiency(fixtures_list):
     return "VALID_DATA", clean
 
 
-def get_missing_fixture_fields(fixture):
+def get_missing_fixture_fields(fixture, require_stats=False):
     """
     Calculate the explicit missing field set for a fixture dict.
 
-    Checks required fields:
+    Checks required basic fields:
     - fixture_id, kickoff, status, competition, season, home_team, away_team
-    - score (home_goals, away_goals)
-    - statistics: xG, shots, shots_on_target, corners, yellow_cards, red_cards, possession, events
+    - score (home_goals, away_goals for finished matches)
+
+    If require_stats=True, also checks statistical fields:
+    - xG, shots, shots_on_target, corners, yellow_cards, red_cards, possession, events
 
     Returns set of missing field names (e.g. {"xg", "shots", "corners"}).
     """
     if not isinstance(fixture, dict):
-        return {
+        base_missing = {
             "fixture_id", "kickoff", "status", "competition", "season",
-            "home_team", "away_team", "score", "xg", "shots",
-            "shots_on_target", "corners", "yellow_cards", "red_cards", "possession", "events"
+            "home_team", "away_team", "score"
         }
+        if require_stats:
+            base_missing.update({"xg", "shots", "shots_on_target", "corners", "yellow_cards", "red_cards", "possession", "events"})
+        return base_missing
 
     missing = set()
 
@@ -250,7 +323,9 @@ def get_missing_fixture_fields(fixture):
         missing.add("fixture_id")
     if not fix_obj.get("date"):
         missing.add("kickoff")
-    if not fix_obj.get("status", {}).get("short") if isinstance(fix_obj.get("status"), dict) else True:
+
+    st_short = fix_obj.get("status", {}).get("short") if isinstance(fix_obj.get("status"), dict) else None
+    if not st_short:
         missing.add("status")
 
     if not league_obj.get("id") and not league_obj.get("name"):
@@ -258,33 +333,48 @@ def get_missing_fixture_fields(fixture):
     if not league_obj.get("season"):
         missing.add("season")
 
-    if not teams_obj.get("home", {}).get("name") if isinstance(teams_obj.get("home"), dict) else True:
+    h_team = teams_obj.get("home", {}) if isinstance(teams_obj.get("home"), dict) else {}
+    a_team = teams_obj.get("away", {}) if isinstance(teams_obj.get("away"), dict) else {}
+    if not h_team.get("name") and not h_team.get("id"):
         missing.add("home_team")
-    if not teams_obj.get("away", {}).get("name") if isinstance(teams_obj.get("away"), dict) else True:
+    if not a_team.get("name") and not a_team.get("id"):
         missing.add("away_team")
 
-    # Score checking
-    is_finished = fix_obj.get("status", {}).get("short") in ("FT", "AET", "PEN") if isinstance(fix_obj.get("status"), dict) else False
-    if is_finished and (goals_obj.get("home") is None or goals_obj.get("away") is None):
-        missing.add("score")
+    # Score checking for finished matches
+    is_finished = st_short in ("FT", "AET", "PEN")
+    if is_finished:
+        if goals_obj.get("home") is None or goals_obj.get("away") is None:
+            missing.add("score")
 
-    # Granular statistical fields checking
-    if stats_obj.get("xG") is None and stats_obj.get("xg") is None:
-        missing.add("xg")
-    if stats_obj.get("shots") is None:
-        missing.add("shots")
-    if stats_obj.get("shots_on_target") is None:
-        missing.add("shots_on_target")
-    if stats_obj.get("corners") is None:
-        missing.add("corners")
-    if stats_obj.get("yellow_cards") is None and not (isinstance(stats_obj.get("cards"), dict) and stats_obj.get("cards", {}).get("home", {}).get("yellow") is None):
-        missing.add("yellow_cards")
-    if stats_obj.get("red_cards") is None:
-        missing.add("red_cards")
-    if stats_obj.get("possession") is None:
-        missing.add("possession")
-    if fixture.get("events") is None and stats_obj.get("events") is None:
-        missing.add("events")
+    if require_stats:
+        xg_val = stats_obj.get("xG") if stats_obj.get("xG") is not None else stats_obj.get("xg")
+        if not is_valid_stat_value(xg_val):
+            missing.add("xg")
+        if not is_valid_stat_value(stats_obj.get("shots")):
+            missing.add("shots")
+        if not is_valid_stat_value(stats_obj.get("shots_on_target")):
+            missing.add("shots_on_target")
+        if not is_valid_stat_value(stats_obj.get("corners")):
+            missing.add("corners")
+
+        has_yellow = is_valid_stat_value(stats_obj.get("yellow_cards")) or (
+            isinstance(stats_obj.get("cards"), dict) and is_valid_stat_value(stats_obj.get("cards"))
+        )
+        if not has_yellow:
+            missing.add("yellow_cards")
+
+        has_red = is_valid_stat_value(stats_obj.get("red_cards")) or (
+            isinstance(stats_obj.get("cards"), dict) and is_valid_stat_value(stats_obj.get("cards"))
+        )
+        if not has_red:
+            missing.add("red_cards")
+
+        if not is_valid_stat_value(stats_obj.get("possession")):
+            missing.add("possession")
+
+        events_val = fixture.get("events") if fixture.get("events") is not None else stats_obj.get("events")
+        if not is_valid_stat_value(events_val):
+            missing.add("events")
 
     return missing
 
@@ -829,8 +919,18 @@ class DataResolver:
         Checks missing statistical fields per fixture before calling external endpoints.
         """
         import storage
-        missing_map = storage.get_missing_enrichment_fields(fixture_ids)
-        to_fetch = [fid for fid, missing in missing_map.items() if len(missing) > 0]
+        existing = storage.get_historical_enrichment(fixture_ids)
+        missing_fids = []
+        for fid in fixture_ids:
+            rec = existing.get(fid)
+            gaps = get_missing_fixture_fields(rec, require_stats=True) if rec else {"statistics"}
+            if len(gaps) > 0:
+                missing_fids.append(fid)
+
+        if not missing_fids:
+            return existing
+
+        to_fetch = missing_fids
 
         if not to_fetch:
             return storage.get_historical_enrichment(fixture_ids)
@@ -854,18 +954,147 @@ class DataResolver:
             logger.warning(f"DataResolver get_team_statistics failed for team {team_id}: {exc}")
             return None
 
-    def get_head_to_head(self, home_id, away_id, last=6, home_team_name=None, away_team_name=None):
+    def get_head_to_head(self, home_id, away_id, last=6, home_team_name=None, away_team_name=None, fixture_date=None, league_id=None):
         """
-        DataResolver method for fetching head-to-head match history using 3-tier provider hierarchy.
+        Retrieves head-to-head match history using 3-tier provider hierarchy with strict canonical identity matching
+        and strict cutoff filtering (match_date < fixture_date).
+
+        Requires BOTH home and away canonical identities to match expected identities.
+        Does NOT rely on fuzzy/substring/home-only/away-only matching.
         """
-        try:
-            try:
-                return api_football.get_head_to_head(home_id, away_id, last=last)
-            except TypeError:
-                return api_football.get_head_to_head(home_id, away_id)
-        except Exception as exc:
-            logger.warning(f"DataResolver get_head_to_head failed for {home_id} vs {away_id}: {exc}")
+        import storage
+        import team_identity
+
+        c_home_id = team_identity.bootstrap_historical_team_identity(home_team_name or f"Team {home_id}", "api_football", home_id, league_id=league_id)
+        c_away_id = team_identity.bootstrap_historical_team_identity(away_team_name or f"Team {away_id}", "api_football", away_id, league_id=league_id)
+
+        if not c_home_id or not c_away_id or c_home_id == c_away_id:
+            logger.warning(f"get_head_to_head called with invalid/ambiguous canonical team identities: {c_home_id} vs {c_away_id}")
             return []
+
+        def _is_valid_h2h_match(match):
+            """Verify match contains BOTH canonical home and away identities and respects strict date cutoff."""
+            if not isinstance(match, dict):
+                return False
+
+            m_date = str(match.get("fixture", {}).get("date", "") or "")
+            if not m_date:
+                return False
+
+            # Strict cutoff check
+            if fixture_date:
+                if not time_utils.is_strictly_before(m_date, fixture_date):
+                    return False
+            else:
+                st = match.get("fixture", {}).get("status", {}).get("short")
+                if st not in ("FT", "AET", "PEN"):
+                    return False
+
+            # Check canonical identities for BOTH teams
+            h_id = match.get("teams", {}).get("home", {}).get("id")
+            a_id = match.get("teams", {}).get("away", {}).get("id")
+
+            if home_id and away_id and ((h_id == home_id and a_id == away_id) or (h_id == away_id and a_id == home_id)):
+                return True
+
+            m_c_home = match.get("canonical_home_id")
+            m_c_away = match.get("canonical_away_id")
+
+            if not m_c_home or not m_c_away:
+                h_n = match.get("teams", {}).get("home", {}).get("name", "") or (f"Team {h_id}" if h_id else "")
+                a_n = match.get("teams", {}).get("away", {}).get("name", "") or (f"Team {a_id}" if a_id else "")
+                prov = match.get("provider_provenance", {}).get("provider", "api_football")
+                m_c_home = team_identity.bootstrap_historical_team_identity(h_n, prov, h_id, league_id=league_id)
+                m_c_away = team_identity.bootstrap_historical_team_identity(a_n, prov, a_id, league_id=league_id)
+
+            if not m_c_home or not m_c_away:
+                return False
+
+            is_match = (
+                (m_c_home == c_home_id and m_c_away == c_away_id) or
+                (m_c_home == c_away_id and m_c_away == c_home_id)
+            )
+            return is_match
+
+        h2h_matches = []
+        seen_fids = set()
+
+        # 1. NEON Persistent DB first
+        if not self.force_fallback:
+            try:
+                db_home_matches = storage.get_team_historical_fixtures(c_home_id, limit=100)
+                for m in db_home_matches:
+                    if _is_valid_h2h_match(m):
+                        fid = m.get("fixture", {}).get("id")
+                        if fid and fid not in seen_fids:
+                            seen_fids.add(fid)
+                            h2h_matches.append(m)
+            except Exception as exc:
+                logger.warning(f"Error querying DB for H2H history: {exc}")
+
+        if len(h2h_matches) >= last and not self.force_fallback:
+            sorted_h2h = sorted(h2h_matches, key=lambda x: str(x.get("fixture", {}).get("date", "") or ""), reverse=True)
+            return sorted_h2h[:last]
+
+        # Tier 1: API-Football
+        if home_id and away_id and not self.force_fallback:
+            try:
+                af_raw = api_football.get_head_to_head(home_id, away_id, last=last * 2)
+                if af_raw:
+                    for m in af_raw:
+                        norm = _normalize_api_football_fixture(m) if isinstance(m, dict) else None
+                        if norm and _is_valid_h2h_match(norm):
+                            fid = norm.get("fixture", {}).get("id")
+                            if fid and fid not in seen_fids:
+                                seen_fids.add(fid)
+                                h2h_matches.append(norm)
+                                lid = norm.get("league", {}).get("id") or league_id
+                                ssn = norm.get("league", {}).get("season") or 2024
+                                if lid and isinstance(lid, int) and lid > 0:
+                                    try:
+                                        storage.save_historical_fixtures([norm], lid, ssn, source="api_football", require_completed=False)
+                                    except Exception:
+                                        pass
+            except Exception as exc:
+                logger.warning(f"Primary provider get_head_to_head failed for {home_id} vs {away_id}: {exc}")
+
+        # Tier 2: football-data.org if still insufficient
+        if len(h2h_matches) < last and league_id:
+            comp_code = LEAGUE_TO_FD_CODE.get(league_id)
+            if comp_code:
+                try:
+                    fd_res = football_data_api.get_competition_matches(comp_code)
+                    fd_matches = fd_res.get("matches", []) if isinstance(fd_res, dict) else []
+                    for m in fd_matches:
+                        norm = _normalize_football_data_match(m, league_id, season=None)
+                        if norm and _is_valid_h2h_match(norm):
+                            fid = norm.get("fixture", {}).get("id")
+                            if fid and fid not in seen_fids:
+                                seen_fids.add(fid)
+                                h2h_matches.append(norm)
+                                storage.save_historical_fixtures([norm], league_id, 2024, source="football_data_org", require_completed=False)
+                except Exception as exc:
+                    logger.warning(f"Secondary provider get_head_to_head failed for league {league_id}: {exc}")
+
+        # Tier 3: SoccerData if still insufficient
+        if len(h2h_matches) < last:
+            sd_code = LEAGUE_TO_SD_CODE.get(league_id) if league_id else None
+            if sd_code:
+                try:
+                    sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_code, season=None)
+                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                        for norm in sd_games:
+                            if _is_valid_h2h_match(norm):
+                                fid = norm.get("fixture", {}).get("id")
+                                if fid and fid not in seen_fids:
+                                    seen_fids.add(fid)
+                                    h2h_matches.append(norm)
+                                    storage.save_historical_fixtures([norm], league_id or 0, 2024, source="soccerdata", require_completed=False)
+                except Exception as exc:
+                    logger.warning(f"Tertiary provider get_head_to_head failed for league {league_id}: {exc}")
+
+        sorted_h2h = sorted(h2h_matches, key=lambda x: str(x.get("fixture", {}).get("date", "") or ""), reverse=True)
+        return sorted_h2h[:last]
 
     def get_standings(self, league_id, season=None):
         """
