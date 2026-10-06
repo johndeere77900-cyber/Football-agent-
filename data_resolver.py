@@ -70,6 +70,7 @@ def generate_synthetic_fixture_id(provider, home_name, away_name, date_str, leag
     """
     Generate a deterministic synthetic fixture identity using provider namespace + canonical home ID + canonical away ID + competition + season + FULL event timestamp.
     Returns None if required identity fields (canonical home ID, canonical away ID, full timestamp) are unavailable.
+    Does NOT create new team identities (uses resolve_canonical_team_id with auto_register=False).
     """
     if not date_str:
         return None
@@ -80,17 +81,21 @@ def generate_synthetic_fixture_id(provider, home_name, away_name, date_str, leag
 
     try:
         import team_identity
-        c_home = team_identity.bootstrap_historical_team_identity(
-            home_name or (str(home_id) if home_id is not None else ""),
-            provider,
-            home_id,
-            league_id=league_id
+        c_home = team_identity.resolve_canonical_team_id(
+            raw_name=home_name or (str(home_id) if home_id is not None else ""),
+            provider=provider,
+            provider_team_id=home_id,
+            league_id=league_id,
+            sport="football",
+            auto_register=False
         )
-        c_away = team_identity.bootstrap_historical_team_identity(
-            away_name or (str(away_id) if away_id is not None else ""),
-            provider,
-            away_id,
-            league_id=league_id
+        c_away = team_identity.resolve_canonical_team_id(
+            raw_name=away_name or (str(away_id) if away_id is not None else ""),
+            provider=provider,
+            provider_team_id=away_id,
+            league_id=league_id,
+            sport="football",
+            auto_register=False
         )
     except Exception:
         c_home, c_away = None, None
@@ -497,28 +502,14 @@ def _build_team_stats_from_matches(matches, canonical_team_id, team_id=None, pro
         if h_goals is None or a_goals is None:
             continue
 
-        m_prov = m.get("provider_provenance", {}).get("provider", provider_name)
-        p_lid = m.get("league", {}).get("id") if isinstance(m.get("league"), dict) else None
-
         m_c_home = m.get("canonical_home_id")
         m_c_away = m.get("canonical_away_id")
 
         if not m_c_home or not m_c_away:
-            teams_obj = m.get("teams", {}) if isinstance(m.get("teams"), dict) else {}
-            h_id = teams_obj.get("home", {}).get("id") if isinstance(teams_obj.get("home"), dict) else None
-            a_id = teams_obj.get("away", {}).get("id") if isinstance(teams_obj.get("away"), dict) else None
-            h_n = teams_obj.get("home", {}).get("name", "") if isinstance(teams_obj.get("home"), dict) else ""
-            a_n = teams_obj.get("away", {}).get("name", "") if isinstance(teams_obj.get("away"), dict) else ""
+            continue
 
-            try:
-                import team_identity
-                m_c_home = m_c_home or team_identity.bootstrap_historical_team_identity(h_n or (str(h_id) if h_id else ""), m_prov, h_id, league_id=p_lid)
-                m_c_away = m_c_away or team_identity.bootstrap_historical_team_identity(a_n or (str(a_id) if a_id else ""), m_prov, a_id, league_id=p_lid)
-            except Exception:
-                pass
-
-        is_home = (m_c_home and m_c_home == canonical_team_id)
-        is_away = (m_c_away and m_c_away == canonical_team_id)
+        is_home = (m_c_home == canonical_team_id)
+        is_away = (m_c_away == canonical_team_id)
 
         if is_home:
             played += 1
@@ -1342,11 +1333,13 @@ class DataResolver:
 
         c_id = None
         if team_name or team_id is not None:
-            c_id = team_identity.bootstrap_historical_team_identity(
-                team_name or (str(team_id) if team_id is not None else ""),
-                "api_football",
-                team_id,
-                league_id=league_id
+            c_id = team_identity.resolve_canonical_team_id(
+                raw_name=team_name or (str(team_id) if team_id is not None else ""),
+                provider="api_football",
+                provider_team_id=team_id,
+                league_id=league_id,
+                sport="football",
+                auto_register=False
             )
 
         # 1. Neon Persistent DB History First

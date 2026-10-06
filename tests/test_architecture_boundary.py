@@ -271,16 +271,65 @@ def test_Q_R_S_T_canonical_identity_matching_rules():
 def test_U_V_W_namespace_synthetic_ids_conflicts():
     """Scenarios U, V, W: Namespace isolation, deterministic synthetic IDs, conflict preservation."""
     # V: Synthetic ID generation is deterministic across process restarts and uses FULL timestamp
-    id1 = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10T15:00:00Z", 39, 2024)
-    id2 = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10T15:00:00Z", 39, 2024)
-    id_different_time = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10T18:00:00Z", 39, 2024)
-    id_short_date = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10", 39, 2024)
+    with patch("team_identity.resolve_canonical_team_id", side_effect=lambda raw_name=None, **kw: f"football_team_{raw_name.lower()}" if raw_name else None):
+        id1 = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10T15:00:00Z", 39, 2024)
+        id2 = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10T15:00:00Z", 39, 2024)
+        id_different_time = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10T18:00:00Z", 39, 2024)
+        id_short_date = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10", 39, 2024)
 
-    assert id1 == id2
-    assert id1 != id_different_time, "Same-day fixtures with different timestamps must produce distinct synthetic IDs!"
-    assert id_short_date is None, "Short date string without full timestamp must return None!"
-    assert isinstance(id1, str)
-    assert "football_data_org" in id1
+        assert id1 == id2
+        assert id1 != id_different_time, "Same-day fixtures with different timestamps must produce distinct synthetic IDs!"
+        assert id_short_date is None, "Short date string without full timestamp must return None!"
+        assert isinstance(id1, str)
+        assert "football_data_org" in id1
+
+
+def test_synthetic_fixture_id_requires_existing_canonical_identity():
+    """Verify synthetic fixture ID generation returns None when canonical IDs cannot be resolved without auto-registration."""
+    with patch("team_identity.resolve_canonical_team_id", return_value=None) as mock_resolve, \
+         patch("team_identity.bootstrap_historical_team_identity") as mock_bootstrap:
+
+        syn_id = generate_synthetic_fixture_id("api_football", "Arsenal", "Chelsea", "2024-09-10T15:00:00+00:00", 39, 2024)
+
+        assert syn_id is None, "Synthetic fixture ID MUST be None when canonical team identities cannot be resolved!"
+        assert mock_resolve.called, "resolve_canonical_team_id MUST be called!"
+        assert mock_bootstrap.called is False, "bootstrap_historical_team_identity MUST NOT be called!"
+
+
+def test_team_stats_skips_matches_without_canonical_identity():
+    """Verify _build_team_stats_from_matches skips historical records lacking canonical IDs."""
+    from data_resolver import _build_team_stats_from_matches
+
+    matches_no_canonical = [
+        {
+            "fixture": {"id": 101, "status": {"short": "FT"}},
+            "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+            "goals": {"home": 2, "away": 1},
+            # Missing canonical_home_id and canonical_away_id
+        }
+    ]
+
+    stats = _build_team_stats_from_matches(matches_no_canonical, "football_team_39_arsenal", team_id=10)
+    assert stats is None, "_build_team_stats_from_matches MUST return None when matches lack canonical IDs!"
+
+
+def test_team_stats_does_not_cross_match_provider_ids():
+    """Verify team stats calculation never compares raw provider IDs across different providers."""
+    from data_resolver import _build_team_stats_from_matches
+
+    other_provider_match = [
+        {
+            "fixture": {"id": 999, "status": {"short": "FT"}},
+            "teams": {"home": {"id": 10, "name": "Other Team"}, "away": {"id": 20, "name": "Another Team"}},
+            "goals": {"home": 3, "away": 0},
+            "canonical_home_id": "football_team_39_other_team",
+            "canonical_away_id": "football_team_39_another_team",
+            "provider_provenance": {"provider": "other_provider"},
+        }
+    ]
+
+    stats = _build_team_stats_from_matches(other_provider_match, "football_team_39_arsenal", team_id=10)
+    assert stats is None, "Matches for a different canonical team MUST NOT be counted even if numeric team ID happens to match!"
 
     # W: Score conflict preservation
     primary = {
