@@ -266,10 +266,15 @@ def test_Q_R_S_T_canonical_identity_matching_rules():
 
 def test_U_V_W_namespace_synthetic_ids_conflicts():
     """Scenarios U, V, W: Namespace isolation, deterministic synthetic IDs, conflict preservation."""
-    # V: Synthetic ID generation is deterministic across process restarts
+    # V: Synthetic ID generation is deterministic across process restarts and uses FULL timestamp
     id1 = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10T15:00:00Z", 39, 2024)
     id2 = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10T15:00:00Z", 39, 2024)
+    id_different_time = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10T18:00:00Z", 39, 2024)
+    id_short_date = generate_synthetic_fixture_id("football_data_org", "Arsenal", "Chelsea", "2024-09-10", 39, 2024)
+
     assert id1 == id2
+    assert id1 != id_different_time, "Same-day fixtures with different timestamps must produce distinct synthetic IDs!"
+    assert id_short_date is None, "Short date string without full timestamp must return None!"
     assert isinstance(id1, str)
     assert "football_data_org" in id1
 
