@@ -1061,6 +1061,9 @@ def test_current_team_feature_uses_per_match_averages():
 def test_recent_feature_uses_average_goals_per_match(
     monkeypatch,
 ):
+    import team_identity
+    team_identity.bootstrap_historical_team_identity("Team 1", "api_football", 1)
+
     monkeypatch.setattr(
         data_resolver.api_football,
         "get_recent_form",
@@ -1122,6 +1125,10 @@ def test_recent_feature_uses_average_goals_per_match(
 def test_h2h_feature_uses_average_goals_per_meeting(
     monkeypatch,
 ):
+    import team_identity
+    team_identity.bootstrap_historical_team_identity("Team 1", "api_football", 1)
+    team_identity.bootstrap_historical_team_identity("Team 2", "api_football", 2)
+
     monkeypatch.setattr(
         data_resolver.api_football,
         "get_head_to_head",

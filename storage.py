@@ -4039,9 +4039,14 @@ def save_historical_enrichment(enriched_fixtures, source="api_football"):
     Save historical fixture enrichment into persistent storage.
 
     Accepts dict (fixture_id -> fixture) or list of enriched fixtures.
+    Valid sources: "api_football", "football_data_org", "soccerdata", "reconciled".
     Idempotent: ON CONFLICT (source, fixture_id) DO NOTHING.
     Returns count of newly inserted enrichment records.
     """
+    valid_sources = ("api_football", "football_data_org", "soccerdata", "reconciled")
+    source_str = str(source).strip().lower()
+    if source_str not in valid_sources:
+        logger.warning(f"Unrecognized enrichment source '{source}', proceeding with storage insertion.")
     if isinstance(enriched_fixtures, dict):
         items = list(enriched_fixtures.values())
     elif isinstance(enriched_fixtures, (list, tuple)):

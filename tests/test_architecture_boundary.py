@@ -19,7 +19,7 @@ import config
 import storage
 import time_utils
 import team_identity
-from data_resolver import DataResolver, generate_synthetic_fixture_id, reconcile_fixture_records
+from data_resolver import DataResolver, generate_synthetic_fixture_id, reconcile_fixture_records, _strict_fixture_match
 
 
 # Approved provider boundary files where direct provider invocations are permitted
@@ -422,3 +422,180 @@ def test_raw_provider_ids_different_providers_cannot_match_without_canonical_ids
         reconciled = reconcile_fixture_records([primary_rec, raw_id_mismatch])
         assert reconciled["teams"]["home"]["name"] == "Arsenal"
         assert reconciled["teams"]["away"]["name"] == "Chelsea"
+
+
+def test_1_strict_fixture_match_fails_closed_without_bootstrap():
+    """Test 1: _strict_fixture_match returns False when canonical IDs cannot be resolved, asserting bootstrap is never called."""
+    primary = {
+        "fixture": {"id": 100, "date": "2024-09-10T15:00:00+00:00"},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 10, "name": "Unresolved A"}, "away": {"id": 20, "name": "Unresolved B"}},
+        "provider_provenance": {"provider": "api_football"},
+    }
+    candidate = {
+        "fixture": {"id": 200, "date": "2024-09-10T15:00:00+00:00"},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 100, "name": "Unresolved A"}, "away": {"id": 200, "name": "Unresolved B"}},
+        "provider_provenance": {"provider": "football_data_org"},
+    }
+
+    def fail_bootstrap(*args, **kwargs):
+        raise AssertionError("_strict_fixture_match MUST NEVER call bootstrap_historical_team_identity!")
+
+    with patch("team_identity.resolve_canonical_team_id", return_value=None), \
+         patch("team_identity.bootstrap_historical_team_identity", side_effect=fail_bootstrap):
+
+        match = _strict_fixture_match(primary, candidate)
+        assert match is False, "_strict_fixture_match MUST return False when canonical IDs are unresolved!"
+
+
+def test_2_get_team_recent_matches_fails_closed_for_unresolved_requested_team():
+    """Test 2: get_team_recent_matches returns [] when requested team cannot be canonically resolved without bootstrapping."""
+    resolver = DataResolver()
+
+    def fail_bootstrap(*args, **kwargs):
+        raise AssertionError("get_team_recent_matches MUST NEVER call bootstrap_historical_team_identity!")
+
+    with patch("team_identity.resolve_canonical_team_id", return_value=None), \
+         patch("team_identity.bootstrap_historical_team_identity", side_effect=fail_bootstrap):
+
+        matches = resolver.get_team_recent_matches(team_id=99999, last=5, league_id=39, team_name="Unresolved FC")
+        assert matches == [], "get_team_recent_matches MUST return [] when requested team is unresolved!"
+
+
+def test_3_get_team_recent_matches_rejects_unresolved_historical_match():
+    """Test 3: get_team_recent_matches rejects historical match lacking canonical IDs without bootstrapping."""
+    resolver = DataResolver(force_fallback=True)
+
+    unresolved_historical = [
+        {
+            "fixture": {"id": 101, "date": "2024-09-01T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 10, "name": "Known Team"}, "away": {"id": 999, "name": "Unresolved FC"}},
+            "goals": {"home": 2, "away": 0},
+            "provider_provenance": {"provider": "api_football"},
+        }
+    ]
+
+    def fail_bootstrap(*args, **kwargs):
+        raise AssertionError("get_team_recent_matches MUST NOT call bootstrap_historical_team_identity on historical records!")
+
+    def mock_resolve(raw_name, provider, provider_team_id, **kw):
+        if provider_team_id == 10 or raw_name == "Known Team":
+            return "football_team_39_known"
+        return None
+
+    with patch("team_identity.resolve_canonical_team_id", side_effect=mock_resolve), \
+         patch("team_identity.bootstrap_historical_team_identity", side_effect=fail_bootstrap), \
+         patch("api_football.get_recent_form", return_value=unresolved_historical):
+
+        matches = resolver.get_team_recent_matches(team_id=10, last=5, league_id=39, team_name="Known Team")
+        assert len(matches) == 0, "Historical match with unresolved team identity MUST be rejected!"
+
+
+def test_4_get_team_statistics_rejects_unresolved_fd_team():
+    """Test 4: get_team_statistics secondary fallback rejects unresolved FD team without bootstrapping."""
+    resolver = DataResolver(force_fallback=True)
+
+    fd_standings = [
+        {
+            "position": 1,
+            "team": {"id": 999, "name": "Unresolved FC", "shortName": "Unresolved"},
+            "playedGames": 10,
+            "goalsFor": 20,
+            "goalsAgainst": 5,
+        }
+    ]
+
+    def fail_bootstrap(*args, **kwargs):
+        raise AssertionError("get_team_statistics MUST NOT call bootstrap_historical_team_identity on secondary fallback!")
+
+    def mock_resolve(raw_name, provider, provider_team_id, **kw):
+        if provider == "api_football" and (provider_team_id == 10 or raw_name == "Arsenal"):
+            return "football_team_39_arsenal"
+        return None
+
+    with patch("team_identity.resolve_canonical_team_id", side_effect=mock_resolve), \
+         patch("team_identity.bootstrap_historical_team_identity", side_effect=fail_bootstrap), \
+         patch("football_data_api.get_competition_standings", return_value=fd_standings):
+
+        stats = resolver.get_team_statistics(team_id=10, league_id=39, season=2024, team_name="Arsenal")
+        assert stats is None, "Secondary standing row for unresolved team MUST NOT be used for stats!"
+
+
+def test_5_get_head_to_head_fails_closed_for_unresolved_requested_teams():
+    """Test 5: get_head_to_head returns [] when requested teams cannot be canonically resolved without bootstrapping."""
+    resolver = DataResolver()
+
+    def fail_bootstrap(*args, **kwargs):
+        raise AssertionError("get_head_to_head MUST NEVER call bootstrap_historical_team_identity for requested teams!")
+
+    with patch("team_identity.resolve_canonical_team_id", return_value=None), \
+         patch("team_identity.bootstrap_historical_team_identity", side_effect=fail_bootstrap):
+
+        h2h = resolver.get_head_to_head(10, 20, last=5, home_team_name="Unresolved A", away_team_name="Unresolved B", league_id=39)
+        assert h2h == [], "get_head_to_head MUST return [] when requested team identities are unresolved!"
+
+
+def test_6_get_head_to_head_rejects_unresolved_historical_match():
+    """Test 6: get_head_to_head rejects historical match with unresolved team identities without bootstrapping."""
+    resolver = DataResolver(force_fallback=True)
+
+    unresolved_h2h = [
+        {
+            "fixture": {"id": 301, "date": "2024-08-01T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 999, "name": "Unresolved B"}},
+            "goals": {"home": 2, "away": 0},
+            "provider_provenance": {"provider": "api_football"},
+        }
+    ]
+
+    def fail_bootstrap(*args, **kwargs):
+        raise AssertionError("get_head_to_head MUST NOT call bootstrap_historical_team_identity on historical H2H records!")
+
+    def mock_resolve(raw_name, provider, provider_team_id, **kw):
+        if provider_team_id == 10 or raw_name == "Arsenal":
+            return "football_team_39_arsenal"
+        if provider_team_id == 20 or raw_name == "Chelsea":
+            return "football_team_39_chelsea"
+        return None
+
+    with patch("team_identity.resolve_canonical_team_id", side_effect=mock_resolve), \
+         patch("team_identity.bootstrap_historical_team_identity", side_effect=fail_bootstrap), \
+         patch("api_football.get_head_to_head", return_value=unresolved_h2h):
+
+        h2h = resolver.get_head_to_head(10, 20, last=5, home_team_name="Arsenal", away_team_name="Chelsea", fixture_date="2024-09-01T15:00:00+00:00", league_id=39)
+        assert len(h2h) == 0, "Historical H2H match with unresolved away team identity MUST be rejected!"
+
+
+def test_7_reconciled_enrichment_provenance():
+    """Test 7: Reconciled enrichment record has enrichment_provenance record_type == 'reconciled' and field-level provenance."""
+    primary_rec = {
+        "fixture": {"id": 901, "date": "2024-09-10T15:00:00+00:00", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+        "goals": {"home": 2, "away": 1},
+        "statistics": {"shots": {"home": 10, "away": 5}},
+        "provider_provenance": {"provider": "api_football"},
+    }
+
+    fd_rec = {
+        "fixture": {"id": 901, "date": "2024-09-10T15:00:00+00:00"},
+        "statistics": {"cards": {"home": 1, "away": 2}},
+        "provider_provenance": {"provider": "football_data_org"},
+    }
+
+    sd_rec = {
+        "fixture": {"id": 901, "date": "2024-09-10T15:00:00+00:00"},
+        "statistics": {"corners": {"home": 6, "away": 3}},
+        "provider_provenance": {"provider": "soccerdata"},
+    }
+
+    reconciled = reconcile_fixture_records([primary_rec, fd_rec, sd_rec])
+    assert reconciled["statistics"]["shots"] == {"home": 10, "away": 5}
+    assert reconciled["statistics"]["cards"] == {"home": 1, "away": 2}
+    assert reconciled["statistics"]["corners"] == {"home": 6, "away": 3}
+    assert reconciled["field_provenance"]["stats_shots"] == "api_football"
+    assert reconciled["field_provenance"]["stats_cards"] == "football_data_org"
+    assert reconciled["field_provenance"]["stats_corners"] == "soccerdata"

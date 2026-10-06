@@ -263,54 +263,127 @@ def _normalize_football_data_standing(row):
 
 def _strict_fixture_match(primary_rec, candidate_rec):
     """
-    Strict cross-provider fixture match rule:
-    Requires BOTH canonical HOME team identity AND canonical AWAY team identity to match.
-    Names alone or raw provider IDs are NOT cross-provider identity.
+    Strict cross-provider fixture match rule.
+
+    Requires BOTH canonical HOME and canonical AWAY identities
+    to resolve and match.
+
+    This function is a reconciliation boundary and MUST NEVER
+    create canonical identities.
+
+    Existing canonical IDs are trusted.
+    Missing IDs are resolved fail-closed.
+    Unresolved identities mean NOT A MATCH.
     """
     import team_identity
 
     if not isinstance(primary_rec, dict) or not isinstance(candidate_rec, dict):
         return False
 
-    p_prov = primary_rec.get("provider_provenance", {}).get("provider", "api_football")
-    c_prov = candidate_rec.get("provider_provenance", {}).get("provider", "fallback")
+    p_prov = primary_rec.get(
+        "provider_provenance", {}
+    ).get("provider", "api_football")
 
-    p_lid = primary_rec.get("league", {}).get("id") if isinstance(primary_rec.get("league"), dict) else None
-    c_lid = candidate_rec.get("league", {}).get("id") if isinstance(candidate_rec.get("league"), dict) else None
+    c_prov = candidate_rec.get(
+        "provider_provenance", {}
+    ).get("provider", "fallback")
 
-    p_teams = primary_rec.get("teams", {}) if isinstance(primary_rec.get("teams"), dict) else {}
-    c_teams = candidate_rec.get("teams", {}) if isinstance(candidate_rec.get("teams"), dict) else {}
+    p_league = primary_rec.get("league", {})
+    c_league = candidate_rec.get("league", {})
 
-    p_h_id = primary_rec.get("canonical_home_id") or team_identity.bootstrap_historical_team_identity(
-        p_teams.get("home", {}).get("name", "") if isinstance(p_teams.get("home"), dict) else "",
-        p_prov,
-        p_teams.get("home", {}).get("id") if isinstance(p_teams.get("home"), dict) else None,
-        league_id=p_lid
-    )
-    p_a_id = primary_rec.get("canonical_away_id") or team_identity.bootstrap_historical_team_identity(
-        p_teams.get("away", {}).get("name", "") if isinstance(p_teams.get("away"), dict) else "",
-        p_prov,
-        p_teams.get("away", {}).get("id") if isinstance(p_teams.get("away"), dict) else None,
-        league_id=p_lid
-    )
+    p_lid = p_league.get("id") if isinstance(p_league, dict) else None
+    c_lid = c_league.get("id") if isinstance(c_league, dict) else None
 
-    c_h_id = candidate_rec.get("canonical_home_id") or team_identity.bootstrap_historical_team_identity(
-        c_teams.get("home", {}).get("name", "") if isinstance(c_teams.get("home"), dict) else "",
-        c_prov,
-        c_teams.get("home", {}).get("id") if isinstance(c_teams.get("home"), dict) else None,
-        league_id=c_lid
-    )
-    c_a_id = candidate_rec.get("canonical_away_id") or team_identity.bootstrap_historical_team_identity(
-        c_teams.get("away", {}).get("name", "") if isinstance(c_teams.get("away"), dict) else "",
-        c_prov,
-        c_teams.get("away", {}).get("id") if isinstance(c_teams.get("away"), dict) else None,
-        league_id=c_lid
-    )
+    p_teams = primary_rec.get("teams", {})
+    c_teams = candidate_rec.get("teams", {})
 
-    if not p_h_id or not p_a_id or not c_h_id or not c_a_id:
+    if not isinstance(p_teams, dict) or not isinstance(c_teams, dict):
         return False
 
-    return (p_h_id == c_h_id) and (p_a_id == c_a_id)
+    p_home = p_teams.get("home", {})
+    p_away = p_teams.get("away", {})
+    c_home = c_teams.get("home", {})
+    c_away = c_teams.get("away", {})
+
+    if not isinstance(p_home, dict):
+        p_home = {}
+
+    if not isinstance(p_away, dict):
+        p_away = {}
+
+    if not isinstance(c_home, dict):
+        c_home = {}
+
+    if not isinstance(c_away, dict):
+        c_away = {}
+
+    p_h_id = primary_rec.get("canonical_home_id")
+    if not p_h_id:
+        p_h_id = team_identity.resolve_canonical_team_id(
+            raw_name=p_home.get("name", "") or (
+                str(p_home.get("id"))
+                if p_home.get("id") is not None
+                else ""
+            ),
+            provider=p_prov,
+            provider_team_id=p_home.get("id"),
+            league_id=p_lid,
+            sport="football",
+            auto_register=False,
+        )
+
+    p_a_id = primary_rec.get("canonical_away_id")
+    if not p_a_id:
+        p_a_id = team_identity.resolve_canonical_team_id(
+            raw_name=p_away.get("name", "") or (
+                str(p_away.get("id"))
+                if p_away.get("id") is not None
+                else ""
+            ),
+            provider=p_prov,
+            provider_team_id=p_away.get("id"),
+            league_id=p_lid,
+            sport="football",
+            auto_register=False,
+        )
+
+    c_h_id = candidate_rec.get("canonical_home_id")
+    if not c_h_id:
+        c_h_id = team_identity.resolve_canonical_team_id(
+            raw_name=c_home.get("name", "") or (
+                str(c_home.get("id"))
+                if c_home.get("id") is not None
+                else ""
+            ),
+            provider=c_prov,
+            provider_team_id=c_home.get("id"),
+            league_id=c_lid,
+            sport="football",
+            auto_register=False,
+        )
+
+    c_a_id = candidate_rec.get("canonical_away_id")
+    if not c_a_id:
+        c_a_id = team_identity.resolve_canonical_team_id(
+            raw_name=c_away.get("name", "") or (
+                str(c_away.get("id"))
+                if c_away.get("id") is not None
+                else ""
+            ),
+            provider=c_prov,
+            provider_team_id=c_away.get("id"),
+            league_id=c_lid,
+            sport="football",
+            auto_register=False,
+        )
+
+    if not p_h_id or not p_a_id:
+        return False
+
+    if not c_h_id or not c_a_id:
+        return False
+
+    return p_h_id == c_h_id and p_a_id == c_a_id
 
 
 def validate_fixtures_sufficiency(fixtures_list):
@@ -932,7 +1005,26 @@ class DataResolver:
                     if lid and ssn:
                         storage.save_historical_fixtures([rf], lid, ssn, source=rf.get("provider_provenance", {}).get("provider", "api_football"), require_completed=False)
                         if rf.get("statistics"):
-                            storage.save_historical_enrichment([rf], source=rf.get("provider_provenance", {}).get("provider", "api_football"))
+                            enrichment_record = dict(rf)
+
+                            field_provenance = enrichment_record.get(
+                                "field_provenance",
+                                {}
+                            )
+
+                            enrichment_record["enrichment_provenance"] = {
+                                "record_type": "reconciled",
+                                "fields": {
+                                    key: value
+                                    for key, value in field_provenance.items()
+                                    if key.startswith("stats_")
+                                },
+                            }
+
+                            storage.save_historical_enrichment(
+                                [enrichment_record],
+                                source="reconciled",
+                            )
             except Exception as exc:
                 logger.warning(f"Error persisting reconciled fixtures to DB: {exc}")
 
@@ -988,13 +1080,21 @@ class DataResolver:
         import team_identity
 
         c_id = canonical_team_id
+
         if not c_id and (team_name or team_id is not None):
-            c_id = team_identity.bootstrap_historical_team_identity(
-                team_name or (str(team_id) if team_id is not None else ""),
-                "api_football",
-                team_id,
-                league_id=league_id
+            c_id = team_identity.resolve_canonical_team_id(
+                raw_name=team_name or (
+                    str(team_id) if team_id is not None else ""
+                ),
+                provider="api_football",
+                provider_team_id=team_id,
+                league_id=league_id,
+                sport="football",
+                auto_register=False,
             )
+
+        if not c_id:
+            return []
 
         def _is_valid_recent_match(match):
             if not isinstance(match, dict):
@@ -1033,17 +1133,26 @@ class DataResolver:
                 h_n = teams_obj.get("home", {}).get("name", "") if isinstance(teams_obj.get("home"), dict) else ""
                 a_n = teams_obj.get("away", {}).get("name", "") if isinstance(teams_obj.get("away"), dict) else ""
 
-                m_c_home = team_identity.bootstrap_historical_team_identity(
-                    h_n or (str(h_id) if h_id is not None else ""),
-                    m_prov,
-                    h_id,
-                    league_id=league_id
+                m_c_home = team_identity.resolve_canonical_team_id(
+                    raw_name=h_n or (
+                        str(h_id) if h_id is not None else ""
+                    ),
+                    provider=m_prov,
+                    provider_team_id=h_id,
+                    league_id=league_id,
+                    sport="football",
+                    auto_register=False,
                 )
-                m_c_away = team_identity.bootstrap_historical_team_identity(
-                    a_n or (str(a_id) if a_id is not None else ""),
-                    m_prov,
-                    a_id,
-                    league_id=league_id
+
+                m_c_away = team_identity.resolve_canonical_team_id(
+                    raw_name=a_n or (
+                        str(a_id) if a_id is not None else ""
+                    ),
+                    provider=m_prov,
+                    provider_team_id=a_id,
+                    league_id=league_id,
+                    sport="football",
+                    auto_register=False,
                 )
 
             return c_id is not None and (m_c_home == c_id or m_c_away == c_id)
@@ -1372,7 +1481,16 @@ class DataResolver:
                         fd_team = row.get("team", {}) or {}
                         fd_tname = fd_team.get("shortName") or fd_team.get("name")
                         fd_tid = fd_team.get("id")
-                        fd_c_id = team_identity.bootstrap_historical_team_identity(fd_tname or "", "football_data_org", fd_tid, league_id=league_id)
+                        fd_c_id = team_identity.resolve_canonical_team_id(
+                            raw_name=fd_tname or (
+                                str(fd_tid) if fd_tid is not None else ""
+                            ),
+                            provider="football_data_org",
+                            provider_team_id=fd_tid,
+                            league_id=league_id,
+                            sport="football",
+                            auto_register=False,
+                        )
                         if c_id and fd_c_id == c_id:
                             fd_stats = _build_team_stats_from_fd_standing(row)
                             if validate_team_stats_sufficiency(fd_stats):
@@ -1405,17 +1523,26 @@ class DataResolver:
         import storage
         import team_identity
 
-        c_home_id = team_identity.bootstrap_historical_team_identity(
-            home_team_name or (str(home_id) if home_id is not None else ""),
-            "api_football",
-            home_id,
-            league_id=league_id
+        c_home_id = team_identity.resolve_canonical_team_id(
+            raw_name=home_team_name or (
+                str(home_id) if home_id is not None else ""
+            ),
+            provider="api_football",
+            provider_team_id=home_id,
+            league_id=league_id,
+            sport="football",
+            auto_register=False,
         )
-        c_away_id = team_identity.bootstrap_historical_team_identity(
-            away_team_name or (str(away_id) if away_id is not None else ""),
-            "api_football",
-            away_id,
-            league_id=league_id
+
+        c_away_id = team_identity.resolve_canonical_team_id(
+            raw_name=away_team_name or (
+                str(away_id) if away_id is not None else ""
+            ),
+            provider="api_football",
+            provider_team_id=away_id,
+            league_id=league_id,
+            sport="football",
+            auto_register=False,
         )
 
         if not c_home_id or not c_away_id or c_home_id == c_away_id:
@@ -1457,17 +1584,26 @@ class DataResolver:
                 a_id = match.get("teams", {}).get("away", {}).get("id")
                 h_n = match.get("teams", {}).get("home", {}).get("name", "") if isinstance(match.get("teams"), dict) else ""
                 a_n = match.get("teams", {}).get("away", {}).get("name", "") if isinstance(match.get("teams"), dict) else ""
-                m_c_home = team_identity.bootstrap_historical_team_identity(
-                    h_n or (str(h_id) if h_id is not None else ""),
-                    m_prov,
-                    h_id,
-                    league_id=league_id
+                m_c_home = team_identity.resolve_canonical_team_id(
+                    raw_name=h_n or (
+                        str(h_id) if h_id is not None else ""
+                    ),
+                    provider=m_prov,
+                    provider_team_id=h_id,
+                    league_id=league_id,
+                    sport="football",
+                    auto_register=False,
                 )
-                m_c_away = team_identity.bootstrap_historical_team_identity(
-                    a_n or (str(a_id) if a_id is not None else ""),
-                    m_prov,
-                    a_id,
-                    league_id=league_id
+
+                m_c_away = team_identity.resolve_canonical_team_id(
+                    raw_name=a_n or (
+                        str(a_id) if a_id is not None else ""
+                    ),
+                    provider=m_prov,
+                    provider_team_id=a_id,
+                    league_id=league_id,
+                    sport="football",
+                    auto_register=False,
                 )
 
             if not m_c_home or not m_c_away:
