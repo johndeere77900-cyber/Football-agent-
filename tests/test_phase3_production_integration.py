@@ -55,11 +55,24 @@ def test_production_football_pre_match_route_e2e(tmp_path, monkeypatch):
         },
     }
 
-    monkeypatch.setattr(api_football, "get_fixtures_by_date", lambda date_str, league_id=None: [fixture_item])
-    monkeypatch.setattr(api_football, "get_league_standings", lambda lid, ssn: [])
-    monkeypatch.setattr(api_football, "get_team_statistics", lambda tid, lid, ssn: mock_stats)
-    monkeypatch.setattr(api_football, "get_recent_form", lambda tid, last=8: [{"teams": {"home": {"id": tid}, "away": {"id": 99}}, "goals": {"home": 2, "away": 0}}])
-    monkeypatch.setattr(api_football, "get_head_to_head", lambda h, a, last=6: [])
+    import data_resolver
+    recent_mock = [
+        {
+            "fixture": {"id": 8001, "date": "2025-01-05T15:00:00+00:00", "status": {"short": "FT"}},
+            "teams": {"home": {"id": 10}, "away": {"id": 99}},
+            "goals": {"home": 2, "away": 0},
+        },
+        {
+            "fixture": {"id": 8002, "date": "2025-01-05T15:00:00+00:00", "status": {"short": "FT"}},
+            "teams": {"home": {"id": 20}, "away": {"id": 99}},
+            "goals": {"home": 2, "away": 0},
+        },
+    ]
+    monkeypatch.setattr(data_resolver.api_football, "get_fixtures_by_date", lambda date_str, league_id=None: [fixture_item])
+    monkeypatch.setattr(data_resolver.api_football, "get_league_standings", lambda lid, ssn=None: [])
+    monkeypatch.setattr(data_resolver.api_football, "get_team_statistics", lambda tid, lid, ssn, **kw: mock_stats)
+    monkeypatch.setattr(data_resolver.api_football, "get_recent_form", lambda tid, last=8, **kw: [m for m in recent_mock if m["teams"]["home"]["id"] == tid])
+    monkeypatch.setattr(data_resolver.api_football, "get_head_to_head", lambda h, a, last=6, **kw: [])
 
     # Execute main.run_daily (actual production entry point)
     main.run_daily("2025-01-10", league_id=39, limit=1, fetch_odds=False)
@@ -118,11 +131,24 @@ def test_production_football_live_route_e2e(tmp_path, monkeypatch):
         "current_score": {"home": 1, "away": 0},
     }
 
-    monkeypatch.setattr(api_football, "get_fixtures_by_date", lambda date_str, league_id=None: [live_fixture_item])
-    monkeypatch.setattr(api_football, "get_league_standings", lambda lid, ssn: [])
-    monkeypatch.setattr(api_football, "get_team_statistics", lambda tid, lid, ssn: mock_stats)
-    monkeypatch.setattr(api_football, "get_recent_form", lambda tid, last=8: [{"teams": {"home": {"id": tid}, "away": {"id": 99}}, "goals": {"home": 2, "away": 0}}])
-    monkeypatch.setattr(api_football, "get_head_to_head", lambda h, a, last=6: [])
+    import data_resolver
+    live_recent_mock = [
+        {
+            "fixture": {"id": 8003, "date": "2025-01-05T15:00:00+00:00", "status": {"short": "FT"}},
+            "teams": {"home": {"id": 10}, "away": {"id": 99}},
+            "goals": {"home": 2, "away": 0},
+        },
+        {
+            "fixture": {"id": 8004, "date": "2025-01-05T15:00:00+00:00", "status": {"short": "FT"}},
+            "teams": {"home": {"id": 20}, "away": {"id": 99}},
+            "goals": {"home": 2, "away": 0},
+        },
+    ]
+    monkeypatch.setattr(data_resolver.api_football, "get_fixtures_by_date", lambda date_str, league_id=None: [live_fixture_item])
+    monkeypatch.setattr(data_resolver.api_football, "get_league_standings", lambda lid, ssn=None: [])
+    monkeypatch.setattr(data_resolver.api_football, "get_team_statistics", lambda tid, lid, ssn, **kw: mock_stats)
+    monkeypatch.setattr(data_resolver.api_football, "get_recent_form", lambda tid, last=8, **kw: [m for m in live_recent_mock if m["teams"]["home"]["id"] == tid])
+    monkeypatch.setattr(data_resolver.api_football, "get_head_to_head", lambda h, a, last=6, **kw: [])
     monkeypatch.setattr(live_model, "live_market_probabilities", lambda h_xg, a_xg, el, st, h_g, a_g: distinctive_live_markets)
 
     # Execute main.run_daily for live match

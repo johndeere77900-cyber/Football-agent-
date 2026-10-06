@@ -24,7 +24,6 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-import api_football
 import backtest
 import basketball_api
 import basketball_model

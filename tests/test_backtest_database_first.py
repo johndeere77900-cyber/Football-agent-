@@ -40,8 +40,12 @@ def test_backtest_reads_from_storage_and_zero_api_calls(temp_db, monkeypatch):
     def fail_if_called(*args, **kwargs):
         raise AssertionError("api_football should NOT be called by backtest!")
 
-    monkeypatch.setattr(backtest.api_football, "get_league_fixtures", fail_if_called)
-    monkeypatch.setattr(backtest.api_football, "get_enriched_fixtures", fail_if_called)
+    import data_resolver
+    monkeypatch.setattr(data_resolver.api_football, "get_league_fixtures", fail_if_called)
+    monkeypatch.setattr(data_resolver.api_football, "get_enriched_fixtures", fail_if_called)
+    import data_resolver
+    monkeypatch.setattr(data_resolver.api_football, "get_league_fixtures", fail_if_called)
+    monkeypatch.setattr(data_resolver.api_football, "get_enriched_fixtures", fail_if_called)
 
     res = backtest.run_real_backtest(
         league_id=39,
@@ -82,8 +86,9 @@ def test_backtest_enrichment_uses_storage(temp_db, monkeypatch):
     def fail_if_called(*args, **kwargs):
         raise AssertionError("api_football should NOT be called by backtest!")
 
-    monkeypatch.setattr(backtest.api_football, "get_league_fixtures", fail_if_called)
-    monkeypatch.setattr(backtest.api_football, "get_enriched_fixtures", fail_if_called)
+    import data_resolver
+    monkeypatch.setattr(data_resolver.api_football, "get_league_fixtures", fail_if_called)
+    monkeypatch.setattr(data_resolver.api_football, "get_enriched_fixtures", fail_if_called)
 
     res = backtest.run_real_backtest(
         league_id=39,

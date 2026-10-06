@@ -247,12 +247,7 @@ def get_team_historical_matches(team_name, season=None, timeout_seconds=DEFAULT_
     for lcode in available_leagues:
         status, matches, meta = get_match_history_games(lcode, season, timeout_seconds=timeout_seconds)
         if status == "SOURCE_AVAILABLE" and matches:
-            filtered = [
-                m for m in matches
-                if team_lower in m["teams"]["home"]["name"].lower() or team_lower in m["teams"]["away"]["name"].lower()
-            ]
-            if filtered:
-                collected_matches.extend(filtered)
+            collected_matches.extend(matches)
 
     if collected_matches:
         return "SOURCE_AVAILABLE", collected_matches, {"status": "SOURCE_AVAILABLE", "count": len(collected_matches), "source": "soccerdata_match_history"}

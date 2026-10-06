@@ -134,8 +134,9 @@ def test_backtest_fails_if_api_football_called(temp_db, monkeypatch):
     def fail_call(*args, **kwargs):
         raise AssertionError("API-Football should NOT be called by backtest!")
 
-    monkeypatch.setattr(backtest.api_football, "get_league_fixtures", fail_call)
-    monkeypatch.setattr(backtest.api_football, "get_enriched_fixtures", fail_call)
+    import data_resolver
+    monkeypatch.setattr(data_resolver.api_football, "get_league_fixtures", fail_call)
+    monkeypatch.setattr(data_resolver.api_football, "get_enriched_fixtures", fail_call)
 
     result = backtest.run_real_backtest(
         league_id=39, season=2024, sample_size=2, min_prior_matches=1

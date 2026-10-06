@@ -61,6 +61,19 @@ class ProviderCallVisitor(ast.NodeVisitor):
                     self.violations.append((node.lineno, f"{module_name}.{method_name}"))
         self.generic_visit(node)
 
+    def visit_ImportFrom(self, node):
+        if node.module in ("api_football", "football_data_api", "soccerdata_provider"):
+            for alias in node.names:
+                if not alias.name.endswith("Error") and not alias.name.isupper():
+                    self.violations.append((node.lineno, f"from {node.module} import {alias.name}"))
+        self.generic_visit(node)
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            if alias.name in ("api_football", "football_data_api", "soccerdata_provider"):
+                self.violations.append((node.lineno, f"import {alias.name}"))
+        self.generic_visit(node)
+
 
 def test_static_architecture_boundary():
     """Scan production Python files and fail if direct football provider calls are found."""

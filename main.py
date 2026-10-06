@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 import requests
 
 from data_resolver import DataResolver, APIFootballError, APIFootballQuotaExhaustedError
-import api_football
 import backtest
 import basketball_api
 import basketball_model
@@ -2027,7 +2026,7 @@ def run_grading():
     """
     Grade all pending football predictions whose fixtures have finished.
 
-    Uses batched API requests (batch_size=20) via api_football.get_enriched_fixtures
+    Uses batched API requests (batch_size=20) via DataResolver.get_enriched_fixtures
     to minimize API credit consumption.
     """
     storage.init_db()
