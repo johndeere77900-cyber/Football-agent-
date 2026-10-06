@@ -176,25 +176,29 @@ def test_I_get_team_statistics_fallback():
     """Scenario I: get_team_statistics 3-tier fallback."""
     resolver = DataResolver()
 
+    raw_fd_table = [
+        {
+            "position": 1,
+            "team": {"id": 100, "name": "Arsenal", "shortName": "Arsenal"},
+            "playedGames": 10,
+            "won": 7,
+            "draw": 2,
+            "lost": 1,
+            "goalsFor": 20,
+            "goalsAgainst": 8,
+            "goalDifference": 12,
+            "points": 23,
+        }
+    ]
+
     with patch("api_football.get_team_statistics", side_effect=RuntimeError("Primary Stats Error")), \
-         patch("football_data_api.get_competition_matches", return_value={
-             "matches": [
-                 {
-                     "id": 501,
-                     "utcDate": "2024-09-01T15:00:00Z",
-                     "status": "FINISHED",
-                     "homeTeam": {"id": 100, "name": "Arsenal"},
-                     "awayTeam": {"id": 101, "name": "Chelsea"},
-                     "score": {"fullTime": {"home": 2, "away": 0}},
-                 }
-             ]
-         }):
+         patch("football_data_api.get_competition_standings", return_value=raw_fd_table):
 
         stats = resolver.get_team_statistics(10, 39, 2024, team_name="Arsenal")
-        if stats is not None:
-            assert isinstance(stats, dict)
-            assert "fixtures" in stats
-            assert stats["provider_provenance"]["provider"] == "football_data_org"
+        assert stats is not None, "get_team_statistics fallback MUST return valid stats when secondary provider supplies data!"
+        assert isinstance(stats, dict)
+        assert "fixtures" in stats
+        assert stats["provider_provenance"]["provider"] == "football_data_org"
 
 
 def test_J_get_head_to_head_fallback_and_cutoff():
@@ -294,3 +298,78 @@ def test_U_V_W_namespace_synthetic_ids_conflicts():
     assert reconciled["disputed_score"] is True
     assert len(reconciled["data_conflicts"]) == 1
     assert reconciled["data_conflicts"][0]["field"] == "goals"
+
+
+def test_partial_primary_data_triggers_secondary_and_tertiary_fallback():
+    """Prove: API returns partial fixture -> football-data.org fills gaps -> remaining gaps -> SoccerData is invoked."""
+    resolver = DataResolver(force_fallback=True)
+    date_str = "2024-09-15"
+
+    partial_primary = [
+        {
+            "fixture": {"id": 101, "date": f"{date_str}T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+            "goals": {"home": 2, "away": 1},
+            # Missing corners, xG, cards, shots
+        }
+    ]
+
+    fd_matches = {
+        "matches": [
+            {
+                "id": 5001,
+                "utcDate": f"{date_str}T15:00:00Z",
+                "status": "FINISHED",
+                "homeTeam": {"id": 100, "name": "Arsenal"},
+                "awayTeam": {"id": 200, "name": "Chelsea"},
+                "score": {"fullTime": {"home": 2, "away": 1}},
+                "season": {"startDate": "2024-08-01"},
+            }
+        ]
+    }
+
+    sd_matches = [
+        {
+            "fixture": {"id": "sd_101", "date": f"{date_str}T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39},
+            "teams": {"home": {"id": "sd_10", "name": "Arsenal"}, "away": {"id": "sd_20", "name": "Chelsea"}},
+            "goals": {"home": 2, "away": 1},
+            "statistics": {"corners": {"home": 5, "away": 3}},
+            "provider_provenance": {"provider": "soccerdata"},
+        }
+    ]
+
+    with patch("api_football.get_fixtures_by_date", return_value=partial_primary), \
+         patch("football_data_api.get_competition_matches", return_value=fd_matches) as mock_fd, \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_AVAILABLE", sd_matches, {})) as mock_sd:
+
+        fixtures, meta = resolver.get_fixtures_for_date(date_str, league_id=39)
+
+        assert mock_fd.called, "Secondary provider MUST be called when primary fixture lacks required statistical fields!"
+        assert mock_sd.called, "Tertiary provider MUST be called when remaining gaps exist after secondary provider!"
+        assert len(fixtures) == 1
+        assert fixtures[0]["statistics"]["corners"] == {"home": 5, "away": 3}
+
+
+def test_raw_provider_ids_different_providers_cannot_match_without_canonical_ids():
+    """Prove: Raw provider IDs from different providers cannot match without canonical IDs."""
+    primary_rec = {
+        "fixture": {"id": 100, "date": "2024-09-10T15:00:00+00:00"},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+        "provider_provenance": {"provider": "api_football"},
+    }
+
+    raw_id_mismatch = {
+        "fixture": {"id": 100, "date": "2024-09-10T15:00:00+00:00"},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 10, "name": "Unknown Team A"}, "away": {"id": 20, "name": "Unknown Team B"}},
+        "provider_provenance": {"provider": "football_data_org"},
+    }
+
+    # Different team names without canonical IDs cannot match even if numeric provider team IDs happen to be 10 and 20
+    with patch("team_identity.bootstrap_historical_team_identity", side_effect=lambda name, prov, tid, **kw: f"{prov}_{tid}" if tid else None):
+        reconciled = reconcile_fixture_records([primary_rec, raw_id_mismatch])
+        assert reconciled["teams"]["home"]["name"] == "Arsenal"
+        assert reconciled["teams"]["away"]["name"] == "Chelsea"
