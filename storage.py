@@ -4627,9 +4627,15 @@ def get_recent_operation_errors(limit=10, chat_id=None):
         conn.close()
 
 
-def get_historical_enrichment(fixture_ids, source="api_football"):
+def get_historical_enrichment(fixture_ids, source=None):
     """
-    Retrieve stored historical fixture enrichment records for given fixture IDs and source.
+    Retrieve stored historical fixture enrichment records for given fixture IDs.
+
+    If source is None (default), queries all sources ('reconciled', 'api_football', 'football_data_org', 'soccerdata')
+    and resolves conflicts per fixture using priority order:
+    reconciled > api_football > football_data_org > soccerdata.
+
+    If source is specified (e.g., source='api_football'), filters strictly by that source.
 
     Returns dict mapping fixture_id (int) -> enriched fixture dict.
     """
@@ -4653,50 +4659,96 @@ def get_historical_enrichment(fixture_ids, source="api_football"):
 
     conn, db_type = _connect()
 
+    priority_map = {
+        "reconciled": 0,
+        "api_football": 1,
+        "football_data_org": 2,
+        "soccerdata": 3,
+    }
+
     try:
         enriched_map = {}
+        best_priority = {}  # fid -> priority int
+
         if db_type == "postgres":
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT fixture_id, raw_json
-                    FROM historical_fixture_enrichment
-                    WHERE source = %s AND fixture_id = ANY(%s)
-                    """,
-                    (source, clean_ids),
-                )
+                if source is not None:
+                    cur.execute(
+                        """
+                        SELECT fixture_id, raw_json, source
+                        FROM historical_fixture_enrichment
+                        WHERE source = %s AND fixture_id = ANY(%s)
+                        """,
+                        (str(source).strip().lower(), clean_ids),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT fixture_id, raw_json, source
+                        FROM historical_fixture_enrichment
+                        WHERE fixture_id = ANY(%s)
+                        """,
+                        (clean_ids,),
+                    )
                 rows = cur.fetchall()
         else:
             try:
                 placeholders = ",".join(["?"] * len(clean_ids))
-                query_params = [source] + clean_ids
-                rows = conn.execute(
-                    f"""
-                    SELECT fixture_id, raw_json
-                    FROM historical_fixture_enrichment
-                    WHERE source = ? AND fixture_id IN ({placeholders})
-                    """,
-                    query_params,
-                ).fetchall()
+                if source is not None:
+                    query_params = [str(source).strip().lower()] + clean_ids
+                    rows = conn.execute(
+                        f"""
+                        SELECT fixture_id, raw_json, source
+                        FROM historical_fixture_enrichment
+                        WHERE source = ? AND fixture_id IN ({placeholders})
+                        """,
+                        query_params,
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        f"""
+                        SELECT fixture_id, raw_json, source
+                        FROM historical_fixture_enrichment
+                        WHERE fixture_id IN ({placeholders})
+                        """,
+                        clean_ids,
+                    ).fetchall()
             except sqlite3.OperationalError:
                 conn.close()
                 init_db()
                 conn, _ = _connect()
                 placeholders = ",".join(["?"] * len(clean_ids))
-                query_params = [source] + clean_ids
-                rows = conn.execute(
-                    f"""
-                    SELECT fixture_id, raw_json
-                    FROM historical_fixture_enrichment
-                    WHERE source = ? AND fixture_id IN ({placeholders})
-                    """,
-                    query_params,
-                ).fetchall()
+                if source is not None:
+                    query_params = [str(source).strip().lower()] + clean_ids
+                    rows = conn.execute(
+                        f"""
+                        SELECT fixture_id, raw_json, source
+                        FROM historical_fixture_enrichment
+                        WHERE source = ? AND fixture_id IN ({placeholders})
+                        """,
+                        query_params,
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        f"""
+                        SELECT fixture_id, raw_json, source
+                        FROM historical_fixture_enrichment
+                        WHERE fixture_id IN ({placeholders})
+                        """,
+                        clean_ids,
+                    ).fetchall()
 
-        for fid, raw in rows:
+        for fid, raw, rec_source in rows:
             payload = _json_loads(raw)
-            if isinstance(payload, dict):
-                enriched_map[int(fid)] = payload
+            if not isinstance(payload, dict):
+                continue
+
+            num_fid = int(fid)
+            prio = priority_map.get(str(rec_source).strip().lower(), 99)
+
+            if num_fid not in enriched_map or prio < best_priority.get(num_fid, 999):
+                enriched_map[num_fid] = payload
+                best_priority[num_fid] = prio
 
         return enriched_map
 

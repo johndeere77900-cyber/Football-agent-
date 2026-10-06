@@ -1006,25 +1006,24 @@ class DataResolver:
                         storage.save_historical_fixtures([rf], lid, ssn, source=rf.get("provider_provenance", {}).get("provider", "api_football"), require_completed=False)
                         if rf.get("statistics"):
                             enrichment_record = dict(rf)
-
-                            field_provenance = enrichment_record.get(
-                                "field_provenance",
-                                {}
+                            field_provenance = enrichment_record.get("field_provenance", {})
+                            has_reconciliation_provenance = bool(
+                                isinstance(field_provenance, dict) and field_provenance
                             )
 
-                            enrichment_record["enrichment_provenance"] = {
-                                "record_type": "reconciled",
-                                "fields": {
-                                    key: value
-                                    for key, value in field_provenance.items()
-                                    if key.startswith("stats_")
-                                },
-                            }
-
-                            storage.save_historical_enrichment(
-                                [enrichment_record],
-                                source="reconciled",
-                            )
+                            if has_reconciliation_provenance:
+                                enrichment_record["enrichment_provenance"] = {
+                                    "record_type": "reconciled",
+                                    "fields": {
+                                        key: value
+                                        for key, value in field_provenance.items()
+                                        if key.startswith("stats_")
+                                    },
+                                }
+                                storage.save_historical_enrichment([enrichment_record], source="reconciled")
+                            else:
+                                prov_source = enrichment_record.get("provider_provenance", {}).get("provider", "api_football")
+                                storage.save_historical_enrichment([enrichment_record], source=prov_source)
             except Exception as exc:
                 logger.warning(f"Error persisting reconciled fixtures to DB: {exc}")
 
@@ -1420,7 +1419,29 @@ class DataResolver:
         to_save = [v for k, v in existing.items() if k in missing_fids and v]
         if to_save:
             try:
-                storage.save_historical_enrichment(to_save, source="api_football")
+                for record in to_save:
+                    if not isinstance(record, dict):
+                        continue
+
+                    record_copy = dict(record)
+                    field_provenance = record_copy.get("field_provenance", {})
+                    has_reconciliation_provenance = bool(
+                        isinstance(field_provenance, dict) and field_provenance
+                    )
+
+                    if has_reconciliation_provenance:
+                        record_copy["enrichment_provenance"] = {
+                            "record_type": "reconciled",
+                            "fields": {
+                                key: value
+                                for key, value in field_provenance.items()
+                                if key.startswith("stats_")
+                            },
+                        }
+                        storage.save_historical_enrichment([record_copy], source="reconciled")
+                    else:
+                        prov_source = record_copy.get("provider_provenance", {}).get("provider", "api_football")
+                        storage.save_historical_enrichment([record_copy], source=prov_source)
             except Exception as exc:
                 logger.warning(f"Error saving enriched fixtures to DB: {exc}")
 

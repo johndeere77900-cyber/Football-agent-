@@ -599,3 +599,47 @@ def test_7_reconciled_enrichment_provenance():
     assert reconciled["field_provenance"]["stats_shots"] == "api_football"
     assert reconciled["field_provenance"]["stats_cards"] == "football_data_org"
     assert reconciled["field_provenance"]["stats_corners"] == "soccerdata"
+
+
+def test_8_storage_enrichment_priority_and_source_none():
+    """Test 8: storage.get_historical_enrichment with source=None queries all sources and respects priority: reconciled > api_football > football_data_org > soccerdata."""
+    fid = 9999
+
+    rec_reconciled = {
+        "fixture": {"id": fid},
+        "statistics": {"shots": 10, "corners": 5},
+        "enrichment_provenance": {"record_type": "reconciled"},
+    }
+    rec_af = {
+        "fixture": {"id": fid},
+        "statistics": {"shots": 8, "corners": 4},
+    }
+    rec_fd = {
+        "fixture": {"id": fid},
+        "statistics": {"shots": 6, "corners": 3},
+    }
+    rec_sd = {
+        "fixture": {"id": fid},
+        "statistics": {"shots": 4, "corners": 2},
+    }
+
+    storage.save_historical_enrichment([rec_sd], source="soccerdata")
+    storage.save_historical_enrichment([rec_fd], source="football_data_org")
+    storage.save_historical_enrichment([rec_af], source="api_football")
+    storage.save_historical_enrichment([rec_reconciled], source="reconciled")
+
+    # 1. source=None must return the highest priority source ('reconciled')
+    fetched_default = storage.get_historical_enrichment([fid])
+    assert fid in fetched_default
+    assert fetched_default[fid]["statistics"]["shots"] == 10
+    assert fetched_default[fid].get("enrichment_provenance", {}).get("record_type") == "reconciled"
+
+    # 2. Filtering strictly by source='api_football' returns the api_football record
+    fetched_af = storage.get_historical_enrichment([fid], source="api_football")
+    assert fid in fetched_af
+    assert fetched_af[fid]["statistics"]["shots"] == 8
+
+    # 3. Filtering strictly by source='soccerdata' returns the soccerdata record
+    fetched_sd = storage.get_historical_enrichment([fid], source="soccerdata")
+    assert fid in fetched_sd
+    assert fetched_sd[fid]["statistics"]["shots"] == 4
