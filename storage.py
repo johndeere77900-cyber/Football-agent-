@@ -246,6 +246,47 @@ def init_db():
                     )
                     """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS prediction_snapshots (
+                        id BIGSERIAL PRIMARY KEY,
+                        fixture_id BIGINT NOT NULL,
+                        prediction_timestamp TEXT NOT NULL,
+                        kickoff_at TEXT,
+                        sport TEXT NOT NULL DEFAULT 'football',
+                        league_id BIGINT,
+                        season INTEGER,
+                        canonical_home_id TEXT,
+                        canonical_away_id TEXT,
+                        home_team TEXT,
+                        away_team TEXT,
+                        prediction_context TEXT NOT NULL DEFAULT 'PRE_MATCH',
+                        model_version TEXT,
+                        feature_version TEXT,
+                        calibration_version TEXT,
+                        data_cutoff_timestamp TEXT,
+                        markets_json JSONB NOT NULL,
+                        features_json JSONB,
+                        confidence_json JSONB,
+                        quality_gate TEXT,
+                        reason_codes_json JSONB,
+                        odds_comparison_json JSONB,
+                        edge DOUBLE PRECISION,
+                        ev DOUBLE PRECISION,
+                        uncertainty_state TEXT,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_fid_ts ON prediction_snapshots (fixture_id, prediction_timestamp)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_lg_kickoff ON prediction_snapshots (league_id, kickoff_at)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_sp_kickoff ON prediction_snapshots (sport, kickoff_at)"
+                )
                 cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS model_version TEXT")
                 cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS feature_version TEXT")
                 cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS calibration_version TEXT")
@@ -535,13 +576,21 @@ def init_db():
                         started_at TEXT NOT NULL,
                         completed_at TEXT NOT NULL,
                         evaluation_json JSONB,
-                        code_version TEXT
+                        code_version TEXT,
+                        season_start INTEGER,
+                        season_end INTEGER,
+                        evaluation_mode TEXT,
+                        fixture_selection TEXT
                     )
                     """
                 )
                 cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS model_version TEXT")
                 cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS feature_version TEXT")
                 cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS calibration_version TEXT")
+                cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS season_start INTEGER")
+                cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS season_end INTEGER")
+                cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS evaluation_mode TEXT")
+                cur.execute("ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS fixture_selection TEXT")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS backtest_market_metrics (
@@ -628,6 +677,47 @@ def init_db():
                     created_at TEXT
                 )
                 """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS prediction_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fixture_id INTEGER NOT NULL,
+                    prediction_timestamp TEXT NOT NULL,
+                    kickoff_at TEXT,
+                    sport TEXT NOT NULL DEFAULT 'football',
+                    league_id INTEGER,
+                    season INTEGER,
+                    canonical_home_id TEXT,
+                    canonical_away_id TEXT,
+                    home_team TEXT,
+                    away_team TEXT,
+                    prediction_context TEXT NOT NULL DEFAULT 'PRE_MATCH',
+                    model_version TEXT,
+                    feature_version TEXT,
+                    calibration_version TEXT,
+                    data_cutoff_timestamp TEXT,
+                    markets_json TEXT NOT NULL,
+                    features_json TEXT,
+                    confidence_json TEXT,
+                    quality_gate TEXT,
+                    reason_codes_json TEXT,
+                    odds_comparison_json TEXT,
+                    edge REAL,
+                    ev REAL,
+                    uncertainty_state TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_fid_ts ON prediction_snapshots (fixture_id, prediction_timestamp)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_lg_kickoff ON prediction_snapshots (league_id, kickoff_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_sp_kickoff ON prediction_snapshots (sport, kickoff_at)"
             )
             _ensure_column_sqlite(conn, "predictions", "home_team_id", "INTEGER")
             _ensure_column_sqlite(conn, "predictions", "away_team_id", "INTEGER")
@@ -1011,13 +1101,21 @@ def init_db():
                     started_at TEXT NOT NULL,
                     completed_at TEXT NOT NULL,
                     evaluation_json TEXT,
-                    code_version TEXT
+                    code_version TEXT,
+                    season_start INTEGER,
+                    season_end INTEGER,
+                    evaluation_mode TEXT,
+                    fixture_selection TEXT
                 )
                 """
             )
             _ensure_column_sqlite(conn, "backtest_runs", "model_version", "TEXT")
             _ensure_column_sqlite(conn, "backtest_runs", "feature_version", "TEXT")
             _ensure_column_sqlite(conn, "backtest_runs", "calibration_version", "TEXT")
+            _ensure_column_sqlite(conn, "backtest_runs", "season_start", "INTEGER")
+            _ensure_column_sqlite(conn, "backtest_runs", "season_end", "INTEGER")
+            _ensure_column_sqlite(conn, "backtest_runs", "evaluation_mode", "TEXT")
+            _ensure_column_sqlite(conn, "backtest_runs", "fixture_selection", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS backtest_market_metrics (
@@ -1439,6 +1537,236 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
         conn.close()
 
 
+def save_prediction_snapshot(
+    fixture_id,
+    prediction_timestamp=None,
+    kickoff_at=None,
+    sport="football",
+    league_id=None,
+    season=None,
+    canonical_home_id=None,
+    canonical_away_id=None,
+    home_team=None,
+    away_team=None,
+    prediction_context="PRE_MATCH",
+    model_version=None,
+    feature_version=None,
+    calibration_version=None,
+    data_cutoff_timestamp=None,
+    markets=None,
+    features=None,
+    confidence=None,
+    quality_gate=None,
+    reason_codes=None,
+    odds_comparison=None,
+    edge=None,
+    ev=None,
+    uncertainty_state=None,
+    prediction_record=None,
+):
+    """
+    Save an immutable prediction snapshot into prediction_snapshots table.
+
+    Does NOT enforce unique constraint on fixture_id so multiple predictions
+    for the same fixture are archived over time.
+    """
+    fixture_id = _validate_positive_int(fixture_id, "fixture_id")
+    now_str = _utc_now()
+    if prediction_timestamp is None:
+        prediction_timestamp = now_str
+
+    sport = _validate_text(sport or "football", "sport").lower()
+    league_id = _validate_optional_positive_int(league_id, "league_id")
+    season = _validate_optional_positive_int(season, "season")
+
+    rec = prediction_record if isinstance(prediction_record, dict) else {}
+
+    model_version = model_version or rec.get("model_version") or getattr(config, "MODEL_VERSION", "v3.0.0")
+    feature_version = feature_version or rec.get("feature_version") or getattr(config, "FEATURE_VERSION", "v3.0.0")
+    calibration_version = calibration_version or rec.get("calibration_version") or getattr(config, "CALIBRATION_VERSION", "v3.0.0")
+    quality_gate = quality_gate or rec.get("quality_gate") or "PASS"
+    reason_codes = reason_codes if reason_codes is not None else rec.get("reason_codes", [])
+    edge = edge if edge is not None else rec.get("edge")
+    ev = ev if ev is not None else rec.get("ev")
+    uncertainty_state = uncertainty_state or (rec.get("uncertainty", {}).get("state") if isinstance(rec.get("uncertainty"), dict) else None)
+
+    markets_data = markets or rec.get("markets") or rec.get("raw_probabilities") or {}
+    markets_json_str = _json_dumps(markets_data, "markets")
+    features_json_str = _json_dumps(features, "features") if features is not None else (_json_dumps(rec.get("feature_snapshot"), "features") if rec.get("feature_snapshot") else None)
+    confidence_json_str = _json_dumps(confidence, "confidence") if confidence is not None else (_json_dumps(rec.get("confidence"), "confidence") if rec.get("confidence") else None)
+    reasons_json_str = _json_dumps(reason_codes, "reason_codes") if reason_codes is not None else None
+    odds_json_str = _json_dumps(odds_comparison, "odds_comparison") if odds_comparison is not None else None
+
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO prediction_snapshots (
+                        fixture_id, prediction_timestamp, kickoff_at, sport,
+                        league_id, season, canonical_home_id, canonical_away_id,
+                        home_team, away_team, prediction_context, model_version,
+                        feature_version, calibration_version, data_cutoff_timestamp,
+                        markets_json, features_json, confidence_json, quality_gate,
+                        reason_codes_json, odds_comparison_json, edge, ev,
+                        uncertainty_state, created_at
+                    )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    RETURNING id
+                    """,
+                    (
+                        fixture_id, prediction_timestamp, kickoff_at, sport,
+                        league_id, season, canonical_home_id, canonical_away_id,
+                        home_team, away_team, prediction_context, model_version,
+                        feature_version, calibration_version, data_cutoff_timestamp,
+                        markets_json_str, features_json_str, confidence_json_str, quality_gate,
+                        reasons_json_str, odds_json_str, edge, ev,
+                        uncertainty_state, now_str,
+                    ),
+                )
+                row = cur.fetchone()
+                snapshot_id = row[0] if row else None
+            conn.commit()
+        else:
+            cursor = conn.execute(
+                """
+                INSERT INTO prediction_snapshots (
+                    fixture_id, prediction_timestamp, kickoff_at, sport,
+                    league_id, season, canonical_home_id, canonical_away_id,
+                    home_team, away_team, prediction_context, model_version,
+                    feature_version, calibration_version, data_cutoff_timestamp,
+                    markets_json, features_json, confidence_json, quality_gate,
+                    reason_codes_json, odds_comparison_json, edge, ev,
+                    uncertainty_state, created_at
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    fixture_id, prediction_timestamp, kickoff_at, sport,
+                    league_id, season, canonical_home_id, canonical_away_id,
+                    home_team, away_team, prediction_context, model_version,
+                    feature_version, calibration_version, data_cutoff_timestamp,
+                    markets_json_str, features_json_str, confidence_json_str, quality_gate,
+                    reasons_json_str, odds_json_str, edge, ev,
+                    uncertainty_state, now_str,
+                ),
+            )
+            snapshot_id = cursor.lastrowid
+            conn.commit()
+
+        return snapshot_id
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_prediction_snapshots(fixture_id=None, sport=None, limit=100):
+    """
+    Retrieve prediction snapshots (read-only, newest first).
+
+    Allows filtering by fixture_id and/or sport.
+    """
+    limit = _validate_positive_int(limit, "limit")
+    fixture_id = _validate_optional_positive_int(fixture_id, "fixture_id")
+    if sport is not None:
+        sport = _validate_text(sport, "sport").lower()
+
+    where_clauses = []
+    params = []
+
+    if fixture_id is not None:
+        where_clauses.append("fixture_id = %s")
+        params.append(fixture_id)
+
+    if sport is not None:
+        where_clauses.append("sport = %s")
+        params.append(sport)
+
+    where_str = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            query = f"""
+                SELECT id, fixture_id, prediction_timestamp, kickoff_at, sport,
+                       league_id, season, canonical_home_id, canonical_away_id,
+                       home_team, away_team, prediction_context, model_version,
+                       feature_version, calibration_version, data_cutoff_timestamp,
+                       markets_json, features_json, confidence_json, quality_gate,
+                       reason_codes_json, odds_comparison_json, edge, ev,
+                       uncertainty_state, created_at
+                FROM prediction_snapshots
+                {where_str}
+                ORDER BY prediction_timestamp DESC, id DESC
+                LIMIT %s
+            """
+            with conn.cursor() as cur:
+                cur.execute(query, params + [limit])
+                rows = cur.fetchall()
+        else:
+            q_sqlite = where_str.replace("%s", "?")
+            query = f"""
+                SELECT id, fixture_id, prediction_timestamp, kickoff_at, sport,
+                       league_id, season, canonical_home_id, canonical_away_id,
+                       home_team, away_team, prediction_context, model_version,
+                       feature_version, calibration_version, data_cutoff_timestamp,
+                       markets_json, features_json, confidence_json, quality_gate,
+                       reason_codes_json, odds_comparison_json, edge, ev,
+                       uncertainty_state, created_at
+                FROM prediction_snapshots
+                {q_sqlite}
+                ORDER BY prediction_timestamp DESC, id DESC
+                LIMIT ?
+            """
+            rows = conn.execute(query, params + [limit]).fetchall()
+
+        snapshots = []
+        for row in rows:
+            snapshots.append({
+                "id": row[0],
+                "fixture_id": row[1],
+                "prediction_timestamp": row[2],
+                "kickoff_at": row[3],
+                "sport": row[4],
+                "league_id": row[5],
+                "season": row[6],
+                "canonical_home_id": row[7],
+                "canonical_away_id": row[8],
+                "home_team": row[9],
+                "away_team": row[10],
+                "prediction_context": row[11],
+                "model_version": row[12],
+                "feature_version": row[13],
+                "calibration_version": row[14],
+                "data_cutoff_timestamp": row[15],
+                "markets": _json_loads(row[16]),
+                "features": _json_loads(row[17]),
+                "confidence": _json_loads(row[18]),
+                "quality_gate": row[19],
+                "reason_codes": _json_loads(row[20]),
+                "odds_comparison": _json_loads(row[21]),
+                "edge": row[22],
+                "ev": row[23],
+                "uncertainty_state": row[24],
+                "created_at": row[25],
+            })
+
+        return snapshots
+
+    finally:
+        conn.close()
+
+
 def get_historical_basketball_games(league_id, season):
     """
     Retrieve stored historical basketball games for a league and season.
@@ -1569,6 +1897,10 @@ def save_backtest_run(run_data, market_metrics=None):
     completed_at = run_data.get("completed_at") or _utc_now()
     eval_json_str = _json_dumps(run_data.get("evaluation_json"), "evaluation_json") if run_data.get("evaluation_json") else None
     code_version = run_data.get("code_version")
+    season_start = run_data.get("season_start")
+    season_end = run_data.get("season_end")
+    evaluation_mode = run_data.get("evaluation_mode", "rolling_window")
+    fixture_selection = run_data.get("fixture_selection", "completed_fixtures")
 
     conn, db_type = _connect()
 
@@ -1583,9 +1915,10 @@ def save_backtest_run(run_data, market_metrics=None):
                             model_version, feature_version, calibration_version,
                             dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
                             selected_count, graded_count, accuracy, brier_score, log_loss, ece,
-                            enrichment_status, started_at, completed_at, evaluation_json, code_version
+                            enrichment_status, started_at, completed_at, evaluation_json, code_version,
+                            season_start, season_end, evaluation_mode, fixture_selection
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (run_id) DO UPDATE SET
                             accuracy = EXCLUDED.accuracy,
                             brier_score = EXCLUDED.brier_score,
@@ -1595,7 +1928,11 @@ def save_backtest_run(run_data, market_metrics=None):
                             feature_version = EXCLUDED.feature_version,
                             calibration_version = EXCLUDED.calibration_version,
                             evaluation_json = EXCLUDED.evaluation_json,
-                            completed_at = EXCLUDED.completed_at
+                            completed_at = EXCLUDED.completed_at,
+                            season_start = EXCLUDED.season_start,
+                            season_end = EXCLUDED.season_end,
+                            evaluation_mode = EXCLUDED.evaluation_mode,
+                            fixture_selection = EXCLUDED.fixture_selection
                         """,
                         (
                             run_id, sport, league_id, season, dataset_identity,
@@ -1603,6 +1940,7 @@ def save_backtest_run(run_data, market_metrics=None):
                             dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
                             selected_count, graded_count, accuracy, brier_score, log_loss, ece,
                             enrichment_status, started_at, completed_at, eval_json_str, code_version,
+                            season_start, season_end, evaluation_mode, fixture_selection,
                         ),
                     )
 
@@ -1636,9 +1974,10 @@ def save_backtest_run(run_data, market_metrics=None):
                     model_version, feature_version, calibration_version,
                     dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
                     selected_count, graded_count, accuracy, brier_score, log_loss, ece,
-                    enrichment_status, started_at, completed_at, evaluation_json, code_version
+                    enrichment_status, started_at, completed_at, evaluation_json, code_version,
+                    season_start, season_end, evaluation_mode, fixture_selection
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (run_id) DO UPDATE SET
                     accuracy = excluded.accuracy,
                     brier_score = excluded.brier_score,
@@ -1648,7 +1987,11 @@ def save_backtest_run(run_data, market_metrics=None):
                     feature_version = excluded.feature_version,
                     calibration_version = excluded.calibration_version,
                     evaluation_json = excluded.evaluation_json,
-                    completed_at = excluded.completed_at
+                    completed_at = excluded.completed_at,
+                    season_start = excluded.season_start,
+                    season_end = excluded.season_end,
+                    evaluation_mode = excluded.evaluation_mode,
+                    fixture_selection = excluded.fixture_selection
                 """,
                 (
                     run_id, sport, league_id, season, dataset_identity,
@@ -1656,6 +1999,7 @@ def save_backtest_run(run_data, market_metrics=None):
                     dataset_fixture_count, sample_size, min_prior_matches, sample_seed,
                     selected_count, graded_count, accuracy, brier_score, log_loss, ece,
                     enrichment_status, started_at, completed_at, eval_json_str, code_version,
+                    season_start, season_end, evaluation_mode, fixture_selection,
                 ),
             )
 

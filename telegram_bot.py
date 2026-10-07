@@ -1082,6 +1082,8 @@ def parse_operation_parameters(operation, text):
     if operation == "backtest":
         params["league_id"] = league_id or (config.ALLOWED_BASKETBALL_LEAGUE_IDS[0] if sport == "basketball" else config.ALLOWED_LEAGUE_IDS[0])
         params["league_name"] = league_name or ("NBA" if sport == "basketball" else "Premier League")
+        if sport != "basketball":
+            params["seasons"] = [2024, 2025, 2026]
 
     return params
 
@@ -1372,46 +1374,86 @@ def handle_backtest_op(params, request_id):
     sport = params.get("sport", "football")
     league_id = params.get("league_id")
     season = params.get("season", 2024)
-    sample_size = params.get("sample", 20)
+    seasons = params.get("seasons", (2024, 2025, 2026))
+    sample_size = params.get("sample", 30)
 
     storage.update_operation_request(request_id, status="RUNNING")
 
     try:
         if sport == "basketball":
             result = backtest.run_basketball_backtest(league_id=league_id, season=season, sample_size=sample_size)
+            acc = result.get("accuracy", 0.0)
+            graded = result.get("graded", 0)
+            correct = result.get("correct", 0)
+            status_str = result.get("status", "COMPLETE")
+
+            summary = {
+                "sport": sport,
+                "league_id": league_id,
+                "season": season,
+                "sample_size": sample_size,
+                "graded": graded,
+                "correct": correct,
+                "accuracy": acc,
+                "status": status_str,
+                "message": f"Backtest completed: {acc:.1%} accuracy ({correct}/{graded})",
+            }
+
+            storage.update_operation_request(request_id, status="COMPLETED", result_summary=summary)
+
+            return (
+                f"🧪 *BACKTEST COMPLETED*\n"
+                f"• Request ID: `{request_id}`\n"
+                f"• Sport: Basketball\n"
+                f"• League ID: {league_id}\n"
+                f"• Season: {season}\n"
+                f"• Sample Size: {sample_size}\n"
+                f"• Graded: {graded}\n"
+                f"• Accuracy: *{acc:.1%}* ({correct}/{graded})\n"
+                f"• Status: {status_str}"
+            )
         else:
-            result = backtest.run_real_backtest(league_id=league_id, season=season, sample_size=sample_size)
+            seasons_tuple = tuple(seasons) if isinstance(seasons, (list, tuple)) else (2024, 2025, 2026)
+            result = backtest.run_rolling_backtest_window(
+                league_id=league_id,
+                seasons=seasons_tuple,
+                sample_size=sample_size,
+            )
+            acc = result.get("accuracy", 0.0)
+            graded = result.get("graded", 0)
+            correct = result.get("correct", 0)
+            status_str = result.get("status", "COMPLETE")
 
-        acc = result.get("accuracy", 0.0)
-        graded = result.get("graded", 0)
-        correct = result.get("correct", 0)
-        status_str = result.get("status", "COMPLETE")
+            summary = {
+                "sport": sport,
+                "league_id": league_id,
+                "seasons": list(seasons_tuple),
+                "evaluation_mode": "rolling_window",
+                "fixture_selection": "completed_fixtures",
+                "sample_size": sample_size,
+                "graded": graded,
+                "correct": correct,
+                "accuracy": acc,
+                "status": status_str,
+                "message": f"Rolling backtest completed: {acc:.1%} accuracy ({correct}/{graded})",
+            }
 
-        summary = {
-            "sport": sport,
-            "league_id": league_id,
-            "season": season,
-            "sample_size": sample_size,
-            "graded": graded,
-            "correct": correct,
-            "accuracy": acc,
-            "status": status_str,
-            "message": f"Backtest completed: {acc:.1%} accuracy ({correct}/{graded})",
-        }
+            storage.update_operation_request(request_id, status="COMPLETED", result_summary=summary)
 
-        storage.update_operation_request(request_id, status="COMPLETED", result_summary=summary)
-
-        return (
-            f"🧪 *BACKTEST COMPLETED*\n"
-            f"• Request ID: `{request_id}`\n"
-            f"• Sport: {sport.title()}\n"
-            f"• League ID: {league_id}\n"
-            f"• Season: {season}\n"
-            f"• Sample Size: {sample_size}\n"
-            f"• Graded Sample: {graded}\n"
-            f"• Accuracy: *{acc:.1%}* ({correct}/{graded})\n"
-            f"• Status: {status_str}"
-        )
+            start_s = seasons_tuple[0]
+            end_s = seasons_tuple[-1]
+            return (
+                f"🧪 *BACKTEST COMPLETED*\n"
+                f"• Request ID: `{request_id}`\n"
+                f"• Evaluation Window: {start_s}–{end_s}\n"
+                f"• Selection: Completed Fixtures\n"
+                f"• Mode: Rolling Window\n"
+                f"• League ID: {league_id}\n"
+                f"• Sample Size: {sample_size}\n"
+                f"• Graded: {graded}\n"
+                f"• Accuracy: *{acc:.1%}* ({correct}/{graded})\n"
+                f"• Status: {status_str}"
+            )
     except Exception as exc:
         storage.update_operation_request(
             request_id,

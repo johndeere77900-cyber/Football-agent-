@@ -1940,6 +1940,7 @@ def run_daily(
             print_prediction(prediction)
 
             prediction_context = "LIVE" if prediction.get("is_live") else "PRE_MATCH"
+            rec = prediction.get("prediction_record") or prediction
             storage.save_prediction(
                 fixture_id=prediction["fixture_id"],
                 match_date=prediction["date"],
@@ -1954,7 +1955,20 @@ def run_daily(
                     "odds_comparison"
                 ),
                 prediction_context=prediction_context,
-                prediction_record=prediction.get("prediction_record") or prediction,
+                prediction_record=rec,
+            )
+
+            storage.save_prediction_snapshot(
+                fixture_id=prediction["fixture_id"],
+                prediction_timestamp=time_utils.format_utc_iso(datetime.now(timezone.utc)),
+                kickoff_at=prediction["date"],
+                sport="football",
+                league_id=league_id_value,
+                season=season,
+                home_team=prediction["home_team"],
+                away_team=prediction["away_team"],
+                prediction_context=prediction_context,
+                prediction_record=rec,
             )
 
             predicted_count += 1
@@ -2481,6 +2495,19 @@ def run_daily_basketball(
                 league=prediction["league"],
                 markets=prediction["markets"],
                 confidence=prediction["confidence"],
+                prediction_context=prediction_context,
+                prediction_record=prediction,
+            )
+
+            storage.save_prediction_snapshot(
+                fixture_id=prediction["game_id"],
+                prediction_timestamp=now_utc,
+                kickoff_at=prediction.get("date") or prediction.get("data_cutoff_timestamp") or game.get("date"),
+                sport="basketball",
+                league_id=league_id,
+                season=game.get("league", {}).get("season") if isinstance(game.get("league"), dict) else None,
+                home_team=prediction["home_team"],
+                away_team=prediction["away_team"],
                 prediction_context=prediction_context,
                 prediction_record=prediction,
             )
