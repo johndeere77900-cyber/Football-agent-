@@ -121,6 +121,14 @@ def sync_historical_fixtures(
             f"{sorted(allowed_seasons)}; received season={season}."
         )
 
+    allowed_leagues = set(getattr(config, "ALLOWED_LEAGUE_IDS", []))
+
+    if league_id not in allowed_leagues:
+        raise ValueError(
+            f"Football historical acquisition only supports configured leagues "
+            f"{sorted(allowed_leagues)}; received league_id={league_id}."
+        )
+
     if historical_budget is None:
         historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
 
@@ -253,7 +261,23 @@ def sync_historical_fixtures(
             fixtures_received.extend(page_fixtures)
 
             # Persist valid fixtures from this page immediately
-            save_result = storage.save_historical_fixtures(page_fixtures, league_id, season, source=page_source)
+            completed_page_fixtures = [
+                fixture
+                for fixture in page_fixtures
+                if (
+                    isinstance(fixture, dict)
+                    and fixture.get("fixture", {}).get("status", {}).get("short")
+                    in ("FT", "AET", "PEN")
+                )
+            ]
+
+            save_result = storage.save_historical_fixtures(
+                completed_page_fixtures,
+                league_id,
+                season,
+                source=page_source,
+                require_completed=True,
+            )
             total_valid_fixtures += save_result.get("valid", 0)
             total_newly_stored += save_result.get("inserted", 0)
             total_duplicates_skipped += save_result.get("duplicates_skipped", 0)

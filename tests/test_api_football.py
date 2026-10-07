@@ -381,9 +381,9 @@ def test_get_league_fixtures_page_does_not_send_page_param(tmp_path, monkeypatch
     res = api_football.get_league_fixtures_page(39, 2024, page=1)
 
     assert len(calls) == 1
-    # Verify that 'page' is NOT in the API request parameters
+    # Verify that 'page' is NOT in the API request parameters and status 'FT-AET-PEN' is included
     assert "page" not in calls[0]
-    assert calls[0] == {"league": 39, "season": 2024}
+    assert calls[0] == {"league": 39, "season": 2024, "status": "FT-AET-PEN"}
     assert res["expected_pages"] == 1
     assert len(res["fixtures"]) == 1
 

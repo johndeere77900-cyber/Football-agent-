@@ -1257,12 +1257,13 @@ class DataResolver:
         sorted_records = sorted(records, key=lambda x: str(x.get("fixture", {}).get("date", "") or ""), reverse=True)
         return sorted_records[:last]
 
-    def get_league_fixtures_page(self, league_id, season, page=1, max_budget=None):
+    def get_league_fixtures_page(self, league_id, season, page=1, max_budget=None, completed_only=True):
         """
         DataResolver wrapper for league fixtures page acquisition with multi-provider gap filling and fallback.
         Attempts API-Football first. If API-Football fails or its quota is exhausted, continues to
         football-data.org -> SoccerData. Does NOT re-raise APIFootballQuotaExhaustedError.
         Calculates missing fields for finished matches and fills gaps across secondary and tertiary providers.
+        When completed_only=True, returned fixtures are strictly filtered to FT, AET, PEN status.
         """
         primary_page = None
         primary_failed = False
@@ -1328,6 +1329,15 @@ class DataResolver:
                     merged = reconcile_fixture_records(candidates)
                     reconciled.append(merged or pf)
 
+                if completed_only:
+                    reconciled = [
+                        f
+                        for f in reconciled
+                        if isinstance(f, dict)
+                        and f.get("fixture", {}).get("status", {}).get("short")
+                        in ("FT", "AET", "PEN")
+                    ]
+
                 return {
                     "fixtures": reconciled,
                     "expected_pages": primary_page.get("expected_pages", 1),
@@ -1353,6 +1363,14 @@ class DataResolver:
                 logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
 
         if fd_matches:
+            if completed_only:
+                fd_matches = [
+                    f
+                    for f in fd_matches
+                    if isinstance(f, dict)
+                    and f.get("fixture", {}).get("status", {}).get("short")
+                    in ("FT", "AET", "PEN")
+                ]
             return {
                 "fixtures": fd_matches,
                 "expected_pages": 1,
@@ -1377,6 +1395,14 @@ class DataResolver:
                 logger.warning(f"DataResolver tertiary fallback get_league_fixtures_page failed for league {league_id}: {sd_exc}")
 
         if sd_matches:
+            if completed_only:
+                sd_matches = [
+                    f
+                    for f in sd_matches
+                    if isinstance(f, dict)
+                    and f.get("fixture", {}).get("status", {}).get("short")
+                    in ("FT", "AET", "PEN")
+                ]
             return {
                 "fixtures": sd_matches,
                 "expected_pages": 1,

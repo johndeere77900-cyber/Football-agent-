@@ -227,3 +227,65 @@ def test_sync_historical_fixtures_season_guards(temp_db):
 
     with pytest.raises(ValueError, match="Football historical acquisition only supports seasons"):
         historical_sync.sync_historical_fixtures(league_id=39, season=2027)
+
+
+def test_sync_historical_fixtures_unconfigured_league_guard(temp_db):
+    """
+    Verify unconfigured football league is rejected before acquisition.
+    """
+    with pytest.raises(ValueError, match="configured leagues"):
+        historical_sync.sync_historical_fixtures(league_id=999999, season=2024)
+
+
+def test_sync_historical_fixtures_unplayed_fixtures_not_persisted(temp_db):
+    """
+    Verify unplayed/upcoming fixtures from provider response are NOT persisted into historical DB.
+    """
+    mixed_fixtures = [
+        {
+            "fixture": {"id": 8001, "date": "2025-01-10T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+            "goals": {"home": 2, "away": 1},
+        },
+        {
+            "fixture": {"id": 8002, "date": "2025-02-10T15:00:00+00:00", "status": {"short": "NS"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 3, "name": "Team C"}},
+            "goals": {"home": None, "away": None},
+        },
+        {
+            "fixture": {"id": 8003, "date": "2025-02-15T15:00:00+00:00", "status": {"short": "PST"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 2, "name": "Team B"}, "away": {"id": 3, "name": "Team C"}},
+            "goals": {"home": None, "away": None},
+        },
+        {
+            "fixture": {"id": 8004, "date": "2025-01-12T15:00:00+00:00", "status": {"short": "AET"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 3, "name": "Team C"}, "away": {"id": 1, "name": "Team A"}},
+            "goals": {"home": 3, "away": 2},
+        },
+        {
+            "fixture": {"id": 8005, "date": "2025-01-14T15:00:00+00:00", "status": {"short": "PEN"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 2, "name": "Team B"}, "away": {"id": 1, "name": "Team A"}},
+            "goals": {"home": 1, "away": 1},
+        },
+    ]
+
+    meta_return = {
+        "fixtures": mixed_fixtures,
+        "page": 1,
+        "expected_pages": 1,
+    }
+
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return):
+        report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    assert report["final_stored_count"] == 3
+    stored = storage.get_historical_fixtures(39, 2024)
+    stored_ids = {f["fixture"]["id"] for f in stored}
+    assert stored_ids == {8001, 8004, 8005}
+    assert 8002 not in stored_ids
+    assert 8003 not in stored_ids
