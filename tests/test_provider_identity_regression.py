@@ -212,7 +212,7 @@ def test_4_football_data_org_data_can_become_complete():
 
 def test_4_b_partial_football_data_org_data_cannot_become_complete():
     """
-    When secondary provider football-data.org returns partial/insufficient data (1 returned fixture),
+    When secondary provider football-data.org returns partial/insufficient data (is_partial=True),
     historical_sync must fail closed and keep dataset status INCOMPLETE.
     """
     fd_match = {
@@ -235,6 +235,7 @@ def test_4_b_partial_football_data_org_data_cannot_become_complete():
             "last": "2024-08-15",
             "competition_code": "PL",
             "season": 2024,
+            "is_partial": True,
         },
     }
 
