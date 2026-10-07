@@ -1669,6 +1669,104 @@ def save_prediction_snapshot(
         conn.close()
 
 
+def get_prediction_snapshots(fixture_id=None, sport=None, limit=100):
+    """
+    Retrieve prediction snapshots (read-only, newest first).
+
+    Allows filtering by fixture_id and/or sport.
+    """
+    limit = _validate_positive_int(limit, "limit")
+    fixture_id = _validate_optional_positive_int(fixture_id, "fixture_id")
+    if sport is not None:
+        sport = _validate_text(sport, "sport").lower()
+
+    where_clauses = []
+    params = []
+
+    if fixture_id is not None:
+        where_clauses.append("fixture_id = %s")
+        params.append(fixture_id)
+
+    if sport is not None:
+        where_clauses.append("sport = %s")
+        params.append(sport)
+
+    where_str = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            query = f"""
+                SELECT id, fixture_id, prediction_timestamp, kickoff_at, sport,
+                       league_id, season, canonical_home_id, canonical_away_id,
+                       home_team, away_team, prediction_context, model_version,
+                       feature_version, calibration_version, data_cutoff_timestamp,
+                       markets_json, features_json, confidence_json, quality_gate,
+                       reason_codes_json, odds_comparison_json, edge, ev,
+                       uncertainty_state, created_at
+                FROM prediction_snapshots
+                {where_str}
+                ORDER BY prediction_timestamp DESC, id DESC
+                LIMIT %s
+            """
+            with conn.cursor() as cur:
+                cur.execute(query, params + [limit])
+                rows = cur.fetchall()
+        else:
+            q_sqlite = where_str.replace("%s", "?")
+            query = f"""
+                SELECT id, fixture_id, prediction_timestamp, kickoff_at, sport,
+                       league_id, season, canonical_home_id, canonical_away_id,
+                       home_team, away_team, prediction_context, model_version,
+                       feature_version, calibration_version, data_cutoff_timestamp,
+                       markets_json, features_json, confidence_json, quality_gate,
+                       reason_codes_json, odds_comparison_json, edge, ev,
+                       uncertainty_state, created_at
+                FROM prediction_snapshots
+                {q_sqlite}
+                ORDER BY prediction_timestamp DESC, id DESC
+                LIMIT ?
+            """
+            rows = conn.execute(query, params + [limit]).fetchall()
+
+        snapshots = []
+        for row in rows:
+            snapshots.append({
+                "id": row[0],
+                "fixture_id": row[1],
+                "prediction_timestamp": row[2],
+                "kickoff_at": row[3],
+                "sport": row[4],
+                "league_id": row[5],
+                "season": row[6],
+                "canonical_home_id": row[7],
+                "canonical_away_id": row[8],
+                "home_team": row[9],
+                "away_team": row[10],
+                "prediction_context": row[11],
+                "model_version": row[12],
+                "feature_version": row[13],
+                "calibration_version": row[14],
+                "data_cutoff_timestamp": row[15],
+                "markets": _json_loads(row[16]),
+                "features": _json_loads(row[17]),
+                "confidence": _json_loads(row[18]),
+                "quality_gate": row[19],
+                "reason_codes": _json_loads(row[20]),
+                "odds_comparison": _json_loads(row[21]),
+                "edge": row[22],
+                "ev": row[23],
+                "uncertainty_state": row[24],
+                "created_at": row[25],
+            })
+
+        return snapshots
+
+    finally:
+        conn.close()
+
+
 def get_historical_basketball_games(league_id, season):
     """
     Retrieve stored historical basketball games for a league and season.
