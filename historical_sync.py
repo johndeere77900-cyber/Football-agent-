@@ -58,43 +58,29 @@ def _is_historical_provider_complete(
     if not isinstance(prov_meta, dict):
         prov_meta = {}
 
-    if prov == "football_data_org":
-        count = prov_meta.get("count")
-        played = prov_meta.get("played")
-        first = prov_meta.get("first")
-        last = prov_meta.get("last")
-        is_partial = prov_meta.get("is_partial", False)
-        is_complete = prov_meta.get("is_complete")
+    is_partial = prov_meta.get("is_partial", False)
+    is_complete = prov_meta.get("is_complete") or prov_meta.get("acquisition_complete")
 
-        if is_partial:
+    if is_partial:
+        return False
+
+    if is_complete is True:
+        return True
+
+    count = prov_meta.get("count")
+    played = prov_meta.get("played")
+    first = prov_meta.get("first")
+    last = prov_meta.get("last")
+
+    if count is not None and isinstance(count, int) and count > 0:
+        if valid_fixtures_count < count:
             return False
-
-        if is_complete is not None:
-            return bool(is_complete)
-
-        if count is not None and isinstance(count, int) and count > 0:
-            if valid_fixtures_count < count:
+        if played is not None and isinstance(played, int):
+            if valid_fixtures_count < played or played < count:
                 return False
-            if played is not None and isinstance(played, int):
-                if valid_fixtures_count < played:
-                    return False
-            if first and last and isinstance(first, str) and isinstance(last, str):
-                if len(first) >= 10 and len(last) >= 10:
-                    return True
-
-        return False
-
-    elif prov == "soccerdata":
-        is_partial = prov_meta.get("is_partial", False)
-        is_complete = prov_meta.get("is_complete") or prov_meta.get("acquisition_complete")
-
-        if is_partial:
-            return False
-
-        if is_complete is not None:
-            return bool(is_complete)
-
-        return False
+        if first and last and isinstance(first, str) and isinstance(last, str):
+            if len(first) >= 10 and len(last) >= 10:
+                return True
 
     return False
 
@@ -461,7 +447,7 @@ def sync_historical_fixtures(
         final_status = "COMPLETE"
     else:
         if not last_error_reason and page_source_val != "api_football":
-            last_error_reason = f"{page_source_val}_completeness_unverifiable"
+            last_error_reason = "provider_coverage_incomplete"
         storage.mark_historical_dataset_incomplete(
             league_id,
             season,

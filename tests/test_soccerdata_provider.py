@@ -338,7 +338,7 @@ def test_sofascore_not_used_when_match_history_returns_usable_data(mock_api_fb, 
                 "provider_provenance": {"provider": "soccerdata_match_history"},
             }
         ],
-        {"status": "SOURCE_AVAILABLE"},
+        {"status": "SOURCE_AVAILABLE", "is_complete": True},
     )
 
     resolver = DataResolver()

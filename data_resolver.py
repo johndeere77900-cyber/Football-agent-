@@ -549,6 +549,58 @@ def validate_fixtures_sufficiency(fixtures_list):
     return "VALID_DATA", clean
 
 
+def _provider_result_is_sufficient_for_historical_acquisition(provider, fixtures, provider_metadata=None, season=None):
+    """
+    Determine whether a provider result is sufficient for historical acquisition of requested league/season.
+
+    Minimum rules:
+    - Empty result = insufficient.
+    - Any provider metadata explicitly indicating partial/incomplete = insufficient.
+    - If the provider exposes an explicit "is_complete=True", it may be accepted.
+    - If provider completeness cannot be established for a historical dataset, treat as insufficient and continue to next provider.
+    - Never declare completeness merely because "len(fixtures) > 0".
+    - Never fabricate an expected fixture count.
+    - Never mark a current/ongoing season complete merely because fixtures were returned.
+    """
+    if not fixtures or not isinstance(fixtures, list) or len(fixtures) == 0:
+        return False
+
+    meta = provider_metadata if isinstance(provider_metadata, dict) else {}
+
+    # Explicit partial/incomplete in metadata -> insufficient
+    if meta.get("is_partial") is True or meta.get("is_complete") is False:
+        return False
+
+    # Check if requested season is current or ongoing
+    current_year = datetime.now(timezone.utc).year
+    if season is not None:
+        try:
+            s_val = int(season)
+            if s_val >= current_year:
+                return False
+        except (ValueError, TypeError):
+            pass
+
+    # Accept if explicit is_complete=True is present in provider metadata
+    if meta.get("is_complete") is True:
+        return True
+
+    # For football_data_org, check if count, played, first, last explicitly establish completeness
+    cnt = meta.get("count")
+    pld = meta.get("played")
+    first = meta.get("first")
+    last = meta.get("last")
+
+    if cnt is not None and isinstance(cnt, int) and cnt > 0:
+        if pld is not None and isinstance(pld, int) and pld == cnt and len(fixtures) >= cnt:
+            if first and last and isinstance(first, str) and isinstance(last, str):
+                if len(first) >= 10 and len(last) >= 10:
+                    return True
+
+    # If completeness cannot be established, treat as insufficient
+    return False
+
+
 def is_valid_stat_value(val):
     """Check if a statistical field value is present, non-None, and non-empty."""
     if val is None:
@@ -1500,8 +1552,8 @@ class DataResolver:
                     "source": "api_football",
                 }
 
-        # If primary provider failed, was quota exhausted, or returned 0 fixtures:
-        # Fallback 1: football-data.org
+        # Fallback Hierarchy: football-data.org -> SoccerData MatchHistory -> SoccerData Sofascore
+        # Evaluates coverage sufficiency at each tier instead of stopping on non-empty results.
         fd_matches = []
         fd_meta = {}
         comp_code = LEAGUE_TO_FD_CODE.get(league_id)
@@ -1517,15 +1569,17 @@ class DataResolver:
             except Exception as fd_exc:
                 logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
 
-        if fd_matches:
-            if completed_only:
-                fd_matches = [
-                    f
-                    for f in fd_matches
-                    if isinstance(f, dict)
-                    and f.get("fixture", {}).get("status", {}).get("short")
-                    in ("FT", "AET", "PEN")
-                ]
+        if completed_only and fd_matches:
+            fd_matches = [
+                f
+                for f in fd_matches
+                if isinstance(f, dict)
+                and f.get("fixture", {}).get("status", {}).get("short")
+                in ("FT", "AET", "PEN")
+            ]
+
+        # Check if secondary provider result is sufficient for historical acquisition
+        if _provider_result_is_sufficient_for_historical_acquisition("football_data_org", fd_matches, provider_metadata=fd_meta, season=season):
             return {
                 "fixtures": fd_matches,
                 "expected_pages": 1,
@@ -1536,56 +1590,129 @@ class DataResolver:
                 "primary_quota_exhausted": primary_quota_exhausted,
             }
 
-        # Fallback 2: SoccerData MatchHistory -> SoccerData Sofascore
+        # Secondary provider result was unavailable or insufficient.
+        # Do NOT discard fd_matches! Retain them and attempt tertiary SoccerData providers for additional coverage.
+        combined_matches = list(fd_matches)
+
+        # Tertiary Tier 1: SoccerData MatchHistory
         sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
-        sd_matches = []
-        sd_meta = {}
+        sd_mh_matches = []
+        sd_mh_meta = {}
 
         if sd_mh_code:
             try:
                 sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
                 if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                    sd_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
-                    sd_meta = sd_meta_res or {}
+                    sd_mh_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
+                    sd_mh_meta = sd_meta_res or {}
             except Exception as sd_exc:
                 logger.warning(f"DataResolver tertiary MatchHistory fallback failed for league {league_id}: {sd_exc}")
 
-        if not sd_matches:
-            sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
-            if sd_ss_code:
-                try:
-                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
-                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                        sd_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
-                        sd_meta = sd_meta_res or {}
-                except Exception as sd_exc:
-                    logger.warning(f"DataResolver tertiary Sofascore fallback failed for league {league_id}: {sd_exc}")
+        if sd_mh_matches:
+            for sm in sd_mh_matches:
+                matching = [cm for cm in combined_matches if _strict_fixture_match(cm, sm)]
+                if matching:
+                    idx = combined_matches.index(matching[0])
+                    reconciled_rec = reconcile_fixture_records([matching[0], sm])
+                    if reconciled_rec:
+                        combined_matches[idx] = reconciled_rec
+                else:
+                    combined_matches.append(sm)
 
-        if sd_matches:
+        # Check if combined dataset after MatchHistory is sufficient
+        if _provider_result_is_sufficient_for_historical_acquisition("soccerdata", combined_matches, provider_metadata=sd_mh_meta, season=season):
+            source_val = "mixed" if (fd_matches and sd_mh_matches) else ("soccerdata" if sd_mh_matches else "football_data_org")
             return {
-                "fixtures": sd_matches,
+                "fixtures": combined_matches,
                 "expected_pages": 1,
                 "current_page": 1,
-                "source": "soccerdata",
-                "provider_metadata": sd_meta,
+                "source": source_val,
+                "provider_metadata": sd_mh_meta if sd_mh_matches else fd_meta,
                 "primary_failed": primary_failed,
                 "primary_quota_exhausted": primary_quota_exhausted,
             }
 
-        if primary_page is not None and isinstance(primary_page, dict):
-            return {
-                "fixtures": [],
-                "expected_pages": primary_page.get("expected_pages", 1),
-                "current_page": primary_page.get("current_page", page),
-                "source": "api_football",
-            }
+        # Tertiary Tier 2: SoccerData Sofascore (covers all 12 configured football leagues)
+        sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
+        sd_ss_matches = []
+        sd_ss_meta = {}
+
+        if sd_ss_code:
+            try:
+                sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
+                if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                    sd_ss_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
+                    sd_ss_meta = sd_meta_res or {}
+            except Exception as sd_exc:
+                logger.warning(f"DataResolver tertiary Sofascore fallback failed for league {league_id}: {sd_exc}")
+
+        if sd_ss_matches:
+            for sm in sd_ss_matches:
+                matching = [cm for cm in combined_matches if _strict_fixture_match(cm, sm)]
+                if matching:
+                    idx = combined_matches.index(matching[0])
+                    reconciled_rec = reconcile_fixture_records([matching[0], sm])
+                    if reconciled_rec:
+                        combined_matches[idx] = reconciled_rec
+                else:
+                    combined_matches.append(sm)
+
+        fd_contributed = len(fd_matches) > 0
+        sd_contributed = len(sd_mh_matches) > 0 or len(sd_ss_matches) > 0
+
+        if fd_contributed and sd_contributed:
+            final_source = "mixed"
+        elif sd_contributed:
+            final_source = "soccerdata"
+        elif fd_contributed:
+            final_source = "football_data_org"
+        else:
+            final_source = "none" if primary_page is None else "api_football"
+
+        # Evaluate completeness evidence from each contributing provider
+        fd_is_complete = _provider_result_is_sufficient_for_historical_acquisition("football_data_org", fd_matches, provider_metadata=fd_meta, season=season)
+        sd_mh_is_complete = _provider_result_is_sufficient_for_historical_acquisition("soccerdata", sd_mh_matches, provider_metadata=sd_mh_meta, season=season)
+        sd_ss_is_complete = _provider_result_is_sufficient_for_historical_acquisition("soccerdata", sd_ss_matches, provider_metadata=sd_ss_meta, season=season)
+
+        is_sufficient_final = fd_is_complete or sd_mh_is_complete or sd_ss_is_complete
+
+        # Preserve detailed provider evidence for historical_sync.py and manifest inspection
+        provider_metadata = {
+            "is_complete": is_sufficient_final,
+            "is_partial": not is_sufficient_final,
+            "providers_contributed": [
+                p for p, count in [
+                    ("football_data_org", len(fd_matches)),
+                    ("soccerdata_match_history", len(sd_mh_matches)),
+                    ("soccerdata_sofascore", len(sd_ss_matches)),
+                ] if count > 0
+            ],
+            "football_data_org": {
+                "count": len(fd_matches),
+                "is_complete": fd_is_complete,
+                "is_partial": fd_meta.get("is_partial", not fd_is_complete) if fd_matches else True,
+                "raw_metadata": fd_meta,
+            },
+            "soccerdata_match_history": {
+                "count": len(sd_mh_matches),
+                "is_complete": sd_mh_is_complete,
+                "is_partial": sd_mh_meta.get("is_partial", not sd_mh_is_complete) if sd_mh_matches else True,
+                "raw_metadata": sd_mh_meta,
+            },
+            "soccerdata_sofascore": {
+                "count": len(sd_ss_matches),
+                "is_complete": sd_ss_is_complete,
+                "is_partial": sd_ss_meta.get("is_partial", not sd_ss_is_complete) if sd_ss_matches else True,
+                "raw_metadata": sd_ss_meta,
+            },
+        }
 
         return {
-            "fixtures": [],
+            "fixtures": combined_matches,
             "expected_pages": 1,
-            "current_page": page,
-            "source": "none",
-            "provider_metadata": sd_meta if sd_meta else fd_meta,
+            "current_page": 1,
+            "source": final_source,
+            "provider_metadata": provider_metadata,
             "primary_failed": primary_failed,
             "primary_quota_exhausted": primary_quota_exhausted,
         }
