@@ -515,6 +515,7 @@ try:
         records = df_reset.to_dict(orient='records')
 
         team_id_map = {{}}
+        enrichment_error = None
         try:
             df_seasons = ss.read_seasons()
             for (lkey, skey), s_row in df_seasons.iterrows():
@@ -546,8 +547,8 @@ try:
                         aid = ev.get("awayTeam", {{}}).get("id")
                         if gid is not None and hid is not None and aid is not None:
                             team_id_map[str(gid)] = (int(hid), int(aid))
-        except Exception:
-            pass
+        except Exception as exc:
+            enrichment_error = str(exc)
 
         for rec in records:
             gid = str(rec.get("game_id") or rec.get("game") or rec.get("id") or "")
@@ -555,7 +556,12 @@ try:
                 rec["home_team_id"] = team_id_map[gid][0]
                 rec["away_team_id"] = team_id_map[gid][1]
 
-        print(json.dumps(records, default=str))
+        output_payload = {{
+            "records": records,
+            "team_id_map_size": len(team_id_map),
+            "enrichment_error": enrichment_error,
+        }}
+        print(json.dumps(output_payload, default=str))
 except Exception as exc:
     sys.exit(1)
 """
@@ -568,9 +574,19 @@ except Exception as exc:
             timeout=timeout_seconds,
         )
         if proc.returncode == 0 and proc.stdout.strip():
-            raw_records = json.loads(proc.stdout)
+            payload = json.loads(proc.stdout)
+            if isinstance(payload, dict) and "records" in payload:
+                raw_records = payload.get("records", [])
+                enrichment_error = payload.get("enrichment_error")
+            elif isinstance(payload, list):
+                raw_records = payload
+                enrichment_error = None
+            else:
+                raw_records = []
+                enrichment_error = None
         else:
             raw_records = []
+            enrichment_error = "Subprocess returned non-zero code or empty stdout"
     except Exception as exc:
         logger.warning(f"SoccerData Sofascore subprocess execution failed or timed out: {exc}")
         return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": str(exc), "source": "soccerdata_sofascore"}
