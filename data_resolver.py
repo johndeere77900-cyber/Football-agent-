@@ -1669,34 +1669,43 @@ class DataResolver:
         else:
             final_source = "none" if primary_page is None else "api_football"
 
-        is_sufficient_final = _provider_result_is_sufficient_for_historical_acquisition(final_source, combined_matches, provider_metadata=None, season=season)
+        # Evaluate completeness evidence from each contributing provider
+        fd_is_complete = _provider_result_is_sufficient_for_historical_acquisition("football_data_org", fd_matches, provider_metadata=fd_meta, season=season)
+        sd_mh_is_complete = _provider_result_is_sufficient_for_historical_acquisition("soccerdata", sd_mh_matches, provider_metadata=sd_mh_meta, season=season)
+        sd_ss_is_complete = _provider_result_is_sufficient_for_historical_acquisition("soccerdata", sd_ss_matches, provider_metadata=sd_ss_meta, season=season)
 
-        if final_source == "mixed":
-            provider_metadata = {
-                "is_partial": not is_sufficient_final,
-                "is_complete": is_sufficient_final,
-                "football_data_org": fd_meta,
-                "soccerdata_match_history": sd_mh_meta,
-                "soccerdata_sofascore": sd_ss_meta,
-            }
-        elif final_source == "soccerdata":
-            base_meta = sd_ss_meta if sd_ss_meta else sd_mh_meta
-            provider_metadata = dict(base_meta) if isinstance(base_meta, dict) else {}
-            if "is_complete" not in provider_metadata:
-                provider_metadata["is_complete"] = is_sufficient_final
-            if "is_partial" not in provider_metadata:
-                provider_metadata["is_partial"] = not is_sufficient_final
-        elif final_source == "football_data_org":
-            provider_metadata = dict(fd_meta) if isinstance(fd_meta, dict) else {}
-            if "is_complete" not in provider_metadata:
-                provider_metadata["is_complete"] = is_sufficient_final
-            if "is_partial" not in provider_metadata:
-                provider_metadata["is_partial"] = not is_sufficient_final
-        else:
-            base_meta = sd_ss_meta if sd_ss_meta else (sd_mh_meta if sd_mh_meta else fd_meta)
-            provider_metadata = dict(base_meta) if isinstance(base_meta, dict) else {}
-            provider_metadata["is_complete"] = False
-            provider_metadata["is_partial"] = True
+        is_sufficient_final = fd_is_complete or sd_mh_is_complete or sd_ss_is_complete
+
+        # Preserve detailed provider evidence for historical_sync.py and manifest inspection
+        provider_metadata = {
+            "is_complete": is_sufficient_final,
+            "is_partial": not is_sufficient_final,
+            "providers_contributed": [
+                p for p, count in [
+                    ("football_data_org", len(fd_matches)),
+                    ("soccerdata_match_history", len(sd_mh_matches)),
+                    ("soccerdata_sofascore", len(sd_ss_matches)),
+                ] if count > 0
+            ],
+            "football_data_org": {
+                "count": len(fd_matches),
+                "is_complete": fd_is_complete,
+                "is_partial": fd_meta.get("is_partial", not fd_is_complete) if fd_matches else True,
+                "raw_metadata": fd_meta,
+            },
+            "soccerdata_match_history": {
+                "count": len(sd_mh_matches),
+                "is_complete": sd_mh_is_complete,
+                "is_partial": sd_mh_meta.get("is_partial", not sd_mh_is_complete) if sd_mh_matches else True,
+                "raw_metadata": sd_mh_meta,
+            },
+            "soccerdata_sofascore": {
+                "count": len(sd_ss_matches),
+                "is_complete": sd_ss_is_complete,
+                "is_partial": sd_ss_meta.get("is_partial", not sd_ss_is_complete) if sd_ss_matches else True,
+                "raw_metadata": sd_ss_meta,
+            },
+        }
 
         return {
             "fixtures": combined_matches,

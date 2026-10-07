@@ -355,3 +355,182 @@ def test_scenario_15_basketball_sync_behavior_unaffected(mock_bb_page):
     assert report["sport"] == "basketball"
     assert report["status"] == "COMPLETE"
     assert report["final_stored_count"] == 1
+
+
+# PR #29 Fix Test 1: football-data.org partial + SoccerData complete -> final is_complete=True
+@patch("soccerdata_provider.get_sofascore_historical_games")
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_fd_partial_plus_soccerdata_complete_yields_is_complete_true(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+    mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+    mock_fd.return_value = {
+        "matches": [{
+            "id": 2001,
+            "utcDate": "2024-08-17T15:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Premier League", "code": "PL"},
+            "season": {"startDate": "2024-08-01"},
+            "homeTeam": {"id": 1, "name": "Arsenal"},
+            "awayTeam": {"id": 2, "name": "Chelsea"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }],
+        "metadata": {"is_partial": True},
+    }
+    mock_sd_mh.return_value = ("SOURCE_NOT_AVAILABLE", [], {})
+    mock_sd_ss.return_value = (
+        "SOURCE_AVAILABLE",
+        [make_test_fixture(2002, h_name="Liverpool", a_name="Everton", h_id=3, a_id=4)],
+        {"status": "SOURCE_AVAILABLE", "is_complete": True},
+    )
+
+    resolver = DataResolver()
+    res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
+
+    assert res["source"] == "mixed"
+    assert res["provider_metadata"]["is_complete"] is True
+    assert res["provider_metadata"]["is_partial"] is False
+
+
+# PR #29 Fix Test 2: football-data.org partial + SoccerData incomplete -> final is_complete=False
+@patch("soccerdata_provider.get_sofascore_historical_games")
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_fd_partial_plus_soccerdata_incomplete_yields_is_complete_false(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+    mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+    mock_fd.return_value = {
+        "matches": [{
+            "id": 2001,
+            "utcDate": "2024-08-17T15:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Premier League", "code": "PL"},
+            "season": {"startDate": "2024-08-01"},
+            "homeTeam": {"id": 1, "name": "Arsenal"},
+            "awayTeam": {"id": 2, "name": "Chelsea"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }],
+        "metadata": {"is_partial": True},
+    }
+    mock_sd_mh.return_value = ("SOURCE_NOT_AVAILABLE", [], {})
+    mock_sd_ss.return_value = (
+        "SOURCE_AVAILABLE",
+        [make_test_fixture(2002, h_name="Liverpool", a_name="Everton", h_id=3, a_id=4)],
+        {"status": "SOURCE_AVAILABLE", "is_partial": True},
+    )
+
+    resolver = DataResolver()
+    res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
+
+    assert res["source"] == "mixed"
+    assert res["provider_metadata"]["is_complete"] is False
+    assert res["provider_metadata"]["is_partial"] is True
+
+
+# PR #29 Fix Test 3: football-data.org partial + SoccerData completeness unknown -> final is_complete=False
+@patch("soccerdata_provider.get_sofascore_historical_games")
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_fd_partial_plus_soccerdata_unknown_yields_is_complete_false(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+    mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+    mock_fd.return_value = {
+        "matches": [{
+            "id": 2001,
+            "utcDate": "2024-08-17T15:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Premier League", "code": "PL"},
+            "season": {"startDate": "2024-08-01"},
+            "homeTeam": {"id": 1, "name": "Arsenal"},
+            "awayTeam": {"id": 2, "name": "Chelsea"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }],
+        "metadata": {"is_partial": True},
+    }
+    mock_sd_mh.return_value = ("SOURCE_NOT_AVAILABLE", [], {})
+    mock_sd_ss.return_value = (
+        "SOURCE_AVAILABLE",
+        [make_test_fixture(2002, h_name="Liverpool", a_name="Everton", h_id=3, a_id=4)],
+        {"status": "SOURCE_AVAILABLE"},  # No is_complete=True
+    )
+
+    resolver = DataResolver()
+    res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
+
+    assert res["source"] == "mixed"
+    assert res["provider_metadata"]["is_complete"] is False
+    assert res["provider_metadata"]["is_partial"] is True
+
+
+# PR #29 Fix Test 4: football-data.org partial + MatchHistory partial + Sofascore complete -> final is_complete=True
+@patch("soccerdata_provider.get_sofascore_historical_games")
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_fd_partial_plus_mh_partial_plus_sofascore_complete_yields_is_complete_true(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+    mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+    mock_fd.return_value = {
+        "matches": [{
+            "id": 2001,
+            "utcDate": "2024-08-17T15:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Premier League", "code": "PL"},
+            "season": {"startDate": "2024-08-01"},
+            "homeTeam": {"id": 1, "name": "Arsenal"},
+            "awayTeam": {"id": 2, "name": "Chelsea"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }],
+        "metadata": {"is_partial": True},
+    }
+    mock_sd_mh.return_value = (
+        "SOURCE_AVAILABLE",
+        [make_test_fixture(2002, h_name="Liverpool", a_name="Everton", h_id=3, a_id=4)],
+        {"status": "SOURCE_AVAILABLE", "is_partial": True},
+    )
+    mock_sd_ss.return_value = (
+        "SOURCE_AVAILABLE",
+        [make_test_fixture(2003, h_name="Tottenham", a_name="West Ham", h_id=5, a_id=6)],
+        {"status": "SOURCE_AVAILABLE", "is_complete": True},
+    )
+
+    resolver = DataResolver()
+    res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
+
+    assert res["source"] == "mixed"
+    assert res["provider_metadata"]["is_complete"] is True
+    assert res["provider_metadata"]["is_partial"] is False
+
+
+# PR #29 Fix Test 5: Non-empty mixed result without explicit completeness evidence -> is_complete=False
+@patch("soccerdata_provider.get_sofascore_historical_games")
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_non_empty_mixed_without_completeness_evidence_yields_is_complete_false(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+    mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+    mock_fd.return_value = {
+        "matches": [{
+            "id": 2001,
+            "utcDate": "2024-08-17T15:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Premier League", "code": "PL"},
+            "season": {"startDate": "2024-08-01"},
+            "homeTeam": {"id": 1, "name": "Arsenal"},
+            "awayTeam": {"id": 2, "name": "Chelsea"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }],
+        "metadata": {},
+    }
+    mock_sd_mh.return_value = (
+        "SOURCE_AVAILABLE",
+        [make_test_fixture(2002, h_name="Liverpool", a_name="Everton", h_id=3, a_id=4)],
+        {"status": "SOURCE_AVAILABLE"},
+    )
+    mock_sd_ss.return_value = ("SOURCE_NOT_AVAILABLE", [], {})
+
+    resolver = DataResolver()
+    res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
+
+    assert res["source"] == "mixed"
+    assert res["provider_metadata"]["is_complete"] is False
+    assert res["provider_metadata"]["is_partial"] is True
