@@ -45,7 +45,7 @@ def make_mock_fixture(
     away_id,
     date_str="2024-05-01T15:00:00+00:00",
     league_id=39,
-    season=2023,
+    season=2024,
     home_goals=2,
     away_goals=1,
     status="FT",
@@ -123,7 +123,7 @@ def test_scenario_1_international_fixture_nigeria_vs_ghana():
             away_id=3000 + i,
             date_str=f"2024-01-{i:02d}T15:00:00+00:00",
             league_id=15,
-            season=2023,
+            season=2024,
             home_goals=2,
             away_goals=1,
         ))
@@ -137,12 +137,12 @@ def test_scenario_1_international_fixture_nigeria_vs_ghana():
             away_id=4000 + i,
             date_str=f"2024-02-{i:02d}T15:00:00+00:00",
             league_id=15,
-            season=2023,
+            season=2024,
             home_goals=1,
             away_goals=0,
         ))
 
-    storage.save_historical_fixtures(hist_fixtures, league_id=15, season=2023)
+    storage.save_historical_fixtures(hist_fixtures, league_id=15, season=2024)
 
     # Step 3: Query DB history and calculate last 5, 10, 20, 30
     db_matches_home = storage.get_team_historical_fixtures(c_home, cutoff=cutoff, limit=30)
@@ -166,14 +166,14 @@ def test_scenario_1_international_fixture_nigeria_vs_ghana():
         away_id=1002,
         date_str="2024-06-01T18:00:00+00:00",
         league_id=15,
-        season=2023,
+        season=2024,
         status="NS",
     )
 
     pred = main.predict_fixture(target_fixture, league_avg_goals=2.5)
 
     # Verify fixture data was persisted in database
-    db_count = storage.get_historical_fixture_count(15, 2023)
+    db_count = storage.get_historical_fixture_count(15, 2024)
     assert db_count >= 13
 
     # Step 5: Verify second prediction run uses DB history without re-fetching
@@ -189,7 +189,7 @@ def test_scenario_2_abundant_historical_coverage_uses_db_only():
     Expected: PostgreSQL/DB supplies required history. External providers are NOT called.
     """
     league_id = 39
-    season = 2023
+    season = 2024
     cutoff = "2024-05-15T15:00:00+00:00"
 
     # Seed 15 completed matches for Arsenal and Chelsea into DB
@@ -237,7 +237,7 @@ def test_scenario_3_incomplete_db_history_with_provider_gap_fill():
     Expected: DB partial history -> API-Football / fallback gap fill -> persist -> prediction attempt.
     """
     league_id = 39
-    season = 2023
+    season = 2024
 
     # Bootstrap identity for Team_A and Team_B
     team_identity.bootstrap_historical_team_identity("Team_A", "api_football", 101, league_id=league_id)
@@ -255,6 +255,14 @@ def test_scenario_3_incomplete_db_history_with_provider_gap_fill():
         season=season,
         status="NS",
     )
+    mock_recent_matches_a = [
+        make_mock_fixture(8000 + i, "Team_A", "Opponent", 101, 200 + i, date_str=f"2024-04-{i:02d}T15:00:00+00:00", season=season)
+        for i in range(1, 6)
+    ]
+    mock_recent_matches_b = [
+        make_mock_fixture(8100 + i, "Team_B", "Opponent", 102, 300 + i, date_str=f"2024-04-{i:02d}T15:00:00+00:00", season=season)
+        for i in range(1, 6)
+    ]
 
     mock_home_stats = {
         "fixtures": {"played": {"total": 10}},

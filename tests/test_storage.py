@@ -518,6 +518,71 @@ def test_historical_enrichment_source_isolation_between_provider_and_reconciled(
     assert reconciled_result[3010]["statistics"]["shots"]["home"] == 9
 
 
+def test_save_historical_fixtures_season_guards(temp_database):
+    sample_fixture = [{
+        "fixture": {"id": 3001, "date": "2025-01-01T15:00:00+00:00", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {
+            "home": {"id": 100, "name": "Team A"},
+            "away": {"id": 101, "name": "Team B"},
+        },
+        "goals": {"home": 2, "away": 1},
+    }]
+
+    # Seasons 2024, 2025, 2026 are allowed
+    res_2024 = storage.save_historical_fixtures(sample_fixture, league_id=39, season=2024)
+    assert res_2024["inserted"] == 1
+
+    sample_fixture_2025 = [{
+        "fixture": {"id": 3002, "date": "2025-01-01T15:00:00+00:00", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2025},
+        "teams": {
+            "home": {"id": 100, "name": "Team A"},
+            "away": {"id": 101, "name": "Team B"},
+        },
+        "goals": {"home": 2, "away": 1},
+    }]
+    res_2025 = storage.save_historical_fixtures(sample_fixture_2025, league_id=39, season=2025)
+    assert res_2025["inserted"] == 1
+
+    sample_fixture_2026 = [{
+        "fixture": {"id": 3003, "date": "2026-01-01T15:00:00+00:00", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2026},
+        "teams": {
+            "home": {"id": 100, "name": "Team A"},
+            "away": {"id": 101, "name": "Team B"},
+        },
+        "goals": {"home": 2, "away": 1},
+    }]
+    res_2026 = storage.save_historical_fixtures(sample_fixture_2026, league_id=39, season=2026)
+    assert res_2026["inserted"] == 1
+
+    # Season 2027 or 2023 raises ValueError
+    with pytest.raises(ValueError, match="Football historical storage only supports seasons"):
+        storage.save_historical_fixtures(sample_fixture, league_id=39, season=2027)
+
+    with pytest.raises(ValueError, match="Football historical storage only supports seasons"):
+        storage.save_historical_fixtures(sample_fixture, league_id=39, season=2023)
+
+    # Basketball historical storage is unaffected for other seasons (e.g. 2023, 2027)
+    basketball_game = [{
+        "id": 4001,
+        "date": "2023-01-01T15:00:00+00:00",
+        "league": {"id": 12, "season": 2023},
+        "teams": {
+            "home": {"id": 200, "name": "Team X"},
+            "away": {"id": 201, "name": "Team Y"},
+        },
+        "scores": {
+            "home": {"total": 100},
+            "away": {"total": 95},
+        },
+        "status": {"short": "FT"},
+    }]
+    bb_res_2023 = storage.save_historical_basketball_games(basketball_game, league_id=12, season=2023)
+    assert bb_res_2023["inserted"] == 1
+
+
 def test_historical_dataset_status_storage(temp_database):
     # Initial status is INCOMPLETE
     init_status = storage.get_historical_dataset_status(39, 2024)
