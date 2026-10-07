@@ -110,6 +110,17 @@ def sync_historical_fixtures(
     Acquire historical fixtures (and optional enrichment) for a league/season
     and save them into persistent storage.
     """
+    # Frozen football historical dataset scope.
+    # Only completed historical seasons 2024, 2025, and 2026 are permitted.
+    # This guard prevents accidental persistence of out-of-window seasons.
+    allowed_seasons = {2024, 2025, 2026}
+
+    if season not in allowed_seasons:
+        raise ValueError(
+            f"Football historical acquisition only supports seasons "
+            f"{sorted(allowed_seasons)}; received season={season}."
+        )
+
     if historical_budget is None:
         historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
 

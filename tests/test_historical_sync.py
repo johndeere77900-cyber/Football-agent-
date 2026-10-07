@@ -216,3 +216,14 @@ def test_historical_sync_empty_pages_count_persisted_on_resume(temp_db):
     assert report2["status"] == "INCOMPLETE"
     status_p2 = storage.get_historical_dataset_status(39, 2024)
     assert status_p2["empty_pages_count"] == 1
+
+
+def test_sync_historical_fixtures_season_guards(temp_db):
+    """
+    Verify strict football historical-season guard in sync_historical_fixtures.
+    """
+    with pytest.raises(ValueError, match="Football historical acquisition only supports seasons"):
+        historical_sync.sync_historical_fixtures(league_id=39, season=2023)
+
+    with pytest.raises(ValueError, match="Football historical acquisition only supports seasons"):
+        historical_sync.sync_historical_fixtures(league_id=39, season=2027)

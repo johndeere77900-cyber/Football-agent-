@@ -4137,6 +4137,14 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
         "rejection_reasons": rejection_reasons_dict,
     }
     """
+    # Frozen football historical storage scope.
+    # Historical football persistence is intentionally limited to 2024-2026.
+    if season not in {2024, 2025, 2026}:
+        raise ValueError(
+            f"Football historical storage only supports seasons "
+            f"[2024, 2025, 2026]; received season={season}."
+        )
+
     import team_identity
 
     league_id = _validate_positive_int(league_id, "league_id")

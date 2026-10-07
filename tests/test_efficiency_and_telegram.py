@@ -158,18 +158,18 @@ def test_next_n_spans_multiple_dates_and_horizon_reporting(monkeypatch):
 def test_game_details_historical_requires_both_teams(monkeypatch):
     """Prove historical fallback details lookup requires BOTH teams when two teams are specified."""
     hist_spurs = {
-        "fixture": {"id": 10, "date": "2023-01-01T15:00:00+00:00", "venue": {"name": "White Hart Lane"}, "status": {"long": "Match Finished"}},
-        "league": {"id": 39, "name": "Premier League", "season": 2022},
+        "fixture": {"id": 10, "date": "2025-01-01T15:00:00+00:00", "venue": {"name": "White Hart Lane"}, "status": {"long": "Match Finished"}},
+        "league": {"id": 39, "name": "Premier League", "season": 2024},
         "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 3, "name": "Tottenham"}},
         "goals": {"home": 2, "away": 0},
     }
     hist_chelsea = {
-        "fixture": {"id": 11, "date": "2023-02-01T15:00:00+00:00", "venue": {"name": "Stamford Bridge"}, "status": {"long": "Match Finished"}},
-        "league": {"id": 39, "name": "Premier League", "season": 2022},
+        "fixture": {"id": 11, "date": "2025-02-01T15:00:00+00:00", "venue": {"name": "Stamford Bridge"}, "status": {"long": "Match Finished"}},
+        "league": {"id": 39, "name": "Premier League", "season": 2024},
         "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 2, "name": "Chelsea"}},
         "goals": {"home": 1, "away": 1},
     }
-    storage.save_historical_fixtures([hist_spurs, hist_chelsea], league_id=39, season=2022)
+    storage.save_historical_fixtures([hist_spurs, hist_chelsea], league_id=39, season=2024)
 
     monkeypatch.setattr(api_football, "get_fixtures_by_date", lambda date_str, league_id=None: [])
 
