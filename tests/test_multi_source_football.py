@@ -105,9 +105,11 @@ def test_scenario_1_international_fixture_nigeria_vs_ghana():
     away_name = "Ghana"
     cutoff = "2024-06-01T18:00:00+00:00"
 
+    league_id = 39
+
     # Step 1: Bootstrap team identity for international team
-    c_home = team_identity.bootstrap_historical_team_identity(home_name, "api_football", 1001, league_id=15)
-    c_away = team_identity.bootstrap_historical_team_identity(away_name, "api_football", 1002, league_id=15)
+    c_home = team_identity.bootstrap_historical_team_identity(home_name, "api_football", 1001, league_id=league_id)
+    c_away = team_identity.bootstrap_historical_team_identity(away_name, "api_football", 1002, league_id=league_id)
 
     assert c_home is not None
     assert c_away is not None
@@ -122,7 +124,7 @@ def test_scenario_1_international_fixture_nigeria_vs_ghana():
             home_id=1001,
             away_id=3000 + i,
             date_str=f"2024-01-{i:02d}T15:00:00+00:00",
-            league_id=15,
+            league_id=league_id,
             season=2024,
             home_goals=2,
             away_goals=1,
@@ -136,13 +138,13 @@ def test_scenario_1_international_fixture_nigeria_vs_ghana():
             home_id=1002,
             away_id=4000 + i,
             date_str=f"2024-02-{i:02d}T15:00:00+00:00",
-            league_id=15,
+            league_id=league_id,
             season=2024,
             home_goals=1,
             away_goals=0,
         ))
 
-    storage.save_historical_fixtures(hist_fixtures, league_id=15, season=2024)
+    storage.save_historical_fixtures(hist_fixtures, league_id=league_id, season=2024)
 
     # Step 3: Query DB history and calculate last 5, 10, 20, 30
     db_matches_home = storage.get_team_historical_fixtures(c_home, cutoff=cutoff, limit=30)
@@ -165,7 +167,7 @@ def test_scenario_1_international_fixture_nigeria_vs_ghana():
         home_id=1001,
         away_id=1002,
         date_str="2024-06-01T18:00:00+00:00",
-        league_id=15,
+        league_id=league_id,
         season=2024,
         status="NS",
     )
@@ -173,7 +175,7 @@ def test_scenario_1_international_fixture_nigeria_vs_ghana():
     pred = main.predict_fixture(target_fixture, league_avg_goals=2.5)
 
     # Verify fixture data was persisted in database
-    db_count = storage.get_historical_fixture_count(15, 2024)
+    db_count = storage.get_historical_fixture_count(league_id, 2024)
     assert db_count >= 13
 
     # Step 5: Verify second prediction run uses DB history without re-fetching

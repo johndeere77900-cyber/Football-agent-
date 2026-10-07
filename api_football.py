@@ -263,10 +263,7 @@ def _get(endpoint, params, max_budget=None):
     url = f"{config.API_FOOTBALL_BASE_URL}/{endpoint.lstrip('/')}"
     backoff = RETRY_BACKOFF_SECONDS
 
-    # Filter out unsupported 'page' parameter for API-Football /fixtures requests
     http_params = dict(params)
-    if endpoint.rstrip("/") == "fixtures" and "page" in http_params:
-        del http_params["page"]
 
     for attempt in range(1, MAX_RETRIES + 1):
         # Quota check before every actual network attempt
@@ -542,7 +539,16 @@ def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
         raise ValueError("page must be a positive integer.")
 
     kwargs = {"max_budget": max_budget} if max_budget is not None else {}
-    page_data = _get("fixtures", {"league": league_id, "season": season, "page": page}, **kwargs)
+    page_data = _get(
+        "fixtures",
+        {
+            "league": league_id,
+            "season": season,
+            "status": "FT-AET-PEN",
+            "page": page,
+        },
+        **kwargs,
+    )
 
     if not isinstance(page_data, dict):
         raise APIFootballError("API-Football response must be a JSON object.")

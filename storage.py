@@ -4138,17 +4138,25 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
     }
     """
     # Frozen football historical storage scope.
-    # Historical football persistence is intentionally limited to 2024-2026.
+    # Historical football persistence is intentionally limited to 2024-2026 and configured leagues.
+    import team_identity
+
+    league_id = _validate_positive_int(league_id, "league_id")
+    season = _validate_positive_int(season, "season")
+
     if season not in {2024, 2025, 2026}:
         raise ValueError(
             f"Football historical storage only supports seasons "
             f"[2024, 2025, 2026]; received season={season}."
         )
 
-    import team_identity
+    allowed_leagues = set(getattr(config, "ALLOWED_LEAGUE_IDS", []))
 
-    league_id = _validate_positive_int(league_id, "league_id")
-    season = _validate_positive_int(season, "season")
+    if league_id not in allowed_leagues:
+        raise ValueError(
+            f"Football historical storage only supports configured leagues "
+            f"{sorted(allowed_leagues)}; received league_id={league_id}."
+        )
 
     if not isinstance(fixtures, (list, tuple)):
         raise ValueError("fixtures must be a list or tuple.")

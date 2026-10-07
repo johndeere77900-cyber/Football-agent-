@@ -564,6 +564,10 @@ def test_save_historical_fixtures_season_guards(temp_database):
     with pytest.raises(ValueError, match="Football historical storage only supports seasons"):
         storage.save_historical_fixtures(sample_fixture, league_id=39, season=2023)
 
+    # Unconfigured league raises ValueError
+    with pytest.raises(ValueError, match="configured leagues"):
+        storage.save_historical_fixtures(sample_fixture, league_id=999999, season=2024)
+
     # Basketball historical storage is unaffected for other seasons (e.g. 2023, 2027)
     basketball_game = [{
         "id": 4001,
@@ -581,6 +585,62 @@ def test_save_historical_fixtures_season_guards(temp_database):
     }]
     bb_res_2023 = storage.save_historical_basketball_games(basketball_game, league_id=12, season=2023)
     assert bb_res_2023["inserted"] == 1
+
+
+def test_validate_historical_fixture_completion_and_scores(temp_database):
+    base_fixture = {
+        "fixture": {"id": 9001, "date": "2025-01-01T15:00:00+00:00", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {
+            "home": {"id": 100, "name": "Team A"},
+            "away": {"id": 101, "name": "Team B"},
+        },
+        "goals": {"home": 2, "away": 1},
+    }
+
+    # FT with valid scores is accepted
+    is_valid, reason, norm = storage.validate_historical_fixture(base_fixture, require_completed=True)
+    assert is_valid is True
+
+    # AET with valid scores is accepted
+    aet_fixture = dict(base_fixture)
+    aet_fixture["fixture"] = {"id": 9002, "date": "2025-01-01T15:00:00+00:00", "status": {"short": "AET"}}
+    is_valid, reason, norm = storage.validate_historical_fixture(aet_fixture, require_completed=True)
+    assert is_valid is True
+
+    # PEN with valid scores is accepted
+    pen_fixture = dict(base_fixture)
+    pen_fixture["fixture"] = {"id": 9003, "date": "2025-01-01T15:00:00+00:00", "status": {"short": "PEN"}}
+    is_valid, reason, norm = storage.validate_historical_fixture(pen_fixture, require_completed=True)
+    assert is_valid is True
+
+    # NS is rejected when require_completed=True
+    ns_fixture = dict(base_fixture)
+    ns_fixture["fixture"] = {"id": 9004, "date": "2025-01-01T15:00:00+00:00", "status": {"short": "NS"}}
+    is_valid, reason, norm = storage.validate_historical_fixture(ns_fixture, require_completed=True)
+    assert is_valid is False
+    assert "fixture_not_completed" in reason
+
+    # PST is rejected when require_completed=True
+    pst_fixture = dict(base_fixture)
+    pst_fixture["fixture"] = {"id": 9005, "date": "2025-01-01T15:00:00+00:00", "status": {"short": "PST"}}
+    is_valid, reason, norm = storage.validate_historical_fixture(pst_fixture, require_completed=True)
+    assert is_valid is False
+    assert "fixture_not_completed" in reason
+
+    # Completed fixture with missing home goals is rejected
+    missing_home_goals = dict(base_fixture)
+    missing_home_goals["goals"] = {"home": None, "away": 1}
+    is_valid, reason, norm = storage.validate_historical_fixture(missing_home_goals, require_completed=True)
+    assert is_valid is False
+    assert "completed_fixture_missing_goals" in reason
+
+    # Completed fixture with missing away goals is rejected
+    missing_away_goals = dict(base_fixture)
+    missing_away_goals["goals"] = {"home": 2, "away": None}
+    is_valid, reason, norm = storage.validate_historical_fixture(missing_away_goals, require_completed=True)
+    assert is_valid is False
+    assert "completed_fixture_missing_goals" in reason
 
 
 def test_historical_dataset_status_storage(temp_database):
