@@ -1211,9 +1211,9 @@ def predict_fixture(
 
     cutoff = fixture_data.get("date")
 
-    # PERMANENT ACCUMULATION: Always store newly discovered fixture payload in permanent database (require_completed=False)
+    # PERMANENT ACCUMULATION: Always store newly discovered fixture payload in permanent database (require_completed=True)
     try:
-        storage.save_historical_fixtures([fixture], league["id"], league["season"], source=provider_name, require_completed=False)
+        storage.save_historical_fixtures([fixture], league["id"], league["season"], source=provider_name, require_completed=True)
         if fixture.get("statistics"):
             storage.save_historical_enrichment([fixture], source=provider_name)
     except Exception as exc:

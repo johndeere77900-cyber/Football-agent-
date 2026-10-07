@@ -518,15 +518,15 @@ def test_main_h2h_temporal_filtering_rules():
 
     h2h_matches = [
         # 1. Past match -> ALLOWED
-        {"fixture": {"id": 1, "date": "2024-12-01T15:00:00+00:00"}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 2, "away": 1}},
+        {"fixture": {"id": 1, "date": "2024-12-01T15:00:00+00:00", "status": {"short": "FT"}}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 2, "away": 1}},
         # 2. Match after fixture date -> EXCLUDED
-        {"fixture": {"id": 2, "date": "2025-01-11T15:00:00+00:00"}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 3, "away": 0}},
+        {"fixture": {"id": 2, "date": "2025-01-11T15:00:00+00:00", "status": {"short": "FT"}}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 3, "away": 0}},
         # 3. Match on exact fixture date/time -> EXCLUDED
-        {"fixture": {"id": 3, "date": "2025-01-10T15:00:00+00:00"}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 1, "away": 1}},
+        {"fixture": {"id": 3, "date": "2025-01-10T15:00:00+00:00", "status": {"short": "FT"}}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 1, "away": 1}},
         # 4. Match with missing date -> EXCLUDED
-        {"fixture": {"id": 4}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 1, "away": 0}},
+        {"fixture": {"id": 4, "status": {"short": "FT"}}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 1, "away": 0}},
         # 5. Match with invalid date -> EXCLUDED
-        {"fixture": {"id": 5, "date": "invalid_date_string"}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 2, "away": 2}},
+        {"fixture": {"id": 5, "date": "invalid_date_string", "status": {"short": "FT"}}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 2, "away": 2}},
     ]
 
     import team_identity

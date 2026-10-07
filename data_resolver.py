@@ -1018,7 +1018,7 @@ class DataResolver:
                     lid = rf.get("league", {}).get("id") or league_id
                     ssn = rf.get("league", {}).get("season")
                     if lid and ssn:
-                        storage.save_historical_fixtures([rf], lid, ssn, source=rf.get("provider_provenance", {}).get("provider", "api_football"), require_completed=False)
+                        storage.save_historical_fixtures([rf], lid, ssn, source=rf.get("provider_provenance", {}).get("provider", "api_football"), require_completed=True)
                         if rf.get("statistics"):
                             enrichment_record = dict(rf)
                             reconciliation_metadata = enrichment_record.get("reconciliation_metadata", {})
@@ -1121,8 +1121,13 @@ class DataResolver:
             if not m_date:
                 return False
 
-            st = fix_obj.get("status", {}).get("short") if isinstance(fix_obj.get("status"), dict) else None
-            if st is not None and st not in ("FT", "AET", "PEN"):
+            st = (
+                fix_obj.get("status", {}).get("short")
+                if isinstance(fix_obj.get("status"), dict)
+                else None
+            )
+
+            if st not in ("FT", "AET", "PEN"):
                 return False
 
             goals = match.get("goals", {}) if isinstance(match.get("goals"), dict) else {}
@@ -1211,7 +1216,7 @@ class DataResolver:
                                 records.append(norm)
                                 valid_to_save.append(norm)
                     if valid_to_save and league_id and season:
-                        storage.save_historical_fixtures(valid_to_save, league_id, season, source="api_football", require_completed=False)
+                        storage.save_historical_fixtures(valid_to_save, league_id, season, source="api_football", require_completed=True)
             except Exception as exc:
                 logger.warning(f"API-Football recent form query failed for team {team_id}: {exc}")
 
@@ -1232,7 +1237,7 @@ class DataResolver:
                                 records.append(norm)
                                 valid_to_save.append(norm)
                     if valid_to_save and league_id and season:
-                        storage.save_historical_fixtures(valid_to_save, league_id, season, source="football_data_org", require_completed=False)
+                        storage.save_historical_fixtures(valid_to_save, league_id, season, source="football_data_org", require_completed=True)
                 except Exception as exc:
                     logger.warning(f"football-data.org recent matches query failed for league {league_id}: {exc}")
 
@@ -1250,7 +1255,7 @@ class DataResolver:
                                 records.append(norm)
                                 valid_to_save.append(norm)
                     if valid_to_save and league_id and season:
-                        storage.save_historical_fixtures(valid_to_save, league_id, season, source="soccerdata", require_completed=False)
+                        storage.save_historical_fixtures(valid_to_save, league_id, season, source="soccerdata", require_completed=True)
             except Exception as exc:
                 logger.warning(f"SoccerData recent matches query failed for team {team_name}: {exc}")
 
@@ -1686,8 +1691,13 @@ class DataResolver:
             if not m_date:
                 return False
 
-            st = match.get("fixture", {}).get("status", {}).get("short") if isinstance(match.get("fixture"), dict) else None
-            if st is not None and st not in ("FT", "AET", "PEN"):
+            st = (
+                match.get("fixture", {}).get("status", {}).get("short")
+                if isinstance(match.get("fixture", {}).get("status"), dict)
+                else None
+            )
+
+            if st not in ("FT", "AET", "PEN"):
                 return False
 
             goals = match.get("goals", {}) or {}
@@ -1779,7 +1789,7 @@ class DataResolver:
                                 ssn = norm.get("league", {}).get("season")
                                 if lid and ssn and isinstance(lid, int) and lid > 0:
                                     try:
-                                        storage.save_historical_fixtures([norm], lid, ssn, source="api_football", require_completed=False)
+                                        storage.save_historical_fixtures([norm], lid, ssn, source="api_football", require_completed=True)
                                     except Exception:
                                         pass
             except Exception as exc:
@@ -1801,7 +1811,7 @@ class DataResolver:
                                 h2h_matches.append(norm)
                                 ssn = norm.get("league", {}).get("season")
                                 if league_id and ssn:
-                                    storage.save_historical_fixtures([norm], league_id, ssn, source="football_data_org", require_completed=False)
+                                    storage.save_historical_fixtures([norm], league_id, ssn, source="football_data_org", require_completed=True)
                 except Exception as exc:
                     logger.warning(f"Secondary provider get_head_to_head failed for league {league_id}: {exc}")
 
@@ -1820,7 +1830,7 @@ class DataResolver:
                                     h2h_matches.append(norm)
                                     ssn = norm.get("league", {}).get("season")
                                     if league_id and ssn:
-                                        storage.save_historical_fixtures([norm], league_id, ssn, source="soccerdata", require_completed=False)
+                                        storage.save_historical_fixtures([norm], league_id, ssn, source="soccerdata", require_completed=True)
                 except Exception as exc:
                     logger.warning(f"Tertiary provider get_head_to_head failed for league {league_id}: {exc}")
 
