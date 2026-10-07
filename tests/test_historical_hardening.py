@@ -6,6 +6,7 @@ import config
 import historical_sync
 import storage
 import api_football
+import data_resolver
 
 
 @pytest.fixture
@@ -78,8 +79,9 @@ def test_quota_ceiling_stops_paginated_fetch_at_budget(temp_db, monkeypatch):
         current_page_call += 1
         if current_page_call > 3:
             raise api_football.APIFootballQuotaExhaustedError("Historical quota budget reached (3).")
+        page = params.get("page", 1) if isinstance(params, dict) else 1
         return {
-            "paging": {"current": current_page_call, "total": 5},
+            "paging": {"current": page, "total": 5},
             "response": [sample_fixture(9010 + current_page_call)],
         }
 
@@ -142,3 +144,115 @@ def test_backtest_fails_if_api_football_called(temp_db, monkeypatch):
         league_id=39, season=2024, sample_size=2, min_prior_matches=1
     )
     assert result["graded"] > 0
+
+
+def _provenance_fixture(fid, provider, home_id=1, away_id=2):
+    record = sample_fixture(
+        fid,
+        home_id=home_id,
+        away_id=away_id,
+    )
+    record["provider_provenance"] = {
+        "provider": provider,
+    }
+    return record
+
+
+def test_reconciliation_metadata_single_provider_is_not_reconciled():
+    record = _provenance_fixture(9201, "api_football")
+
+    result = data_resolver.reconcile_fixture_records([record])
+
+    assert result is not None
+    metadata = result["reconciliation_metadata"]
+    assert metadata["providers_used"] == ["api_football"]
+    assert metadata["provider_count"] == 1
+    assert metadata["is_reconciled"] is False
+
+
+def test_reconciliation_metadata_two_providers_is_reconciled():
+    api_record = _provenance_fixture(9202, "api_football")
+    fd_record = _provenance_fixture(9202, "football_data_org")
+
+    result = data_resolver.reconcile_fixture_records(
+        [api_record, fd_record]
+    )
+
+    assert result is not None
+    metadata = result["reconciliation_metadata"]
+    assert metadata["providers_used"] == [
+        "api_football",
+        "football_data_org",
+    ]
+    assert metadata["provider_count"] == 2
+    assert metadata["is_reconciled"] is True
+
+
+def test_reconciliation_metadata_three_providers_is_reconciled():
+    api_record = _provenance_fixture(9203, "api_football")
+    fd_record = _provenance_fixture(9203, "football_data_org")
+    sd_record = _provenance_fixture(9203, "soccerdata")
+
+    result = data_resolver.reconcile_fixture_records(
+        [api_record, fd_record, sd_record]
+    )
+
+    assert result is not None
+    metadata = result["reconciliation_metadata"]
+    assert metadata["providers_used"] == [
+        "api_football",
+        "football_data_org",
+        "soccerdata",
+    ]
+    assert metadata["provider_count"] == 3
+    assert metadata["is_reconciled"] is True
+
+
+def test_single_provider_enrichment_persists_actual_provider_source(temp_db):
+    record = _provenance_fixture(9204, "api_football")
+
+    inserted = storage.save_historical_enrichment(
+        [record],
+        source="api_football",
+    )
+
+    assert inserted == 1
+
+    api_result = storage.get_historical_enrichment(
+        [9204],
+        source="api_football",
+    )
+    reconciled_result = storage.get_historical_enrichment(
+        [9204],
+        source="reconciled",
+    )
+
+    assert 9204 in api_result
+    assert 9204 not in reconciled_result
+
+
+def test_multi_provider_enrichment_persists_reconciled_source(temp_db):
+    api_record = _provenance_fixture(9205, "api_football")
+    fd_record = _provenance_fixture(9205, "football_data_org")
+
+    reconciled = data_resolver.reconcile_fixture_records(
+        [api_record, fd_record]
+    )
+
+    assert reconciled is not None
+    assert reconciled["reconciliation_metadata"]["is_reconciled"] is True
+
+    inserted = storage.save_historical_enrichment(
+        [reconciled],
+        source="reconciled",
+    )
+
+    assert inserted == 1
+
+    result = storage.get_historical_enrichment(
+        [9205],
+        source="reconciled",
+    )
+
+    assert 9205 in result
+    assert result[9205]["reconciliation_metadata"]["provider_count"] == 2

@@ -464,6 +464,60 @@ def test_historical_fixture_enrichment_storage(temp_database):
     assert fetched_dup[3001]["statistics"]["shots"]["home"] == 10
 
 
+def test_historical_enrichment_source_isolation_between_provider_and_reconciled(
+    temp_database,
+):
+    provider_record = {
+        "fixture": {"id": 3010},
+        "statistics": {
+            "shots": {"home": 5, "away": 3}
+        },
+    }
+
+    reconciled_record = {
+        "fixture": {"id": 3010},
+        "statistics": {
+            "shots": {"home": 9, "away": 7}
+        },
+        "reconciliation_metadata": {
+            "providers_used": [
+                "api_football",
+                "football_data_org",
+            ],
+            "provider_count": 2,
+            "is_reconciled": True,
+        },
+    }
+
+    assert (
+        storage.save_historical_enrichment(
+            [provider_record],
+            source="api_football",
+        )
+        == 1
+    )
+
+    assert (
+        storage.save_historical_enrichment(
+            [reconciled_record],
+            source="reconciled",
+        )
+        == 1
+    )
+
+    api_result = storage.get_historical_enrichment(
+        [3010],
+        source="api_football",
+    )
+    reconciled_result = storage.get_historical_enrichment(
+        [3010],
+        source="reconciled",
+    )
+
+    assert api_result[3010]["statistics"]["shots"]["home"] == 5
+    assert reconciled_result[3010]["statistics"]["shots"]["home"] == 9
+
+
 def test_historical_dataset_status_storage(temp_database):
     # Initial status is INCOMPLETE
     init_status = storage.get_historical_dataset_status(39, 2024)
