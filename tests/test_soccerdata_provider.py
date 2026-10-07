@@ -1,3 +1,4 @@
+import json
 import pytest
 from unittest.mock import patch, MagicMock
 import config
@@ -248,6 +249,73 @@ def test_12_valid_completed_fixture_passes_real_storage_integration():
     assert item["fixture"]["status"]["short"] in ("FT", "AET", "PEN")
     assert item["goals"]["home"] == 2
     assert item["goals"]["away"] == 1
+
+
+# Test: Sofascore provider status contract returns SOURCE_RETURNED_PARTIAL_DATA when team IDs cannot be obtained
+@patch("subprocess.run")
+def test_sofascore_status_partial_data_when_team_ids_missing(mock_subproc):
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    # Return records without home_team_id / away_team_id
+    payload = {
+        "records": [
+            {
+                "game_id": 99887766,
+                "date": "2024-09-01T15:00:00Z",
+                "home_team": "Arsenal",
+                "away_team": "Chelsea",
+                "home_score": 2,
+                "away_score": 1,
+                "league": "Premier League",
+                "season": 2024,
+            }
+        ],
+        "team_id_map_size": 0,
+        "enrichment_error": None,
+    }
+    mock_proc.stdout = json.dumps(payload)
+    mock_subproc.return_value = mock_proc
+
+    status, matches, meta = soccerdata_provider.get_sofascore_historical_games("ENG-Premier League", 2024, league_id=39)
+
+    assert status == "SOURCE_RETURNED_PARTIAL_DATA"
+    assert len(matches) == 0
+    assert meta["storage_ready_count"] == 0
+
+
+# Test: Sofascore provider status contract returns SOURCE_AVAILABLE when team IDs are successfully enriched
+@patch("subprocess.run")
+def test_sofascore_status_available_when_team_ids_present(mock_subproc):
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    payload = {
+        "records": [
+            {
+                "game_id": 99887766,
+                "date": "2024-09-01T15:00:00Z",
+                "home_team": "Arsenal",
+                "away_team": "Chelsea",
+                "home_team_id": 101,
+                "away_team_id": 102,
+                "home_score": 2,
+                "away_score": 1,
+                "league": "Premier League",
+                "season": 2024,
+            }
+        ],
+        "team_id_map_size": 1,
+        "enrichment_error": None,
+    }
+    mock_proc.stdout = json.dumps(payload)
+    mock_subproc.return_value = mock_proc
+
+    status, matches, meta = soccerdata_provider.get_sofascore_historical_games("ENG-Premier League", 2024, league_id=39)
+
+    assert status == "SOURCE_AVAILABLE"
+    assert len(matches) == 1
+    assert matches[0]["fixture"]["id"] == 99887766
+    assert matches[0]["teams"]["home"]["id"] == 101
+    assert matches[0]["teams"]["away"]["id"] == 102
 
 
 # Fallback hierarchy check: Sofascore is NOT called if MatchHistory returns usable data

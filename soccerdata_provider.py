@@ -516,45 +516,99 @@ try:
 
         team_id_map = {{}}
         enrichment_error = None
+
         try:
             df_seasons = ss.read_seasons()
+
+            if df_seasons is None or getattr(df_seasons, "empty", True):
+                raise RuntimeError("Sofascore season metadata unavailable")
+
             for (lkey, skey), s_row in df_seasons.iterrows():
                 u_league_id = s_row.get("league_id")
                 u_season_id = s_row.get("season_id")
-                if not u_league_id or not u_season_id:
+
+                if u_league_id is None or u_season_id is None:
                     continue
-                url1 = f"https://api.sofascore.com/api/v1/unique-tournament/{{u_league_id}}/season/{{u_season_id}}/rounds"
+
+                url1 = (
+                    f"https://api.sofascore.com/api/v1/"
+                    f"unique-tournament/{{u_league_id}}/season/{{u_season_id}}/rounds"
+                )
+
                 fpath1 = ss.data_dir / f"matches/rounds_{{lkey}}_{{skey}}.json"
                 ss.get(url1, fpath1)
+
                 if not fpath1.exists():
                     continue
+
                 with open(fpath1, "r", encoding="utf-8") as fp1:
                     season_data = json.load(fp1)
+
                 for r_info in season_data.get("rounds", []):
                     r_num = r_info.get("round")
+
                     if r_num is None:
                         continue
-                    url2 = f"https://api.sofascore.com/api/v1/unique-tournament/{{u_league_id}}/season/{{u_season_id}}/events/round/{{r_num}}"
-                    fpath2 = ss.data_dir / f"matches/round_matches_{{lkey}}_{{skey}}_{{r_num}}.json"
+
+                    url2 = (
+                        f"https://api.sofascore.com/api/v1/"
+                        f"unique-tournament/{{u_league_id}}/season/{{u_season_id}}"
+                        f"/events/round/{{r_num}}"
+                    )
+
+                    fpath2 = (
+                        ss.data_dir
+                        / f"matches/round_matches_{{lkey}}_{{skey}}_{{r_num}}.json"
+                    )
+
                     ss.get(url2, fpath2)
+
                     if not fpath2.exists():
                         continue
+
                     with open(fpath2, "r", encoding="utf-8") as fp2:
                         m_data = json.load(fp2)
+
                     for ev in m_data.get("events", []):
                         gid = ev.get("id")
-                        hid = ev.get("homeTeam", {{}}).get("id")
-                        aid = ev.get("awayTeam", {{}}).get("id")
-                        if gid is not None and hid is not None and aid is not None:
-                            team_id_map[str(gid)] = (int(hid), int(aid))
+                        home_team = ev.get("homeTeam") or {{}}
+                        away_team = ev.get("awayTeam") or {{}}
+
+                        hid = home_team.get("id")
+                        aid = away_team.get("id")
+
+                        if gid is None or hid is None or aid is None:
+                            continue
+
+                        try:
+                            gid_int = int(gid)
+                            hid_int = int(hid)
+                            aid_int = int(aid)
+                        except (ValueError, TypeError):
+                            continue
+
+                        if gid_int <= 0 or hid_int <= 0 or aid_int <= 0:
+                            continue
+
+                        team_id_map[str(gid_int)] = (hid_int, aid_int)
+
         except Exception as exc:
             enrichment_error = str(exc)
 
+        # Attach only REAL Sofascore provider team IDs.
         for rec in records:
-            gid = str(rec.get("game_id") or rec.get("game") or rec.get("id") or "")
-            if gid in team_id_map:
-                rec["home_team_id"] = team_id_map[gid][0]
-                rec["away_team_id"] = team_id_map[gid][1]
+            gid_raw = rec.get("game_id") or rec.get("game") or rec.get("id")
+
+            try:
+                gid = str(int(gid_raw))
+            except (ValueError, TypeError):
+                continue
+
+            team_ids = team_id_map.get(gid)
+
+            if team_ids:
+                rec["home_team_id"] = team_ids[0]
+                rec["away_team_id"] = team_ids[1]
 
         output_payload = {{
             "records": records,
@@ -611,15 +665,65 @@ except Exception as exc:
                 "status": "SOURCE_RETURNED_PARTIAL_DATA",
                 "count": 0,
                 "source": "soccerdata_sofascore",
+                "enrichment_error": enrichment_error,
+            }
+            return "SOURCE_RETURNED_PARTIAL_DATA", [], meta
+
+        # A Sofascore fixture is storage-ready only when it has:
+        # - real numeric fixture ID
+        # - real positive provider home team ID
+        # - real positive provider away team ID
+        # Never report SOURCE_AVAILABLE for records that cannot pass
+        # the downstream historical storage boundary.
+
+        storage_ready_matches = []
+
+        for match in normalized_matches:
+            fixture = match.get("fixture", {})
+            teams = match.get("teams", {})
+            home = teams.get("home", {})
+            away = teams.get("away", {})
+
+            fixture_id = fixture.get("id")
+            home_id = home.get("id")
+            away_id = away.get("id")
+
+            if (
+                isinstance(fixture_id, int)
+                and not isinstance(fixture_id, bool)
+                and fixture_id > 0
+                and isinstance(home_id, int)
+                and not isinstance(home_id, bool)
+                and home_id > 0
+                and isinstance(away_id, int)
+                and not isinstance(away_id, bool)
+                and away_id > 0
+            ):
+                storage_ready_matches.append(match)
+
+        if not storage_ready_matches:
+            meta = {
+                "status": "SOURCE_RETURNED_PARTIAL_DATA",
+                "count": 0,
+                "raw_count": len(normalized_matches),
+                "storage_ready_count": 0,
+                "team_id_map_size": len(team_id_map) if 'team_id_map' in locals() else 0,
+                "enrichment_error": enrichment_error,
+                "source": "soccerdata_sofascore",
             }
             return "SOURCE_RETURNED_PARTIAL_DATA", [], meta
 
         meta = {
             "status": "SOURCE_AVAILABLE",
-            "count": len(normalized_matches),
+            "count": len(storage_ready_matches),
+            "raw_count": len(normalized_matches),
+            "storage_ready_count": len(storage_ready_matches),
+            "team_id_map_size": len(team_id_map) if 'team_id_map' in locals() else 0,
+            "enrichment_error": enrichment_error,
             "source": "soccerdata_sofascore",
         }
-        return "SOURCE_AVAILABLE", normalized_matches, meta
+
+        return "SOURCE_AVAILABLE", storage_ready_matches, meta
 
     except Exception as exc:
         meta = {
