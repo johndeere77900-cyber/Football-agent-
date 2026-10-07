@@ -714,6 +714,13 @@ def reconcile_fixture_records(records):
     if not valid_records:
         return None
 
+    providers_used = {
+        r.get("provider_provenance", {}).get("provider")
+        for r in valid_records
+        if isinstance(r.get("provider_provenance"), dict)
+        and r.get("provider_provenance", {}).get("provider")
+    }
+
     primary = valid_records[0]
     result = dict(primary)
 
@@ -789,6 +796,11 @@ def reconcile_fixture_records(records):
 
     result["statistics"] = stats
     result["field_provenance"] = field_provenance
+    result["reconciliation_metadata"] = {
+        "providers_used": sorted(providers_used),
+        "provider_count": len(providers_used),
+        "is_reconciled": len(providers_used) > 1,
+    }
     if data_conflicts:
         result["data_conflicts"] = data_conflicts
 
@@ -1006,12 +1018,14 @@ class DataResolver:
                         storage.save_historical_fixtures([rf], lid, ssn, source=rf.get("provider_provenance", {}).get("provider", "api_football"), require_completed=False)
                         if rf.get("statistics"):
                             enrichment_record = dict(rf)
-                            field_provenance = enrichment_record.get("field_provenance", {})
-                            has_reconciliation_provenance = bool(
-                                isinstance(field_provenance, dict) and field_provenance
+                            reconciliation_metadata = enrichment_record.get("reconciliation_metadata", {})
+                            has_reconciliation_provenance = (
+                                isinstance(reconciliation_metadata, dict)
+                                and reconciliation_metadata.get("is_reconciled") is True
                             )
 
                             if has_reconciliation_provenance:
+                                field_provenance = enrichment_record.get("field_provenance", {})
                                 enrichment_record["enrichment_provenance"] = {
                                     "record_type": "reconciled",
                                     "fields": {
@@ -1424,12 +1438,14 @@ class DataResolver:
                         continue
 
                     record_copy = dict(record)
-                    field_provenance = record_copy.get("field_provenance", {})
-                    has_reconciliation_provenance = bool(
-                        isinstance(field_provenance, dict) and field_provenance
+                    reconciliation_metadata = record_copy.get("reconciliation_metadata", {})
+                    has_reconciliation_provenance = (
+                        isinstance(reconciliation_metadata, dict)
+                        and reconciliation_metadata.get("is_reconciled") is True
                     )
 
                     if has_reconciliation_provenance:
+                        field_provenance = record_copy.get("field_provenance", {})
                         record_copy["enrichment_provenance"] = {
                             "record_type": "reconciled",
                             "fields": {

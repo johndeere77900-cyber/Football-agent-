@@ -643,3 +643,109 @@ def test_8_storage_enrichment_priority_and_source_none():
     fetched_sd = storage.get_historical_enrichment([fid], source="soccerdata")
     assert fid in fetched_sd
     assert fetched_sd[fid]["statistics"]["shots"] == 4
+
+
+def test_reconcile_fixture_records_reconciliation_metadata():
+    """Verify reconciliation_metadata attaches providers_used, provider_count, and is_reconciled correctly for 1, 2, and 3 providers."""
+    api_rec = {
+        "fixture": {"id": 1001, "date": "2024-09-10T15:00:00+00:00"},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+        "provider_provenance": {"provider": "api_football"},
+    }
+    fd_rec = {
+        "fixture": {"id": 1001, "date": "2024-09-10T15:00:00+00:00"},
+        "teams": {"home": {"id": 100, "name": "Arsenal"}, "away": {"id": 200, "name": "Chelsea"}},
+        "provider_provenance": {"provider": "football_data_org"},
+    }
+    sd_rec = {
+        "fixture": {"id": 1001, "date": "2024-09-10T15:00:00+00:00"},
+        "teams": {"home": {"id": "sd10", "name": "Arsenal"}, "away": {"id": "sd20", "name": "Chelsea"}},
+        "provider_provenance": {"provider": "soccerdata"},
+    }
+
+    # 1. Single provider
+    res_1 = reconcile_fixture_records([api_rec])
+    assert res_1["reconciliation_metadata"]["is_reconciled"] is False
+    assert res_1["reconciliation_metadata"]["provider_count"] == 1
+    assert res_1["reconciliation_metadata"]["providers_used"] == ["api_football"]
+
+    # 2. Two providers
+    res_2 = reconcile_fixture_records([api_rec, fd_rec])
+    assert res_2["reconciliation_metadata"]["is_reconciled"] is True
+    assert res_2["reconciliation_metadata"]["provider_count"] == 2
+    assert res_2["reconciliation_metadata"]["providers_used"] == ["api_football", "football_data_org"]
+
+    # 3. Three providers
+    res_3 = reconcile_fixture_records([api_rec, fd_rec, sd_rec])
+    assert res_3["reconciliation_metadata"]["is_reconciled"] is True
+    assert res_3["reconciliation_metadata"]["provider_count"] == 3
+    assert res_3["reconciliation_metadata"]["providers_used"] == ["api_football", "football_data_org", "soccerdata"]
+
+
+def test_single_vs_multi_provider_enrichment_persistence_source():
+    """Verify single-provider enrichment is persisted under actual provider source, while multi-provider enrichment is persisted under 'reconciled'."""
+    fid_single = 8001
+    fid_multi = 8002
+
+    single_provider_fixture = {
+        "fixture": {"id": fid_single, "date": "2024-09-10T15:00:00+00:00", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+        "goals": {"home": 2, "away": 0},
+        "statistics": {"shots": {"home": 10, "away": 4}},
+        "provider_provenance": {"provider": "api_football"},
+    }
+
+    # Reconcile single provider
+    reconciled_single = reconcile_fixture_records([single_provider_fixture])
+
+    # Simulate get_enriched_fixtures / get_fixtures_for_date persistence logic
+    rec_copy = dict(reconciled_single)
+    meta_single = rec_copy.get("reconciliation_metadata", {})
+    has_rec_single = isinstance(meta_single, dict) and meta_single.get("is_reconciled") is True
+
+    assert has_rec_single is False, "Single provider MUST NOT have is_reconciled=True!"
+
+    prov_src_single = rec_copy.get("provider_provenance", {}).get("provider", "api_football")
+    storage.save_historical_enrichment([rec_copy], source=prov_src_single)
+
+    # Verify stored in DB under "api_football", NOT "reconciled"
+    db_single_af = storage.get_historical_enrichment([fid_single], source="api_football")
+    db_single_rec = storage.get_historical_enrichment([fid_single], source="reconciled")
+
+    assert fid_single in db_single_af
+    assert fid_single not in db_single_rec
+
+    # Multi provider
+    multi_primary_fixture = {
+        "fixture": {"id": fid_multi, "date": "2024-09-10T15:00:00+00:00", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+        "goals": {"home": 2, "away": 0},
+        "statistics": {"shots": {"home": 10, "away": 4}},
+        "provider_provenance": {"provider": "api_football"},
+    }
+
+    multi_provider_candidate = {
+        "fixture": {"id": fid_multi, "date": "2024-09-10T15:00:00+00:00"},
+        "statistics": {"corners": {"home": 5, "away": 2}},
+        "provider_provenance": {"provider": "football_data_org"},
+    }
+
+    reconciled_multi = reconcile_fixture_records([multi_primary_fixture, multi_provider_candidate])
+
+    rec_multi_copy = dict(reconciled_multi)
+    meta_multi = rec_multi_copy.get("reconciliation_metadata", {})
+    has_rec_multi = isinstance(meta_multi, dict) and meta_multi.get("is_reconciled") is True
+
+    assert has_rec_multi is True, "Multi-provider record MUST have is_reconciled=True!"
+
+    field_provenance = rec_multi_copy.get("field_provenance", {})
+    rec_multi_copy["enrichment_provenance"] = {
+        "record_type": "reconciled",
+        "fields": {key: value for key, value in field_provenance.items() if key.startswith("stats_")},
+    }
+    storage.save_historical_enrichment([rec_multi_copy], source="reconciled")
+
+    db_multi_rec = storage.get_historical_enrichment([fid_multi], source="reconciled")
+    assert fid_multi in db_multi_rec
