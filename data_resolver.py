@@ -4,7 +4,7 @@ Provider-neutral Data Resolver for Football data.
 Implements strict 3-tier provider hierarchy with field-level merging and reconciliation:
 1. Primary: API-Football (api_football.py)
 2. Secondary Fallback: football-data.org (football_data_api.py)
-3. Tertiary Fallback: SoccerData (soccerdata_provider.py)
+3. Tertiary Fallback: SoccerData MatchHistory & Sofascore (soccerdata_provider.py)
 4. Permanent Memory: Neon PostgreSQL / SQLite (storage.py)
 
 Result Status Codes:
@@ -54,8 +54,8 @@ LEAGUE_TO_FD_CODE = {
 
 FD_CODE_TO_LEAGUE = {v: k for k, v in LEAGUE_TO_FD_CODE.items()}
 
-# Mapping league ID to SoccerData league code strings
-LEAGUE_TO_SD_CODE = {
+# Mapping league ID to SoccerData MatchHistory code strings (domestic leagues)
+LEAGUE_TO_SD_MH_CODE = {
     39: "ENG-Premier League",
     140: "ESP-La Liga",
     135: "ITA-Serie A",
@@ -64,6 +64,80 @@ LEAGUE_TO_SD_CODE = {
     88: "NED-Eredivisie",
     94: "POR-Primeira Liga",
 }
+
+# Mapping league ID to SoccerData Sofascore code strings (all 12 configured football leagues)
+LEAGUE_TO_SD_SOFASCORE_CODE = {
+    39: "ENG-Premier League",
+    140: "ESP-La Liga",
+    135: "ITA-Serie A",
+    78: "GER-Bundesliga",
+    61: "FRA-Ligue 1",
+    88: "NED-Eredivisie",
+    94: "POR-Primeira Liga",
+    2: "INT-Champions League",
+    3: "INT-Europa League",
+    5: "INT-Nations League",
+    1: "INT-World Cup",
+    4: "INT-European Championship",
+}
+
+# Maintain backward compatibility for LEAGUE_TO_SD_CODE
+LEAGUE_TO_SD_CODE = LEAGUE_TO_SD_MH_CODE
+
+
+def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_only=True):
+    """
+    Validate and filter tertiary SoccerData matches.
+    Strictly enforces:
+    - requested season isolation
+    - requested league isolation
+    - valid score for completed matches (home_goals is not None and away_goals is not None)
+    - status filter FT/AET/PEN if completed_only=True
+    """
+    if not matches or not isinstance(matches, list):
+        return []
+
+    valid_matches = []
+    for m in matches:
+        if not isinstance(m, dict):
+            continue
+
+        m_league = m.get("league", {}) if isinstance(m.get("league"), dict) else {}
+        m_season = m_league.get("season")
+        m_league_id = m_league.get("id")
+
+        # Season isolation check: MUST match requested season explicitly
+        if m_season is None or str(m_season) != str(season):
+            continue
+
+        # League isolation check
+        if m_league_id is not None and league_id is not None and str(m_league_id) != str(league_id):
+            continue
+
+        fix_obj = m.get("fixture", {}) if isinstance(m.get("fixture"), dict) else {}
+        st_short = fix_obj.get("status", {}).get("short") if isinstance(fix_obj.get("status"), dict) else None
+
+        goals = m.get("goals", {}) if isinstance(m.get("goals"), dict) else {}
+        h_g = goals.get("home")
+        a_g = goals.get("away")
+
+        is_completed = st_short in ("FT", "AET", "PEN")
+
+        # Reject completed matches missing scores
+        if is_completed and (h_g is None or a_g is None):
+            continue
+
+        if completed_only and not is_completed:
+            continue
+
+        # Ensure league id and season are attached
+        if isinstance(m.get("league"), dict):
+            m["league"]["id"] = league_id
+            m["league"]["season"] = season
+
+        valid_matches.append(m)
+
+    return valid_matches
 
 
 def generate_synthetic_fixture_id(provider, home_name, away_name, date_str, league_id=None, season=None, home_id=None, away_id=None):
@@ -950,14 +1024,24 @@ class DataResolver:
 
             # Tier 3: SoccerData if gaps remain or primary/secondary empty
             if still_has_gaps or not (primary_fixtures or fd_matches):
-                sd_code = LEAGUE_TO_SD_CODE.get(league_id) if league_id else None
-                if sd_code or not league_id:
+                sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id) if league_id else None
+                if sd_mh_code or not league_id:
                     try:
-                        sd_status, sd_games, sd_meta = soccerdata_provider.get_match_history_games(sd_code, None)
+                        sd_status, sd_games, sd_meta = soccerdata_provider.get_match_history_games(sd_mh_code, None, league_id=league_id)
                         if sd_status == "SOURCE_AVAILABLE" and sd_games:
                             sd_matches = [m for m in sd_games if str(m.get("fixture", {}).get("date", "")).startswith(date_str)]
                     except Exception as exc:
-                        logger.error(f"Tertiary provider (SoccerData) failed for date {date_str}: {exc}")
+                        logger.error(f"Tertiary provider (SoccerData MatchHistory) failed for date {date_str}: {exc}")
+
+                if not sd_matches:
+                    sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id) if league_id else None
+                    if sd_ss_code or not league_id:
+                        try:
+                            sd_status, sd_games, sd_meta = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, None, league_id=league_id)
+                            if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                                sd_matches = [m for m in sd_games if str(m.get("fixture", {}).get("date", "")).startswith(date_str)]
+                        except Exception as exc:
+                            logger.error(f"Tertiary provider (SoccerData Sofascore) failed for date {date_str}: {exc}")
 
         # Field-Level Reconciliation Grouping by Team Identity / Date
         reconciled_fixtures = []
@@ -1244,7 +1328,7 @@ class DataResolver:
         # Tier 3: SoccerData if still insufficient
         if len(records) < last and team_name:
             try:
-                sd_status, sd_matches, _ = soccerdata_provider.get_team_historical_matches(team_name, season=season)
+                sd_status, sd_matches, _ = soccerdata_provider.get_team_historical_matches(team_name, season=season, league_id=league_id)
                 if sd_status == "SOURCE_AVAILABLE" and sd_matches:
                     valid_to_save = []
                     for norm in sd_matches:
@@ -1266,7 +1350,7 @@ class DataResolver:
         """
         DataResolver wrapper for league fixtures page acquisition with multi-provider gap filling and fallback.
         Attempts API-Football first. If API-Football fails or its quota is exhausted, continues to
-        football-data.org -> SoccerData. Does NOT re-raise APIFootballQuotaExhaustedError.
+        football-data.org -> SoccerData (MatchHistory -> Sofascore). Does NOT re-raise APIFootballQuotaExhaustedError.
         Calculates missing fields for finished matches and fills gaps across secondary and tertiary providers.
         When completed_only=True, returned fixtures are strictly filtered to FT, AET, PEN status.
         """
@@ -1317,14 +1401,25 @@ class DataResolver:
                         for f in primary_fixtures
                     )
 
-                    sd_code = LEAGUE_TO_SD_CODE.get(league_id)
-                    if sd_code and page == 1 and still_has_gaps:
-                        try:
-                            sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_code, season)
-                            if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                                sd_matches = sd_games
-                        except Exception as sd_exc:
-                            logger.warning(f"DataResolver tertiary get_league_fixtures_page failed for league {league_id}: {sd_exc}")
+                    if page == 1 and still_has_gaps:
+                        sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
+                        if sd_mh_code:
+                            try:
+                                sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
+                                if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                                    sd_matches = sd_games
+                            except Exception as sd_exc:
+                                logger.warning(f"DataResolver tertiary MatchHistory get_league_fixtures_page failed for league {league_id}: {sd_exc}")
+
+                        if not sd_matches:
+                            sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
+                            if sd_ss_code:
+                                try:
+                                    sd_status, sd_games, _ = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
+                                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                                        sd_matches = sd_games
+                                except Exception as sd_exc:
+                                    logger.warning(f"DataResolver tertiary Sofascore get_league_fixtures_page failed for league {league_id}: {sd_exc}")
 
                 reconciled = []
                 for pf in primary_fixtures:
@@ -1386,28 +1481,32 @@ class DataResolver:
                 "primary_quota_exhausted": primary_quota_exhausted,
             }
 
-        # Fallback 2: SoccerData
+        # Fallback 2: SoccerData MatchHistory -> SoccerData Sofascore
+        sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
         sd_matches = []
         sd_meta = {}
-        sd_code = LEAGUE_TO_SD_CODE.get(league_id)
-        if sd_code:
+
+        if sd_mh_code:
             try:
-                sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_code, season)
+                sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
                 if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                    sd_matches = sd_games
+                    sd_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
                     sd_meta = sd_meta_res or {}
             except Exception as sd_exc:
-                logger.warning(f"DataResolver tertiary fallback get_league_fixtures_page failed for league {league_id}: {sd_exc}")
+                logger.warning(f"DataResolver tertiary MatchHistory fallback failed for league {league_id}: {sd_exc}")
+
+        if not sd_matches:
+            sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
+            if sd_ss_code:
+                try:
+                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
+                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                        sd_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
+                        sd_meta = sd_meta_res or {}
+                except Exception as sd_exc:
+                    logger.warning(f"DataResolver tertiary Sofascore fallback failed for league {league_id}: {sd_exc}")
 
         if sd_matches:
-            if completed_only:
-                sd_matches = [
-                    f
-                    for f in sd_matches
-                    if isinstance(f, dict)
-                    and f.get("fixture", {}).get("status", {}).get("short")
-                    in ("FT", "AET", "PEN")
-                ]
             return {
                 "fixtures": sd_matches,
                 "expected_pages": 1,
@@ -1510,20 +1609,30 @@ class DataResolver:
         # Tier 3: SoccerData if gaps still remain
         still_missing = [fid for fid in missing_fids if len(get_missing_fixture_fields(existing.get(fid), require_stats=True)) > 0]
         if still_missing and league_id:
-            sd_code = LEAGUE_TO_SD_CODE.get(league_id)
-            if sd_code:
+            sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
+            sd_games = []
+            if sd_mh_code:
                 try:
-                    sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_code, season)
-                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                        for norm_sd in sd_games:
-                            for fid in list(still_missing):
-                                ex_rec = existing.get(fid)
-                                if ex_rec and _strict_fixture_match(ex_rec, norm_sd):
-                                    reconciled = reconcile_fixture_records([ex_rec, norm_sd])
-                                    if reconciled:
-                                        existing[fid] = reconciled
+                    sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
                 except Exception as exc:
-                    logger.warning(f"Tertiary provider enrichment failed for league {league_id}: {exc}")
+                    logger.warning(f"Tertiary MatchHistory provider enrichment failed for league {league_id}: {exc}")
+
+            if not sd_games:
+                sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
+                if sd_ss_code:
+                    try:
+                        sd_status, sd_games, _ = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
+                    except Exception as exc:
+                        logger.warning(f"Tertiary Sofascore provider enrichment failed for league {league_id}: {exc}")
+
+            if sd_games:
+                for norm_sd in sd_games:
+                    for fid in list(still_missing):
+                        ex_rec = existing.get(fid)
+                        if ex_rec and _strict_fixture_match(ex_rec, norm_sd):
+                            reconciled = reconcile_fixture_records([ex_rec, norm_sd])
+                            if reconciled:
+                                existing[fid] = reconciled
 
         # Save merged results
         to_save = [v for k, v in existing.items() if k in missing_fids and v]
@@ -1631,17 +1740,28 @@ class DataResolver:
             except Exception as exc:
                 logger.warning(f"Secondary provider (football_data_api) team statistics failed for league {league_id}: {exc}")
 
-        # Tier 3: SoccerData
-        sd_code = LEAGUE_TO_SD_CODE.get(league_id)
-        if sd_code and (team_name or c_id):
+        # Tier 3: SoccerData MatchHistory -> Sofascore
+        sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
+        if sd_mh_code and (team_name or c_id):
             try:
-                sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_code, season)
+                sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
                 if sd_status == "SOURCE_AVAILABLE" and sd_games:
                     sd_stats = _build_team_stats_from_matches(sd_games, c_id, None, "soccerdata")
                     if validate_team_stats_sufficiency(sd_stats):
                         return sd_stats
             except Exception as exc:
-                logger.warning(f"Tertiary provider (SoccerData) team statistics failed for team {team_name}: {exc}")
+                logger.warning(f"Tertiary MatchHistory provider team statistics failed for team {team_name}: {exc}")
+
+        sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
+        if sd_ss_code and (team_name or c_id):
+            try:
+                sd_status, sd_games, _ = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
+                if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                    sd_stats = _build_team_stats_from_matches(sd_games, c_id, None, "soccerdata")
+                    if validate_team_stats_sufficiency(sd_stats):
+                        return sd_stats
+            except Exception as exc:
+                logger.warning(f"Tertiary Sofascore provider team statistics failed for team {team_name}: {exc}")
 
         return None
 
@@ -1817,22 +1937,32 @@ class DataResolver:
 
         # Tier 3: SoccerData if still insufficient
         if len(h2h_matches) < last:
-            sd_code = LEAGUE_TO_SD_CODE.get(league_id) if league_id else None
-            if sd_code:
+            sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id) if league_id else None
+            sd_games = []
+            if sd_mh_code:
                 try:
-                    sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_code, season=None)
-                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                        for norm in sd_games:
-                            if _is_valid_h2h_match(norm):
-                                fid = norm.get("fixture", {}).get("id")
-                                if fid and fid not in seen_fids:
-                                    seen_fids.add(fid)
-                                    h2h_matches.append(norm)
-                                    ssn = norm.get("league", {}).get("season")
-                                    if league_id and ssn:
-                                        storage.save_historical_fixtures([norm], league_id, ssn, source="soccerdata", require_completed=True)
+                    sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_mh_code, season=None, league_id=league_id)
                 except Exception as exc:
-                    logger.warning(f"Tertiary provider get_head_to_head failed for league {league_id}: {exc}")
+                    logger.warning(f"Tertiary MatchHistory get_head_to_head failed for league {league_id}: {exc}")
+
+            if not sd_games:
+                sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id) if league_id else None
+                if sd_ss_code:
+                    try:
+                        sd_status, sd_games, _ = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season=None, league_id=league_id)
+                    except Exception as exc:
+                        logger.warning(f"Tertiary Sofascore get_head_to_head failed for league {league_id}: {exc}")
+
+            if sd_games:
+                for norm in sd_games:
+                    if _is_valid_h2h_match(norm):
+                        fid = norm.get("fixture", {}).get("id")
+                        if fid and fid not in seen_fids:
+                            seen_fids.add(fid)
+                            h2h_matches.append(norm)
+                            ssn = norm.get("league", {}).get("season")
+                            if league_id and ssn:
+                                storage.save_historical_fixtures([norm], league_id, ssn, source="soccerdata", require_completed=True)
 
         sorted_h2h = sorted(h2h_matches, key=lambda x: str(x.get("fixture", {}).get("date", "") or ""), reverse=True)
         return sorted_h2h[:last]

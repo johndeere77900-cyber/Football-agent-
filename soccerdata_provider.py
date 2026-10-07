@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_SOCCERDATA_TIMEOUT = 12.0
 
 
-def _normalize_match_history_row(row, league_id=None):
+def _normalize_match_history_row(row, league_id=None, season=None):
     """Normalize a match record from SoccerData MatchHistory."""
     if row is None or not isinstance(row, dict):
         return None
@@ -119,6 +119,7 @@ def _normalize_match_history_row(row, league_id=None):
         },
         "league": {
             "id": league_id,
+            "season": season,
             "name": str(data.get("league") or data.get("Div") or ""),
         },
         "teams": {
@@ -150,7 +151,124 @@ def _normalize_match_history_row(row, league_id=None):
     }
 
 
-def get_match_history_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT):
+def _normalize_sofascore_row(row, league_id=None, season=None):
+    """Normalize a match record from SoccerData Sofascore."""
+    if row is None or not isinstance(row, dict):
+        return None
+
+    data = row
+
+    date_val = str(data.get("date") or "")
+    home_team = str(data.get("home_team") or "")
+    away_team = str(data.get("away_team") or "")
+
+    if not date_val or not home_team or not away_team or date_val in ("NaT", "None"):
+        return None
+
+    # Extract score / goals
+    raw_h_score = data.get("home_score")
+    raw_a_score = data.get("away_score")
+
+    home_goals = None
+    away_goals = None
+
+    if raw_h_score is not None and str(raw_h_score).strip().lower() not in ("nan", "none", ""):
+        try:
+            home_goals = int(float(raw_h_score))
+        except (ValueError, TypeError):
+            home_goals = None
+
+    if raw_a_score is not None and str(raw_a_score).strip().lower() not in ("nan", "none", ""):
+        try:
+            away_goals = int(float(raw_a_score))
+        except (ValueError, TypeError):
+            away_goals = None
+
+    # Determine status
+    raw_status = str(data.get("status") or "").upper()
+    if home_goals is not None and away_goals is not None:
+        if "AET" in raw_status or "EXTRA" in raw_status:
+            short_status = "AET"
+            long_status = "After Extra Time"
+        elif "PEN" in raw_status or "PENALTY" in raw_status:
+            short_status = "PEN"
+            long_status = "Penalties"
+        else:
+            short_status = "FT"
+            long_status = "Finished"
+    else:
+        if "PST" in raw_status or "POSTPONED" in raw_status:
+            short_status = "PST"
+            long_status = "Postponed"
+        elif "CANC" in raw_status or "CANCELLED" in raw_status:
+            short_status = "CANC"
+            long_status = "Cancelled"
+        elif "SUSP" in raw_status or "SUSPENDED" in raw_status:
+            short_status = "SUSP"
+            long_status = "Suspended"
+        else:
+            short_status = "NS"
+            long_status = "Not Started"
+
+    # Game ID & Provider Fixture ID
+    raw_game_id = data.get("game_id")
+    if raw_game_id is not None and str(raw_game_id).strip().lower() not in ("", "nan", "none"):
+        source_fixture_id = f"sd_ss_{raw_game_id}"
+    else:
+        source_fixture_id = f"sd_ss_{date_val}_{home_team}_{away_team}".replace(" ", "_")
+
+    field_availability = {
+        "fixture": True,
+        "teams": True,
+        "score": (home_goals is not None and away_goals is not None),
+        "shots": False,
+        "shots_on_target": False,
+        "corners": False,
+        "cards": False,
+        "xG": False,
+    }
+
+    return {
+        "fixture": {
+            "id": source_fixture_id,
+            "date": date_val,
+            "status": {"short": short_status, "long": long_status},
+        },
+        "league": {
+            "id": league_id,
+            "season": season,
+            "name": str(data.get("league") or ""),
+        },
+        "teams": {
+            "home": {"id": f"sd_{home_team}".replace(" ", "_"), "name": home_team},
+            "away": {"id": f"sd_{away_team}".replace(" ", "_"), "name": away_team},
+        },
+        "goals": {
+            "home": home_goals,
+            "away": away_goals,
+        },
+        "statistics": {
+            "shots": None,
+            "shots_on_target": None,
+            "corners": None,
+            "cards": None,
+            "xG": None,
+        },
+        "field_availability": field_availability,
+        "provider_provenance": {
+            "provider": "soccerdata_sofascore",
+            "provider_type": "tertiary",
+            "provider_fixture_id": source_fixture_id,
+            "provider_team_ids": {
+                "home": f"sd_{home_team}".replace(" ", "_"),
+                "away": f"sd_{away_team}".replace(" ", "_"),
+            },
+            "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
+        },
+    }
+
+
+def get_match_history_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None):
     """
     Retrieve matches for league_code (e.g., 'ENG-Premier League', 'ESP-La Liga') and season via SoccerData MatchHistory.
     Executes in a clean subprocess to prevent C-level library crashes from affecting the main process.
@@ -164,6 +282,21 @@ def get_match_history_games(league_code, season, timeout_seconds=DEFAULT_SOCCERD
 import json, sys
 try:
     import soccerdata as sd
+    import soccerdata._config as cfg
+
+    custom_leagues = {{
+        'NED-Eredivisie': {{'MatchHistory': 'N1'}},
+        'POR-Primeira Liga': {{'MatchHistory': 'P1'}},
+    }}
+    for k, v in custom_leagues.items():
+        if k not in cfg.LEAGUE_DICT:
+            cfg.LEAGUE_DICT[k] = v
+        else:
+            cfg.LEAGUE_DICT[k].update(v)
+
+    if hasattr(sd.MatchHistory, '_all_leagues_dict'):
+        delattr(sd.MatchHistory, '_all_leagues_dict')
+
     mh = sd.MatchHistory(leagues={repr(league_code)}, seasons={repr(season)})
     df = mh.read_games()
     if df is None or getattr(df, 'empty', True):
@@ -202,7 +335,7 @@ except Exception as exc:
     normalized_matches = []
     try:
         for row in raw_records:
-            norm = _normalize_match_history_row(row)
+            norm = _normalize_match_history_row(row, league_id=league_id, season=season)
             if norm:
                 normalized_matches.append(norm)
 
@@ -230,6 +363,106 @@ except Exception as exc:
         return "SOURCE_FAILED", [], meta
 
 
+def get_sofascore_historical_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None):
+    """
+    Retrieve matches for league_code (e.g., 'ENG-Premier League', 'INT-Champions League') and season via SoccerData Sofascore.
+    Executes in a clean subprocess to prevent C-level library crashes from affecting the main process.
+
+    Returns tuple: (status_code, matches_list, metadata)
+    """
+    if not league_code:
+        return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata_sofascore"}
+
+    code_str = f"""
+import json, sys
+try:
+    import soccerdata as sd
+    import soccerdata._config as cfg
+
+    custom_leagues = {{
+        'INT-Champions League': {{'Sofascore': 'UEFA Champions League'}},
+        'INT-Europa League': {{'Sofascore': 'UEFA Europa League'}},
+        'INT-Nations League': {{'Sofascore': 'UEFA Nations League'}},
+        'INT-World Cup': {{'Sofascore': 'World Cup'}},
+        'INT-European Championship': {{'Sofascore': 'EURO'}},
+        'NED-Eredivisie': {{'Sofascore': 'Eredivisie'}},
+        'POR-Primeira Liga': {{'Sofascore': 'Liga Portugal'}},
+    }}
+    for k, v in custom_leagues.items():
+        if k not in cfg.LEAGUE_DICT:
+            cfg.LEAGUE_DICT[k] = v
+        else:
+            cfg.LEAGUE_DICT[k].update(v)
+
+    if hasattr(sd.Sofascore, '_all_leagues_dict'):
+        delattr(sd.Sofascore, '_all_leagues_dict')
+
+    ss = sd.Sofascore(leagues={repr(league_code)}, seasons={repr(season)})
+    df = ss.read_schedule()
+    if df is None or getattr(df, 'empty', True):
+        print(json.dumps([]))
+    else:
+        df_reset = df.reset_index() if hasattr(df, 'reset_index') else df
+        records = df_reset.to_dict(orient='records')
+        print(json.dumps(records, default=str))
+except Exception as exc:
+    sys.exit(1)
+"""
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code_str],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            raw_records = json.loads(proc.stdout)
+        else:
+            raw_records = []
+    except Exception as exc:
+        logger.warning(f"SoccerData Sofascore subprocess execution failed or timed out: {exc}")
+        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": str(exc), "source": "soccerdata_sofascore"}
+
+    if not raw_records:
+        meta = {
+            "status": "SOURCE_NOT_AVAILABLE",
+            "error": "No data returned or empty response",
+            "source": "soccerdata_sofascore",
+        }
+        return "SOURCE_NOT_AVAILABLE", [], meta
+
+    normalized_matches = []
+    try:
+        for row in raw_records:
+            norm = _normalize_sofascore_row(row, league_id=league_id, season=season)
+            if norm:
+                normalized_matches.append(norm)
+
+        if not normalized_matches:
+            meta = {
+                "status": "SOURCE_RETURNED_PARTIAL_DATA",
+                "count": 0,
+                "source": "soccerdata_sofascore",
+            }
+            return "SOURCE_RETURNED_PARTIAL_DATA", [], meta
+
+        meta = {
+            "status": "SOURCE_AVAILABLE",
+            "count": len(normalized_matches),
+            "source": "soccerdata_sofascore",
+        }
+        return "SOURCE_AVAILABLE", normalized_matches, meta
+
+    except Exception as exc:
+        meta = {
+            "status": "SOURCE_FAILED",
+            "error": str(exc),
+            "source": "soccerdata_sofascore",
+        }
+        return "SOURCE_FAILED", [], meta
+
+
 def get_team_historical_matches(team_name, season=None, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None):
     """
     Retrieve team-centric historical matches using available SoccerData sources.
@@ -251,7 +484,7 @@ def get_team_historical_matches(team_name, season=None, timeout_seconds=DEFAULT_
     collected_matches = []
 
     for lcode in available_leagues:
-        status, matches, meta = get_match_history_games(lcode, season, timeout_seconds=timeout_seconds)
+        status, matches, meta = get_match_history_games(lcode, season, timeout_seconds=timeout_seconds, league_id=league_id)
         if status == "SOURCE_AVAILABLE" and matches:
             for m in matches:
                 h_name = m.get("teams", {}).get("home", {}).get("name", "")
