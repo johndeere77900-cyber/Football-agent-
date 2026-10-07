@@ -134,9 +134,20 @@ def sync_historical_fixtures(
             page_expected = page_meta.get("expected_pages", 1)
             page_source = page_meta.get("source", "api_football")
 
-            if expected_pages == 0:
+            if page_meta.get("primary_failed") and not page_fixtures:
+                if page_meta.get("primary_quota_exhausted"):
+                    quota_budget_stopped = True
+                    last_error_reason = "quota_budget_exhausted_during_acquisition"
+                    print(f"API Quota exhausted during fixture fetch on page {current_page}", flush=True)
+                else:
+                    acquisition_failed = True
+                    last_error_reason = "secondary_provider_returned_no_fixtures"
+                    print(f"Primary acquisition unavailable; fallback returned no fixtures on page {current_page}", flush=True)
+                break
+
+            if expected_pages == 0 or page_source != "api_football":
                 expected_pages = page_expected
-            elif page_expected != expected_pages:
+            elif page_expected != expected_pages and page_fixtures:
                 acquisition_failed = True
                 last_error_reason = "pagination_metadata_mismatch"
                 print(
@@ -164,7 +175,7 @@ def sync_historical_fixtures(
             current_stored_count = storage.get_historical_fixture_count(league_id, season)
 
             if current_page >= expected_pages:
-                acquisition_complete = (page_source == "api_football")
+                acquisition_complete = True
 
             # Update progress in manifest immediately
             storage.mark_historical_dataset_incomplete(
@@ -199,11 +210,7 @@ def sync_historical_fixtures(
         acquisition_failed = True
         if not last_error_reason:
             if total_valid_fixtures == 0:
-                last_error_reason = "secondary_provider_returned_no_fixtures"
-            elif page_source == "football_data_org":
-                last_error_reason = "secondary_provider_completeness_unverifiable"
-            elif page_source == "soccerdata":
-                last_error_reason = "tertiary_provider_completeness_unverifiable"
+                last_error_reason = "fallback_providers_returned_no_fixtures"
             else:
                 last_error_reason = "fallback_providers_returned_no_fixtures"
         storage.mark_historical_dataset_incomplete(

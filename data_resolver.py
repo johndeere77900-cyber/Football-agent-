@@ -1259,66 +1259,67 @@ class DataResolver:
 
     def get_league_fixtures_page(self, league_id, season, page=1, max_budget=None):
         """
-        DataResolver wrapper for league fixtures page acquisition with multi-provider gap filling.
-        Preserves original quota exception types so historical_sync quota accounting functions as expected.
+        DataResolver wrapper for league fixtures page acquisition with multi-provider gap filling and fallback.
+        Attempts API-Football first. If API-Football fails or its quota is exhausted, continues to
+        football-data.org -> SoccerData. Does NOT re-raise APIFootballQuotaExhaustedError.
         Calculates missing fields for finished matches and fills gaps across secondary and tertiary providers.
         """
         primary_page = None
+        primary_failed = False
+        primary_quota_exhausted = False
         try:
             primary_page = api_football.get_league_fixtures_page(league_id, season, page=page, max_budget=max_budget)
-        except api_football.APIFootballQuotaExhaustedError:
-            raise
+        except api_football.APIFootballQuotaExhaustedError as exc:
+            primary_failed = True
+            primary_quota_exhausted = True
+            logger.warning(f"DataResolver primary get_league_fixtures_page quota exhausted for league {league_id}: {exc}")
         except Exception as exc:
+            primary_failed = True
             logger.warning(f"DataResolver primary get_league_fixtures_page failed for league {league_id}: {exc}")
 
-        primary_fixtures = []
-        if primary_page and isinstance(primary_page.get("fixtures"), list):
-            primary_fixtures = [_normalize_api_football_fixture(f, league_id, season) for f in primary_page["fixtures"] if isinstance(f, dict)]
+        # If primary provider succeeded without exception:
+        if primary_page is not None and isinstance(primary_page, dict):
+            raw_fixtures = primary_page.get("fixtures", [])
+            if not isinstance(raw_fixtures, list):
+                raw_fixtures = []
 
-        needs_gap_filling = not primary_fixtures or any(
-            f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN") and
-            len(get_missing_fixture_fields(f, require_stats=True)) > 0
-            for f in primary_fixtures
-        )
+            primary_fixtures = [_normalize_api_football_fixture(f, league_id, season) for f in raw_fixtures if isinstance(f, dict)]
 
-        fd_matches = []
-        sd_matches = []
+            fd_matches = []
+            sd_matches = []
 
-        if needs_gap_filling:
-            comp_code = LEAGUE_TO_FD_CODE.get(league_id)
-            if comp_code and page == 1:
-                try:
-                    fd_res = football_data_api.get_competition_matches(comp_code, season=season)
-                    matches = fd_res.get("matches", []) if isinstance(fd_res, dict) else (fd_res if isinstance(fd_res, list) else [])
-                    fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
-                except Exception as fd_exc:
-                    logger.warning(f"DataResolver secondary get_league_fixtures_page failed for league {league_id}: {fd_exc}")
-
-            # Recalculate gaps after merging football-data.org matches
-            still_has_gaps = True
-            if primary_fixtures or fd_matches:
-                partially_reconciled = []
-                for pf in (primary_fixtures or fd_matches):
-                    matching_fd = [m for m in fd_matches if _strict_fixture_match(pf, m)]
-                    merged = reconcile_fixture_records([pf] + matching_fd)
-                    partially_reconciled.append(merged or pf)
-
-                still_has_gaps = any(
+            if primary_fixtures:
+                needs_gap_filling = any(
                     f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN") and
                     len(get_missing_fixture_fields(f, require_stats=True)) > 0
-                    for f in partially_reconciled
+                    for f in primary_fixtures
                 )
 
-            sd_code = LEAGUE_TO_SD_CODE.get(league_id)
-            if sd_code and page == 1 and (still_has_gaps or not (primary_fixtures or fd_matches)):
-                try:
-                    sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_code, season)
-                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                        sd_matches = sd_games
-                except Exception as sd_exc:
-                    logger.warning(f"DataResolver tertiary get_league_fixtures_page failed for league {league_id}: {sd_exc}")
+                if needs_gap_filling:
+                    comp_code = LEAGUE_TO_FD_CODE.get(league_id)
+                    if comp_code and page == 1:
+                        try:
+                            fd_res = football_data_api.get_competition_matches(comp_code, season=season)
+                            matches = fd_res.get("matches", []) if isinstance(fd_res, dict) else (fd_res if isinstance(fd_res, list) else [])
+                            fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
+                        except Exception as fd_exc:
+                            logger.warning(f"DataResolver secondary get_league_fixtures_page failed for league {league_id}: {fd_exc}")
 
-        if primary_fixtures:
+                    still_has_gaps = any(
+                        f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN") and
+                        len(get_missing_fixture_fields(f, require_stats=True)) > 0
+                        for f in primary_fixtures
+                    )
+
+                    sd_code = LEAGUE_TO_SD_CODE.get(league_id)
+                    if sd_code and page == 1 and still_has_gaps:
+                        try:
+                            sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_code, season)
+                            if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                                sd_matches = sd_games
+                        except Exception as sd_exc:
+                            logger.warning(f"DataResolver tertiary get_league_fixtures_page failed for league {league_id}: {sd_exc}")
+
             reconciled = []
             for pf in primary_fixtures:
                 matching_fd = [m for m in fd_matches if _strict_fixture_match(pf, m)]
@@ -1329,18 +1330,70 @@ class DataResolver:
 
             return {
                 "fixtures": reconciled,
-                "expected_pages": primary_page.get("expected_pages", 1) if primary_page else 1,
-                "current_page": primary_page.get("current_page", page) if primary_page else page,
+                "expected_pages": primary_page.get("expected_pages", 1),
+                "current_page": primary_page.get("current_page", page),
                 "source": "api_football",
             }
 
+        # If primary provider failed, was quota exhausted, or returned 0 fixtures:
+        # Fallback 1: football-data.org
+        fd_matches = []
+        comp_code = LEAGUE_TO_FD_CODE.get(league_id)
+        if comp_code:
+            try:
+                fd_res = football_data_api.get_competition_matches(comp_code, season=season)
+                matches = fd_res.get("matches", []) if isinstance(fd_res, dict) else (fd_res if isinstance(fd_res, list) else [])
+                fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
+            except Exception as fd_exc:
+                logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
+
         if fd_matches:
-            return {"fixtures": fd_matches, "expected_pages": 1, "current_page": 1, "source": "football_data_org"}
+            return {
+                "fixtures": fd_matches,
+                "expected_pages": 1,
+                "current_page": 1,
+                "source": "football_data_org",
+                "primary_failed": primary_failed,
+                "primary_quota_exhausted": primary_quota_exhausted,
+            }
+
+        # Fallback 2: SoccerData
+        sd_matches = []
+        sd_code = LEAGUE_TO_SD_CODE.get(league_id)
+        if sd_code:
+            try:
+                sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_code, season)
+                if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                    sd_matches = sd_games
+            except Exception as sd_exc:
+                logger.warning(f"DataResolver tertiary fallback get_league_fixtures_page failed for league {league_id}: {sd_exc}")
 
         if sd_matches:
-            return {"fixtures": sd_matches, "expected_pages": 1, "current_page": 1, "source": "soccerdata"}
+            return {
+                "fixtures": sd_matches,
+                "expected_pages": 1,
+                "current_page": 1,
+                "source": "soccerdata",
+                "primary_failed": primary_failed,
+                "primary_quota_exhausted": primary_quota_exhausted,
+            }
 
-        return {"fixtures": [], "expected_pages": 1, "current_page": page, "source": "none"}
+        if primary_page is not None and isinstance(primary_page, dict):
+            return {
+                "fixtures": [],
+                "expected_pages": primary_page.get("expected_pages", 1),
+                "current_page": primary_page.get("current_page", page),
+                "source": "api_football",
+            }
+
+        return {
+            "fixtures": [],
+            "expected_pages": 1,
+            "current_page": page,
+            "source": "none",
+            "primary_failed": primary_failed,
+            "primary_quota_exhausted": primary_quota_exhausted,
+        }
 
     def check_competition_coverage(self, league_id, season):
         """DataResolver owner for checking provider coverage for league + season."""

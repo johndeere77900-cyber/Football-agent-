@@ -168,11 +168,11 @@ def test_3_h2h_cannot_cross_match_providers_by_numeric_id():
     assert snapshot["goals_for"] == 1.0
 
 
-def test_4_partial_football_data_org_data_cannot_become_complete():
+def test_4_football_data_org_data_can_become_complete():
     """
     When primary provider API-Football is unavailable and secondary provider
-    football-data.org returns valid matches, historical_sync must keep the dataset
-    status as INCOMPLETE with reason 'secondary_provider_completeness_unverifiable'.
+    football-data.org returns valid complete dataset, historical_sync allows
+    the dataset to become COMPLETE with provider-neutral completion.
     """
     fd_match = {
         "id": 99911,
@@ -201,10 +201,10 @@ def test_4_partial_football_data_org_data_cannot_become_complete():
          patch("football_data_api.get_competition_matches", return_value=fd_response):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
-    assert report["status"] == "INCOMPLETE"
+    assert report["status"] == "COMPLETE"
     st = storage.get_historical_dataset_status(39, 2024)
-    assert st["status"] == "INCOMPLETE"
-    assert st["error_reason"] == "secondary_provider_completeness_unverifiable"
+    assert st["status"] == "COMPLETE"
+    assert st["acquisition_complete"] is True
 
 
 def test_5_verified_canonical_mappings_still_work():
