@@ -8,7 +8,7 @@ Guarantees:
 - Hard timeout on scraper execution to prevent long hangs.
 - Process isolation via clean subprocess so C-level library crashes (e.g. tls_requests bus errors) never crash the main process.
 - Explicit status reporting: SOURCE_AVAILABLE, SOURCE_NOT_AVAILABLE, SOURCE_FAILED, SOURCE_RETURNED_PARTIAL_DATA.
-- Never fabricates missing values.
+- Never fabricates missing values or provider identities.
 - Complete provider provenance tracking.
 """
 
@@ -25,6 +25,22 @@ logger = logging.getLogger(__name__)
 DEFAULT_SOCCERDATA_TIMEOUT = 12.0
 
 
+def _parse_row_season(raw_s, default_s=None):
+    """Parse raw season from row dictionary into integer year (e.g. '2024', '2425' -> 2024)."""
+    if raw_s is None or str(raw_s).strip().lower() in ("", "none", "nan"):
+        return default_s
+    s_str = str(raw_s).strip()
+    if s_str.isdigit():
+        val = int(s_str)
+        if val >= 2000:
+            return val
+        if len(s_str) == 4 and val < 2000:  # e.g. 2425 -> 2024
+            return 2000 + int(s_str[:2])
+    if len(s_str) >= 4 and s_str[:4].isdigit():
+        return int(s_str[:4])
+    return default_s
+
+
 def _normalize_match_history_row(row, league_id=None, season=None):
     """Normalize a match record from SoccerData MatchHistory."""
     if row is None or not isinstance(row, dict):
@@ -36,18 +52,32 @@ def _normalize_match_history_row(row, league_id=None, season=None):
     home_team = str(data.get("home_team") or data.get("HomeTeam") or "")
     away_team = str(data.get("away_team") or data.get("AwayTeam") or "")
 
-    if not date_val or not home_team or not away_team:
+    if not date_val or not home_team or not away_team or date_val in ("NaT", "None"):
         return None
+
+    # Require real provider game/fixture ID (do NOT fabricate synthetic string IDs)
+    raw_game_id = data.get("game_id") or data.get("game") or data.get("id")
+    if raw_game_id is None or str(raw_game_id).strip().lower() in ("", "nan", "none"):
+        return None
+
+    source_fixture_id = f"sd_mh_{raw_game_id}"
+
+    # Parse row's actual season from raw data (do NOT default to requested season if missing)
+    row_season = _parse_row_season(data.get("season") or data.get("Season"), default_s=None)
 
     # Extract score / goals
     home_goals = data.get("FTHG") if "FTHG" in data else data.get("home_score")
     away_goals = data.get("FTAG") if "FTAG" in data else data.get("away_score")
 
     try:
-        home_goals = int(home_goals) if home_goals is not None and str(home_goals).isdigit() else None
-        away_goals = int(away_goals) if away_goals is not None and str(away_goals).isdigit() else None
+        home_goals = int(home_goals) if home_goals is not None and str(home_goals).strip().isdigit() else None
+        away_goals = int(away_goals) if away_goals is not None and str(away_goals).strip().isdigit() else None
     except (ValueError, TypeError):
         home_goals, away_goals = None, None
+
+    # Do not invent team IDs from names
+    home_id = data.get("home_team_id") or data.get("home_id")
+    away_id = data.get("away_team_id") or data.get("away_id")
 
     # Match statistics
     shots = {}
@@ -109,8 +139,6 @@ def _normalize_match_history_row(row, league_id=None, season=None):
         "xG": False,  # MatchHistory doesn't provide xG
     }
 
-    source_fixture_id = f"sd_mh_{date_val}_{home_team}_{away_team}".replace(" ", "_")
-
     return {
         "fixture": {
             "id": source_fixture_id,
@@ -119,12 +147,12 @@ def _normalize_match_history_row(row, league_id=None, season=None):
         },
         "league": {
             "id": league_id,
-            "season": season,
+            "season": row_season,
             "name": str(data.get("league") or data.get("Div") or ""),
         },
         "teams": {
-            "home": {"id": f"sd_{home_team}".replace(" ", "_"), "name": home_team},
-            "away": {"id": f"sd_{away_team}".replace(" ", "_"), "name": away_team},
+            "home": {"id": home_id, "name": home_team},
+            "away": {"id": away_id, "name": away_team},
         },
         "goals": {
             "home": home_goals,
@@ -143,8 +171,8 @@ def _normalize_match_history_row(row, league_id=None, season=None):
             "provider_type": "tertiary",
             "provider_fixture_id": source_fixture_id,
             "provider_team_ids": {
-                "home": f"sd_{home_team}".replace(" ", "_"),
-                "away": f"sd_{away_team}".replace(" ", "_"),
+                "home": home_id,
+                "away": away_id,
             },
             "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
         },
@@ -165,6 +193,16 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
     if not date_val or not home_team or not away_team or date_val in ("NaT", "None"):
         return None
 
+    # Require real provider game/fixture ID (do NOT fabricate synthetic string IDs)
+    raw_game_id = data.get("game_id") or data.get("game") or data.get("id")
+    if raw_game_id is None or str(raw_game_id).strip().lower() in ("", "nan", "none"):
+        return None
+
+    source_fixture_id = f"sd_ss_{raw_game_id}"
+
+    # Parse row's actual season from raw data (do NOT default to requested season if missing)
+    row_season = _parse_row_season(data.get("season") or data.get("Season"), default_s=None)
+
     # Extract score / goals
     raw_h_score = data.get("home_score")
     raw_a_score = data.get("away_score")
@@ -183,6 +221,10 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
             away_goals = int(float(raw_a_score))
         except (ValueError, TypeError):
             away_goals = None
+
+    # Do not invent team IDs from names
+    home_id = data.get("home_team_id") or data.get("home_id")
+    away_id = data.get("away_team_id") or data.get("away_id")
 
     # Determine status
     raw_status = str(data.get("status") or "").upper()
@@ -210,13 +252,6 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
             short_status = "NS"
             long_status = "Not Started"
 
-    # Game ID & Provider Fixture ID
-    raw_game_id = data.get("game_id")
-    if raw_game_id is not None and str(raw_game_id).strip().lower() not in ("", "nan", "none"):
-        source_fixture_id = f"sd_ss_{raw_game_id}"
-    else:
-        source_fixture_id = f"sd_ss_{date_val}_{home_team}_{away_team}".replace(" ", "_")
-
     field_availability = {
         "fixture": True,
         "teams": True,
@@ -236,12 +271,12 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
         },
         "league": {
             "id": league_id,
-            "season": season,
+            "season": row_season,
             "name": str(data.get("league") or ""),
         },
         "teams": {
-            "home": {"id": f"sd_{home_team}".replace(" ", "_"), "name": home_team},
-            "away": {"id": f"sd_{away_team}".replace(" ", "_"), "name": away_team},
+            "home": {"id": home_id, "name": home_team},
+            "away": {"id": away_id, "name": away_team},
         },
         "goals": {
             "home": home_goals,
@@ -260,8 +295,8 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
             "provider_type": "tertiary",
             "provider_fixture_id": source_fixture_id,
             "provider_team_ids": {
-                "home": f"sd_{home_team}".replace(" ", "_"),
-                "away": f"sd_{away_team}".replace(" ", "_"),
+                "home": home_id,
+                "away": away_id,
             },
             "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
         },
@@ -365,7 +400,7 @@ except Exception as exc:
 
 def get_sofascore_historical_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None):
     """
-    Retrieve matches for league_code (e.g., 'ENG-Premier League', 'INT-Champions League') and season via SoccerData Sofascore.
+    Retrieve matches for league_code (e.g., 'ENG-Premier League', 'INT-European Championship') and season via SoccerData Sofascore.
     Executes in a clean subprocess to prevent C-level library crashes from affecting the main process.
 
     Returns tuple: (status_code, matches_list, metadata)

@@ -54,7 +54,7 @@ LEAGUE_TO_FD_CODE = {
 
 FD_CODE_TO_LEAGUE = {v: k for k, v in LEAGUE_TO_FD_CODE.items()}
 
-# Mapping league ID to SoccerData MatchHistory code strings (domestic leagues)
+# Mapping league ID to SoccerData MatchHistory code strings
 LEAGUE_TO_SD_MH_CODE = {
     39: "ENG-Premier League",
     140: "ESP-La Liga",
@@ -81,7 +81,7 @@ LEAGUE_TO_SD_SOFASCORE_CODE = {
     4: "INT-European Championship",
 }
 
-# Maintain backward compatibility for LEAGUE_TO_SD_CODE
+# Maintain backward compatibility
 LEAGUE_TO_SD_CODE = LEAGUE_TO_SD_MH_CODE
 
 
@@ -89,7 +89,8 @@ def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_
     """
     Validate and filter tertiary SoccerData matches.
     Strictly enforces:
-    - requested season isolation
+    - requested season isolation: fixture.league.season == requested season
+    - rejects records where season is missing or does not equal requested season
     - requested league isolation
     - valid score for completed matches (home_goals is not None and away_goals is not None)
     - status filter FT/AET/PEN if completed_only=True
@@ -106,8 +107,8 @@ def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_
         m_season = m_league.get("season")
         m_league_id = m_league.get("id")
 
-        # Season isolation check: MUST match requested season explicitly
-        if m_season is None or str(m_season) != str(season):
+        # Authoritative season isolation check: reject if season missing or != requested season
+        if m_season is None or str(m_season).strip() != str(season).strip():
             continue
 
         # League isolation check
@@ -1530,6 +1531,7 @@ class DataResolver:
             "expected_pages": 1,
             "current_page": page,
             "source": "none",
+            "provider_metadata": sd_meta if sd_meta else fd_meta,
             "primary_failed": primary_failed,
             "primary_quota_exhausted": primary_quota_exhausted,
         }
