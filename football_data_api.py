@@ -200,13 +200,38 @@ def get_competition_matches(comp_code, season=None):
     comp_obj = data.get("competition", {}) if isinstance(data.get("competition"), dict) else {}
     filters_obj = data.get("filters", {}) if isinstance(data.get("filters"), dict) else {}
 
+    cnt = res_set.get("count")
+    pld = res_set.get("played")
+    first_dt = res_set.get("first")
+    last_dt = res_set.get("last")
+
+    s_val = filters_obj.get("season") or season
+    try:
+        s_int = int(s_val) if s_val is not None else None
+    except (ValueError, TypeError):
+        s_int = None
+
+    current_year = datetime.now(timezone.utc).year
+    is_partial = False
+    is_complete = False
+
+    if cnt is not None and isinstance(cnt, int) and cnt > 0:
+        if pld is not None and isinstance(pld, int) and pld < cnt:
+            is_partial = True
+        elif len(matches) < cnt:
+            is_partial = True
+        elif s_int is not None and s_int < current_year and first_dt and last_dt:
+            is_complete = True
+
     metadata = {
-        "count": res_set.get("count"),
-        "played": res_set.get("played"),
-        "first": res_set.get("first"),
-        "last": res_set.get("last"),
+        "count": cnt,
+        "played": pld,
+        "first": first_dt,
+        "last": last_dt,
         "competition_code": comp_obj.get("code"),
-        "season": filters_obj.get("season") or season,
+        "season": s_val,
+        "is_complete": is_complete,
+        "is_partial": is_partial,
     }
 
     return {"matches": matches, "metadata": metadata}
