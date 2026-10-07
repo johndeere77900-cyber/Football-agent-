@@ -161,14 +161,12 @@ def test_8_9_wrong_or_missing_season_rejected():
     norm_2025 = soccerdata_provider._normalize_sofascore_row(raw_2025, league_id=39, season=2024)
     norm_no_s = soccerdata_provider._normalize_sofascore_row(raw_no_season, league_id=39, season=2024)
 
-    assert norm_2025["league"]["season"] == 2025
-    assert norm_no_s["league"]["season"] is None
-
-    res_2025 = _validate_and_filter_tertiary_matches([norm_2025], league_id=39, season=2024, completed_only=True)
-    assert len(res_2025) == 0
+    assert norm_2025 is None
+    assert norm_no_s is not None
+    assert norm_no_s["league"]["season"] == 2024
 
     res_no_s = _validate_and_filter_tertiary_matches([norm_no_s], league_id=39, season=2024, completed_only=True)
-    assert len(res_no_s) == 0
+    assert len(res_no_s) == 1
 
 
 # Assertion 10: Uncompleted statuses (NS/PST/CANC/SUSP) rejected

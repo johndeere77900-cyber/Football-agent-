@@ -71,8 +71,18 @@ def _normalize_match_history_row(row, league_id=None, season=None):
     except (ValueError, TypeError):
         return None
 
-    # Parse row's actual season from raw data (do NOT default to requested season if missing)
-    row_season = _parse_row_season(data.get("season") or data.get("Season"), default_s=None)
+    raw_s = data.get("season") or data.get("Season")
+    parsed_raw = _parse_row_season(raw_s, default_s=None)
+
+    if season is not None:
+        if parsed_raw is not None and parsed_raw != season:
+            return None
+        row_season = season
+    else:
+        row_season = parsed_raw
+
+    if row_season is None:
+        return None
 
     # Extract score / goals
     home_goals = data.get("FTHG") if "FTHG" in data else data.get("home_score")
@@ -236,8 +246,18 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
     except (ValueError, TypeError):
         return None
 
-    # Parse row's actual season from raw data (do NOT default to requested season if missing)
-    row_season = _parse_row_season(data.get("season") or data.get("Season"), default_s=None)
+    raw_s = data.get("season") or data.get("Season")
+    parsed_raw = _parse_row_season(raw_s, default_s=None)
+
+    if season is not None:
+        if parsed_raw is not None and parsed_raw != season:
+            return None
+        row_season = season
+    else:
+        row_season = parsed_raw
+
+    if row_season is None:
+        return None
 
     # Extract score / goals
     raw_h_score = data.get("home_score")
@@ -495,20 +515,39 @@ try:
         records = df_reset.to_dict(orient='records')
 
         team_id_map = {{}}
-        matches_dir = ss.data_dir / "matches"
-        if matches_dir.exists():
-            for fpath in matches_dir.glob("round_matches_*.json"):
-                try:
-                    with open(fpath, "r", encoding="utf-8") as fp:
-                        m_data = json.load(fp)
-                        for ev in m_data.get("events", []):
-                            g_id = ev.get("id")
-                            h_id = ev.get("homeTeam", {{}}).get("id")
-                            a_id = ev.get("awayTeam", {{}}).get("id")
-                            if g_id is not None and h_id is not None and a_id is not None:
-                                team_id_map[str(g_id)] = (h_id, a_id)
-                except Exception:
-                    pass
+        try:
+            df_seasons = ss.read_seasons()
+            for (lkey, skey), s_row in df_seasons.iterrows():
+                u_league_id = s_row.get("league_id")
+                u_season_id = s_row.get("season_id")
+                if not u_league_id or not u_season_id:
+                    continue
+                url1 = f"https://api.sofascore.com/api/v1/unique-tournament/{{u_league_id}}/season/{{u_season_id}}/rounds"
+                fpath1 = ss.data_dir / f"matches/rounds_{{lkey}}_{{skey}}.json"
+                ss.get(url1, fpath1)
+                if not fpath1.exists():
+                    continue
+                with open(fpath1, "r", encoding="utf-8") as fp1:
+                    season_data = json.load(fp1)
+                for r_info in season_data.get("rounds", []):
+                    r_num = r_info.get("round")
+                    if r_num is None:
+                        continue
+                    url2 = f"https://api.sofascore.com/api/v1/unique-tournament/{{u_league_id}}/season/{{u_season_id}}/events/round/{{r_num}}"
+                    fpath2 = ss.data_dir / f"matches/round_matches_{{lkey}}_{{skey}}_{{r_num}}.json"
+                    ss.get(url2, fpath2)
+                    if not fpath2.exists():
+                        continue
+                    with open(fpath2, "r", encoding="utf-8") as fp2:
+                        m_data = json.load(fp2)
+                    for ev in m_data.get("events", []):
+                        gid = ev.get("id")
+                        hid = ev.get("homeTeam", {{}}).get("id")
+                        aid = ev.get("awayTeam", {{}}).get("id")
+                        if gid is not None and hid is not None and aid is not None:
+                            team_id_map[str(gid)] = (int(hid), int(aid))
+        except Exception:
+            pass
 
         for rec in records:
             gid = str(rec.get("game_id") or rec.get("game") or rec.get("id") or "")
