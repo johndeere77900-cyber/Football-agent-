@@ -193,12 +193,21 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
     if not date_val or not home_team or not away_team or date_val in ("NaT", "None"):
         return None
 
-    # Require real provider game/fixture ID (do NOT fabricate synthetic string IDs)
+    # Require real numeric provider game/event ID (BIGINT strict positive int)
     raw_game_id = data.get("game_id") or data.get("game") or data.get("id")
-    if raw_game_id is None or str(raw_game_id).strip().lower() in ("", "nan", "none"):
+    if raw_game_id is None:
         return None
 
-    source_fixture_id = f"sd_ss_{raw_game_id}"
+    raw_str = str(raw_game_id).strip().lower()
+    if raw_str in ("", "nan", "none"):
+        return None
+
+    try:
+        fixture_id = int(raw_str)
+        if fixture_id <= 0:
+            return None
+    except (ValueError, TypeError):
+        return None
 
     # Parse row's actual season from raw data (do NOT default to requested season if missing)
     row_season = _parse_row_season(data.get("season") or data.get("Season"), default_s=None)
@@ -222,9 +231,23 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
         except (ValueError, TypeError):
             away_goals = None
 
-    # Do not invent team IDs from names
-    home_id = data.get("home_team_id") or data.get("home_id")
-    away_id = data.get("away_team_id") or data.get("away_id")
+    # Extract raw team IDs if present as integers; otherwise leave None (do NOT fabricate team IDs)
+    raw_h_id = data.get("home_team_id") or data.get("home_id")
+    raw_a_id = data.get("away_team_id") or data.get("away_id")
+
+    home_id = None
+    if raw_h_id is not None and str(raw_h_id).strip().lower() not in ("nan", "none", ""):
+        try:
+            home_id = int(str(raw_h_id).strip())
+        except (ValueError, TypeError):
+            home_id = None
+
+    away_id = None
+    if raw_a_id is not None and str(raw_a_id).strip().lower() not in ("nan", "none", ""):
+        try:
+            away_id = int(str(raw_a_id).strip())
+        except (ValueError, TypeError):
+            away_id = None
 
     # Determine status
     raw_status = str(data.get("status") or "").upper()
@@ -265,7 +288,7 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
 
     return {
         "fixture": {
-            "id": source_fixture_id,
+            "id": fixture_id,
             "date": date_val,
             "status": {"short": short_status, "long": long_status},
         },
@@ -293,7 +316,7 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
         "provider_provenance": {
             "provider": "soccerdata_sofascore",
             "provider_type": "tertiary",
-            "provider_fixture_id": source_fixture_id,
+            "provider_fixture_id": fixture_id,
             "provider_team_ids": {
                 "home": home_id,
                 "away": away_id,

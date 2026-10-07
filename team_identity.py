@@ -113,15 +113,19 @@ def resolve_canonical_team_id(
         return None
 
     provider = str(provider).strip().lower()
-    p_team_id_str = str(provider_team_id).strip()
+    p_team_id_str = None
+    if provider_team_id is not None and str(provider_team_id).strip().lower() not in ("", "none", "nan"):
+        p_team_id_str = str(provider_team_id).strip()
+
     norm_name = normalize_team_name(raw_name)
     if not norm_name:
         return None
 
-    # Step 1: Existing verified provider mapping in DB
-    existing = storage.get_team_identity_by_provider(sport, provider, p_team_id_str)
-    if existing:
-        return existing["canonical_id"]
+    # Step 1: Existing verified provider mapping in DB (only if provider team ID is present)
+    if p_team_id_str:
+        existing = storage.get_team_identity_by_provider(sport, provider, p_team_id_str)
+        if existing:
+            return existing["canonical_id"]
 
     # Step 2: Exact normalized_name lookup in DB
     target_canonical_id = None
@@ -179,16 +183,17 @@ def resolve_canonical_team_id(
     if not target_canonical_id:
         return None
 
-    # Persist the newly resolved mapping for this provider team ID
-    storage.save_team_identity(
-        sport=sport,
-        canonical_id=target_canonical_id,
-        provider=provider,
-        provider_team_id=p_team_id_str,
-        normalized_name=norm_name,
-        display_name=raw_name.strip(),
-        league_id=league_id,
-    )
+    # Persist the newly resolved mapping ONLY if real provider team ID exists
+    if p_team_id_str:
+        storage.save_team_identity(
+            sport=sport,
+            canonical_id=target_canonical_id,
+            provider=provider,
+            provider_team_id=p_team_id_str,
+            normalized_name=norm_name,
+            display_name=raw_name.strip(),
+            league_id=league_id,
+        )
 
     return target_canonical_id
 
@@ -210,7 +215,10 @@ def bootstrap_historical_team_identity(
         return None
 
     provider = str(provider).strip().lower()
-    p_team_id_str = str(provider_team_id).strip()
+    p_team_id_str = None
+    if provider_team_id is not None and str(provider_team_id).strip().lower() not in ("", "none", "nan"):
+        p_team_id_str = str(provider_team_id).strip()
+
     norm_name = normalize_team_name(raw_name)
     if not norm_name:
         return None
@@ -235,14 +243,16 @@ def bootstrap_historical_team_identity(
     else:
         canonical_id = f"{sport}_team_{slug}"
 
-    storage.save_team_identity(
-        sport=sport,
-        canonical_id=canonical_id,
-        provider=provider,
-        provider_team_id=p_team_id_str,
-        normalized_name=norm_name,
-        display_name=raw_name.strip(),
-        league_id=league_id,
-    )
+    # Save provider mapping ONLY if a real provider team ID exists
+    if p_team_id_str:
+        storage.save_team_identity(
+            sport=sport,
+            canonical_id=canonical_id,
+            provider=provider,
+            provider_team_id=p_team_id_str,
+            normalized_name=norm_name,
+            display_name=raw_name.strip(),
+            league_id=league_id,
+        )
 
     return canonical_id
