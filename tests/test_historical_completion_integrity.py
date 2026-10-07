@@ -122,8 +122,9 @@ def test_G_complete_dataset_matching_count_backtest_runs_zero_api_calls(temp_db,
     def fail_call(*args, **kwargs):
         raise AssertionError("api_football must NOT be called during backtest!")
 
-    monkeypatch.setattr(backtest.api_football, "get_league_fixtures", fail_call)
-    monkeypatch.setattr(backtest.api_football, "get_league_fixtures_with_metadata", fail_call)
+    import data_resolver
+    monkeypatch.setattr(data_resolver.api_football, "get_league_fixtures", fail_call)
+    monkeypatch.setattr(data_resolver.api_football, "get_league_fixtures_with_metadata", fail_call)
 
     res = backtest.run_real_backtest(league_id=39, season=2024, sample_size=2, min_prior_matches=1)
     assert res["graded"] > 0

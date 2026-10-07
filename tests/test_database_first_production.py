@@ -100,9 +100,9 @@ def test_single_prior_match_insufficient():
         _sample_fixture_record(302, "2024-09-12T15:00:00+00:00", 2, 10, 1, 0, league_id, season),
     ]
 
-    with patch("api_football.get_team_statistics", return_value=mock_stats) as mock_stats_call, \
-         patch("api_football.get_recent_form", return_value=mock_form), \
-         patch("api_football.get_head_to_head", return_value=[]):
+    with patch("data_resolver.api_football.get_team_statistics", return_value=mock_stats) as mock_stats_call, \
+         patch("data_resolver.api_football.get_recent_form", return_value=mock_form), \
+         patch("data_resolver.api_football.get_head_to_head", return_value=[]):
 
         pred = main.predict_fixture(target_fixture, league_avg_goals=2.5)
 
@@ -145,9 +145,9 @@ def test_both_teams_must_satisfy_minimum_history():
         _sample_fixture_record(302, "2024-09-12T15:00:00+00:00", 2, 10, 1, 0, league_id, season),
     ]
 
-    with patch("api_football.get_team_statistics", return_value=mock_stats) as mock_stats_call, \
-         patch("api_football.get_recent_form", return_value=mock_form), \
-         patch("api_football.get_head_to_head", return_value=[]):
+    with patch("data_resolver.api_football.get_team_statistics", return_value=mock_stats) as mock_stats_call, \
+         patch("data_resolver.api_football.get_recent_form", return_value=mock_form), \
+         patch("data_resolver.api_football.get_head_to_head", return_value=[]):
 
         pred = main.predict_fixture(target_fixture, league_avg_goals=2.5)
 

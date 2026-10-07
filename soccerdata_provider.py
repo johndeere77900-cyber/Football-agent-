@@ -230,29 +230,43 @@ except Exception as exc:
         return "SOURCE_FAILED", [], meta
 
 
-def get_team_historical_matches(team_name, season=None, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT):
+def get_team_historical_matches(team_name, season=None, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None):
     """
     Retrieve team-centric historical matches using available SoccerData sources.
     Iterates over known available MatchHistory leagues if no specific league is supplied.
+    Filters matches using exact canonical team identity resolution via team_identity.py.
 
     Returns tuple: (status_code, matches_list, metadata)
     """
     if not team_name:
         return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata"}
 
-    team_lower = team_name.lower().strip()
+    try:
+        import team_identity
+        req_c_id = team_identity.bootstrap_historical_team_identity(team_name, "soccerdata", None, league_id=league_id)
+    except Exception:
+        req_c_id = None
+
     available_leagues = ['ENG-Premier League', 'ESP-La Liga', 'FRA-Ligue 1', 'GER-Bundesliga', 'ITA-Serie A']
     collected_matches = []
 
     for lcode in available_leagues:
         status, matches, meta = get_match_history_games(lcode, season, timeout_seconds=timeout_seconds)
         if status == "SOURCE_AVAILABLE" and matches:
-            filtered = [
-                m for m in matches
-                if team_lower in m["teams"]["home"]["name"].lower() or team_lower in m["teams"]["away"]["name"].lower()
-            ]
-            if filtered:
-                collected_matches.extend(filtered)
+            for m in matches:
+                h_name = m.get("teams", {}).get("home", {}).get("name", "")
+                a_name = m.get("teams", {}).get("away", {}).get("name", "")
+                try:
+                    h_cid = team_identity.bootstrap_historical_team_identity(h_name, "soccerdata", None, league_id=league_id)
+                    a_cid = team_identity.bootstrap_historical_team_identity(a_name, "soccerdata", None, league_id=league_id)
+                except Exception:
+                    h_cid, a_cid = None, None
+
+                m["canonical_home_id"] = h_cid
+                m["canonical_away_id"] = a_cid
+
+                if req_c_id and (h_cid == req_c_id or a_cid == req_c_id):
+                    collected_matches.append(m)
 
     if collected_matches:
         return "SOURCE_AVAILABLE", collected_matches, {"status": "SOURCE_AVAILABLE", "count": len(collected_matches), "source": "soccerdata_match_history"}

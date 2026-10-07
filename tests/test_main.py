@@ -1,6 +1,7 @@
 import pytest
 
 import config
+import data_resolver
 import main
 
 
@@ -74,6 +75,7 @@ def recent_matches(team_id):
 
     return [
         {
+            "fixture": {"id": 1001, "date": "2024-01-10T15:00:00+00:00", "status": {"short": "FT"}},
             "teams": {
                 "home": {
                     "id": team_id,
@@ -88,6 +90,7 @@ def recent_matches(team_id):
             },
         },
         {
+            "fixture": {"id": 1002, "date": "2024-01-12T15:00:00+00:00", "status": {"short": "FT"}},
             "teams": {
                 "home": {
                     "id": other,
@@ -107,6 +110,7 @@ def recent_matches(team_id):
 def h2h_matches():
     return [
         {
+            "fixture": {"id": 2001, "date": "2024-01-10T15:00:00+00:00", "status": {"short": "FT"}},
             "teams": {
                 "home": {
                     "id": 1,
@@ -121,6 +125,7 @@ def h2h_matches():
             },
         },
         {
+            "fixture": {"id": 2002, "date": "2024-01-12T15:00:00+00:00", "status": {"short": "FT"}},
             "teams": {
                 "home": {
                     "id": 2,
@@ -139,21 +144,21 @@ def h2h_matches():
 
 def patch_prediction_dependencies(monkeypatch):
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_team_statistics",
         lambda team_id, league_id, season:
         team_stats(),
     )
 
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_recent_form",
-        lambda team_id, last:
+        lambda team_id, last, **kwargs:
         recent_matches(team_id),
     )
 
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_head_to_head",
         lambda home_id, away_id, last:
         h2h_matches(),
@@ -319,7 +324,7 @@ def test_missing_one_season_team_is_insufficient(
     football_fixture,
 ):
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_team_statistics",
         lambda team_id, league_id, season:
         team_stats()
@@ -345,20 +350,20 @@ def test_missing_recent_history_is_insufficient(
     football_fixture,
 ):
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_team_statistics",
         lambda team_id, league_id, season:
         team_stats(),
     )
 
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_recent_form",
-        lambda team_id, last: [],
+        lambda team_id, last, **kwargs: [],
     )
 
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_head_to_head",
         lambda home_id, away_id, last: [],
     )
@@ -620,7 +625,7 @@ def test_missing_card_data_does_not_create_fabricated_cards_market(
         return stats
 
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_team_statistics",
         lambda team_id, league_id, season:
         stats_without_cards(),
@@ -858,7 +863,7 @@ def test_run_daily_rejects_disallowed_explicit_league(
         )
 
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_fixtures_by_date",
         fail_if_called,
     )
@@ -913,7 +918,7 @@ def test_run_daily_does_not_hide_programming_errors(
     )
 
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_fixtures_by_date",
         lambda *args: [
             {
@@ -1056,11 +1061,15 @@ def test_current_team_feature_uses_per_match_averages():
 def test_recent_feature_uses_average_goals_per_match(
     monkeypatch,
 ):
+    import team_identity
+    team_identity.bootstrap_historical_team_identity("Team 1", "api_football", 1)
+
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_recent_form",
-        lambda team_id, last: [
+        lambda team_id, last, **kwargs: [
             {
+                "fixture": {"id": 101, "date": "2024-01-10T15:00:00+00:00", "status": {"short": "FT"}},
                 "teams": {
                     "home": {"id": 1},
                     "away": {"id": 99},
@@ -1071,6 +1080,7 @@ def test_recent_feature_uses_average_goals_per_match(
                 },
             },
             {
+                "fixture": {"id": 102, "date": "2024-01-12T15:00:00+00:00", "status": {"short": "FT"}},
                 "teams": {
                     "home": {"id": 99},
                     "away": {"id": 1},
@@ -1081,6 +1091,7 @@ def test_recent_feature_uses_average_goals_per_match(
                 },
             },
             {
+                "fixture": {"id": 103, "date": "2024-01-14T15:00:00+00:00", "status": {"short": "FT"}},
                 "teams": {
                     "home": {"id": 1},
                     "away": {"id": 98},
@@ -1114,11 +1125,16 @@ def test_recent_feature_uses_average_goals_per_match(
 def test_h2h_feature_uses_average_goals_per_meeting(
     monkeypatch,
 ):
+    import team_identity
+    team_identity.bootstrap_historical_team_identity("Team 1", "api_football", 1)
+    team_identity.bootstrap_historical_team_identity("Team 2", "api_football", 2)
+
     monkeypatch.setattr(
-        main.api_football,
+        data_resolver.api_football,
         "get_head_to_head",
         lambda home_id, away_id, last: [
             {
+                "fixture": {"id": 201, "date": "2024-01-10T15:00:00+00:00", "status": {"short": "FT"}},
                 "teams": {
                     "home": {"id": 1},
                     "away": {"id": 2},
@@ -1129,6 +1145,7 @@ def test_h2h_feature_uses_average_goals_per_meeting(
                 },
             },
             {
+                "fixture": {"id": 202, "date": "2024-01-12T15:00:00+00:00", "status": {"short": "FT"}},
                 "teams": {
                     "home": {"id": 2},
                     "away": {"id": 1},
@@ -1139,6 +1156,7 @@ def test_h2h_feature_uses_average_goals_per_meeting(
                 },
             },
             {
+                "fixture": {"id": 203, "date": "2024-01-14T15:00:00+00:00", "status": {"short": "FT"}},
                 "teams": {
                     "home": {"id": 1},
                     "away": {"id": 2},

@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 import requests
 
 from data_resolver import DataResolver, APIFootballError, APIFootballQuotaExhaustedError
-import api_football
 import backtest
 import basketball_api
 import basketball_model
@@ -648,7 +647,14 @@ def _recent_feature(
         home_id = home.get("id")
         away_id = away.get("id")
 
-        if home_id == team_id or (team_name and team_name.lower() in str(home.get("name", "")).lower()):
+        import team_identity
+        home_name = home.get("name", "")
+        away_name = away.get("name", "")
+
+        is_home = (home_id is not None and str(home_id) == str(team_id)) or (team_name and team_identity.normalize_team_name(team_name) == team_identity.normalize_team_name(home_name))
+        is_away = (away_id is not None and str(away_id) == str(team_id)) or (team_name and team_identity.normalize_team_name(team_name) == team_identity.normalize_team_name(away_name))
+
+        if is_home:
             goals_for.append(
                 float(home_goals)
             )
@@ -656,7 +662,7 @@ def _recent_feature(
                 float(away_goals)
             )
 
-        elif away_id == team_id or (team_name and team_name.lower() in str(away.get("name", "")).lower()):
+        elif is_away:
             goals_for.append(
                 float(away_goals)
             )
@@ -2020,7 +2026,7 @@ def run_grading():
     """
     Grade all pending football predictions whose fixtures have finished.
 
-    Uses batched API requests (batch_size=20) via api_football.get_enriched_fixtures
+    Uses batched API requests (batch_size=20) via DataResolver.get_enriched_fixtures
     to minimize API credit consumption.
     """
     storage.init_db()

@@ -529,6 +529,10 @@ def test_main_h2h_temporal_filtering_rules():
         {"fixture": {"id": 5, "date": "invalid_date_string"}, "teams": {"home": {"id": 10}, "away": {"id": 20}}, "goals": {"home": 2, "away": 2}},
     ]
 
+    import team_identity
+    team_identity.bootstrap_historical_team_identity("Team 10", "api_football", 10)
+    team_identity.bootstrap_historical_team_identity("Team 20", "api_football", 20)
+
     with patch("api_football.get_head_to_head", return_value=h2h_matches):
         feature = main._h2h_feature(10, 20, last=6, fixture_date=fixture_date)
 

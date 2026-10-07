@@ -146,9 +146,10 @@ def test_canonical_backtest_with_complete_dataset_zero_api_calls(tmp_path, monke
     def fail_if_called(*args, **kwargs):
         raise AssertionError("API-Football should NOT be called during canonical backtest!")
 
-    monkeypatch.setattr(backtest.api_football, "get_league_fixtures", fail_if_called)
-    monkeypatch.setattr(backtest.api_football, "get_league_fixtures_with_metadata", fail_if_called)
-    monkeypatch.setattr(backtest.api_football, "get_enriched_fixtures", fail_if_called)
+    import data_resolver
+    monkeypatch.setattr(data_resolver.api_football, "get_league_fixtures", fail_if_called)
+    monkeypatch.setattr(data_resolver.api_football, "get_league_fixtures_with_metadata", fail_if_called)
+    monkeypatch.setattr(data_resolver.api_football, "get_enriched_fixtures", fail_if_called)
 
     res = backtest.run_real_backtest(
         league_id=39,
