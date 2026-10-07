@@ -212,11 +212,42 @@ def test_B_api_error_falls_back_to_football_data(mock_api_fb, mock_fd, mock_sd):
     assert res["fixtures"][0]["provider_provenance"]["provider"] == "football_data_org"
 
 
-# Test C — secondary failure -> SoccerData
+# Test C — API-Football empty historical response -> fallback
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_C_secondary_failure_falls_back_to_soccerdata(mock_api_fb, mock_fd, mock_sd):
+def test_C_api_empty_response_falls_back_to_football_data(mock_api_fb, mock_fd, mock_sd):
+    mock_api_fb.return_value = {"fixtures": [], "expected_pages": 1, "current_page": 1}
+    mock_fd.return_value = {
+        "matches": [
+            {
+                "id": 1003,
+                "utcDate": "2024-08-19T14:00:00Z",
+                "status": "FINISHED",
+                "competition": {"name": "Premier League", "code": "PL"},
+                "season": {"startDate": "2024-08-01"},
+                "homeTeam": {"id": 10, "name": "Arsenal FC", "shortName": "Arsenal"},
+                "awayTeam": {"id": 20, "name": "Chelsea FC", "shortName": "Chelsea"},
+                "score": {"fullTime": {"home": 2, "away": 1}},
+            }
+        ],
+        "metadata": {"count": 1, "played": 1},
+    }
+
+    resolver = DataResolver()
+    res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
+
+    assert res["source"] == "football_data_org"
+    assert len(res["fixtures"]) == 1
+    assert res["fixtures"][0]["fixture"]["id"] == 1003
+    assert res["fixtures"][0]["provider_provenance"]["provider"] == "football_data_org"
+
+
+# Test D — Secondary failure -> SoccerData
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_D_secondary_failure_falls_back_to_soccerdata(mock_api_fb, mock_fd, mock_sd):
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
     mock_fd.side_effect = football_data_api.FootballDataAPIError("Secondary error")
     mock_sd.return_value = (
@@ -242,11 +273,48 @@ def test_C_secondary_failure_falls_back_to_soccerdata(mock_api_fb, mock_fd, mock
     assert res["fixtures"][0]["provider_provenance"]["provider"] == "soccerdata"
 
 
-# Test D — provider-neutral completion
+# Test E — Fallback complete
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_D_provider_neutral_completion_with_fallback_provider(mock_api_fb, mock_fd, mock_sd):
+def test_E_fallback_complete_metadata_marks_dataset_complete(mock_api_fb, mock_fd, mock_sd):
+    import historical_sync
+
+    mock_api_fb.side_effect = api_football.APIFootballQuotaExhaustedError("Quota exhausted")
+    matches = [
+        {
+            "id": 2000 + i,
+            "utcDate": "2024-08-17T14:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Premier League", "code": "PL"},
+            "season": {"startDate": "2024-08-01"},
+            "homeTeam": {"id": (i % 20) + 1, "name": f"Team {(i % 20) + 1}"},
+            "awayTeam": {"id": ((i + 1) % 20) + 1, "name": f"Team {((i + 1) % 20) + 1}"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }
+        for i in range(380)
+    ]
+    mock_fd.return_value = {
+        "matches": matches,
+        "metadata": {"count": 380, "played": 380},
+    }
+
+    report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    assert report["status"] == "COMPLETE"
+    assert report["acquisition_complete"] is True
+    assert report["valid_fixtures"] == 380
+
+    status = storage.get_historical_dataset_status(39, 2024)
+    assert status["status"] == "COMPLETE"
+    assert status["acquisition_complete"] is True
+
+
+# Test F — Fallback partial
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_F_fallback_partial_metadata_marks_dataset_incomplete(mock_api_fb, mock_fd, mock_sd):
     import historical_sync
 
     mock_api_fb.side_effect = api_football.APIFootballQuotaExhaustedError("Quota exhausted")
@@ -263,19 +331,14 @@ def test_D_provider_neutral_completion_with_fallback_provider(mock_api_fb, mock_
                 "score": {"fullTime": {"home": 2, "away": 1}},
             }
         ],
-        "metadata": {"count": 1, "played": 1},
+        "metadata": {"count": 1, "played": 1, "is_partial": True},
     }
 
     report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
-    assert report["status"] == "COMPLETE"
-    assert report["acquisition_complete"] is True
-    assert report["valid_fixtures"] == 1
+    assert report["status"] == "INCOMPLETE"
+    assert report["acquisition_complete"] is False
 
     status = storage.get_historical_dataset_status(39, 2024)
-    assert status["status"] == "COMPLETE"
-    assert status["acquisition_complete"] is True
-
-    stored = storage.get_historical_fixtures(39, 2024)
-    assert len(stored) == 1
-    assert stored[0]["provider_provenance"]["provider"] == "football_data_org"
+    assert status["status"] == "INCOMPLETE"
+    assert status["acquisition_complete"] is False

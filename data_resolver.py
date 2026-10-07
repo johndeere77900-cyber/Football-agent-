@@ -1320,29 +1320,34 @@ class DataResolver:
                         except Exception as sd_exc:
                             logger.warning(f"DataResolver tertiary get_league_fixtures_page failed for league {league_id}: {sd_exc}")
 
-            reconciled = []
-            for pf in primary_fixtures:
-                matching_fd = [m for m in fd_matches if _strict_fixture_match(pf, m)]
-                matching_sd = [m for m in sd_matches if _strict_fixture_match(pf, m)]
-                candidates = [pf] + matching_fd + matching_sd
-                merged = reconcile_fixture_records(candidates)
-                reconciled.append(merged or pf)
+                reconciled = []
+                for pf in primary_fixtures:
+                    matching_fd = [m for m in fd_matches if _strict_fixture_match(pf, m)]
+                    matching_sd = [m for m in sd_matches if _strict_fixture_match(pf, m)]
+                    candidates = [pf] + matching_fd + matching_sd
+                    merged = reconcile_fixture_records(candidates)
+                    reconciled.append(merged or pf)
 
-            return {
-                "fixtures": reconciled,
-                "expected_pages": primary_page.get("expected_pages", 1),
-                "current_page": primary_page.get("current_page", page),
-                "source": "api_football",
-            }
+                return {
+                    "fixtures": reconciled,
+                    "expected_pages": primary_page.get("expected_pages", 1),
+                    "current_page": primary_page.get("current_page", page),
+                    "source": "api_football",
+                }
 
         # If primary provider failed, was quota exhausted, or returned 0 fixtures:
         # Fallback 1: football-data.org
         fd_matches = []
+        fd_meta = {}
         comp_code = LEAGUE_TO_FD_CODE.get(league_id)
         if comp_code:
             try:
                 fd_res = football_data_api.get_competition_matches(comp_code, season=season)
-                matches = fd_res.get("matches", []) if isinstance(fd_res, dict) else (fd_res if isinstance(fd_res, list) else [])
+                if isinstance(fd_res, dict):
+                    matches = fd_res.get("matches", [])
+                    fd_meta = fd_res.get("metadata", {}) or {}
+                else:
+                    matches = fd_res if isinstance(fd_res, list) else []
                 fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
             except Exception as fd_exc:
                 logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
@@ -1353,18 +1358,21 @@ class DataResolver:
                 "expected_pages": 1,
                 "current_page": 1,
                 "source": "football_data_org",
+                "provider_metadata": fd_meta,
                 "primary_failed": primary_failed,
                 "primary_quota_exhausted": primary_quota_exhausted,
             }
 
         # Fallback 2: SoccerData
         sd_matches = []
+        sd_meta = {}
         sd_code = LEAGUE_TO_SD_CODE.get(league_id)
         if sd_code:
             try:
-                sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_code, season)
+                sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_code, season)
                 if sd_status == "SOURCE_AVAILABLE" and sd_games:
                     sd_matches = sd_games
+                    sd_meta = sd_meta_res or {}
             except Exception as sd_exc:
                 logger.warning(f"DataResolver tertiary fallback get_league_fixtures_page failed for league {league_id}: {sd_exc}")
 
@@ -1374,6 +1382,7 @@ class DataResolver:
                 "expected_pages": 1,
                 "current_page": 1,
                 "source": "soccerdata",
+                "provider_metadata": sd_meta,
                 "primary_failed": primary_failed,
                 "primary_quota_exhausted": primary_quota_exhausted,
             }
