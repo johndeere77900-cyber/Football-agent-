@@ -3146,6 +3146,448 @@ def run_basketball_backtest(
 
 
 # ---------------------------------------------------------------------------
+# Rolling window backtest runner
+# ---------------------------------------------------------------------------
+
+
+def run_rolling_backtest_window(
+    league_id: Any,
+    seasons: Sequence[int] = (2024, 2025, 2026),
+    sample_size: int = 30,
+    min_prior_matches: int = 5,
+    sample_seed: Optional[int] = 42,
+    enrich_statistics: bool = False,
+) -> Dict[str, Any]:
+    """
+    Run a rolling-window historical backtest over 2024-2026 completed fixtures.
+    """
+    if (
+        isinstance(league_id, bool)
+        or not isinstance(league_id, int)
+    ):
+        raise ValueError("league_id must be an integer.")
+
+    if not isinstance(seasons, (list, tuple)) or not seasons:
+        raise ValueError("seasons must be a non-empty sequence of integer years.")
+
+    allowed_rolling_seasons = {2024, 2025, 2026}
+    for s in seasons:
+        if (
+            isinstance(s, bool)
+            or not isinstance(s, int)
+            or s not in allowed_rolling_seasons
+        ):
+            raise ValueError(
+                f"Invalid season {s} for rolling-window backtest. "
+                "Only seasons from (2024, 2025, 2026) are allowed."
+            )
+
+    if (
+        isinstance(sample_size, bool)
+        or not isinstance(sample_size, int)
+        or sample_size <= 0
+    ):
+        raise ValueError("sample_size must be a positive integer.")
+
+    if (
+        isinstance(min_prior_matches, bool)
+        or not isinstance(min_prior_matches, int)
+        or min_prior_matches < 0
+    ):
+        raise ValueError("min_prior_matches must be a non-negative integer.")
+
+    if enrich_statistics not in (True, False):
+        raise ValueError("enrich_statistics must be a boolean.")
+
+    if sample_seed is not None and (
+        isinstance(sample_seed, bool) or not isinstance(sample_seed, int)
+    ):
+        raise ValueError("sample_seed must be an integer or None.")
+
+    seasons_sorted = sorted(list(set(seasons)))
+    season_start = seasons_sorted[0]
+    season_end = seasons_sorted[-1]
+
+    season_statuses: Dict[int, Dict[str, Any]] = {}
+    all_raw_fixtures: List[Dict[str, Any]] = []
+
+    for s in seasons_sorted:
+        s_fixtures = storage.get_historical_fixtures(league_id, s)
+        if not isinstance(s_fixtures, list):
+            s_fixtures = []
+
+        season_statuses[s] = {
+            "status": "AVAILABLE" if s_fixtures else "EMPTY",
+            "fixture_count": len(s_fixtures),
+        }
+        all_raw_fixtures.extend([f for f in s_fixtures if isinstance(f, dict)])
+
+    # Deduplicate fixtures by stable identity (source, fixture_id)
+    seen_identities = set()
+    combined_fixtures: List[Dict[str, Any]] = []
+
+    for f in all_raw_fixtures:
+        fid = _fixture_id(f)
+        source = f.get("source", "api_football")
+        key = (source, str(fid)) if fid is not None else id(f)
+        if key not in seen_identities:
+            seen_identities.add(key)
+            combined_fixtures.append(f)
+
+    # Sort combined fixtures chronologically by kickoff
+    combined_fixtures.sort(
+        key=lambda f: time_utils.parse_utc_datetime(_fixture_date(f))
+        or datetime.min.replace(tzinfo=timezone.utc)
+    )
+
+    # Candidates must be strictly finished AND gradeable fixtures
+    finished = [
+        f for f in combined_fixtures
+        if _is_finished(f) and _fixture_is_gradeable(f)
+    ]
+
+    finished.sort(
+        key=lambda f: time_utils.parse_utc_datetime(_fixture_date(f))
+        or datetime.min.replace(tzinfo=timezone.utc)
+    )
+
+    eligible = _filter_candidates_by_minimum_history(
+        finished,
+        combined_fixtures,
+        minimum_matches=min_prior_matches,
+    )
+
+    selected = _sample_backtest_candidates(
+        eligible,
+        sample_size,
+        seed=sample_seed,
+    )
+
+    selected.sort(
+        key=lambda f: time_utils.parse_utc_datetime(_fixture_date(f))
+        or datetime.min.replace(tzinfo=timezone.utc)
+    )
+
+    enriched_by_id: Dict[str, Dict[str, Any]] = {}
+    statistics_enriched = False
+    statistical_data_available = {"corners": 0, "cards": 0}
+
+    if enrich_statistics and selected:
+        statistics_enriched = True
+        fixture_ids = [
+            _fixture_id(f)
+            for f in selected
+            if _fixture_id(f) is not None
+        ]
+        enriched = storage.get_historical_enrichment(fixture_ids)
+        if isinstance(enriched, dict):
+            for key, value in enriched.items():
+                if isinstance(value, dict):
+                    enriched_by_id[_fixture_lookup_key(key)] = value
+
+    log: List[Dict[str, Any]] = []
+    market_summary = _new_market_summary()
+    prior_raw_predictions_by_id: Dict[Any, Dict[str, Any]] = {}
+
+    correct = 0
+    graded = 0
+
+    for candidate in selected:
+        fixture_id = _fixture_id(candidate)
+        cutoff = _fixture_date(candidate)
+        candidate_season = candidate.get("league", {}).get("season") or season_end
+
+        for prev_f in finished:
+            prev_date = _fixture_date(prev_f)
+            if not time_utils.is_strictly_before(prev_date, cutoff):
+                break
+            prev_id = _fixture_id(prev_f)
+            if prev_id not in prior_raw_predictions_by_id:
+                prev_hist = _historical_prediction_for_fixture(
+                    combined_fixtures,
+                    prev_f,
+                    min_prior_matches=min_prior_matches,
+                    calibrator=None,
+                    league_id=league_id,
+                    season=candidate_season,
+                )
+                if prev_hist is not None:
+                    prev_pred = prev_hist["prediction"]
+                    prev_act = _actual_match_result(prev_f)
+                    if prev_act in ("home_win", "draw", "away_win") and isinstance(prev_pred, dict):
+                        prior_raw_predictions_by_id[prev_id] = {
+                            "fixture_id": prev_id,
+                            "game_id": prev_id,
+                            "raw_probabilities": prev_pred.get("raw_probabilities", {}),
+                            "actual": prev_act,
+                            "timestamp": prev_date,
+                        }
+
+        calibrator = calibration.train_walk_forward_calibrator(
+            list(prior_raw_predictions_by_id.values()),
+            cutoff,
+            sport="football",
+        )
+
+        enriched_fixture = (
+            enriched_by_id.get(_fixture_lookup_key(fixture_id))
+            if fixture_id is not None
+            else None
+        )
+
+        fixture_for_stats = _merge_enriched_fixture(
+            candidate,
+            enriched_fixture,
+        )
+
+        historical = _historical_prediction_for_fixture(
+            combined_fixtures,
+            candidate,
+            min_prior_matches=min_prior_matches,
+            calibrator=calibrator,
+            league_id=league_id,
+            season=candidate_season,
+        )
+
+        if historical is None:
+            continue
+
+        prediction = historical["prediction"]
+        prediction_markets = prediction.get("markets", {})
+        market_result = _grade_prediction_markets(
+            prediction_markets,
+            candidate,
+        )
+
+        selected_markets = market_result["selected"]
+        primary = selected_markets.get("match_result")
+        primary_won = primary.get("won") if isinstance(primary, dict) else None
+
+        if primary_won is not None:
+            graded += 1
+            if primary_won:
+                correct += 1
+
+        _update_market_summary(
+            market_summary,
+            selected_markets,
+        )
+
+        statistical_actuals = _statistical_actuals(fixture_for_stats)
+        if statistical_actuals["corners"]:
+            statistical_data_available["corners"] += 1
+        if statistical_actuals["cards"]:
+            statistical_data_available["cards"] += 1
+
+        match_result = _actual_match_result(candidate)
+        if match_result in ("home_win", "draw", "away_win") and fixture_id is not None:
+            prior_raw_predictions_by_id[fixture_id] = {
+                "fixture_id": fixture_id,
+                "game_id": fixture_id,
+                "raw_probabilities": prediction.get("raw_probabilities", {}),
+                "actual": match_result,
+                "timestamp": cutoff,
+            }
+
+        predicted = primary.get("pick") if isinstance(primary, dict) else None
+        qg_decision = prediction.get("quality_gate") or prediction.get("quality_gate_result", {}).get("decision", "PASS")
+        calib_status = prediction.get("calibration_metadata", {}).get("calibration_status", "UNAVAILABLE")
+
+        prior_outcomes = []
+        for prev_f in finished:
+            prev_date = _fixture_date(prev_f)
+            if not time_utils.is_strictly_before(prev_date, cutoff):
+                break
+            prev_act = _actual_match_result(prev_f)
+            if prev_act in ("home_win", "draw", "away_win"):
+                prior_outcomes.append(prev_act)
+
+        if prior_outcomes:
+            n_p = len(prior_outcomes)
+            prior_dist_1x2 = {
+                "home_win": prior_outcomes.count("home_win") / n_p,
+                "draw": prior_outcomes.count("draw") / n_p,
+                "away_win": prior_outcomes.count("away_win") / n_p,
+            }
+        else:
+            prior_dist_1x2 = {"home_win": 1.0 / 3.0, "draw": 1.0 / 3.0, "away_win": 1.0 / 3.0}
+
+        entry = {
+            "fixture_id": fixture_id,
+            "match": f"{_home_name(candidate)} vs {_away_name(candidate)}",
+            "date": _fixture_date(candidate),
+            "home_team": _home_name(candidate),
+            "away_team": _away_name(candidate),
+            "correct": bool(primary_won) if primary_won is not None else False,
+            "predicted": predicted,
+            "actual": match_result,
+            "quality_gate": qg_decision,
+            "calibration_status": calib_status,
+            "prior_empirical_distribution": prior_dist_1x2,
+            "probabilities": prediction_markets.get("match_result", {}),
+            "market_grading": {
+                "selected": selected_markets,
+                "outcomes": market_result["outcomes"],
+                "statistical_actuals": statistical_actuals,
+            },
+            "prediction": prediction,
+            "historical_features": {
+                "historical_snapshot": historical["historical_snapshot"],
+                "recent_snapshot": historical["recent_snapshot"],
+                "h2h_snapshot": historical["h2h_snapshot"],
+                "elo_snapshot": historical["elo_snapshot"],
+                "league_avg_goals": historical["league_avg_goals"],
+            },
+        }
+
+        log.append(entry)
+
+    sampling_info = {
+        "total_eligible_population": len(eligible),
+        "selected_sample": len(selected),
+        "sample_seed": sample_seed,
+        "sampling_mode": "FULL" if len(selected) >= len(eligible) else "RANDOM_SAMPLED",
+        "evaluation_coverage": round(len(selected) / len(eligible), 4) if len(eligible) > 0 else 0.0,
+        "is_sampled": len(selected) < len(eligible),
+    }
+
+    all_eval = evaluate_football_log_group(log)
+    signal_log = [e for e in log if e.get("quality_gate") == "SIGNAL"]
+    pass_log = [e for e in log if e.get("quality_gate") == "PASS"]
+
+    signal_eval = evaluate_football_log_group(signal_log)
+    pass_eval = evaluate_football_log_group(pass_log)
+
+    diagnostics = compute_stability_diagnostics(log, sport="football")
+
+    evaluation = dict(all_eval["markets"])
+    evaluation["groups"] = {
+        "all": all_eval,
+        "signal": signal_eval,
+        "pass": pass_eval,
+    }
+    evaluation["all"] = all_eval
+    evaluation["signal"] = signal_eval
+    evaluation["pass"] = pass_eval
+    evaluation["sampling"] = sampling_info
+    evaluation["diagnostics"] = diagnostics
+    evaluation["baselines"] = all_eval.get("baselines", {})
+
+    brier_score = evaluation["match_result"]["brier_score"]
+    log_loss = evaluation["match_result"]["log_loss"]
+    match_result_calibration = evaluation["match_result"]["calibration"]
+
+    result = {
+        "league_id": league_id,
+        "seasons_evaluated": seasons_sorted,
+        "evaluation_mode": "rolling_window",
+        "fixture_selection": "completed_fixtures",
+        "fixtures_fetched": len(combined_fixtures),
+        "finished_fixtures": len(finished),
+        "eligible_candidates": len(eligible),
+        "requested_sample": sample_size,
+        "selected": len(selected),
+        "sample_size": min(sample_size, len(selected)),
+        "graded": graded,
+        "correct": correct,
+        "accuracy": correct / graded if graded else 0.0,
+        "brier_score": brier_score,
+        "log_loss": log_loss,
+        "calibration": match_result_calibration,
+        "evaluation": evaluation,
+        "sampling": sampling_info,
+        "diagnostics": diagnostics,
+        "min_prior_matches": min_prior_matches,
+        "sample_seed": sample_seed,
+        "statistics_enriched": statistics_enriched,
+        "statistical_data_available": statistical_data_available,
+        "market_summary": market_summary,
+        "season_statuses": season_statuses,
+        "log": log,
+    }
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    log_path = BACKTEST_LOG_DIR / f"backtest_rolling_{league_id}_{season_start}_{season_end}_{timestamp}.json"
+
+    try:
+        log_path.write_text(
+            json.dumps(
+                result,
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            ),
+            encoding="utf-8",
+        )
+        result["log_path"] = str(log_path)
+    except OSError:
+        result["log_path"] = None
+
+    _print_backtest_report(result)
+
+    try:
+        run_id = f"football_rolling_{league_id}_{season_start}_{season_end}_{timestamp}"
+        run_data = {
+            "run_id": run_id,
+            "sport": "football",
+            "league_id": league_id,
+            "season": season_end,
+            "season_start": season_start,
+            "season_end": season_end,
+            "evaluation_mode": "rolling_window",
+            "fixture_selection": "completed_fixtures",
+            "dataset_identity": f"football_{league_id}_rolling_{season_start}_{season_end}",
+            "model_version": getattr(config, "MODEL_VERSION", "v3.0.0"),
+            "feature_version": getattr(config, "FEATURE_VERSION", "v3.0.0"),
+            "calibration_version": getattr(config, "CALIBRATION_VERSION", "v3.0.0"),
+            "dataset_fixture_count": len(combined_fixtures),
+            "sample_size": sample_size,
+            "min_prior_matches": min_prior_matches,
+            "sample_seed": sample_seed,
+            "selected_count": len(selected),
+            "graded_count": graded,
+            "accuracy": result["accuracy"],
+            "brier_score": brier_score,
+            "log_loss": log_loss,
+            "ece": match_result_calibration.get("ece") if isinstance(match_result_calibration, dict) else None,
+            "enrichment_status": "NONE",
+            "started_at": timestamp,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "evaluation_json": evaluation,
+            "code_version": "authoritative",
+        }
+        market_metrics = []
+        for m_key in ("match_result", "double_chance", "over_under_2_5", "btts"):
+            m_eval = evaluation.get(m_key, {})
+            if isinstance(m_eval, dict):
+                s_cnt = m_eval.get("sample_count", graded)
+                acc_val = m_eval.get("accuracy")
+                br_val = m_eval.get("brier_score")
+                ll_val = m_eval.get("log_loss")
+                ece_val = m_eval.get("calibration", {}).get("ece") if isinstance(m_eval.get("calibration"), dict) else None
+                market_metrics.append({
+                    "market_key": m_key,
+                    "sample_count": s_cnt,
+                    "accuracy": acc_val,
+                    "brier_score": br_val,
+                    "log_loss": ll_val,
+                    "ece": ece_val,
+                    "metrics_json": m_eval,
+                })
+        storage.save_backtest_run(run_data, market_metrics)
+        result["status"] = "COMPLETED"
+        result["persisted"] = True
+        result["persistence_error"] = None
+    except Exception as exc:
+        result["status"] = "PERSISTENCE_FAILED"
+        result["persisted"] = False
+        result["persistence_error"] = str(exc)
+        print(f"ERROR: Could not persist rolling backtest experiment record: {exc}", flush=True)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Multi-season backtest runner
 # ---------------------------------------------------------------------------
 
