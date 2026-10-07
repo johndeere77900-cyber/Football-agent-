@@ -246,6 +246,47 @@ def init_db():
                     )
                     """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS prediction_snapshots (
+                        id BIGSERIAL PRIMARY KEY,
+                        fixture_id BIGINT NOT NULL,
+                        prediction_timestamp TEXT NOT NULL,
+                        kickoff_at TEXT,
+                        sport TEXT NOT NULL DEFAULT 'football',
+                        league_id BIGINT,
+                        season INTEGER,
+                        canonical_home_id TEXT,
+                        canonical_away_id TEXT,
+                        home_team TEXT,
+                        away_team TEXT,
+                        prediction_context TEXT NOT NULL DEFAULT 'PRE_MATCH',
+                        model_version TEXT,
+                        feature_version TEXT,
+                        calibration_version TEXT,
+                        data_cutoff_timestamp TEXT,
+                        markets_json JSONB NOT NULL,
+                        features_json JSONB,
+                        confidence_json JSONB,
+                        quality_gate TEXT,
+                        reason_codes_json JSONB,
+                        odds_comparison_json JSONB,
+                        edge DOUBLE PRECISION,
+                        ev DOUBLE PRECISION,
+                        uncertainty_state TEXT,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_fid_ts ON prediction_snapshots (fixture_id, prediction_timestamp)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_lg_kickoff ON prediction_snapshots (league_id, kickoff_at)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_sp_kickoff ON prediction_snapshots (sport, kickoff_at)"
+                )
                 cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS model_version TEXT")
                 cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS feature_version TEXT")
                 cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS calibration_version TEXT")
@@ -636,6 +677,47 @@ def init_db():
                     created_at TEXT
                 )
                 """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS prediction_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fixture_id INTEGER NOT NULL,
+                    prediction_timestamp TEXT NOT NULL,
+                    kickoff_at TEXT,
+                    sport TEXT NOT NULL DEFAULT 'football',
+                    league_id INTEGER,
+                    season INTEGER,
+                    canonical_home_id TEXT,
+                    canonical_away_id TEXT,
+                    home_team TEXT,
+                    away_team TEXT,
+                    prediction_context TEXT NOT NULL DEFAULT 'PRE_MATCH',
+                    model_version TEXT,
+                    feature_version TEXT,
+                    calibration_version TEXT,
+                    data_cutoff_timestamp TEXT,
+                    markets_json TEXT NOT NULL,
+                    features_json TEXT,
+                    confidence_json TEXT,
+                    quality_gate TEXT,
+                    reason_codes_json TEXT,
+                    odds_comparison_json TEXT,
+                    edge REAL,
+                    ev REAL,
+                    uncertainty_state TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_fid_ts ON prediction_snapshots (fixture_id, prediction_timestamp)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_lg_kickoff ON prediction_snapshots (league_id, kickoff_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_sp_kickoff ON prediction_snapshots (sport, kickoff_at)"
             )
             _ensure_column_sqlite(conn, "predictions", "home_team_id", "INTEGER")
             _ensure_column_sqlite(conn, "predictions", "away_team_id", "INTEGER")
@@ -1447,6 +1529,138 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
         }
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def save_prediction_snapshot(
+    fixture_id,
+    prediction_timestamp=None,
+    kickoff_at=None,
+    sport="football",
+    league_id=None,
+    season=None,
+    canonical_home_id=None,
+    canonical_away_id=None,
+    home_team=None,
+    away_team=None,
+    prediction_context="PRE_MATCH",
+    model_version=None,
+    feature_version=None,
+    calibration_version=None,
+    data_cutoff_timestamp=None,
+    markets=None,
+    features=None,
+    confidence=None,
+    quality_gate=None,
+    reason_codes=None,
+    odds_comparison=None,
+    edge=None,
+    ev=None,
+    uncertainty_state=None,
+    prediction_record=None,
+):
+    """
+    Save an immutable prediction snapshot into prediction_snapshots table.
+
+    Does NOT enforce unique constraint on fixture_id so multiple predictions
+    for the same fixture are archived over time.
+    """
+    fixture_id = _validate_positive_int(fixture_id, "fixture_id")
+    now_str = _utc_now()
+    if prediction_timestamp is None:
+        prediction_timestamp = now_str
+
+    sport = _validate_text(sport or "football", "sport").lower()
+    league_id = _validate_optional_positive_int(league_id, "league_id")
+    season = _validate_optional_positive_int(season, "season")
+
+    rec = prediction_record if isinstance(prediction_record, dict) else {}
+
+    model_version = model_version or rec.get("model_version") or getattr(config, "MODEL_VERSION", "v3.0.0")
+    feature_version = feature_version or rec.get("feature_version") or getattr(config, "FEATURE_VERSION", "v3.0.0")
+    calibration_version = calibration_version or rec.get("calibration_version") or getattr(config, "CALIBRATION_VERSION", "v3.0.0")
+    quality_gate = quality_gate or rec.get("quality_gate") or "PASS"
+    reason_codes = reason_codes if reason_codes is not None else rec.get("reason_codes", [])
+    edge = edge if edge is not None else rec.get("edge")
+    ev = ev if ev is not None else rec.get("ev")
+    uncertainty_state = uncertainty_state or (rec.get("uncertainty", {}).get("state") if isinstance(rec.get("uncertainty"), dict) else None)
+
+    markets_data = markets or rec.get("markets") or rec.get("raw_probabilities") or {}
+    markets_json_str = _json_dumps(markets_data, "markets")
+    features_json_str = _json_dumps(features, "features") if features is not None else (_json_dumps(rec.get("feature_snapshot"), "features") if rec.get("feature_snapshot") else None)
+    confidence_json_str = _json_dumps(confidence, "confidence") if confidence is not None else (_json_dumps(rec.get("confidence"), "confidence") if rec.get("confidence") else None)
+    reasons_json_str = _json_dumps(reason_codes, "reason_codes") if reason_codes is not None else None
+    odds_json_str = _json_dumps(odds_comparison, "odds_comparison") if odds_comparison is not None else None
+
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO prediction_snapshots (
+                        fixture_id, prediction_timestamp, kickoff_at, sport,
+                        league_id, season, canonical_home_id, canonical_away_id,
+                        home_team, away_team, prediction_context, model_version,
+                        feature_version, calibration_version, data_cutoff_timestamp,
+                        markets_json, features_json, confidence_json, quality_gate,
+                        reason_codes_json, odds_comparison_json, edge, ev,
+                        uncertainty_state, created_at
+                    )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    RETURNING id
+                    """,
+                    (
+                        fixture_id, prediction_timestamp, kickoff_at, sport,
+                        league_id, season, canonical_home_id, canonical_away_id,
+                        home_team, away_team, prediction_context, model_version,
+                        feature_version, calibration_version, data_cutoff_timestamp,
+                        markets_json_str, features_json_str, confidence_json_str, quality_gate,
+                        reasons_json_str, odds_json_str, edge, ev,
+                        uncertainty_state, now_str,
+                    ),
+                )
+                row = cur.fetchone()
+                snapshot_id = row[0] if row else None
+            conn.commit()
+        else:
+            cursor = conn.execute(
+                """
+                INSERT INTO prediction_snapshots (
+                    fixture_id, prediction_timestamp, kickoff_at, sport,
+                    league_id, season, canonical_home_id, canonical_away_id,
+                    home_team, away_team, prediction_context, model_version,
+                    feature_version, calibration_version, data_cutoff_timestamp,
+                    markets_json, features_json, confidence_json, quality_gate,
+                    reason_codes_json, odds_comparison_json, edge, ev,
+                    uncertainty_state, created_at
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    fixture_id, prediction_timestamp, kickoff_at, sport,
+                    league_id, season, canonical_home_id, canonical_away_id,
+                    home_team, away_team, prediction_context, model_version,
+                    feature_version, calibration_version, data_cutoff_timestamp,
+                    markets_json_str, features_json_str, confidence_json_str, quality_gate,
+                    reasons_json_str, odds_json_str, edge, ev,
+                    uncertainty_state, now_str,
+                ),
+            )
+            snapshot_id = cursor.lastrowid
+            conn.commit()
+
+        return snapshot_id
 
     except Exception:
         conn.rollback()
