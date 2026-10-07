@@ -493,6 +493,29 @@ try:
     else:
         df_reset = df.reset_index() if hasattr(df, 'reset_index') else df
         records = df_reset.to_dict(orient='records')
+
+        team_id_map = {{}}
+        matches_dir = ss.data_dir / "matches"
+        if matches_dir.exists():
+            for fpath in matches_dir.glob("round_matches_*.json"):
+                try:
+                    with open(fpath, "r", encoding="utf-8") as fp:
+                        m_data = json.load(fp)
+                        for ev in m_data.get("events", []):
+                            g_id = ev.get("id")
+                            h_id = ev.get("homeTeam", {{}}).get("id")
+                            a_id = ev.get("awayTeam", {{}}).get("id")
+                            if g_id is not None and h_id is not None and a_id is not None:
+                                team_id_map[str(g_id)] = (h_id, a_id)
+                except Exception:
+                    pass
+
+        for rec in records:
+            gid = str(rec.get("game_id") or rec.get("game") or rec.get("id") or "")
+            if gid in team_id_map:
+                rec["home_team_id"] = team_id_map[gid][0]
+                rec["away_team_id"] = team_id_map[gid][1]
+
         print(json.dumps(records, default=str))
 except Exception as exc:
     sys.exit(1)
