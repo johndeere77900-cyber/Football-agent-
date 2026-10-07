@@ -247,13 +247,13 @@ def test_C_football_data_org_partial_response_incomplete(mock_api_fb, mock_fd):
     assert report["acquisition_complete"] is False
 
 
-# Test D — football-data.org trustworthy complete metadata -> COMPLETE
+# Test D — football-data.org trustworthy complete metadata without quota exhaustion -> COMPLETE
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
 def test_D_football_data_org_complete_metadata_complete(mock_api_fb, mock_fd):
     import historical_sync
 
-    mock_api_fb.side_effect = api_football.APIFootballQuotaExhaustedError("Quota exhausted")
+    mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
     matches = [
         {
             "id": 2000 + i,
@@ -284,6 +284,62 @@ def test_D_football_data_org_complete_metadata_complete(mock_api_fb, mock_fd):
     assert report["status"] == "COMPLETE"
     assert report["acquisition_complete"] is True
     assert report["valid_fixtures"] == 380
+
+
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_quota_exhaustion_with_fallback_fixtures_remains_incomplete(mock_api_fb, mock_fd, mock_sd):
+    import historical_sync
+
+    # 1. API-Football raises quota exhaustion
+    mock_api_fb.side_effect = api_football.APIFootballQuotaExhaustedError("Quota exhausted")
+
+    # 2. DataResolver returns valid football-data.org fallback fixtures
+    matches = [
+        {
+            "id": 5000 + i,
+            "utcDate": "2024-08-17T14:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Premier League", "code": "PL"},
+            "season": {"startDate": "2024-08-01"},
+            "homeTeam": {"id": (i % 20) + 1, "name": f"Team {(i % 20) + 1}"},
+            "awayTeam": {"id": ((i + 1) % 20) + 1, "name": f"Team {((i + 1) % 20) + 1}"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }
+        for i in range(380)
+    ]
+    mock_fd.return_value = {
+        "matches": matches,
+        "metadata": {
+            "count": 380,
+            "played": 380,
+            "first": "2024-08-17T14:00:00Z",
+            "last": "2025-05-25T16:00:00Z",
+            "competition_code": "PL",
+            "season": 2024,
+        },
+    }
+
+    # 3. sync_historical_fixtures() receives those fixtures
+    report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+    # 4. Final dataset status is INCOMPLETE
+    assert report["status"] == "INCOMPLETE"
+    # 5. quota_budget_stopped is True
+    assert report["quota_budget_stopped"] is True
+    # 6. acquisition_complete is False
+    assert report["acquisition_complete"] is False
+
+    # 7. Fallback fixtures remain stored in database
+    stored = storage.get_historical_fixtures(39, 2024)
+    assert len(stored) == 380
+    assert stored[0]["provider_provenance"]["provider"] == "football_data_org"
+
+    status = storage.get_historical_dataset_status(39, 2024)
+    assert status["status"] == "INCOMPLETE"
+    assert status["acquisition_complete"] is False
+    assert status["error_reason"] == "quota_budget_exhausted_during_acquisition"
 
 
 # Test E — SoccerData with fixtures but no trustworthy completeness metadata -> INCOMPLETE

@@ -212,10 +212,12 @@ def sync_historical_fixtures(
             page_expected = page_meta.get("expected_pages", 1)
             page_source = page_meta.get("source", "api_football")
 
+            if page_meta.get("primary_quota_exhausted"):
+                quota_budget_stopped = True
+                last_error_reason = "quota_budget_exhausted_during_acquisition"
+
             if page_meta.get("primary_failed") and not page_fixtures:
                 if page_meta.get("primary_quota_exhausted"):
-                    quota_budget_stopped = True
-                    last_error_reason = "quota_budget_exhausted_during_acquisition"
                     print(f"API Quota exhausted during fixture fetch on page {current_page}", flush=True)
                 else:
                     acquisition_failed = True
