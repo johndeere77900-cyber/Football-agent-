@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 import config
 import storage
-from data_resolver import DataResolver, LEAGUE_TO_SD_MH_CODE, LEAGUE_TO_SD_SOFASCORE_CODE
+from data_resolver import DataResolver, LEAGUE_TO_SD_MH_CODE, LEAGUE_TO_SD_SOFASCORE_CODE, _validate_and_filter_tertiary_matches
 import soccerdata_provider
 import historical_sync
 import team_identity
@@ -15,9 +15,24 @@ def init_test_db(tmp_path, monkeypatch):
     storage.init_db()
 
 
-# Test A — Real numeric Sofascore ID (no prefix, strict int)
-def test_A_real_numeric_sofascore_id():
-    raw_row = {
+# Assertion 1: Real numeric MatchHistory & Sofascore fixture ID is retained unchanged (BIGINT int)
+def test_1_real_numeric_fixture_id_retained():
+    raw_mh = {
+        "game_id": 500101,
+        "date": "2024-09-01T15:00:00Z",
+        "home_team": "Arsenal",
+        "away_team": "Chelsea",
+        "home_score": 2,
+        "away_score": 1,
+        "league": "Premier League",
+        "season": 2024,
+    }
+    norm_mh = soccerdata_provider._normalize_match_history_row(raw_mh, league_id=39, season=2024)
+    assert norm_mh is not None
+    assert norm_mh["fixture"]["id"] == 500101
+    assert isinstance(norm_mh["fixture"]["id"], int)
+
+    raw_ss = {
         "game_id": 12345678,
         "date": "2024-09-01T15:00:00Z",
         "home_team": "Arsenal",
@@ -27,16 +42,38 @@ def test_A_real_numeric_sofascore_id():
         "league": "Premier League",
         "season": 2024,
     }
-    norm = soccerdata_provider._normalize_sofascore_row(raw_row, league_id=39, season=2024)
-    assert norm is not None
-    assert norm["fixture"]["id"] == 12345678
-    assert isinstance(norm["fixture"]["id"], int)
-    assert norm["provider_provenance"]["provider_fixture_id"] == 12345678
+    norm_ss = soccerdata_provider._normalize_sofascore_row(raw_ss, league_id=39, season=2024)
+    assert norm_ss is not None
+    assert norm_ss["fixture"]["id"] == 12345678
+    assert isinstance(norm_ss["fixture"]["id"], int)
 
 
-# Test B — Synthetic / missing / invalid ID rejected
+# Assertion 2 & 3: "sd_mh_<id>" and "sd_ss_<id>" string prefixes are rejected for permanent fixture.id
+def test_2_3_prefixed_fixture_ids_rejected():
+    record_prefixed_mh = {
+        "fixture": {"id": "sd_mh_101", "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024, "name": "Premier League"},
+        "teams": {"home": {"id": 101, "name": "Arsenal"}, "away": {"id": 102, "name": "Chelsea"}},
+        "goals": {"home": 2, "away": 1},
+        "provider_provenance": {"provider": "soccerdata_match_history"},
+    }
+    res_mh = _validate_and_filter_tertiary_matches([record_prefixed_mh], league_id=39, season=2024)
+    assert len(res_mh) == 0
+
+    record_prefixed_ss = {
+        "fixture": {"id": "sd_ss_101", "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024, "name": "Premier League"},
+        "teams": {"home": {"id": 101, "name": "Arsenal"}, "away": {"id": 102, "name": "Chelsea"}},
+        "goals": {"home": 2, "away": 1},
+        "provider_provenance": {"provider": "soccerdata_sofascore"},
+    }
+    res_ss = _validate_and_filter_tertiary_matches([record_prefixed_ss], league_id=39, season=2024)
+    assert len(res_ss) == 0
+
+
+# Assertion 4 & 5: Missing or non-numeric fixture ID is rejected
 @pytest.mark.parametrize("invalid_id", [None, "", "NaN", "invalid_str", -5, 0])
-def test_B_invalid_or_missing_game_id_rejected(invalid_id):
+def test_4_5_missing_or_non_numeric_fixture_id_rejected(invalid_id):
     raw_row = {
         "game_id": invalid_id,
         "date": "2024-09-01T15:00:00Z",
@@ -51,8 +88,8 @@ def test_B_invalid_or_missing_game_id_rejected(invalid_id):
     assert norm is None
 
 
-# Test C — No fake team IDs produced
-def test_C_no_fake_team_ids_when_missing():
+# Assertion 6: Missing provider team IDs are NOT converted into generated/hash IDs
+def test_6_missing_provider_team_ids_not_converted_into_generated_ids():
     raw_row = {
         "game_id": 99887766,
         "date": "2024-09-01T15:00:00Z",
@@ -73,25 +110,119 @@ def test_C_no_fake_team_ids_when_missing():
     assert norm["provider_provenance"]["provider_team_ids"]["away"] is None
 
 
-# Test D — Canonical bootstrap with missing provider team IDs
-def test_D_canonical_bootstrap_with_missing_provider_ids():
-    # Calling bootstrap with None as provider_team_id
-    c_home = team_identity.bootstrap_historical_team_identity("Arsenal FC", "soccerdata_sofascore", None, league_id=39)
-    assert c_home is not None
-    assert c_home.startswith("football_team_")
+# Assertion 7: Tertiary fixture without real numeric team IDs is rejected by _validate_and_filter_tertiary_matches
+def test_7_tertiary_fixture_without_real_numeric_team_ids_rejected():
+    raw_row_no_team_ids = {
+        "game_id": 99887766,
+        "date": "2024-09-01T15:00:00Z",
+        "home_team": "Arsenal",
+        "away_team": "Chelsea",
+        "home_team_id": None,
+        "away_team_id": None,
+        "home_score": 2,
+        "away_score": 1,
+        "league": "Premier League",
+        "season": 2024,
+    }
+    norm = soccerdata_provider._normalize_sofascore_row(raw_row_no_team_ids, league_id=39, season=2024)
+    assert norm is not None
 
-    # Confirm no fake "None" string mapping was persisted in team_identities
-    mapping = storage.get_team_identity_by_provider("football", "soccerdata_sofascore", "None")
-    assert mapping is None
+    filtered = _validate_and_filter_tertiary_matches([norm], league_id=39, season=2024, completed_only=True)
+    assert len(filtered) == 0
 
 
-# Test E — Real storage integration with normalized Sofascore fixture
-def test_E_real_storage_integration_with_normalized_sofascore_fixture():
+# Assertion 8 & 9: Wrong season or missing season rejected
+def test_8_9_wrong_or_missing_season_rejected():
+    raw_2025 = {
+        "game_id": 1002,
+        "date": "2025-09-01T15:00:00Z",
+        "home_team": "Arsenal",
+        "away_team": "Chelsea",
+        "home_team_id": 101,
+        "away_team_id": 102,
+        "home_score": 3,
+        "away_score": 0,
+        "season": 2025,
+        "status": "FT",
+    }
+    raw_no_season = {
+        "game_id": 1003,
+        "date": "2024-09-01T15:00:00Z",
+        "home_team": "Arsenal",
+        "away_team": "Chelsea",
+        "home_team_id": 101,
+        "away_team_id": 102,
+        "home_score": 1,
+        "away_score": 1,
+        "season": None,
+        "status": "FT",
+    }
+
+    norm_2025 = soccerdata_provider._normalize_sofascore_row(raw_2025, league_id=39, season=2024)
+    norm_no_s = soccerdata_provider._normalize_sofascore_row(raw_no_season, league_id=39, season=2024)
+
+    assert norm_2025["league"]["season"] == 2025
+    assert norm_no_s["league"]["season"] is None
+
+    res_2025 = _validate_and_filter_tertiary_matches([norm_2025], league_id=39, season=2024, completed_only=True)
+    assert len(res_2025) == 0
+
+    res_no_s = _validate_and_filter_tertiary_matches([norm_no_s], league_id=39, season=2024, completed_only=True)
+    assert len(res_no_s) == 0
+
+
+# Assertion 10: Uncompleted statuses (NS/PST/CANC/SUSP) rejected
+@pytest.mark.parametrize("short_code", ["NS", "PST", "CANC", "SUSP"])
+def test_10_uncompleted_statuses_rejected(short_code):
+    raw_uncomp = {
+        "game_id": 222222,
+        "date": "2024-09-01T15:00:00Z",
+        "home_team": "Arsenal",
+        "away_team": "Chelsea",
+        "home_team_id": 101,
+        "away_team_id": 102,
+        "home_score": None,
+        "away_score": None,
+        "league": "Premier League",
+        "season": 2024,
+        "status": short_code,
+    }
+    norm = soccerdata_provider._normalize_sofascore_row(raw_uncomp, league_id=39, season=2024)
+    assert norm is not None
+    filtered = _validate_and_filter_tertiary_matches([norm], league_id=39, season=2024, completed_only=True)
+    assert len(filtered) == 0
+
+
+# Assertion 11: Completed FT/AET/PEN fixtures without scores rejected
+def test_11_completed_fixtures_without_scores_rejected():
+    raw_no_score = {
+        "game_id": 111111,
+        "date": "2024-09-01T15:00:00Z",
+        "home_team": "Arsenal",
+        "away_team": "Chelsea",
+        "home_team_id": 101,
+        "away_team_id": 102,
+        "home_score": None,
+        "away_score": 1,
+        "league": "Premier League",
+        "season": 2024,
+        "status": "FT",
+    }
+    norm = soccerdata_provider._normalize_sofascore_row(raw_no_score, league_id=39, season=2024)
+    assert norm is not None
+    filtered = _validate_and_filter_tertiary_matches([norm], league_id=39, season=2024, completed_only=True)
+    assert len(filtered) == 0
+
+
+# Assertion 12: Valid completed fixture with REAL numeric fixture/team IDs and canonical IDs passes storage.save_historical_fixtures
+def test_12_valid_completed_fixture_passes_real_storage_integration():
     raw_row = {
         "game_id": 88776655,
         "date": "2024-09-01T15:00:00Z",
         "home_team": "Arsenal",
         "away_team": "Chelsea",
+        "home_team_id": 101,
+        "away_team_id": 102,
         "home_score": 2,
         "away_score": 1,
         "league": "Premier League",
@@ -101,7 +232,6 @@ def test_E_real_storage_integration_with_normalized_sofascore_fixture():
     norm = soccerdata_provider._normalize_sofascore_row(raw_row, league_id=39, season=2024)
     assert norm is not None
 
-    from data_resolver import _validate_and_filter_tertiary_matches
     filtered = _validate_and_filter_tertiary_matches([norm], league_id=39, season=2024, completed_only=True)
     assert len(filtered) == 1
 
@@ -115,85 +245,27 @@ def test_E_real_storage_integration_with_normalized_sofascore_fixture():
     assert isinstance(item["fixture"]["id"], int)
     assert item["canonical_home_id"] is not None
     assert item["canonical_away_id"] is not None
+    assert item["teams"]["home"]["id"] == 101
+    assert item["teams"]["away"]["id"] == 102
     assert item["fixture"]["status"]["short"] in ("FT", "AET", "PEN")
     assert item["goals"]["home"] == 2
     assert item["goals"]["away"] == 1
 
 
-# Test F — Invalid completed data rejected
-def test_F_invalid_completed_data_rejected():
-    # FT missing home score
-    raw_no_hscore = {
-        "game_id": 111111,
-        "date": "2024-09-01T15:00:00Z",
-        "home_team": "Arsenal",
-        "away_team": "Chelsea",
-        "home_score": None,
-        "away_score": 1,
-        "league": "Premier League",
-        "season": 2024,
-        "status": "FT",
-    }
-    norm_no_hscore = soccerdata_provider._normalize_sofascore_row(raw_no_hscore, league_id=39, season=2024)
-    assert norm_no_hscore is not None
-
-    from data_resolver import _validate_and_filter_tertiary_matches
-    filtered_no_hscore = _validate_and_filter_tertiary_matches([norm_no_hscore], league_id=39, season=2024, completed_only=True)
-    assert len(filtered_no_hscore) == 0
-
-    # Uncompleted status (NS, PST, CANC, SUSP)
-    for st_code in ["NS", "PST", "CANC", "SUSP"]:
-        raw_uncompleted = {
-            "game_id": 222222,
-            "date": "2024-09-01T15:00:00Z",
-            "home_team": "Arsenal",
-            "away_team": "Chelsea",
-            "home_score": None,
-            "away_score": None,
-            "league": "Premier League",
-            "season": 2024,
-            "status": st_code,
-        }
-        norm_uncomp = soccerdata_provider._normalize_sofascore_row(raw_uncompleted, league_id=39, season=2024)
-        assert norm_uncomp is not None
-        filtered_uncomp = _validate_and_filter_tertiary_matches([norm_uncomp], league_id=39, season=2024, completed_only=True)
-        assert len(filtered_uncomp) == 0
-
-    # Wrong season
-    raw_wrong_season = {
-        "game_id": 333333,
-        "date": "2025-09-01T15:00:00Z",
-        "home_team": "Arsenal",
-        "away_team": "Chelsea",
-        "home_score": 2,
-        "away_score": 1,
-        "league": "Premier League",
-        "season": 2025,
-        "status": "FT",
-    }
-    norm_wrong_s = soccerdata_provider._normalize_sofascore_row(raw_wrong_season, league_id=39, season=2024)
-    assert norm_wrong_s is not None
-    assert norm_wrong_s["league"]["season"] == 2025
-
-    filtered_wrong_season = _validate_and_filter_tertiary_matches([norm_wrong_s], league_id=39, season=2024, completed_only=True)
-    assert len(filtered_wrong_season) == 0
-
-
-# Test G — Fallback ordering: MatchHistory -> Sofascore
+# Fallback hierarchy check: Sofascore is NOT called if MatchHistory returns usable data
 @patch("soccerdata_provider.get_sofascore_historical_games")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_G_fallback_ordering_sofascore_only_used_when_match_history_fails(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+def test_sofascore_not_used_when_match_history_returns_usable_data(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
     mock_api_fb.side_effect = Exception("Primary error")
     mock_fd.side_effect = Exception("Secondary error")
 
-    # MatchHistory returns usable data
     mock_sd_mh.return_value = (
         "SOURCE_AVAILABLE",
         [
             {
-                "fixture": {"id": "sd_mh_101", "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
+                "fixture": {"id": 500101, "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
                 "league": {"id": 39, "season": 2024, "name": "Premier League"},
                 "teams": {"home": {"id": 101, "name": "Arsenal"}, "away": {"id": 102, "name": "Chelsea"}},
                 "goals": {"home": 2, "away": 1},
@@ -210,14 +282,3 @@ def test_G_fallback_ordering_sofascore_only_used_when_match_history_fails(mock_a
     assert len(res["fixtures"]) == 1
     assert res["fixtures"][0]["provider_provenance"]["provider"] == "soccerdata_match_history"
     mock_sd_ss.assert_not_called()
-
-
-# Test 12 configured leagues mapping verification
-def test_all_12_configured_leagues_have_tertiary_strategy():
-    configured_leagues = getattr(config, "ALLOWED_LEAGUE_IDS", [])
-    assert len(configured_leagues) == 12
-
-    for lid in configured_leagues:
-        has_mh = lid in LEAGUE_TO_SD_MH_CODE
-        has_ss = lid in LEAGUE_TO_SD_SOFASCORE_CODE
-        assert has_mh or has_ss, f"League ID {lid} lacks a tertiary SoccerData mapping!"

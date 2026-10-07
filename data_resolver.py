@@ -94,8 +94,9 @@ def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_
     - requested league isolation
     - valid score for completed matches (home_goals is not None and away_goals is not None)
     - status filter FT/AET/PEN if completed_only=True
-    - real provider fixture ID
-    - canonical team resolution before storage validation
+    - real integer fixture ID (positive int, no string prefixes)
+    - real integer provider team IDs (rejects matches without real positive provider team IDs)
+    - canonical team resolution
     """
     import team_identity
 
@@ -110,20 +111,14 @@ def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_
         fix_obj = m.get("fixture", {}) if isinstance(m.get("fixture"), dict) else {}
         fid = fix_obj.get("id")
 
-        if fid is None:
+        if fid is None or isinstance(fid, bool):
             continue
 
         if isinstance(fid, str) and fid.isdigit():
             fid = int(fid)
             fix_obj["id"] = fid
 
-        if isinstance(fid, int):
-            if fid <= 0:
-                continue
-        elif isinstance(fid, str):
-            if not fid.startswith("sd_mh_") and not fid.startswith("sd_ss_"):
-                continue
-        else:
+        if not isinstance(fid, int) or fid <= 0:
             continue
 
         m_league = m.get("league", {}) if isinstance(m.get("league"), dict) else {}
@@ -167,6 +162,20 @@ def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_
         h_prov_id = h_obj.get("id")
         a_prov_id = a_obj.get("id")
 
+        # Storage requires real positive provider team IDs.
+        # Never fabricate IDs from canonical IDs, names, hashes, or strings.
+        if h_prov_id is None or a_prov_id is None:
+            continue
+
+        if not isinstance(h_prov_id, int) or isinstance(h_prov_id, bool) or h_prov_id <= 0:
+            continue
+
+        if not isinstance(a_prov_id, int) or isinstance(a_prov_id, bool) or a_prov_id <= 0:
+            continue
+
+        h_obj["id"] = h_prov_id
+        a_obj["id"] = a_prov_id
+
         c_home = team_identity.bootstrap_historical_team_identity(h_name, prov_source, h_prov_id, league_id=league_id)
         c_away = team_identity.bootstrap_historical_team_identity(a_name, prov_source, a_prov_id, league_id=league_id)
 
@@ -175,12 +184,6 @@ def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_
 
         m["canonical_home_id"] = c_home
         m["canonical_away_id"] = c_away
-
-        # If provider supplied no numeric team ID, assign deterministic positive int from canonical ID for storage validation
-        if h_prov_id is None:
-            h_obj["id"] = abs(hash(c_home)) % 2000000000 + 1
-        if a_prov_id is None:
-            a_obj["id"] = abs(hash(c_away)) % 2000000000 + 1
 
         # Ensure league id and season are attached
         if isinstance(m.get("league"), dict):
@@ -1540,7 +1543,7 @@ class DataResolver:
 
         if sd_mh_code:
             try:
-                sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season=season, league_id=league_id)
+                sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
                 if sd_status == "SOURCE_AVAILABLE" and sd_games:
                     sd_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
                     sd_meta = sd_meta_res or {}
@@ -1551,7 +1554,7 @@ class DataResolver:
             sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
             if sd_ss_code:
                 try:
-                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season=season, league_id=league_id)
+                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
                         sd_meta = sd_meta_res or {}
