@@ -195,7 +195,7 @@ def _normalize_football_data_match(match, league_id, season):
     fd_home_id = home_team.get("id")
     fd_away_id = away_team.get("id")
 
-    return {
+    res = {
         "fixture": {
             "id": match.get("id"),
             "date": match.get("utcDate"),
@@ -229,6 +229,9 @@ def _normalize_football_data_match(match, league_id, season):
             "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
         },
     }
+    if match.get("statistics") and isinstance(match.get("statistics"), dict):
+        res["statistics"] = match["statistics"]
+    return res
 
 
 def _normalize_football_data_standing(row):
