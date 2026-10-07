@@ -361,7 +361,7 @@ def test_get_enriched_fixtures_batches_and_deduplicates(
     ]
 
 
-def test_get_league_fixtures_page_does_not_send_page_param(tmp_path, monkeypatch):
+def test_get_league_fixtures_page_sends_page_param(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test-key")
 
@@ -369,23 +369,39 @@ def test_get_league_fixtures_page_does_not_send_page_param(tmp_path, monkeypatch
 
     def fake_get(url, headers, params, timeout):
         calls.append(params)
+        current_page = params.get("page", 1)
         return FakeResponse(
             payload={
-                "response": [{"fixture": {"id": 100}}],
-                "paging": {"current": 1, "total": 1},
+                "response": [{"fixture": {"id": 100 + current_page}}],
+                "paging": {"current": current_page, "total": 3},
             }
         )
 
     monkeypatch.setattr(api_football.requests, "get", fake_get)
 
-    res = api_football.get_league_fixtures_page(39, 2024, page=1)
+    res2 = api_football.get_league_fixtures_page(39, 2024, page=2)
 
     assert len(calls) == 1
-    # Verify that 'page' is NOT in the API request parameters and status 'FT-AET-PEN' is included
-    assert "page" not in calls[0]
-    assert calls[0] == {"league": 39, "season": 2024, "status": "FT-AET-PEN"}
-    assert res["expected_pages"] == 1
-    assert len(res["fixtures"]) == 1
+    assert calls[0] == {
+        "league": 39,
+        "season": 2024,
+        "page": 2,
+        "status": "FT-AET-PEN",
+    }
+    assert res2["expected_pages"] == 3
+    assert len(res2["fixtures"]) == 1
+
+    res3 = api_football.get_league_fixtures_page(39, 2024, page=3)
+
+    assert len(calls) == 2
+    assert calls[1]["page"] == 3
+    assert calls[1] == {
+        "league": 39,
+        "season": 2024,
+        "page": 3,
+        "status": "FT-AET-PEN",
+    }
+    assert res3["expected_pages"] == 3
 
 
 def test_get_league_fixtures_page_pagination_validation(tmp_path, monkeypatch):

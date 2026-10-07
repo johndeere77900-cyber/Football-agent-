@@ -263,10 +263,7 @@ def _get(endpoint, params, max_budget=None):
     url = f"{config.API_FOOTBALL_BASE_URL}/{endpoint.lstrip('/')}"
     backoff = RETRY_BACKOFF_SECONDS
 
-    # Filter out unsupported 'page' parameter for API-Football /fixtures requests
     http_params = dict(params)
-    if endpoint.rstrip("/") == "fixtures" and "page" in http_params:
-        del http_params["page"]
 
     for attempt in range(1, MAX_RETRIES + 1):
         # Quota check before every actual network attempt
