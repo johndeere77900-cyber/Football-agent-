@@ -174,18 +174,20 @@ def test_4_football_data_org_data_can_become_complete():
     football-data.org returns valid complete dataset, historical_sync allows
     the dataset to become COMPLETE with provider-neutral completion.
     """
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
     fd_matches = [
         {
             "id": 99900 + i,
             "utcDate": "2024-08-15T19:00:00Z",
             "status": "FINISHED",
-            "homeTeam": {"id": (i % 20) + 1, "name": f"Team {(i % 20) + 1}"},
-            "awayTeam": {"id": ((i + 1) % 20) + 1, "name": f"Team {((i + 1) % 20) + 1}"},
+            "homeTeam": {"id": h_id, "name": f"Team {h_id}"},
+            "awayTeam": {"id": a_id, "name": f"Team {a_id}"},
             "score": {"fullTime": {"home": 2, "away": 1}},
             "competition": {"code": "PL"},
             "season": {"startDate": "2024-08-01", "endDate": "2025-05-31"},
         }
-        for i in range(380)
+        for i, (h_id, a_id) in enumerate(pairings)
     ]
 
     fd_response = {

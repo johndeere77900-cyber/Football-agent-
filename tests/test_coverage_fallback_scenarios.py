@@ -26,7 +26,7 @@ import api_football
 import football_data_api
 import soccerdata_provider
 import data_resolver
-from data_resolver import DataResolver, _validate_and_filter_tertiary_matches, _provider_result_is_sufficient_for_historical_acquisition
+from data_resolver import DataResolver, _validate_and_filter_tertiary_matches, _provider_result_is_sufficient_for_historical_acquisition, _validate_historical_structural_coverage
 import historical_sync
 import storage
 import config
@@ -357,30 +357,45 @@ def test_scenario_15_basketball_sync_behavior_unaffected(mock_bb_page):
     assert report["final_stored_count"] == 1
 
 
-# PR #29 Fix Test 1: football-data.org partial + SoccerData complete -> final is_complete=True
+# PR #29 Fix Test 1: football-data.org partial + SoccerData complete -> merged schedule complete -> final is_complete=True
 @patch("soccerdata_provider.get_sofascore_historical_games")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
 def test_fd_partial_plus_soccerdata_complete_yields_is_complete_true(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
-    mock_fd.return_value = {
-        "matches": [{
-            "id": 2001,
+
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
+    fd_pairings = pairings[:200]
+    ss_pairings = pairings[200:]
+
+    fd_matches = [
+        {
+            "id": 2000 + i,
             "utcDate": "2024-08-17T15:00:00Z",
             "status": "FINISHED",
             "competition": {"name": "Premier League", "code": "PL"},
             "season": {"startDate": "2024-08-01"},
-            "homeTeam": {"id": 1, "name": "Arsenal"},
-            "awayTeam": {"id": 2, "name": "Chelsea"},
+            "homeTeam": {"id": h_id, "name": f"Team {h_id}"},
+            "awayTeam": {"id": a_id, "name": f"Team {a_id}"},
             "score": {"fullTime": {"home": 1, "away": 0}},
-        }],
+        }
+        for i, (h_id, a_id) in enumerate(fd_pairings)
+    ]
+    mock_fd.return_value = {
+        "matches": fd_matches,
         "metadata": {"is_partial": True},
     }
     mock_sd_mh.return_value = ("SOURCE_NOT_AVAILABLE", [], {})
+
+    ss_fixtures = [
+        make_test_fixture(3000 + i, h_name=f"Team {h_id}", a_name=f"Team {a_id}", h_id=h_id, a_id=a_id)
+        for i, (h_id, a_id) in enumerate(ss_pairings)
+    ]
     mock_sd_ss.return_value = (
         "SOURCE_AVAILABLE",
-        [make_test_fixture(2002, h_name="Liverpool", a_name="Everton", h_id=3, a_id=4)],
+        ss_fixtures,
         {"status": "SOURCE_AVAILABLE", "is_complete": True},
     )
 
@@ -388,6 +403,7 @@ def test_fd_partial_plus_soccerdata_complete_yields_is_complete_true(mock_api_fb
     res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
 
     assert res["source"] == "mixed"
+    assert len(res["fixtures"]) == 380
     assert res["provider_metadata"]["is_complete"] is True
     assert res["provider_metadata"]["is_partial"] is False
 
@@ -427,6 +443,186 @@ def test_fd_partial_plus_soccerdata_incomplete_yields_is_complete_false(mock_api
     assert res["provider_metadata"]["is_partial"] is True
 
 
+def make_18_team_schedule(league_id=61, season=2025, missing_pair=None):
+    teams = list(range(1, 19))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
+    if missing_pair:
+        pairings = [p for p in pairings if p != missing_pair]
+    fixtures = []
+    for i, (h_id, a_id) in enumerate(pairings):
+        fixtures.append({
+            "fixture": {"id": 610000 + i, "date": "2025-08-15T20:00:00Z", "status": {"short": "FT"}},
+            "league": {"id": league_id, "season": season, "name": "Ligue 1"},
+            "teams": {
+                "home": {"id": h_id, "name": f"Team {h_id}"},
+                "away": {"id": a_id, "name": f"Team {a_id}"},
+            },
+            "goals": {"home": 1, "away": 0},
+            "canonical_home_id": f"team_{h_id}",
+            "canonical_away_id": f"team_{a_id}",
+            "provider_provenance": {"provider": "football_data_org", "provider_type": "secondary"},
+        })
+    return fixtures
+
+
+# TEST A — Provider falsely claims complete
+def test_A_provider_falsely_claims_complete():
+    # 305 fixtures (1 missing from 18-team Ligue 1 schedule)
+    fixtures_305 = make_18_team_schedule(league_id=61, season=2025, missing_pair=(17, 18))
+    meta = {"count": 305, "played": 305, "is_complete": True, "is_partial": False}
+
+    is_suff = _provider_result_is_sufficient_for_historical_acquisition(
+        "football_data_org", fixtures_305, provider_metadata=meta, season=2025, league_id=61
+    )
+    cov = _validate_historical_structural_coverage(fixtures_305, season=2025, provider_metadata=meta, league_id=61)
+
+    assert is_suff is False
+    assert cov["verified"] is False
+    assert cov["reason"] in ("fixture_count_mismatch", "team_participation_imbalance")
+
+
+# TEST B — Missing fixture detected by team balance
+def test_B_missing_fixture_detected_by_team_balance():
+    # 18 teams, missing pair (17, 18) -> team 17 missing 1 home match, team 18 missing 1 away match
+    fixtures_305 = make_18_team_schedule(league_id=61, season=2025, missing_pair=(17, 18))
+    cov = _validate_historical_structural_coverage(fixtures_305, season=2025, league_id=61)
+
+    assert cov["verified"] is False
+    assert cov["fixture_count"] == 305
+    assert cov["expected_fixture_count"] == 306
+    assert cov["team_count"] == 18
+    # Team 17 home match count is 16 (instead of 17)
+    assert cov["team_match_counts"]["team_17"]["home"] == 16
+    assert cov["team_match_counts"]["team_17"]["total"] == 33
+    # Team 18 away match count is 16 (instead of 17)
+    assert cov["team_match_counts"]["team_18"]["away"] == 16
+    assert cov["team_match_counts"]["team_18"]["total"] == 33
+
+
+# TEST C — Complete 18-team double round robin
+def test_C_complete_18_team_double_round_robin():
+    fixtures_306 = make_18_team_schedule(league_id=61, season=2025)
+    cov = _validate_historical_structural_coverage(fixtures_306, season=2025, league_id=61)
+
+    assert cov["verified"] is True
+    assert cov["reason"] is None
+    assert cov["fixture_count"] == 306
+    assert cov["distinct_fixture_count"] == 306
+    assert cov["expected_fixture_count"] == 306
+    assert cov["team_count"] == 18
+    for t_id, counts in cov["team_match_counts"].items():
+        assert counts["home"] == 17
+        assert counts["away"] == 17
+        assert counts["total"] == 34
+
+
+# TEST D — Mixed provider completion
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_D_mixed_provider_completion(mock_api_fb, mock_fd, mock_sd_mh):
+    mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+
+    # Provider A (football-data.org) supplies 305 fixtures
+    fd_raw = [
+        {
+            "id": 610000 + i,
+            "utcDate": "2025-08-15T20:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Ligue 1", "code": "FL1"},
+            "season": {"startDate": "2025-08-01"},
+            "homeTeam": {"id": h_id, "name": f"Team {h_id}"},
+            "awayTeam": {"id": a_id, "name": f"Team {a_id}"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }
+        for i, (h_id, a_id) in enumerate([(h, a) for h in range(1, 19) for a in range(1, 19) if h != a and (h, a) != (17, 18)])
+    ]
+    mock_fd.return_value = {
+        "matches": fd_raw,
+        "metadata": {"count": 305, "played": 305, "is_complete": True},
+    }
+
+    # Provider B (SoccerData) supplies missing fixture (17 vs 18)
+    missing_sd_fixture = {
+        "fixture": {"id": 610305, "date": "2025-08-15T20:00:00Z", "status": {"short": "FT"}},
+        "league": {"id": 61, "season": 2025, "name": "Ligue 1"},
+        "teams": {"home": {"id": 17, "name": "Team 17"}, "away": {"id": 18, "name": "Team 18"}},
+        "goals": {"home": 2, "away": 1},
+        "provider_provenance": {"provider": "soccerdata_match_history"},
+    }
+    mock_sd_mh.return_value = ("SOURCE_AVAILABLE", [missing_sd_fixture], {"status": "SOURCE_AVAILABLE"})
+
+    resolver = DataResolver()
+    res = resolver.get_league_fixtures_page(league_id=61, season=2025, page=1)
+
+    assert res["source"] == "mixed"
+    assert len(res["fixtures"]) == 306
+    assert res["provider_metadata"]["is_complete"] is True
+    assert res["provider_metadata"]["structural_coverage"]["verified"] is True
+    assert res["provider_metadata"]["structural_coverage"]["expected_fixture_count"] == 306
+
+
+# TEST E — Provider claims complete but structure is incomplete (Ligue 1 305 vs 306 failure)
+@patch("soccerdata_provider.get_sofascore_historical_games")
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_E_provider_claims_complete_but_structure_incomplete_triggers_fallback(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+    mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+
+    # football-data.org returns 305 fixtures and claims complete
+    fd_raw = [
+        {
+            "id": 610000 + i,
+            "utcDate": "2025-08-15T20:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Ligue 1", "code": "FL1"},
+            "season": {"startDate": "2025-08-01"},
+            "homeTeam": {"id": h_id, "name": f"Team {h_id}"},
+            "awayTeam": {"id": a_id, "name": f"Team {a_id}"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }
+        for i, (h_id, a_id) in enumerate([(h, a) for h in range(1, 19) for a in range(1, 19) if h != a and (h, a) != (17, 18)])
+    ]
+    mock_fd.return_value = {
+        "matches": fd_raw,
+        "metadata": {"count": 305, "played": 305, "is_complete": True},  # Claims complete
+    }
+
+    mock_sd_mh.return_value = ("SOURCE_NOT_AVAILABLE", [], {})
+    mock_sd_ss.return_value = ("SOURCE_NOT_AVAILABLE", [], {})
+
+    resolver = DataResolver()
+    res = resolver.get_league_fixtures_page(league_id=61, season=2025, page=1)
+
+    # Must NOT stop at football-data.org's false claim; must trigger fallbacks
+    assert mock_sd_mh.call_count == 1
+    assert mock_sd_ss.call_count == 1
+    assert res["provider_metadata"]["is_complete"] is False
+    assert res["provider_metadata"]["structural_coverage"]["verified"] is False
+
+
+# TEST F — Unknown competition format fails closed
+def test_F_unknown_competition_format_fails_closed():
+    # Champions League (league_id=2) is not a double round robin league
+    cl_fixtures = [
+        {
+            "fixture": {"id": 2001, "date": "2025-09-16T20:00:00Z", "status": {"short": "FT"}},
+            "league": {"id": 2, "season": 2025, "name": "Champions League"},
+            "teams": {"home": {"id": 1, "name": "Real Madrid"}, "away": {"id": 2, "name": "Stuttgart"}},
+            "goals": {"home": 3, "away": 1},
+            "canonical_home_id": "real_madrid",
+            "canonical_away_id": "stuttgart",
+        }
+    ]
+
+    cov = _validate_historical_structural_coverage(cl_fixtures, season=2025, league_id=2)
+
+    assert cov["verified"] is False
+    assert cov["reason"] == "structural_coverage_unverifiable"
+    assert cov["expected_fixture_count"] is None
+
+
 # PR #29 Fix Test 3: football-data.org partial + SoccerData completeness unknown -> final is_complete=False
 @patch("soccerdata_provider.get_sofascore_historical_games")
 @patch("soccerdata_provider.get_match_history_games")
@@ -462,34 +658,55 @@ def test_fd_partial_plus_soccerdata_unknown_yields_is_complete_false(mock_api_fb
     assert res["provider_metadata"]["is_partial"] is True
 
 
-# PR #29 Fix Test 4: football-data.org partial + MatchHistory partial + Sofascore complete -> final is_complete=True
+# PR #29 Fix Test 4: football-data.org partial + MatchHistory partial + Sofascore complete -> merged schedule complete -> final is_complete=True
 @patch("soccerdata_provider.get_sofascore_historical_games")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
 def test_fd_partial_plus_mh_partial_plus_sofascore_complete_yields_is_complete_true(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
-    mock_fd.return_value = {
-        "matches": [{
-            "id": 2001,
+
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
+    fd_pairings = pairings[:100]
+    mh_pairings = pairings[100:200]
+    ss_pairings = pairings[200:]
+
+    fd_matches = [
+        {
+            "id": 2000 + i,
             "utcDate": "2024-08-17T15:00:00Z",
             "status": "FINISHED",
             "competition": {"name": "Premier League", "code": "PL"},
             "season": {"startDate": "2024-08-01"},
-            "homeTeam": {"id": 1, "name": "Arsenal"},
-            "awayTeam": {"id": 2, "name": "Chelsea"},
+            "homeTeam": {"id": h_id, "name": f"Team {h_id}"},
+            "awayTeam": {"id": a_id, "name": f"Team {a_id}"},
             "score": {"fullTime": {"home": 1, "away": 0}},
-        }],
+        }
+        for i, (h_id, a_id) in enumerate(fd_pairings)
+    ]
+    mock_fd.return_value = {
+        "matches": fd_matches,
         "metadata": {"is_partial": True},
     }
+
+    mh_fixtures = [
+        make_test_fixture(3000 + i, h_name=f"Team {h_id}", a_name=f"Team {a_id}", h_id=h_id, a_id=a_id)
+        for i, (h_id, a_id) in enumerate(mh_pairings)
+    ]
     mock_sd_mh.return_value = (
         "SOURCE_AVAILABLE",
-        [make_test_fixture(2002, h_name="Liverpool", a_name="Everton", h_id=3, a_id=4)],
+        mh_fixtures,
         {"status": "SOURCE_AVAILABLE", "is_partial": True},
     )
+
+    ss_fixtures = [
+        make_test_fixture(4000 + i, h_name=f"Team {h_id}", a_name=f"Team {a_id}", h_id=h_id, a_id=a_id)
+        for i, (h_id, a_id) in enumerate(ss_pairings)
+    ]
     mock_sd_ss.return_value = (
         "SOURCE_AVAILABLE",
-        [make_test_fixture(2003, h_name="Tottenham", a_name="West Ham", h_id=5, a_id=6)],
+        ss_fixtures,
         {"status": "SOURCE_AVAILABLE", "is_complete": True},
     )
 
@@ -497,6 +714,7 @@ def test_fd_partial_plus_mh_partial_plus_sofascore_complete_yields_is_complete_t
     res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
 
     assert res["source"] == "mixed"
+    assert len(res["fixtures"]) == 380
     assert res["provider_metadata"]["is_complete"] is True
     assert res["provider_metadata"]["is_partial"] is False
 

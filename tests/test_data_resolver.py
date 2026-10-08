@@ -254,6 +254,8 @@ def test_D_football_data_org_complete_metadata_complete(mock_api_fb, mock_fd):
     import historical_sync
 
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
     matches = [
         {
             "id": 2000 + i,
@@ -261,11 +263,11 @@ def test_D_football_data_org_complete_metadata_complete(mock_api_fb, mock_fd):
             "status": "FINISHED",
             "competition": {"name": "Premier League", "code": "PL"},
             "season": {"startDate": "2024-08-01"},
-            "homeTeam": {"id": (i % 20) + 1, "name": f"Team {(i % 20) + 1}"},
-            "awayTeam": {"id": ((i + 1) % 20) + 1, "name": f"Team {((i + 1) % 20) + 1}"},
+            "homeTeam": {"id": h_id, "name": f"Team {h_id}"},
+            "awayTeam": {"id": a_id, "name": f"Team {a_id}"},
             "score": {"fullTime": {"home": 1, "away": 0}},
         }
-        for i in range(380)
+        for i, (h_id, a_id) in enumerate(pairings)
     ]
     mock_fd.return_value = {
         "matches": matches,
@@ -380,18 +382,22 @@ def test_F_soccerdata_with_complete_metadata_complete(mock_api_fb, mock_fd, mock
 
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
     mock_fd.side_effect = football_data_api.FootballDataAPIError("Secondary error")
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
+    sd_fixtures = [
+        {
+            "fixture": {"id": 900000 + i, "date": "2024-08-17T14:00:00Z", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024, "name": "Premier League"},
+            "teams": {"home": {"id": h_id, "name": f"Team {h_id}"}, "away": {"id": a_id, "name": f"Team {a_id}"}},
+            "goals": {"home": 1, "away": 0},
+            "provider_provenance": {"provider": "soccerdata", "provider_type": "tertiary"},
+        }
+        for i, (h_id, a_id) in enumerate(pairings)
+    ]
     mock_sd.return_value = (
         "SOURCE_AVAILABLE",
-        [
-            {
-                "fixture": {"id": 900101, "date": "2024-08-17T14:00:00Z", "status": {"short": "FT"}},
-                "league": {"id": 39, "season": 2024, "name": "Premier League"},
-                "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 2, "name": "Chelsea"}},
-                "goals": {"home": 1, "away": 0},
-                "provider_provenance": {"provider": "soccerdata", "provider_type": "tertiary"},
-            }
-        ],
-        {"status": "SOURCE_AVAILABLE", "count": 1, "is_complete": True},
+        sd_fixtures,
+        {"status": "SOURCE_AVAILABLE", "count": 380, "is_complete": True},
     )
 
     report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)

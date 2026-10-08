@@ -58,31 +58,24 @@ def _is_historical_provider_complete(
     if not isinstance(prov_meta, dict):
         prov_meta = {}
 
-    is_partial = prov_meta.get("is_partial", False)
-    is_complete = prov_meta.get("is_complete") or prov_meta.get("acquisition_complete")
+    structural_coverage = prov_meta.get("structural_coverage", {})
+    if not isinstance(structural_coverage, dict):
+        structural_coverage = {}
 
-    if is_partial:
+    if prov == "api_football":
+        if structural_coverage and structural_coverage.get("verified") is not True:
+            return False
+        return (
+            expected_pages > 0 and
+            pages_completed == expected_pages and
+            valid_fixtures_count > 0
+        )
+
+    if prov_meta.get("is_partial") is True:
         return False
 
-    if is_complete is True:
-        return True
-
-    count = prov_meta.get("count")
-    played = prov_meta.get("played")
-    first = prov_meta.get("first")
-    last = prov_meta.get("last")
-
-    if count is not None and isinstance(count, int) and count > 0:
-        if valid_fixtures_count < count:
-            return False
-        if played is not None and isinstance(played, int):
-            if valid_fixtures_count < played or played < count:
-                return False
-        if first and last and isinstance(first, str) and isinstance(last, str):
-            if len(first) >= 10 and len(last) >= 10:
-                return True
-
-    return False
+    # Require independently verified structural evidence
+    return structural_coverage.get("verified") is True
 
 
 def sync_historical_fixtures(
