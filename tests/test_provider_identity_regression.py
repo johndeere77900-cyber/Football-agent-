@@ -29,6 +29,17 @@ def init_test_db(tmp_path, monkeypatch):
     storage.init_db()
 
 
+@pytest.fixture(autouse=True)
+def mock_team_universe(monkeypatch):
+    def _mock_get_team_ids(league_id, season):
+        if league_id in (39, 140, 135, 78, 2):
+            return list(range(1, 21))
+        elif league_id in (61, 88, 94):
+            return list(range(1, 19))
+        return []
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
+
+
 def test_1_same_numeric_team_id_across_providers_does_not_cross_match():
     """
     Team ID 50 in API-Football is Team Alpha.

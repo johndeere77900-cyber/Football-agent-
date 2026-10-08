@@ -24,6 +24,13 @@ def isolated_db(tmp_path, monkeypatch):
     return db_file
 
 
+@pytest.fixture(autouse=True)
+def mock_team_universe(monkeypatch):
+    def _mock_get_team_ids(league_id, season):
+        return [1, 2]
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
+
+
 def sample_football_fixture(fid, date="2025-01-10T15:00:00+00:00", status="FT", home_goals=2, away_goals=1, league_id=39, home_id=1, away_id=2):
     return {
         "fixture": {"id": fid, "date": date, "status": {"short": status}},

@@ -10,6 +10,17 @@ def init_test_db():
     storage.init_db()
 
 
+@pytest.fixture(autouse=True)
+def mock_team_universe(monkeypatch):
+    def _mock_get_team_ids(league_id, season):
+        if league_id in (39, 140, 135, 78, 2):
+            return list(range(1, 21))
+        elif league_id in (61, 88, 94):
+            return list(range(1, 19))
+        return []
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
+
+
 @patch("api_football.get_fixtures_by_date")
 def test_data_resolver_primary_success(mock_api_fb):
     mock_api_fb.return_value = [
@@ -153,16 +164,21 @@ import soccerdata_provider
 def test_A_api_football_multipage_complete(mock_api_fb):
     import historical_sync
 
+    pairings = [(h, a) for h in range(1, 21) for a in range(1, 21) if h != a]
+    page1_pairings = pairings[:190]
+    page2_pairings = pairings[190:]
+
     def mock_page_fetch(league_id, season, page, max_budget=None):
         if page == 1:
             return {
                 "fixtures": [
                     {
-                        "fixture": {"id": 8001, "date": "2024-08-17T14:00:00Z", "status": {"short": "FT"}},
+                        "fixture": {"id": 8000 + i, "date": "2024-08-17T14:00:00Z", "status": {"short": "FT"}},
                         "league": {"id": 39, "season": 2024},
-                        "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+                        "teams": {"home": {"id": h, "name": f"Team {h}"}, "away": {"id": a, "name": f"Team {a}"}},
                         "goals": {"home": 1, "away": 0},
                     }
+                    for i, (h, a) in enumerate(page1_pairings)
                 ],
                 "expected_pages": 2,
                 "current_page": 1,
@@ -171,11 +187,12 @@ def test_A_api_football_multipage_complete(mock_api_fb):
             return {
                 "fixtures": [
                     {
-                        "fixture": {"id": 8002, "date": "2024-08-24T14:00:00Z", "status": {"short": "FT"}},
+                        "fixture": {"id": 8200 + i, "date": "2024-08-24T14:00:00Z", "status": {"short": "FT"}},
                         "league": {"id": 39, "season": 2024},
-                        "teams": {"home": {"id": 2, "name": "Team B"}, "away": {"id": 3, "name": "Team C"}},
+                        "teams": {"home": {"id": h, "name": f"Team {h}"}, "away": {"id": a, "name": f"Team {a}"}},
                         "goals": {"home": 2, "away": 2},
                     }
+                    for i, (h, a) in enumerate(page2_pairings)
                 ],
                 "expected_pages": 2,
                 "current_page": 2,
@@ -297,6 +314,7 @@ def test_quota_exhaustion_with_fallback_fixtures_remains_incomplete(mock_api_fb,
     # 1. API-Football raises quota exhaustion
     mock_api_fb.side_effect = api_football.APIFootballQuotaExhaustedError("Quota exhausted")
 
+    pairings = [(h, a) for h in range(1, 21) for a in range(1, 21) if h != a]
     # 2. DataResolver returns valid football-data.org fallback fixtures
     matches = [
         {
@@ -305,11 +323,11 @@ def test_quota_exhaustion_with_fallback_fixtures_remains_incomplete(mock_api_fb,
             "status": "FINISHED",
             "competition": {"name": "Premier League", "code": "PL"},
             "season": {"startDate": "2024-08-01"},
-            "homeTeam": {"id": (i % 20) + 1, "name": f"Team {(i % 20) + 1}"},
-            "awayTeam": {"id": ((i + 1) % 20) + 1, "name": f"Team {((i + 1) % 20) + 1}"},
+            "homeTeam": {"id": h, "name": f"Team {h}"},
+            "awayTeam": {"id": a, "name": f"Team {a}"},
             "score": {"fullTime": {"home": 1, "away": 0}},
         }
-        for i in range(380)
+        for i, (h, a) in enumerate(pairings)
     ]
     mock_fd.return_value = {
         "matches": matches,

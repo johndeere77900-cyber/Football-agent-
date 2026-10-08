@@ -47,13 +47,6 @@ def _is_historical_provider_complete(
 
     prov = (page_source or "api_football").lower()
 
-    if prov == "api_football":
-        return (
-            expected_pages > 0 and
-            pages_completed == expected_pages and
-            valid_fixtures_count > 0
-        )
-
     prov_meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else {}
     if not isinstance(prov_meta, dict):
         prov_meta = {}
@@ -62,13 +55,15 @@ def _is_historical_provider_complete(
     if not isinstance(structural_coverage, dict):
         structural_coverage = {}
 
+    if structural_coverage.get("verified") is not True:
+        return False
+
     if prov == "api_football":
-        if structural_coverage and structural_coverage.get("verified") is not True:
-            return False
         return (
             expected_pages > 0 and
             pages_completed == expected_pages and
-            valid_fixtures_count > 0
+            valid_fixtures_count > 0 and
+            final_stored_count > 0
         )
 
     if prov_meta.get("is_partial") is True:
