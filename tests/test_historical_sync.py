@@ -13,6 +13,13 @@ def temp_db(tmp_path, monkeypatch):
     return db_path
 
 
+@pytest.fixture(autouse=True)
+def mock_team_universe(monkeypatch):
+    def _mock_get_team_ids(league_id, season):
+        return [1, 2]
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
+
+
 def test_historical_sync_saves_fixtures(temp_db, monkeypatch):
     fixtures_sample = [
         {
@@ -29,7 +36,7 @@ def test_historical_sync_saves_fixtures(temp_db, monkeypatch):
             "league": {"id": 39, "season": 2024},
             "teams": {
                 "home": {"id": 2, "name": "Team B"},
-                "away": {"id": 3, "name": "Team C"},
+                "away": {"id": 1, "name": "Team A"},
             },
             "goals": {"home": 0, "away": 0},
         },
@@ -64,7 +71,13 @@ def test_historical_sync_repeated_runs_are_idempotent(temp_db):
             "league": {"id": 39, "season": 2024},
             "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
             "goals": {"home": 2, "away": 1},
-        }
+        },
+        {
+            "fixture": {"id": 5002, "date": "2025-01-17T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 2, "name": "Team B"}, "away": {"id": 1, "name": "Team A"}},
+            "goals": {"home": 0, "away": 0},
+        },
     ]
 
     meta_return = {
@@ -79,11 +92,11 @@ def test_historical_sync_repeated_runs_are_idempotent(temp_db):
         # Second run on COMPLETE dataset must NOT call get_league_fixtures_page
         mock_get.assert_called_once()
 
-    assert report1["newly_stored"] == 1
+    assert report1["newly_stored"] == 2
     assert report1["status"] == "COMPLETE"
     assert report2["status"] == "COMPLETE"
     assert report2["api_requests_consumed"] == 0
-    assert report2["final_stored_count"] == 1
+    assert report2["final_stored_count"] == 2
 
 
 def test_historical_sync_refresh_forces_reacquisition(temp_db):
@@ -138,7 +151,7 @@ def test_historical_sync_page_by_page_resumability(temp_db):
         {
             "fixture": {"id": 6002, "date": "2025-01-08T15:00:00+00:00", "status": {"short": "FT"}},
             "league": {"id": 39, "season": 2024},
-            "teams": {"home": {"id": 2, "name": "Team B"}, "away": {"id": 3, "name": "Team C"}},
+            "teams": {"home": {"id": 2, "name": "Team B"}, "away": {"id": 1, "name": "Team A"}},
             "goals": {"home": 2, "away": 2},
         }
     ]

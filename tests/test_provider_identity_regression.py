@@ -29,6 +29,17 @@ def init_test_db(tmp_path, monkeypatch):
     storage.init_db()
 
 
+@pytest.fixture(autouse=True)
+def mock_team_universe(monkeypatch):
+    def _mock_get_team_ids(league_id, season):
+        if league_id in (39, 140, 135, 78, 2):
+            return list(range(1, 21))
+        elif league_id in (61, 88, 94):
+            return list(range(1, 19))
+        return []
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
+
+
 def test_1_same_numeric_team_id_across_providers_does_not_cross_match():
     """
     Team ID 50 in API-Football is Team Alpha.
@@ -174,18 +185,20 @@ def test_4_football_data_org_data_can_become_complete():
     football-data.org returns valid complete dataset, historical_sync allows
     the dataset to become COMPLETE with provider-neutral completion.
     """
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
     fd_matches = [
         {
             "id": 99900 + i,
             "utcDate": "2024-08-15T19:00:00Z",
             "status": "FINISHED",
-            "homeTeam": {"id": (i % 20) + 1, "name": f"Team {(i % 20) + 1}"},
-            "awayTeam": {"id": ((i + 1) % 20) + 1, "name": f"Team {((i + 1) % 20) + 1}"},
+            "homeTeam": {"id": h_id, "name": f"Team {h_id}"},
+            "awayTeam": {"id": a_id, "name": f"Team {a_id}"},
             "score": {"fullTime": {"home": 2, "away": 1}},
             "competition": {"code": "PL"},
             "season": {"startDate": "2024-08-01", "endDate": "2025-05-31"},
         }
-        for i in range(380)
+        for i, (h_id, a_id) in enumerate(pairings)
     ]
 
     fd_response = {

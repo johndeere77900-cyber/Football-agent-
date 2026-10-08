@@ -24,11 +24,18 @@ def isolated_db(tmp_path, monkeypatch):
     return db_file
 
 
-def sample_football_fixture(fid, date="2025-01-10T15:00:00+00:00", status="FT", home_goals=2, away_goals=1, league_id=39):
+@pytest.fixture(autouse=True)
+def mock_team_universe(monkeypatch):
+    def _mock_get_team_ids(league_id, season):
+        return [1, 2]
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
+
+
+def sample_football_fixture(fid, date="2025-01-10T15:00:00+00:00", status="FT", home_goals=2, away_goals=1, league_id=39, home_id=1, away_id=2):
     return {
         "fixture": {"id": fid, "date": date, "status": {"short": status}},
         "league": {"id": league_id, "season": 2024},
-        "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+        "teams": {"home": {"id": home_id, "name": f"Team {home_id}"}, "away": {"id": away_id, "name": f"Team {away_id}"}},
         "goals": {"home": home_goals, "away": away_goals},
         "score": {
             "fulltime": {"home": 1, "away": 1},
@@ -61,8 +68,8 @@ def sample_basketball_game(gid, date="2024-11-10T20:00:00+00:00", status="FT", h
 
 
 def test_A_to_G_football_pagination_failure_persistence_and_resumption(isolated_db):
-    fix1 = sample_football_fixture(7001)
-    fix2 = sample_football_fixture(7002)
+    fix1 = sample_football_fixture(7001, home_id=1, away_id=2)
+    fix2 = sample_football_fixture(7002, home_id=2, away_id=1)
 
     def mock_p1_ok_p2_fail(league_id, season, page, max_budget=None):
         if page == 1:
@@ -343,38 +350,35 @@ def test_pre_acquisition_quota_exhaustion_preserves_manifest_fields_football_and
 
 
 def test_later_page_quota_interruption_and_resume_football_and_basketball(isolated_db):
-    fix1 = sample_football_fixture(1501, league_id=39)
-    fix2 = sample_football_fixture(1502, league_id=39)
-    fix3 = sample_football_fixture(1503, league_id=39)
+    fix1 = sample_football_fixture(1501, league_id=39, home_id=1, away_id=2)
+    fix2 = sample_football_fixture(1502, league_id=39, home_id=2, away_id=1)
 
     def mock_fb_p1_p2_p3(league_id, season, page, max_budget=None):
         if page == 1:
-            return {"fixtures": [fix1], "page": 1, "expected_pages": 3}
-        if page == 2:
-            return {"fixtures": [fix2], "page": 2, "expected_pages": 3}
-        raise api_football.APIFootballQuotaExhaustedError("Quota exhausted on page 3")
+            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
+        raise api_football.APIFootballQuotaExhaustedError("Quota exhausted on page 2")
 
     with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1_p2_p3):
         rep = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
-    assert rep["pages_completed"] == 2
-    assert rep["expected_pages"] == 3
+    assert rep["pages_completed"] == 1
+    assert rep["expected_pages"] == 2
     st = storage.get_historical_dataset_status(39, 2024, sport="football")
-    assert st["pages_completed"] == 2
-    assert st["expected_pages"] == 3
+    assert st["pages_completed"] == 1
+    assert st["expected_pages"] == 2
     assert st["error_reason"] == "quota_budget_exhausted_during_acquisition"
 
-    # Resume from page 3
-    def mock_fb_p3_resume(league_id, season, page, max_budget=None):
-        if page == 3:
-            return {"fixtures": [fix3], "page": 3, "expected_pages": 3}
+    # Resume from page 2
+    def mock_fb_p2_resume(league_id, season, page, max_budget=None):
+        if page == 2:
+            return {"fixtures": [fix2], "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p3_resume):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p2_resume):
         rep_res = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert rep_res["status"] == "COMPLETE"
-    assert rep_res["pages_completed"] == 3
+    assert rep_res["pages_completed"] == 2
 
 
 def test_api_exception_checkpoint_and_resume_football_and_basketball(isolated_db):
@@ -547,14 +551,15 @@ def test_empty_page_acquisition_scenarios_football_and_basketball(isolated_db):
     assert rep_fb_fin["status"] == "INCOMPLETE"
 
     # D. Football Valid 1-page dataset -> COMPLETE
-    fix304 = sample_football_fixture(1304, league_id=140)
+    fix304_a = sample_football_fixture(1304, league_id=140, home_id=1, away_id=2)
+    fix304_b = sample_football_fixture(1305, league_id=140, home_id=2, away_id=1)
     def mock_valid_1p(league_id, season, page=1, max_budget=None):
-        return {"fixtures": [fix304], "page": 1, "expected_pages": 1}
+        return {"fixtures": [fix304_a, fix304_b], "page": 1, "expected_pages": 1}
 
     with patch("api_football.get_league_fixtures_page", side_effect=mock_valid_1p):
         rep_fb_valid = historical_sync.sync_historical_fixtures(league_id=140, season=2024)
     assert rep_fb_valid["status"] == "COMPLETE"
-    assert rep_fb_valid["final_stored_count"] == 1
+    assert rep_fb_valid["final_stored_count"] == 2
 
     # E. Basketball Empty middle page -> INCOMPLETE
     bg101 = sample_basketball_game(8301, league_id=101)

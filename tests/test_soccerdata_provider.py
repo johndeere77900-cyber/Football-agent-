@@ -16,6 +16,17 @@ def init_test_db(tmp_path, monkeypatch):
     storage.init_db()
 
 
+@pytest.fixture(autouse=True)
+def mock_team_universe(monkeypatch):
+    def _mock_get_team_ids(league_id, season):
+        if league_id in (39, 140, 135, 78, 2):
+            return list(range(1, 21))
+        elif league_id in (61, 88, 94):
+            return list(range(1, 19))
+        return []
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
+
+
 # Assertion 1: Real numeric MatchHistory & Sofascore fixture ID is retained unchanged (BIGINT int)
 def test_1_real_numeric_fixture_id_retained():
     raw_mh = {
@@ -318,7 +329,7 @@ def test_sofascore_status_available_when_team_ids_present(mock_subproc):
     assert matches[0]["teams"]["away"]["id"] == 102
 
 
-# Fallback hierarchy check: Sofascore is NOT called if MatchHistory returns usable data
+# Fallback hierarchy check: Sofascore is NOT called if MatchHistory returns structurally complete data
 @patch("soccerdata_provider.get_sofascore_historical_games")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
@@ -327,17 +338,22 @@ def test_sofascore_not_used_when_match_history_returns_usable_data(mock_api_fb, 
     mock_api_fb.side_effect = Exception("Primary error")
     mock_fd.side_effect = Exception("Secondary error")
 
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
+    mh_fixtures = [
+        {
+            "fixture": {"id": 500000 + i, "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024, "name": "Premier League"},
+            "teams": {"home": {"id": h_id, "name": f"Team {h_id}"}, "away": {"id": a_id, "name": f"Team {a_id}"}},
+            "goals": {"home": 2, "away": 1},
+            "provider_provenance": {"provider": "soccerdata_match_history"},
+        }
+        for i, (h_id, a_id) in enumerate(pairings)
+    ]
+
     mock_sd_mh.return_value = (
         "SOURCE_AVAILABLE",
-        [
-            {
-                "fixture": {"id": 500101, "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
-                "league": {"id": 39, "season": 2024, "name": "Premier League"},
-                "teams": {"home": {"id": 101, "name": "Arsenal"}, "away": {"id": 102, "name": "Chelsea"}},
-                "goals": {"home": 2, "away": 1},
-                "provider_provenance": {"provider": "soccerdata_match_history"},
-            }
-        ],
+        mh_fixtures,
         {"status": "SOURCE_AVAILABLE", "is_complete": True},
     )
 
@@ -345,6 +361,47 @@ def test_sofascore_not_used_when_match_history_returns_usable_data(mock_api_fb, 
     res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
 
     assert res["source"] == "soccerdata"
-    assert len(res["fixtures"]) == 1
+    assert len(res["fixtures"]) == 380
     assert res["fixtures"][0]["provider_provenance"]["provider"] == "soccerdata_match_history"
     mock_sd_ss.assert_not_called()
+
+
+# Test: SoccerData MatchHistory & Sofascore reached when football-data.org returns non-empty but structurally incomplete dataset
+@patch("soccerdata_provider.get_sofascore_historical_games")
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_soccerdata_reached_when_fd_returns_structurally_incomplete_dataset(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+    mock_api_fb.side_effect = Exception("Primary error")
+
+    # football-data.org returns 305 fixtures (structurally incomplete for 18-team Ligue 1 2025) and claims complete
+    fd_raw = [
+        {
+            "id": 610000 + i,
+            "utcDate": "2025-08-15T20:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Ligue 1", "code": "FL1"},
+            "season": {"startDate": "2025-08-01"},
+            "homeTeam": {"id": h_id, "name": f"Team {h_id}"},
+            "awayTeam": {"id": a_id, "name": f"Team {a_id}"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }
+        for i, (h_id, a_id) in enumerate([(h, a) for h in range(1, 19) for a in range(1, 19) if h != a and (h, a) != (17, 18)])
+    ]
+    mock_fd.return_value = {
+        "matches": fd_raw,
+        "metadata": {"count": 305, "played": 305, "is_complete": True},  # Claims complete
+    }
+
+    mock_sd_mh.return_value = ("SOURCE_NOT_AVAILABLE", [], {})
+    mock_sd_ss.return_value = ("SOURCE_NOT_AVAILABLE", [], {})
+
+    resolver = DataResolver()
+    res = resolver.get_league_fixtures_page(league_id=61, season=2025, page=1)
+
+    # Prove SoccerData MatchHistory was called because structural coverage failed
+    assert mock_sd_mh.call_count == 1
+    # Prove Sofascore tertiary fallback was also called when MatchHistory was unavailable
+    assert mock_sd_ss.call_count == 1
+    assert res["provider_metadata"]["is_complete"] is False
+    assert res["provider_metadata"]["structural_coverage"]["verified"] is False
