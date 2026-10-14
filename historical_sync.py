@@ -16,6 +16,7 @@ import os
 import sys
 from datetime import datetime, timezone
 
+import data_resolver
 from data_resolver import DataResolver, APIFootballQuotaExhaustedError
 import config
 import storage
@@ -388,9 +389,23 @@ def sync_historical_fixtures(
     else:
         enrichment_status = "NONE"
 
-    # Update dataset manifest completion status strictly using provider-neutral helper
+    # Determine exact source semantics and re-read persisted fixtures for final structural validation
+    stored_fixtures_all = storage.get_historical_fixtures(league_id, season)
+
     page_source_val = page_source if 'page_source' in locals() else "api_football"
     page_meta_val = page_meta if 'page_meta' in locals() else {}
+
+    db_coverage = data_resolver._validate_historical_structural_coverage(
+        stored_fixtures_all,
+        season=season,
+        provider_metadata=page_meta_val.get("provider_metadata", {}) if isinstance(page_meta_val, dict) else {},
+        league_id=league_id,
+    )
+
+    # Re-verify page metadata with DB structural verification result
+    if isinstance(page_meta_val, dict):
+        if "provider_metadata" in page_meta_val and isinstance(page_meta_val["provider_metadata"], dict):
+            page_meta_val["provider_metadata"]["structural_coverage"] = db_coverage
 
     is_fully_complete = _is_historical_provider_complete(
         page_source=page_source_val,
@@ -402,12 +417,16 @@ def sync_historical_fixtures(
         acquisition_failed=acquisition_failed,
         rejected_count=rejected_count,
         empty_pages_count=total_empty_pages_count,
-        final_stored_count=final_stored_count,
+        final_stored_count=len(stored_fixtures_all),
     )
-    acquisition_complete = is_fully_complete
 
-    # Determine exact source semantics for dataset manifest
-    stored_fixtures_all = storage.get_historical_fixtures(league_id, season)
+    # Current/ongoing seasons (2026+) remain INCOMPLETE until season end
+    import datetime as dt_mod
+    current_year = dt_mod.datetime.now(dt_mod.timezone.utc).year
+    if season >= current_year:
+        is_fully_complete = False
+
+    acquisition_complete = is_fully_complete
     sources_found = set()
     for f in stored_fixtures_all:
         if isinstance(f, dict):

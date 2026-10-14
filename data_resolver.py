@@ -90,18 +90,22 @@ DOUBLE_ROUND_ROBIN_LEAGUE_IDS = {39, 140, 135, 78, 61, 88, 94}
 
 def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *args, **kwargs):
     """
-    Return the authoritative competition team IDs for structural validation.
+    Return the authoritative canonical competition team IDs for structural validation.
 
     Never fabricate IDs.
+    Resolves standings/teams into canonical team IDs using read-only resolution.
 
     Priority:
     1. API-Football standings
     2. football-data.org competition teams
 
     Returns:
-        list[int] of positive provider team IDs, or [] when unavailable.
+        list[str|int] of team IDs, or [] when unavailable.
     """
-    team_ids = set()
+    import team_identity
+
+    canonical_ids = set()
+    raw_provider_ids = set()
 
     # Primary authoritative source: API-Football standings
     try:
@@ -116,7 +120,6 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
             rows = standings
 
         if isinstance(rows, list):
-            # API-Football may wrap standings inside groups.
             expanded = []
             for row in rows:
                 if isinstance(row, list):
@@ -127,21 +130,30 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
             for row in expanded:
                 team = row.get("team", {}) if isinstance(row, dict) else {}
                 team_id = team.get("id") if isinstance(team, dict) else None
+                team_name = team.get("name", "") if isinstance(team, dict) else ""
 
-                if (
-                    isinstance(team_id, int)
-                    and not isinstance(team_id, bool)
-                    and team_id > 0
-                ):
-                    team_ids.add(team_id)
+                if team_id is not None and not isinstance(team_id, bool):
+                    raw_provider_ids.add(team_id)
 
-        if team_ids:
-            return sorted(team_ids)
+                c_id = team_identity.resolve_canonical_team_id(
+                    raw_name=team_name or (str(team_id) if team_id is not None else ""),
+                    provider="api_football",
+                    provider_team_id=team_id,
+                    league_id=league_id,
+                    sport="football",
+                    auto_register=False,
+                )
+                if c_id:
+                    canonical_ids.add(c_id)
+                elif team_id is not None:
+                    canonical_ids.add(team_id)
+
+        if canonical_ids:
+            return sorted(canonical_ids, key=lambda x: str(x))
 
     except Exception as exc:
         logger.warning(
-            "Unable to obtain authoritative API-Football team universe "
-            "for league %s season %s: %s",
+            "Unable to obtain authoritative API-Football team universe for league %s season %s: %s",
             league_id,
             season,
             exc,
@@ -165,24 +177,35 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
             if isinstance(rows, list):
                 for row in rows:
                     team_id = row.get("id") if isinstance(row, dict) else None
+                    team_name = (row.get("shortName") or row.get("name", "")) if isinstance(row, dict) else ""
 
-                    if (
-                        isinstance(team_id, int)
-                        and not isinstance(team_id, bool)
-                        and team_id > 0
-                    ):
-                        team_ids.add(team_id)
+                    if team_id is not None and not isinstance(team_id, bool):
+                        raw_provider_ids.add(team_id)
+
+                    c_id = team_identity.resolve_canonical_team_id(
+                        raw_name=team_name or (str(team_id) if team_id is not None else ""),
+                        provider="football_data_org",
+                        provider_team_id=team_id,
+                        league_id=league_id,
+                        sport="football",
+                        auto_register=False,
+                    )
+                    if c_id:
+                        canonical_ids.add(c_id)
+                    elif team_id is not None:
+                        canonical_ids.add(team_id)
 
         except Exception as exc:
             logger.warning(
-                "Unable to obtain authoritative football-data.org team universe "
-                "for league %s season %s: %s",
+                "Unable to obtain authoritative football-data.org team universe for league %s season %s: %s",
                 league_id,
                 season,
                 exc,
             )
 
-    return sorted(team_ids)
+    if canonical_ids:
+        return sorted(canonical_ids, key=lambda x: str(x))
+    return sorted(raw_provider_ids, key=lambda x: str(x))
 
 
 def _validate_historical_structural_coverage(fixtures, season, provider_metadata=None, league_id=None):
@@ -281,31 +304,35 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         h_obj = teams_obj.get("home", {}) if isinstance(teams_obj.get("home"), dict) else {}
         a_obj = teams_obj.get("away", {}) if isinstance(teams_obj.get("away"), dict) else {}
 
-        h_id = h_obj.get("id")
-        if h_id not in expected_team_set and f.get("canonical_home_id") in expected_team_set:
-            h_id = f.get("canonical_home_id")
-        if h_id is None:
-            h_id = f.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
-                raw_name=h_obj.get("name", "") or (str(h_obj.get("id")) if h_obj.get("id") is not None else ""),
-                provider=p_prov,
-                provider_team_id=h_obj.get("id"),
-                league_id=f_lid,
-                sport="football",
-                auto_register=False,
-            )
+        canonical_h = f.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
+            raw_name=h_obj.get("name", "") or (str(h_obj.get("id")) if h_obj.get("id") is not None else ""),
+            provider=p_prov,
+            provider_team_id=h_obj.get("id"),
+            league_id=f_lid,
+            sport="football",
+            auto_register=False,
+        )
+        if canonical_h in expected_team_set:
+            h_id = canonical_h
+        elif h_obj.get("id") in expected_team_set:
+            h_id = h_obj.get("id")
+        else:
+            h_id = canonical_h or h_obj.get("id")
 
-        a_id = a_obj.get("id")
-        if a_id not in expected_team_set and f.get("canonical_away_id") in expected_team_set:
-            a_id = f.get("canonical_away_id")
-        if a_id is None:
-            a_id = f.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
-                raw_name=a_obj.get("name", "") or (str(a_obj.get("id")) if a_obj.get("id") is not None else ""),
-                provider=p_prov,
-                provider_team_id=a_obj.get("id"),
-                league_id=f_lid,
-                sport="football",
-                auto_register=False,
-            )
+        canonical_a = f.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
+            raw_name=a_obj.get("name", "") or (str(a_obj.get("id")) if a_obj.get("id") is not None else ""),
+            provider=p_prov,
+            provider_team_id=a_obj.get("id"),
+            league_id=f_lid,
+            sport="football",
+            auto_register=False,
+        )
+        if canonical_a in expected_team_set:
+            a_id = canonical_a
+        elif a_obj.get("id") in expected_team_set:
+            a_id = a_obj.get("id")
+        else:
+            a_id = canonical_a or a_obj.get("id")
 
         if h_id is not None and a_id is not None:
             distinct_pairings.add((h_id, a_id))

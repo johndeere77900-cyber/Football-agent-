@@ -183,8 +183,8 @@ def resolve_canonical_team_id(
     if not target_canonical_id:
         return None
 
-    # Persist the newly resolved mapping ONLY if real provider team ID exists
-    if p_team_id_str:
+    # Persist newly resolved mapping ONLY if auto_register is True and real provider team ID exists
+    if p_team_id_str and auto_register:
         storage.save_team_identity(
             sport=sport,
             canonical_id=target_canonical_id,
