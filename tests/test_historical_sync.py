@@ -15,8 +15,11 @@ def temp_db(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def mock_team_universe(monkeypatch):
+    import team_identity
+    cid1 = team_identity.bootstrap_historical_team_identity("Team A", "api_football", 1)
+    cid2 = team_identity.bootstrap_historical_team_identity("Team B", "api_football", 2)
     def _mock_get_team_ids(league_id, season, *args, **kwargs):
-        return [1, 2]
+        return [cid1 or "football_team_team_a", cid2 or "football_team_team_b"]
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
 
 
