@@ -72,6 +72,10 @@ def _is_historical_provider_complete(
     if prov == "api_football":
         if expected_pages <= 0 or pages_completed < expected_pages:
             return False
+    else:
+        # Fallback provider completeness is independent of primary provider page count
+        if pages_completed <= 0:
+            return False
 
     # Require independently verified structural evidence
     return True
@@ -438,10 +442,6 @@ def sync_historical_fixtures(
         manifest_source = page_source_val
 
     if is_fully_complete:
-        if page_source_val != "api_football":
-            expected_pages = 1
-            pages_completed = 1
-
         storage.mark_historical_dataset_complete(
             league_id,
             season,
