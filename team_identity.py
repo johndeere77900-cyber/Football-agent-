@@ -36,8 +36,8 @@ def normalize_team_name(name: str) -> str:
     nfkd = unicodedata.normalize("NFKD", name)
     no_accents = "".join([c for c in nfkd if not unicodedata.combining(c)])
 
-    # Lowercase and replace underscores/punctuation with space
-    text = no_accents.lower().replace("_", " ")
+    # Lowercase, expand ampersands to 'and', replace underscores with space
+    text = no_accents.lower().replace("_", " ").replace("&", " and ")
 
     # Replace remaining punctuation / non-alphanumeric with space
     text = re.sub(r"[^\w\s]", " ", text)
@@ -145,10 +145,16 @@ def resolve_canonical_team_id(
     if not target_canonical_id:
         alias_dict = getattr(config, "CANONICAL_TEAM_ALIASES", {})
         canonical_alias = None
-        if league_id and (norm_name, league_id) in alias_dict:
-            canonical_alias = alias_dict[(norm_name, league_id)]
-        elif norm_name in alias_dict:
-            canonical_alias = alias_dict[norm_name]
+        for alias_key, target_val in alias_dict.items():
+            if isinstance(alias_key, tuple) and len(alias_key) == 2:
+                key_name, key_league = alias_key
+                if normalize_team_name(str(key_name)) == norm_name and (league_id is None or key_league == league_id):
+                    canonical_alias = target_val
+                    break
+            elif isinstance(alias_key, str):
+                if normalize_team_name(alias_key) == norm_name:
+                    canonical_alias = target_val
+                    break
 
         if canonical_alias:
             target_canonical_id = f"{sport}_team_{sanitize_canonical_slug(canonical_alias)}"

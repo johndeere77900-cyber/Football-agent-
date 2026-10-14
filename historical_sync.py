@@ -438,6 +438,10 @@ def sync_historical_fixtures(
         manifest_source = page_source_val
 
     if is_fully_complete:
+        if page_source_val != "api_football":
+            expected_pages = 1
+            pages_completed = 1
+
         storage.mark_historical_dataset_complete(
             league_id,
             season,

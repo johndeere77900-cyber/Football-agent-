@@ -94,18 +94,16 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
 
     Never fabricate IDs.
     Resolves standings/teams into canonical team IDs using read-only resolution.
+    If ANY expected team fails resolution, or if partial results are produced, returns [].
 
     Priority:
     1. API-Football standings
     2. football-data.org competition teams
 
     Returns:
-        list[str|int] of team IDs, or [] when unavailable.
+        list[str|int] of verified canonical team IDs, or [] when unavailable/incomplete.
     """
     import team_identity
-
-    canonical_ids = set()
-    raw_provider_ids = set()
 
     # Primary authoritative source: API-Football standings
     try:
@@ -116,7 +114,7 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
         else:
             rows = standings
 
-        if isinstance(rows, list):
+        if isinstance(rows, list) and rows:
             expanded = []
             for row in rows:
                 if isinstance(row, list):
@@ -124,24 +122,29 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                 elif isinstance(row, dict):
                     expanded.append(row)
 
-            for row in expanded:
-                team = row.get("team", {}) if isinstance(row, dict) else {}
-                team_id = team.get("id") if isinstance(team, dict) else None
-                team_name = team.get("name", "") if isinstance(team, dict) else ""
+            if expanded:
+                canonical_ids = set()
+                all_resolved = True
+                for row in expanded:
+                    team = row.get("team", {}) if isinstance(row, dict) else {}
+                    team_id = team.get("id") if isinstance(team, dict) else None
+                    team_name = team.get("name", "") if isinstance(team, dict) else ""
 
-                c_id = team_identity.resolve_canonical_team_id(
-                    raw_name=team_name or (str(team_id) if team_id is not None else ""),
-                    provider="api_football",
-                    provider_team_id=team_id,
-                    league_id=league_id,
-                    sport="football",
-                    auto_register=False,
-                )
-                if c_id:
+                    c_id = team_identity.resolve_canonical_team_id(
+                        raw_name=team_name or (str(team_id) if team_id is not None else ""),
+                        provider="api_football",
+                        provider_team_id=team_id,
+                        league_id=league_id,
+                        sport="football",
+                        auto_register=False,
+                    )
+                    if not c_id:
+                        all_resolved = False
+                        break
                     canonical_ids.add(c_id)
 
-        if canonical_ids:
-            return sorted(canonical_ids, key=lambda x: str(x))
+                if all_resolved and len(canonical_ids) == len(expanded):
+                    return sorted(canonical_ids, key=lambda x: str(x))
 
     except Exception as exc:
         logger.warning(
@@ -166,7 +169,9 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
             else:
                 rows = result
 
-            if isinstance(rows, list):
+            if isinstance(rows, list) and rows:
+                canonical_ids = set()
+                all_resolved = True
                 for row in rows:
                     team_id = row.get("id") if isinstance(row, dict) else None
                     team_name = (row.get("shortName") or row.get("name", "")) if isinstance(row, dict) else ""
@@ -179,8 +184,13 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                         sport="football",
                         auto_register=False,
                     )
-                    if c_id:
-                        canonical_ids.add(c_id)
+                    if not c_id:
+                        all_resolved = False
+                        break
+                    canonical_ids.add(c_id)
+
+                if all_resolved and len(canonical_ids) == len(rows):
+                    return sorted(canonical_ids, key=lambda x: str(x))
 
         except Exception as exc:
             logger.warning(
@@ -190,8 +200,6 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                 exc,
             )
 
-    if canonical_ids:
-        return sorted(canonical_ids, key=lambda x: str(x))
     return []
 
 
@@ -299,13 +307,6 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             sport="football",
             auto_register=False,
         )
-        if canonical_h in expected_team_set:
-            h_id = canonical_h
-        elif h_obj.get("id") in expected_team_set:
-            h_id = h_obj.get("id")
-        else:
-            h_id = canonical_h or h_obj.get("id")
-
         canonical_a = f.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
             raw_name=a_obj.get("name", "") or (str(a_obj.get("id")) if a_obj.get("id") is not None else ""),
             provider=p_prov,
@@ -314,12 +315,9 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             sport="football",
             auto_register=False,
         )
-        if canonical_a in expected_team_set:
-            a_id = canonical_a
-        elif a_obj.get("id") in expected_team_set:
-            a_id = a_obj.get("id")
-        else:
-            a_id = canonical_a or a_obj.get("id")
+
+        h_id = canonical_h
+        a_id = canonical_a
 
         if h_id is not None and a_id is not None:
             distinct_pairings.add((h_id, a_id))
@@ -561,7 +559,7 @@ def generate_synthetic_fixture_id(provider, home_name, away_name, date_str, leag
 
 
 def _normalize_api_football_fixture(fixture, league_id=None, season=None):
-    """Ensure API-Football fixture includes explicit provider identity metadata and valid synthetic ID if missing."""
+    """Ensure API-Football fixture includes explicit provider identity metadata and internal event key if missing ID."""
     if not isinstance(fixture, dict):
         return None
 
@@ -588,8 +586,9 @@ def _normalize_api_football_fixture(fixture, league_id=None, season=None):
     fid = fix_data.get("id")
     raw_date = fix_data.get("date")
 
+    synthetic_key = None
     if not fid and home_name and away_name and raw_date:
-        fid = generate_synthetic_fixture_id(
+        synthetic_key = generate_synthetic_fixture_id(
             "api_football",
             home_name,
             away_name,
@@ -599,16 +598,13 @@ def _normalize_api_football_fixture(fixture, league_id=None, season=None):
             home_id=home_id,
             away_id=away_id
         )
-        if fid:
-            if "fixture" not in res or not isinstance(res.get("fixture"), dict):
-                res["fixture"] = {"id": fid, "date": raw_date}
-            else:
-                res["fixture"]["id"] = fid
+        if synthetic_key:
+            res["event_key"] = synthetic_key
 
     res["provider_provenance"] = {
         "provider": "api_football",
         "provider_type": "primary",
-        "provider_fixture_id": fid or fix_data.get("id"),
+        "provider_fixture_id": fid,
         "provider_competition_id": league_data.get("id"),
         "provider_team_ids": {"home": home_id, "away": away_id},
         "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),

@@ -30,6 +30,12 @@ def setup_db():
 
 @pytest.fixture(autouse=True)
 def mock_team_universe(monkeypatch):
+    import team_identity
+    for tid in range(1, 21):
+        team_identity.bootstrap_historical_team_identity(f"Team {tid}", "api_football", tid)
+        team_identity.bootstrap_historical_team_identity(f"Team {tid}", "football_data_org", tid)
+        team_identity.bootstrap_historical_team_identity(f"Team {tid}", "soccerdata_sofascore", tid)
+
     def _mock_get_team_ids(league_id, season, *args, **kwargs):
         if league_id in (39, 140, 135, 78, 2):
             return list(range(1, 21))  # 20 teams for PL/PD/SA/BL1
@@ -55,6 +61,8 @@ def make_test_fixture(fid, h_name="Arsenal", a_name="Chelsea", h_id=1, a_id=2, s
             "home": {"id": h_id, "name": h_name},
             "away": {"id": a_id, "name": a_name},
         },
+        "canonical_home_id": h_id,
+        "canonical_away_id": a_id,
         "goals": {
             "home": h_goals,
             "away": a_goals,

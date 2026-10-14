@@ -212,8 +212,16 @@ def test_4_football_data_org_data_can_become_complete():
             "season": 2024,
         },
     }
+    fd_teams_response = {
+        "teams": [
+            {"id": i, "name": f"Team {i}", "shortName": f"Team {i}"} for i in range(1, 21)
+        ]
+    }
 
     with patch("main.check_competition_coverage", return_value=("season_not_available", "Season 2024 unavailable")), \
+         patch("api_football.get_league_fixtures_page", side_effect=Exception("Unavailable")), \
+         patch("api_football.get_league_standings", side_effect=Exception("Unavailable")), \
+         patch("football_data_api.get_competition_teams", return_value=fd_teams_response), \
          patch("football_data_api.get_competition_matches", return_value=fd_response):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
@@ -251,8 +259,16 @@ def test_4_b_partial_football_data_org_data_cannot_become_complete():
             "is_partial": True,
         },
     }
+    fd_teams_response = {
+        "teams": [
+            {"id": i, "name": f"Team {i}", "shortName": f"Team {i}"} for i in range(1, 21)
+        ]
+    }
 
     with patch("main.check_competition_coverage", return_value=("season_not_available", "Season 2024 unavailable")), \
+         patch("api_football.get_league_fixtures_page", side_effect=Exception("Unavailable")), \
+         patch("api_football.get_league_standings", side_effect=Exception("Unavailable")), \
+         patch("football_data_api.get_competition_teams", return_value=fd_teams_response), \
          patch("football_data_api.get_competition_matches", return_value=fd_response):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
@@ -314,3 +330,157 @@ def test_8_mixed_or_invalid_providers_rejected_for_identity_mapping():
 
     with pytest.raises(ValueError, match="Invalid team identity provider"):
         storage.save_team_identity("football", "football_team_arsenal", "mixed", "100", "arsenal", "Arsenal")
+
+
+def test_cross_provider_event_reconciliation_rejects_conflicting_scores():
+    """
+    Verify that cross-provider event reconciliation flags conflicting scores as disputed.
+    """
+    import data_resolver
+
+    rec_api = {
+        "fixture": {"id": 100, "date": "2024-09-01T15:00:00Z"},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+        "goals": {"home": 2, "away": 1},
+        "provider_provenance": {"provider": "api_football"},
+    }
+    rec_fd = {
+        "fixture": {"id": 200, "date": "2024-09-01T15:00:00Z"},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 57, "name": "Arsenal FC"}, "away": {"id": 61, "name": "Chelsea FC"}},
+        "goals": {"home": 0, "away": 0},
+        "provider_provenance": {"provider": "football_data_org"},
+    }
+
+    reconciled = data_resolver.reconcile_fixture_records([rec_api, rec_fd])
+    assert reconciled["disputed_score"] is True
+    assert len(reconciled["data_conflicts"]) > 0
+
+
+def test_legitimate_rematches_remain_distinct():
+    """
+    Verify that legitimate home and away rematches on different dates remain distinct.
+    """
+    f_leg1 = {
+        "fixture": {"id": 1001, "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+        "goals": {"home": 2, "away": 1},
+        "canonical_home_id": "football_team_arsenal",
+        "canonical_away_id": "football_team_chelsea",
+    }
+    f_leg2 = {
+        "fixture": {"id": 1002, "date": "2025-01-15T15:00:00Z", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 20, "name": "Chelsea"}, "away": {"id": 10, "name": "Arsenal"}},
+        "goals": {"home": 1, "away": 1},
+        "canonical_home_id": "football_team_chelsea",
+        "canonical_away_id": "football_team_arsenal",
+    }
+
+    res = storage.save_historical_fixtures([f_leg1, f_leg2], 39, 2024, source="api_football")
+    assert res["inserted"] == 2
+
+
+def test_enrichment_lookups_remain_correct_when_fixture_ids_collide():
+    """
+    Verify that statistical enrichment lookups operate correctly with source isolation.
+    """
+    enrich_api = [{
+        "fixture": {"id": 777, "date": "2024-09-01T15:00:00Z"},
+        "statistics": {"shots": {"home": 12, "away": 8}},
+        "provider_provenance": {"provider": "api_football"},
+    }]
+    enrich_fd = [{
+        "fixture": {"id": 777, "date": "2024-09-01T15:00:00Z"},
+        "statistics": {"shots": {"home": 5, "away": 3}},
+        "provider_provenance": {"provider": "football_data_org"},
+    }]
+
+    storage.save_historical_enrichment(enrich_api, source="api_football")
+    storage.save_historical_enrichment(enrich_fd, source="football_data_org")
+
+    res_api = storage.get_historical_enrichment([777], source="api_football")
+    res_fd = storage.get_historical_enrichment([777], source="football_data_org")
+
+    assert res_api[777]["statistics"]["shots"]["home"] == 12
+    assert res_fd[777]["statistics"]["shots"]["home"] == 5
+
+
+def test_missing_provider_fixture_ids_cannot_produce_invalid_synthetic_ids_used_by_persistence():
+    """
+    Verify that generated synthetic string IDs are stored separately in event_key
+    and never overwrite integer provider fixture IDs.
+    """
+    import data_resolver
+
+    fix = {
+        "fixture": {"date": "2024-09-01T15:00:00Z"},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+    }
+
+    norm = data_resolver._normalize_api_football_fixture(fix, league_id=39, season=2024)
+    # Synthetic string key must NOT be placed into integer fixture.id
+    assert norm["fixture"].get("id") is None
+    assert norm.get("event_key") is not None
+
+
+def test_fallback_completeness_and_pagination_remain_independent():
+    """
+    Verify that fallback complete responses specify expected_pages: 1 and current_page: 1.
+    """
+    import data_resolver
+
+    resolver = data_resolver.DataResolver()
+    teams = [team_identity.bootstrap_historical_team_identity(f"Team {i}", "football_data_org", i, league_id=39) for i in range(1, 21)]
+    pairings = [(h, a) for h in range(1, 21) for a in range(1, 21) if h != a]
+    matches = [
+        {
+            "id": 9000 + i,
+            "utcDate": "2024-08-17T15:00:00Z",
+            "status": "FINISHED",
+            "homeTeam": {"id": h, "name": f"Team {h}"},
+            "awayTeam": {"id": a, "name": f"Team {a}"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+            "competition": {"code": "PL"},
+            "season": {"startDate": "2024-08-01"},
+        }
+        for i, (h, a) in enumerate(pairings)
+    ]
+    fd_teams_response = {
+        "teams": [
+            {"id": i, "name": f"Team {i}", "shortName": f"Team {i}"} for i in range(1, 21)
+        ]
+    }
+
+    with patch("api_football.get_league_fixtures_page", side_effect=Exception("API error")), \
+         patch("api_football.get_league_standings", side_effect=Exception("API error")), \
+         patch("football_data_api.get_competition_teams", return_value=fd_teams_response), \
+         patch("football_data_api.get_competition_matches", return_value={"matches": matches, "metadata": {"is_complete": True}}):
+
+        res = resolver.get_league_fixtures_page(39, 2024, page=1)
+        assert res["expected_pages"] == 1
+        assert res["current_page"] == 1
+        assert res["provider_metadata"]["is_complete"] is True
+
+
+def test_historical_structural_validation_rejects_incomplete_team_universes_and_unresolved_identities():
+    """
+    Verify that structural coverage fails closed when canonical expected team universe is incomplete or unresolved.
+    """
+    import data_resolver
+
+    fixtures = [{
+        "fixture": {"id": 1, "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 9991, "name": "Unknown A"}, "away": {"id": 9992, "name": "Unknown B"}},
+        "goals": {"home": 1, "away": 0},
+    }]
+
+    res = data_resolver._validate_historical_structural_coverage(
+        fixtures, season=2024, provider_metadata={"competition_format": "double_round_robin", "expected_team_ids": []}, league_id=39
+    )
+    assert res["verified"] is False
+    assert res["reason"] == "authoritative_team_universe_unavailable"
