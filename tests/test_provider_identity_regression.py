@@ -274,3 +274,28 @@ def test_5_verified_canonical_mappings_still_work():
 
     cid_inter = team_identity.resolve_canonical_team_id("Inter", "api_football", 108, league_id=135)
     assert cid_inter == "football_team_inter_milan"
+
+
+def test_6_unknown_teams_fail_closed_without_auto_registration():
+    """
+    Verify that resolving unknown teams with auto_register=False returns None and fails closed.
+    """
+    cid = team_identity.resolve_canonical_team_id("Unknown Completely Random Club 9999", "api_football", 99999, league_id=39, auto_register=False)
+    assert cid is None
+
+
+def test_7_pre_kickoff_temporal_filtering_rejects_kickoff_or_future_matches():
+    """
+    Verify that matches at kickoff or in the future are strictly rejected by time_utils.is_strictly_before.
+    """
+    import time_utils
+    kickoff = "2025-01-10T15:00:00+00:00"
+
+    # Match at exact kickoff time -> False
+    assert time_utils.is_strictly_before("2025-01-10T15:00:00+00:00", kickoff) is False
+
+    # Match after kickoff time -> False
+    assert time_utils.is_strictly_before("2025-01-10T16:00:00+00:00", kickoff) is False
+
+    # Match before kickoff time -> True
+    assert time_utils.is_strictly_before("2025-01-10T14:59:59+00:00", kickoff) is True

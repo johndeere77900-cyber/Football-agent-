@@ -3232,7 +3232,16 @@ def run_rolling_backtest_window(
     for f in all_raw_fixtures:
         fid = _fixture_id(f)
         source = f.get("source", "api_football")
-        key = (source, str(fid)) if fid is not None else id(f)
+        if fid is not None:
+            key = (source, str(fid))
+        else:
+            h_id = _home_id(f)
+            a_id = _away_id(f)
+            dt_str = _fixture_date(f)
+            if h_id is not None and a_id is not None and dt_str:
+                key = (source, str(h_id), str(a_id), str(dt_str))
+            else:
+                continue
         if key not in seen_identities:
             seen_identities.add(key)
             combined_fixtures.append(f)
