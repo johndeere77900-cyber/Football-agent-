@@ -3939,6 +3939,8 @@ def save_team_identity(
     sport = _validate_text(sport, "sport").lower()
     canonical_id = _validate_text(canonical_id, "canonical_id")
     provider = _validate_text(provider, "provider").lower()
+    if provider in {"mixed", "reconciled", "unknown"}:
+        raise ValueError(f"Invalid team identity provider: {provider}")
     provider_team_id = str(provider_team_id).strip()
     if not provider_team_id:
         raise ValueError("provider_team_id cannot be empty.")

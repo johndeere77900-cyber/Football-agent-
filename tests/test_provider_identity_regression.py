@@ -299,3 +299,18 @@ def test_7_pre_kickoff_temporal_filtering_rejects_kickoff_or_future_matches():
 
     # Match before kickoff time -> True
     assert time_utils.is_strictly_before("2025-01-10T14:59:59+00:00", kickoff) is True
+
+
+def test_8_mixed_or_invalid_providers_rejected_for_identity_mapping():
+    """
+    Verify that 'mixed', 'reconciled', and 'unknown' cannot be used as identity provider namespaces.
+    """
+    import pytest
+
+    assert team_identity.resolve_canonical_team_id("Arsenal", "mixed", 100) is None
+    assert team_identity.resolve_canonical_team_id("Arsenal", "reconciled", 100) is None
+    assert team_identity.bootstrap_historical_team_identity("Arsenal", "mixed", 100) is None
+    assert team_identity.bootstrap_historical_team_identity("Arsenal", "reconciled", 100) is None
+
+    with pytest.raises(ValueError, match="Invalid team identity provider"):
+        storage.save_team_identity("football", "football_team_arsenal", "mixed", "100", "arsenal", "Arsenal")

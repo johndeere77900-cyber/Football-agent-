@@ -72,6 +72,9 @@ def safe_stripped_team_name(name: str) -> str:
     return " ".join(filtered)
 
 
+INVALID_IDENTITY_PROVIDERS = {"mixed", "reconciled", "unknown"}
+
+
 def strip_national_team_words(name: str) -> str:
     """
     Strip national team suffix words (national team, football team, national, team)
@@ -113,6 +116,9 @@ def resolve_canonical_team_id(
         return None
 
     provider = str(provider).strip().lower()
+    if provider in INVALID_IDENTITY_PROVIDERS:
+        return None
+
     p_team_id_str = None
     if provider_team_id is not None and str(provider_team_id).strip().lower() not in ("", "none", "nan"):
         p_team_id_str = str(provider_team_id).strip()
@@ -215,6 +221,9 @@ def bootstrap_historical_team_identity(
         return None
 
     provider = str(provider).strip().lower()
+    if provider in INVALID_IDENTITY_PROVIDERS:
+        return None
+
     p_team_id_str = None
     if provider_team_id is not None and str(provider_team_id).strip().lower() not in ("", "none", "nan"):
         p_team_id_str = str(provider_team_id).strip()
