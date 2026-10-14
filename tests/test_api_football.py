@@ -187,6 +187,31 @@ def test_network_failure_retries(
     assert len(calls) == 2
 
 
+def test_get_league_standings_passes_max_budget(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test-key")
+
+    budget_checks = []
+
+    def mock_check_quota(endpoint, max_budget=None):
+        budget_checks.append((endpoint, max_budget))
+
+    monkeypatch.setattr(api_football, "_check_and_consume_quota", mock_check_quota)
+
+    def fake_get(url, headers, params, timeout):
+        return FakeResponse(payload={"response": [{"league": {"standings": [[{"team": {"id": 10, "name": "Arsenal"}}]]}}]})
+
+    monkeypatch.setattr(api_football.requests, "get", fake_get)
+
+    res = api_football.get_league_standings(39, 2024, max_budget=25)
+
+    assert len(res) > 0
+    assert ("standings", 25) in budget_checks
+
+
 def test_permanent_http_error_is_not_retried(
     tmp_path,
     monkeypatch,

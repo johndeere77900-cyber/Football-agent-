@@ -109,10 +109,7 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
 
     # Primary authoritative source: API-Football standings
     try:
-        try:
-            standings = api_football.get_league_standings(league_id, season, max_budget=max_budget)
-        except TypeError:
-            standings = api_football.get_league_standings(league_id, season)
+        standings = api_football.get_league_standings(league_id, season, max_budget=max_budget)
 
         if isinstance(standings, dict):
             rows = standings.get("response", standings.get("standings", []))
@@ -132,9 +129,6 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                 team_id = team.get("id") if isinstance(team, dict) else None
                 team_name = team.get("name", "") if isinstance(team, dict) else ""
 
-                if team_id is not None and not isinstance(team_id, bool):
-                    raw_provider_ids.add(team_id)
-
                 c_id = team_identity.resolve_canonical_team_id(
                     raw_name=team_name or (str(team_id) if team_id is not None else ""),
                     provider="api_football",
@@ -145,8 +139,6 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                 )
                 if c_id:
                     canonical_ids.add(c_id)
-                elif team_id is not None:
-                    canonical_ids.add(team_id)
 
         if canonical_ids:
             return sorted(canonical_ids, key=lambda x: str(x))
@@ -179,9 +171,6 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                     team_id = row.get("id") if isinstance(row, dict) else None
                     team_name = (row.get("shortName") or row.get("name", "")) if isinstance(row, dict) else ""
 
-                    if team_id is not None and not isinstance(team_id, bool):
-                        raw_provider_ids.add(team_id)
-
                     c_id = team_identity.resolve_canonical_team_id(
                         raw_name=team_name or (str(team_id) if team_id is not None else ""),
                         provider="football_data_org",
@@ -192,8 +181,6 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                     )
                     if c_id:
                         canonical_ids.add(c_id)
-                    elif team_id is not None:
-                        canonical_ids.add(team_id)
 
         except Exception as exc:
             logger.warning(
@@ -205,7 +192,7 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
 
     if canonical_ids:
         return sorted(canonical_ids, key=lambda x: str(x))
-    return sorted(raw_provider_ids, key=lambda x: str(x))
+    return []
 
 
 def _validate_historical_structural_coverage(fixtures, season, provider_metadata=None, league_id=None):

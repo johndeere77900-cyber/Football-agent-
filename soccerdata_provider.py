@@ -747,7 +747,7 @@ def get_team_historical_matches(team_name, season=None, timeout_seconds=DEFAULT_
 
     try:
         import team_identity
-        req_c_id = team_identity.bootstrap_historical_team_identity(team_name, "soccerdata", None, league_id=league_id)
+        req_c_id = team_identity.resolve_canonical_team_id(team_name, "soccerdata", None, league_id=league_id, auto_register=False)
     except Exception:
         req_c_id = None
 
@@ -761,8 +761,8 @@ def get_team_historical_matches(team_name, season=None, timeout_seconds=DEFAULT_
                 h_name = m.get("teams", {}).get("home", {}).get("name", "")
                 a_name = m.get("teams", {}).get("away", {}).get("name", "")
                 try:
-                    h_cid = team_identity.bootstrap_historical_team_identity(h_name, "soccerdata", None, league_id=league_id)
-                    a_cid = team_identity.bootstrap_historical_team_identity(a_name, "soccerdata", None, league_id=league_id)
+                    h_cid = team_identity.resolve_canonical_team_id(h_name, "soccerdata", None, league_id=league_id, auto_register=False)
+                    a_cid = team_identity.resolve_canonical_team_id(a_name, "soccerdata", None, league_id=league_id, auto_register=False)
                 except Exception:
                     h_cid, a_cid = None, None
 
