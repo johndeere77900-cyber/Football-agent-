@@ -557,12 +557,12 @@ def test_save_historical_fixtures_season_guards(temp_database):
     res_2026 = storage.save_historical_fixtures(sample_fixture_2026, league_id=39, season=2026)
     assert res_2026["inserted"] == 1
 
-    # Season 2027 or 2023 raises ValueError
+    # Season 2027 or 2019 raises ValueError
     with pytest.raises(ValueError, match="Football historical storage only supports seasons"):
         storage.save_historical_fixtures(sample_fixture, league_id=39, season=2027)
 
     with pytest.raises(ValueError, match="Football historical storage only supports seasons"):
-        storage.save_historical_fixtures(sample_fixture, league_id=39, season=2023)
+        storage.save_historical_fixtures(sample_fixture, league_id=39, season=2019)
 
     # Unconfigured league raises ValueError
     with pytest.raises(ValueError, match="configured leagues"):

@@ -29,6 +29,17 @@ def init_test_db(tmp_path, monkeypatch):
     storage.init_db()
 
 
+@pytest.fixture(autouse=True)
+def mock_team_universe(monkeypatch):
+    def _mock_get_team_ids(league_id, season, *args, **kwargs):
+        if league_id in (39, 140, 135, 78, 2):
+            return list(range(1, 21))
+        elif league_id in (61, 88, 94):
+            return list(range(1, 19))
+        return []
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
+
+
 def test_1_same_numeric_team_id_across_providers_does_not_cross_match():
     """
     Team ID 50 in API-Football is Team Alpha.
@@ -174,18 +185,20 @@ def test_4_football_data_org_data_can_become_complete():
     football-data.org returns valid complete dataset, historical_sync allows
     the dataset to become COMPLETE with provider-neutral completion.
     """
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
     fd_matches = [
         {
             "id": 99900 + i,
             "utcDate": "2024-08-15T19:00:00Z",
             "status": "FINISHED",
-            "homeTeam": {"id": (i % 20) + 1, "name": f"Team {(i % 20) + 1}"},
-            "awayTeam": {"id": ((i + 1) % 20) + 1, "name": f"Team {((i + 1) % 20) + 1}"},
+            "homeTeam": {"id": h_id, "name": f"Team {h_id}"},
+            "awayTeam": {"id": a_id, "name": f"Team {a_id}"},
             "score": {"fullTime": {"home": 2, "away": 1}},
             "competition": {"code": "PL"},
             "season": {"startDate": "2024-08-01", "endDate": "2025-05-31"},
         }
-        for i in range(380)
+        for i, (h_id, a_id) in enumerate(pairings)
     ]
 
     fd_response = {
@@ -261,3 +274,43 @@ def test_5_verified_canonical_mappings_still_work():
 
     cid_inter = team_identity.resolve_canonical_team_id("Inter", "api_football", 108, league_id=135)
     assert cid_inter == "football_team_inter_milan"
+
+
+def test_6_unknown_teams_fail_closed_without_auto_registration():
+    """
+    Verify that resolving unknown teams with auto_register=False returns None and fails closed.
+    """
+    cid = team_identity.resolve_canonical_team_id("Unknown Completely Random Club 9999", "api_football", 99999, league_id=39, auto_register=False)
+    assert cid is None
+
+
+def test_7_pre_kickoff_temporal_filtering_rejects_kickoff_or_future_matches():
+    """
+    Verify that matches at kickoff or in the future are strictly rejected by time_utils.is_strictly_before.
+    """
+    import time_utils
+    kickoff = "2025-01-10T15:00:00+00:00"
+
+    # Match at exact kickoff time -> False
+    assert time_utils.is_strictly_before("2025-01-10T15:00:00+00:00", kickoff) is False
+
+    # Match after kickoff time -> False
+    assert time_utils.is_strictly_before("2025-01-10T16:00:00+00:00", kickoff) is False
+
+    # Match before kickoff time -> True
+    assert time_utils.is_strictly_before("2025-01-10T14:59:59+00:00", kickoff) is True
+
+
+def test_8_mixed_or_invalid_providers_rejected_for_identity_mapping():
+    """
+    Verify that 'mixed', 'reconciled', and 'unknown' cannot be used as identity provider namespaces.
+    """
+    import pytest
+
+    assert team_identity.resolve_canonical_team_id("Arsenal", "mixed", 100) is None
+    assert team_identity.resolve_canonical_team_id("Arsenal", "reconciled", 100) is None
+    assert team_identity.bootstrap_historical_team_identity("Arsenal", "mixed", 100) is None
+    assert team_identity.bootstrap_historical_team_identity("Arsenal", "reconciled", 100) is None
+
+    with pytest.raises(ValueError, match="Invalid team identity provider"):
+        storage.save_team_identity("football", "football_team_arsenal", "mixed", "100", "arsenal", "Arsenal")

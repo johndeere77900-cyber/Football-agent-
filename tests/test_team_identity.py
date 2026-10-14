@@ -1,3 +1,4 @@
+from unittest.mock import patch
 import pytest
 import storage
 import team_identity
@@ -32,3 +33,19 @@ def test_cross_provider_canonical_resolution():
 def test_ambiguous_or_empty_name_fails_closed():
     assert team_identity.resolve_canonical_team_id("", "api_football", 123) is None
     assert team_identity.resolve_canonical_team_id("   ", "api_football", 124) is None
+
+
+def test_resolve_canonical_team_id_read_only_when_auto_register_false():
+    """
+    Verify that resolve_canonical_team_id with auto_register=False performs ZERO identity DB writes.
+    """
+    with patch("storage.save_team_identity") as mock_save:
+        cid = team_identity.resolve_canonical_team_id(
+            "Arsenal",
+            "api_football",
+            10,
+            league_id=39,
+            auto_register=False,
+        )
+        assert cid == "football_team_arsenal"
+        mock_save.assert_not_called()

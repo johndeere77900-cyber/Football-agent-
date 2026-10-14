@@ -384,7 +384,7 @@ def _get(endpoint, params, max_budget=None):
 # ============================================================================
 
 
-def get_fixtures_by_date(date_str, league_id=None):
+def get_fixtures_by_date(date_str, league_id=None, max_budget=None):
     """
     Return fixtures for a calendar date.
 
@@ -425,7 +425,7 @@ def get_fixtures_by_date(date_str, league_id=None):
         return _filter_league(response)
 
     # Fetch full date from API (no league param) to cover all leagues in 1 call
-    data = _get("fixtures", {"date": date_str})
+    data = _get("fixtures", {"date": date_str}, max_budget=max_budget)
     response = data.get("response", [])
     if not isinstance(response, list):
         return []
@@ -442,7 +442,7 @@ def get_live_fixtures():
     return response
 
 
-def get_team_statistics(team_id, league_id, season):
+def get_team_statistics(team_id, league_id, season, max_budget=None):
     team_id = _validate_positive_int_like(team_id, "team_id")
     league_id = _validate_positive_int_like(league_id, "league_id")
     season = _validate_positive_int_like(season, "season")
@@ -453,14 +453,14 @@ def get_team_statistics(team_id, league_id, season):
         "season": season,
     }
 
-    data = _get("teams/statistics", params)
+    data = _get("teams/statistics", params, max_budget=max_budget)
     response = data.get("response", {})
     if not isinstance(response, dict):
         return {}
     return response
 
 
-def get_head_to_head(team_a_id, team_b_id, last=10):
+def get_head_to_head(team_a_id, team_b_id, last=10, max_budget=None):
     team_a_id = _validate_positive_int_like(team_a_id, "team_a_id")
     team_b_id = _validate_positive_int_like(team_b_id, "team_b_id")
 
@@ -472,14 +472,14 @@ def get_head_to_head(team_a_id, team_b_id, last=10):
         "last": last,
     }
 
-    data = _get("fixtures/headtohead", params)
+    data = _get("fixtures/headtohead", params, max_budget=max_budget)
     response = data.get("response", [])
     if not isinstance(response, list):
         return []
     return response
 
 
-def get_recent_form(team_id, last=8, league_id=None, season=None):
+def get_recent_form(team_id, last=8, league_id=None, season=None, max_budget=None):
     team_id = _validate_positive_int_like(team_id, "team_id")
 
     if isinstance(last, bool) or not isinstance(last, int) or last <= 0:
@@ -495,7 +495,7 @@ def get_recent_form(team_id, last=8, league_id=None, season=None):
     if season is not None:
         params["season"] = _validate_positive_int_like(season, "season")
 
-    data = _get("fixtures", params)
+    data = _get("fixtures", params, max_budget=max_budget)
     response = data.get("response", [])
     if not isinstance(response, list):
         return []
@@ -713,12 +713,12 @@ def get_enriched_fixtures(fixture_ids, batch_size=FIXTURE_BATCH_SIZE, max_budget
 # ============================================================================
 
 
-def get_league_standings(league_id, season):
+def get_league_standings(league_id, season, max_budget=None):
     """Return flattened league standings."""
     league_id = _validate_positive_int_like(league_id, "league_id")
     season = _validate_positive_int_like(season, "season")
 
-    data = _get("standings", {"league": league_id, "season": season})
+    data = _get("standings", {"league": league_id, "season": season}, max_budget=max_budget)
     response = data.get("response", [])
 
     if not isinstance(response, list) or not response:

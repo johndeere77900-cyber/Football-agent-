@@ -3939,6 +3939,8 @@ def save_team_identity(
     sport = _validate_text(sport, "sport").lower()
     canonical_id = _validate_text(canonical_id, "canonical_id")
     provider = _validate_text(provider, "provider").lower()
+    if provider in {"mixed", "reconciled", "unknown"}:
+        raise ValueError(f"Invalid team identity provider: {provider}")
     provider_team_id = str(provider_team_id).strip()
     if not provider_team_id:
         raise ValueError("provider_team_id cannot be empty.")
@@ -4138,16 +4140,18 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
     }
     """
     # Frozen football historical storage scope.
-    # Historical football persistence is intentionally limited to 2024-2026 and configured leagues.
+    # Historical football persistence is intentionally limited to 2020-2026 and configured leagues.
     import team_identity
 
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
 
-    if season not in {2024, 2025, 2026}:
+    allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+
+    if season not in allowed_seasons:
         raise ValueError(
             f"Football historical storage only supports seasons "
-            f"[2024, 2025, 2026]; received season={season}."
+            f"{sorted(allowed_seasons)}; received season={season}."
         )
 
     allowed_leagues = set(getattr(config, "ALLOWED_LEAGUE_IDS", []))

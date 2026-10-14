@@ -3152,15 +3152,18 @@ def run_basketball_backtest(
 
 def run_rolling_backtest_window(
     league_id: Any,
-    seasons: Sequence[int] = (2024, 2025, 2026),
+    seasons: Sequence[int] = None,
     sample_size: int = 30,
     min_prior_matches: int = 5,
     sample_seed: Optional[int] = 42,
     enrich_statistics: bool = False,
 ) -> Dict[str, Any]:
     """
-    Run a rolling-window historical backtest over 2024-2026 completed fixtures.
+    Run a rolling-window historical backtest over completed target fixtures.
     """
+    if seasons is None:
+        seasons = tuple(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+
     if (
         isinstance(league_id, bool)
         or not isinstance(league_id, int)
@@ -3170,7 +3173,7 @@ def run_rolling_backtest_window(
     if not isinstance(seasons, (list, tuple)) or not seasons:
         raise ValueError("seasons must be a non-empty sequence of integer years.")
 
-    allowed_rolling_seasons = {2024, 2025, 2026}
+    allowed_rolling_seasons = set(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
     for s in seasons:
         if (
             isinstance(s, bool)
@@ -3179,7 +3182,7 @@ def run_rolling_backtest_window(
         ):
             raise ValueError(
                 f"Invalid season {s} for rolling-window backtest. "
-                "Only seasons from (2024, 2025, 2026) are allowed."
+                f"Only seasons from {sorted(allowed_rolling_seasons)} are allowed."
             )
 
     if (
@@ -3229,7 +3232,16 @@ def run_rolling_backtest_window(
     for f in all_raw_fixtures:
         fid = _fixture_id(f)
         source = f.get("source", "api_football")
-        key = (source, str(fid)) if fid is not None else id(f)
+        if fid is not None:
+            key = (source, str(fid))
+        else:
+            h_id = _home_id(f)
+            a_id = _away_id(f)
+            dt_str = _fixture_date(f)
+            if h_id is not None and a_id is not None and dt_str:
+                key = (source, str(h_id), str(a_id), str(dt_str))
+            else:
+                continue
         if key not in seen_identities:
             seen_identities.add(key)
             combined_fixtures.append(f)

@@ -72,6 +72,9 @@ def safe_stripped_team_name(name: str) -> str:
     return " ".join(filtered)
 
 
+INVALID_IDENTITY_PROVIDERS = {"mixed", "reconciled", "unknown"}
+
+
 def strip_national_team_words(name: str) -> str:
     """
     Strip national team suffix words (national team, football team, national, team)
@@ -113,6 +116,9 @@ def resolve_canonical_team_id(
         return None
 
     provider = str(provider).strip().lower()
+    if provider in INVALID_IDENTITY_PROVIDERS:
+        return None
+
     p_team_id_str = None
     if provider_team_id is not None and str(provider_team_id).strip().lower() not in ("", "none", "nan"):
         p_team_id_str = str(provider_team_id).strip()
@@ -183,8 +189,8 @@ def resolve_canonical_team_id(
     if not target_canonical_id:
         return None
 
-    # Persist the newly resolved mapping ONLY if real provider team ID exists
-    if p_team_id_str:
+    # Persist newly resolved mapping ONLY if auto_register is True and real provider team ID exists
+    if p_team_id_str and auto_register:
         storage.save_team_identity(
             sport=sport,
             canonical_id=target_canonical_id,
@@ -215,6 +221,9 @@ def bootstrap_historical_team_identity(
         return None
 
     provider = str(provider).strip().lower()
+    if provider in INVALID_IDENTITY_PROVIDERS:
+        return None
+
     p_team_id_str = None
     if provider_team_id is not None and str(provider_team_id).strip().lower() not in ("", "none", "nan"):
         p_team_id_str = str(provider_team_id).strip()

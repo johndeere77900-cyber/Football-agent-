@@ -2860,7 +2860,7 @@ def build_parser():
         "--seasons",
         nargs="+",
         type=int,
-        help="Explicit list of seasons for historical queue (e.g. --seasons 2022 2023 2024)",
+        help="Explicit list of seasons for historical queue (e.g. --seasons 2020 2021 2022 2023 2024 2025 2026)",
     )
 
     parser.add_argument(
