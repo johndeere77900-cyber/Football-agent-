@@ -26,7 +26,7 @@ def isolated_db(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def mock_team_universe(monkeypatch):
-    def _mock_get_team_ids(league_id, season):
+    def _mock_get_team_ids(league_id, season, *args, **kwargs):
         return [1, 2]
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
 

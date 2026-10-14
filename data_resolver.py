@@ -88,7 +88,7 @@ LEAGUE_TO_SD_CODE = LEAGUE_TO_SD_MH_CODE
 DOUBLE_ROUND_ROBIN_LEAGUE_IDS = {39, 140, 135, 78, 61, 88, 94}
 
 
-def _get_authoritative_historical_team_ids(league_id, season):
+def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *args, **kwargs):
     """
     Return the authoritative competition team IDs for structural validation.
 
@@ -105,7 +105,10 @@ def _get_authoritative_historical_team_ids(league_id, season):
 
     # Primary authoritative source: API-Football standings
     try:
-        standings = api_football.get_league_standings(league_id, season)
+        try:
+            standings = api_football.get_league_standings(league_id, season, max_budget=max_budget)
+        except TypeError:
+            standings = api_football.get_league_standings(league_id, season)
 
         if isinstance(standings, dict):
             rows = standings.get("response", standings.get("standings", []))
@@ -1756,7 +1759,7 @@ class DataResolver:
         Calculates missing fields for finished matches and fills gaps across secondary and tertiary providers.
         When completed_only=True, returned fixtures are strictly filtered to FT, AET, PEN status.
         """
-        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season)
+        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget)
         competition_format = (
             "double_round_robin"
             if league_id in DOUBLE_ROUND_ROBIN_LEAGUE_IDS

@@ -30,7 +30,7 @@ def setup_db():
 
 @pytest.fixture(autouse=True)
 def mock_team_universe(monkeypatch):
-    def _mock_get_team_ids(league_id, season):
+    def _mock_get_team_ids(league_id, season, *args, **kwargs):
         if league_id in (39, 140, 135, 78, 2):
             return list(range(1, 21))  # 20 teams for PL/PD/SA/BL1
         elif league_id in (61, 88, 94):
