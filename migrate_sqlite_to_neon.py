@@ -480,7 +480,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False, verify_only=False)
                                 home_goals, away_goals, raw_json, source, fetched_at
                             )
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (fixture_id) DO NOTHING
+                            ON CONFLICT (source, fixture_id) DO NOTHING
                             """,
                             (fid, lid, ssn, kick, st, hid, aid, hname, aname, hg, ag, raw_str, src or 'api_football', fat),
                         )
@@ -549,7 +549,7 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False, verify_only=False)
                             """
                             INSERT INTO historical_fixture_enrichment (fixture_id, raw_json, fetched_at, source)
                             VALUES (%s, %s, %s, %s)
-                            ON CONFLICT (fixture_id) DO NOTHING
+                            ON CONFLICT (source, fixture_id) DO NOTHING
                             """,
                             (fid, raw_str, fat, src or 'api_football'),
                         )
