@@ -4144,10 +4144,12 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
 
-    if season not in {2024, 2025, 2026}:
+    allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+
+    if season not in allowed_seasons:
         raise ValueError(
             f"Football historical storage only supports seasons "
-            f"[2024, 2025, 2026]; received season={season}."
+            f"{sorted(allowed_seasons)}; received season={season}."
         )
 
     allowed_leagues = set(getattr(config, "ALLOWED_LEAGUE_IDS", []))

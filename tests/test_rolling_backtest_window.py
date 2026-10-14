@@ -98,13 +98,13 @@ def test_rolling_window_excludes_upcoming_2026_fixtures(temp_db):
 
 
 def test_rolling_window_rejects_invalid_seasons():
-    """Reject seasons outside 2024, 2025, 2026."""
+    """Reject seasons outside config.TARGET_SEASONS."""
     with pytest.raises(ValueError) as exc_info:
         backtest.run_rolling_backtest_window(
             league_id=39,
-            seasons=(2022, 2024, 2025),
+            seasons=(2019, 2024, 2025),
         )
-    assert "Invalid season 2022" in str(exc_info.value)
+    assert "Invalid season 2019" in str(exc_info.value)
 
 
 def test_rolling_window_candidate_result_excluded_from_features(temp_db):

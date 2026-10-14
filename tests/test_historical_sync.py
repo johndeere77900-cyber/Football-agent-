@@ -236,10 +236,77 @@ def test_sync_historical_fixtures_season_guards(temp_db):
     Verify strict football historical-season guard in sync_historical_fixtures.
     """
     with pytest.raises(ValueError, match="Football historical acquisition only supports seasons"):
-        historical_sync.sync_historical_fixtures(league_id=39, season=2023)
+        historical_sync.sync_historical_fixtures(league_id=39, season=2019)
 
     with pytest.raises(ValueError, match="Football historical acquisition only supports seasons"):
         historical_sync.sync_historical_fixtures(league_id=39, season=2027)
+
+
+def test_unknown_provenance_fails_closed():
+    """
+    Verify that an unknown, empty, None, or malformed provider provenance fails closed.
+    """
+    assert historical_sync._is_historical_provider_complete(
+        page_source=None,
+        page_meta={"provider_metadata": {"structural_coverage": {"verified": True}}},
+        valid_fixtures_count=100,
+        expected_pages=1,
+        pages_completed=1,
+        quota_budget_stopped=False,
+        acquisition_failed=False,
+        rejected_count=0,
+        empty_pages_count=0,
+        final_stored_count=100,
+    ) is False
+
+    assert historical_sync._is_historical_provider_complete(
+        page_source="unsupported_provider",
+        page_meta={"provider_metadata": {"structural_coverage": {"verified": True}}},
+        valid_fixtures_count=100,
+        expected_pages=1,
+        pages_completed=1,
+        quota_budget_stopped=False,
+        acquisition_failed=False,
+        rejected_count=0,
+        empty_pages_count=0,
+        final_stored_count=100,
+    ) is False
+
+
+def test_ongoing_2026_fixtures_handled_by_status():
+    """
+    Verify that ongoing 2026 season fixtures are handled according to status.
+    Unplayed fixtures (NS, PST) are filtered out for historical storage,
+    while completed fixtures (FT, AET, PEN) are persisted.
+    """
+    fixtures_2026 = [
+        {
+            "fixture": {"id": 202601, "date": "2026-03-01T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2026},
+            "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+            "goals": {"home": 2, "away": 1},
+        },
+        {
+            "fixture": {"id": 202602, "date": "2026-04-01T15:00:00+00:00", "status": {"short": "NS"}},
+            "league": {"id": 39, "season": 2026},
+            "teams": {"home": {"id": 2, "name": "Team B"}, "away": {"id": 1, "name": "Team A"}},
+            "goals": {"home": None, "away": None},
+        },
+    ]
+
+    meta_return = {
+        "fixtures": fixtures_2026,
+        "page": 1,
+        "expected_pages": 1,
+    }
+
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return):
+        report = historical_sync.sync_historical_fixtures(league_id=39, season=2026)
+
+    assert report["final_stored_count"] == 1
+    stored = storage.get_historical_fixtures(39, 2026)
+    assert len(stored) == 1
+    assert stored[0]["fixture"]["id"] == 202601
 
 
 def test_sync_historical_fixtures_unconfigured_league_guard(temp_db):

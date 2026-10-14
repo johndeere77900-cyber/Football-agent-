@@ -45,7 +45,14 @@ def _is_historical_provider_complete(
     if rejected_count > 0 or empty_pages_count > 0:
         return False
 
-    prov = (page_source or "api_football").lower()
+    if not page_source or not isinstance(page_source, str):
+        return False
+
+    supported_providers = {"api_football", "football_data_org", "soccerdata", "mixed"}
+    prov = page_source.strip().lower()
+
+    if prov not in supported_providers:
+        return False
 
     prov_meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else {}
     if not isinstance(prov_meta, dict):
@@ -84,10 +91,7 @@ def sync_historical_fixtures(
     Acquire historical fixtures (and optional enrichment) for a league/season
     and save them into persistent storage.
     """
-    # Frozen football historical dataset scope.
-    # Only completed historical seasons 2024, 2025, and 2026 are permitted.
-    # This guard prevents accidental persistence of out-of-window seasons.
-    allowed_seasons = {2024, 2025, 2026}
+    allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
 
     if season not in allowed_seasons:
         raise ValueError(
@@ -873,7 +877,7 @@ def run_historical_queue(
     elif season is not None:
         target_seasons = [season]
     else:
-        target_seasons = list(getattr(config, "TARGET_SEASONS", [2022, 2023, 2024]))
+        target_seasons = list(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
 
     seasons = target_seasons
 
@@ -1024,7 +1028,7 @@ if __name__ == "__main__":
         "--seasons",
         nargs="+",
         type=int,
-        help="Explicit list of seasons for historical queue (e.g. --seasons 2022 2023 2024)",
+        help="Explicit list of seasons for historical queue (e.g. --seasons 2020 2021 2022 2023 2024 2025 2026)",
     )
 
     args = parser.parse_args()

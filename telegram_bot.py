@@ -1083,7 +1083,7 @@ def parse_operation_parameters(operation, text):
         params["league_id"] = league_id or (config.ALLOWED_BASKETBALL_LEAGUE_IDS[0] if sport == "basketball" else config.ALLOWED_LEAGUE_IDS[0])
         params["league_name"] = league_name or ("NBA" if sport == "basketball" else "Premier League")
         if sport != "basketball":
-            params["seasons"] = [2024, 2025, 2026]
+            params["seasons"] = list(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
 
     return params
 
@@ -1374,7 +1374,7 @@ def handle_backtest_op(params, request_id):
     sport = params.get("sport", "football")
     league_id = params.get("league_id")
     season = params.get("season", 2024)
-    seasons = params.get("seasons", (2024, 2025, 2026))
+    seasons = params.get("seasons", tuple(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026])))
     sample_size = params.get("sample", 30)
 
     storage.update_operation_request(request_id, status="RUNNING")
@@ -1413,7 +1413,7 @@ def handle_backtest_op(params, request_id):
                 f"• Status: {status_str}"
             )
         else:
-            seasons_tuple = tuple(seasons) if isinstance(seasons, (list, tuple)) else (2024, 2025, 2026)
+            seasons_tuple = tuple(seasons) if isinstance(seasons, (list, tuple)) else tuple(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
             result = backtest.run_rolling_backtest_window(
                 league_id=league_id,
                 seasons=seasons_tuple,
