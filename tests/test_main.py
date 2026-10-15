@@ -79,9 +79,11 @@ def recent_matches(team_id):
             "teams": {
                 "home": {
                     "id": team_id,
+                    "name": "Home FC" if team_id == 1 else "Away FC",
                 },
                 "away": {
                     "id": other,
+                    "name": f"Opponent {other}",
                 },
             },
             "goals": {
@@ -94,9 +96,11 @@ def recent_matches(team_id):
             "teams": {
                 "home": {
                     "id": other,
+                    "name": f"Opponent {other}",
                 },
                 "away": {
                     "id": team_id,
+                    "name": "Home FC" if team_id == 1 else "Away FC",
                 },
             },
             "goals": {
@@ -114,9 +118,11 @@ def h2h_matches():
             "teams": {
                 "home": {
                     "id": 1,
+                    "name": "Home FC",
                 },
                 "away": {
                     "id": 2,
+                    "name": "Away FC",
                 },
             },
             "goals": {
@@ -129,9 +135,11 @@ def h2h_matches():
             "teams": {
                 "home": {
                     "id": 2,
+                    "name": "Away FC",
                 },
                 "away": {
                     "id": 1,
+                    "name": "Home FC",
                 },
             },
             "goals": {
@@ -143,6 +151,12 @@ def h2h_matches():
 
 
 def patch_prediction_dependencies(monkeypatch):
+    import team_identity
+    team_identity.bootstrap_historical_team_identity("Home FC", "api_football", 1, league_id=39)
+    team_identity.bootstrap_historical_team_identity("Away FC", "api_football", 2, league_id=39)
+    team_identity.bootstrap_historical_team_identity("Opponent 99", "api_football", 99, league_id=39)
+    team_identity.bootstrap_historical_team_identity("Opponent 98", "api_football", 98, league_id=39)
+
     monkeypatch.setattr(
         data_resolver.api_football,
         "get_team_statistics",

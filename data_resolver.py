@@ -274,35 +274,16 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     import team_identity
 
     distinct_pairings = set()
-    seen_fixture_ids = set()
+    seen_fixture_ids = {}  # prov_fid_key -> fixture_dict
     participating_teams = set()
     team_match_counts = {}
+    valid_fixture_count = 0
 
     for f in fixtures:
         if not isinstance(f, dict):
-            continue
-
-        fix_obj = f.get("fixture", {}) if isinstance(f.get("fixture"), dict) else {}
-        fid = fix_obj.get("id")
-
-        if fid is None or isinstance(fid, bool):
-            continue
-        if isinstance(fid, str) and fid.isdigit():
-            fid = int(fid)
-            fix_obj["id"] = fid
-        if not isinstance(fid, int) or fid <= 0:
-            continue
-
-        p_prov = f.get("provider_provenance", {}).get("provider", "unknown") if isinstance(f.get("provider_provenance"), dict) else "unknown"
-        f_league = f.get("league", {}) if isinstance(f.get("league"), dict) else {}
-        f_lid = f_league.get("id") or league_id
-
-        # Validate unique provider-qualified fixture identity (provider, fid)
-        prov_fid_key = (p_prov, fid)
-        if prov_fid_key in seen_fixture_ids:
             return {
                 "verified": False,
-                "reason": "duplicate_fixture_id",
+                "reason": "invalid_fixture_metadata",
                 "fixture_count": fixture_count,
                 "distinct_fixture_count": len(distinct_pairings),
                 "team_count": len(participating_teams),
@@ -313,9 +294,160 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
                 "team_match_counts": team_match_counts,
                 "expected_fixture_count": expected_fixture_count,
             }
-        seen_fixture_ids.add(prov_fid_key)
 
-        teams_obj = f.get("teams", {}) if isinstance(f.get("teams"), dict) else {}
+        fix_obj = f.get("fixture")
+        if not isinstance(fix_obj, dict):
+            return {
+                "verified": False,
+                "reason": "invalid_fixture_metadata",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+
+        fid = fix_obj.get("id")
+        if fid is None or isinstance(fid, bool):
+            return {
+                "verified": False,
+                "reason": "invalid_fixture_metadata",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+        if isinstance(fid, str) and fid.isdigit():
+            fid = int(fid)
+            fix_obj["id"] = fid
+        if not isinstance(fid, int) or fid <= 0:
+            return {
+                "verified": False,
+                "reason": "invalid_fixture_metadata",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+
+        # FIX 1 Requirement 1: Explicit league ID & season check on every fixture
+        f_league = f.get("league")
+        if not isinstance(f_league, dict):
+            return {
+                "verified": False,
+                "reason": "invalid_fixture_metadata",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+
+        f_lid = f_league.get("id")
+        f_ssn = f_league.get("season")
+
+        if f_lid is None or (league_id is not None and f_lid != league_id):
+            return {
+                "verified": False,
+                "reason": "invalid_fixture_metadata",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+
+        if f_ssn is None or (season is not None and str(f_ssn) != str(season)):
+            return {
+                "verified": False,
+                "reason": "invalid_fixture_metadata",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+
+        p_prov = f.get("provider_provenance", {}).get("provider", "unknown") if isinstance(f.get("provider_provenance"), dict) else "unknown"
+
+        # Validate unique provider-qualified fixture identity (provider, fid)
+        prov_fid_key = (p_prov, fid)
+        if prov_fid_key in seen_fixture_ids:
+            prev_f = seen_fixture_ids[prov_fid_key]
+            # Check if conflicting record
+            prev_goals = prev_f.get("goals", {}) if isinstance(prev_f.get("goals"), dict) else {}
+            curr_goals = f.get("goals", {}) if isinstance(f.get("goals"), dict) else {}
+            prev_teams = prev_f.get("teams", {}) if isinstance(prev_f.get("teams"), dict) else {}
+            curr_teams = f.get("teams", {}) if isinstance(f.get("teams"), dict) else {}
+
+            is_conflict = (
+                prev_goals != curr_goals or
+                prev_teams.get("home", {}).get("id") != curr_teams.get("home", {}).get("id") or
+                prev_teams.get("away", {}).get("id") != curr_teams.get("away", {}).get("id")
+            )
+
+            if is_conflict:
+                return {
+                    "verified": False,
+                    "reason": "conflicting_fixture_id",
+                    "fixture_count": fixture_count,
+                    "distinct_fixture_count": len(distinct_pairings),
+                    "team_count": len(participating_teams),
+                    "expected_team_count": expected_team_count,
+                    "expected_team_ids": sorted(expected_team_set),
+                    "missing_team_ids": [],
+                    "unexpected_team_ids": [],
+                    "team_match_counts": team_match_counts,
+                    "expected_fixture_count": expected_fixture_count,
+                }
+            else:
+                # Identical duplicate: must not inflate coverage count
+                continue
+
+        seen_fixture_ids[prov_fid_key] = f
+
+        teams_obj = f.get("teams")
+        if not isinstance(teams_obj, dict):
+            return {
+                "verified": False,
+                "reason": "invalid_fixture_metadata",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+
         h_obj = teams_obj.get("home", {}) if isinstance(teams_obj.get("home"), dict) else {}
         a_obj = teams_obj.get("away", {}) if isinstance(teams_obj.get("away"), dict) else {}
 
@@ -339,38 +471,87 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         h_id = canonical_h
         a_id = canonical_a
 
-        if h_id is not None and a_id is not None:
-            pairing_key = (h_id, a_id)
-            distinct_pairings.add(pairing_key)
-            participating_teams.add(h_id)
-            participating_teams.add(a_id)
+        if h_id is None or a_id is None:
+            return {
+                "verified": False,
+                "reason": "unresolved_team_identity",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
 
-            if h_id not in team_match_counts:
-                team_match_counts[h_id] = {"home": 0, "away": 0, "total": 0}
-            team_match_counts[h_id]["home"] += 1
-            team_match_counts[h_id]["total"] += 1
+        if h_id == a_id:
+            return {
+                "verified": False,
+                "reason": "same_team_match",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
 
-            if a_id not in team_match_counts:
-                team_match_counts[a_id] = {"home": 0, "away": 0, "total": 0}
-            team_match_counts[a_id]["away"] += 1
-            team_match_counts[a_id]["total"] += 1
+        pairing_key = (h_id, a_id)
+        distinct_pairings.add(pairing_key)
+        participating_teams.add(h_id)
+        participating_teams.add(a_id)
+        valid_fixture_count += 1
+
+        if h_id not in team_match_counts:
+            team_match_counts[h_id] = {"home": 0, "away": 0, "total": 0}
+        team_match_counts[h_id]["home"] += 1
+        team_match_counts[h_id]["total"] += 1
+
+        if a_id not in team_match_counts:
+            team_match_counts[a_id] = {"home": 0, "away": 0, "total": 0}
+        team_match_counts[a_id]["away"] += 1
+        team_match_counts[a_id]["total"] += 1
 
     distinct_fixture_count = len(distinct_pairings)
 
     if not is_double_round_robin:
         # Non-double-round-robin (tournament, cup, international)
-        has_authoritative_evidence = (expected_fixture_count is not None) or bool(expected_team_set)
+        # FIX 1 Requirement 6: Require credible provider-specific completeness evidence.
+        # A team list or a nonzero fixture count alone is insufficient.
+        has_authoritative_evidence = (
+            (expected_fixture_count is not None and expected_fixture_count > 0)
+            or (provider_metadata.get("has_authoritative_evidence") is True and expected_fixture_count is not None)
+        )
+        if not has_authoritative_evidence:
+            return {
+                "verified": False,
+                "reason": "structural_coverage_unverifiable",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": distinct_fixture_count,
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": sorted(expected_team_set - participating_teams),
+                "unexpected_team_ids": sorted(participating_teams - expected_team_set) if expected_team_set else [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+
         is_verified = (
-            has_authoritative_evidence
-            and fixture_count > 0
-            and len(seen_fixture_ids) == fixture_count
-            and (expected_fixture_count is None or fixture_count == expected_fixture_count)
+            valid_fixture_count > 0
+            and len(seen_fixture_ids) == valid_fixture_count
+            and valid_fixture_count == expected_fixture_count
             and (not expected_team_set or expected_team_set.issubset(participating_teams))
         )
         return {
             "verified": is_verified,
-            "reason": None if is_verified else ("tournament_coverage_incomplete" if has_authoritative_evidence else "structural_coverage_unverifiable"),
-            "fixture_count": fixture_count,
+            "reason": None if is_verified else "tournament_coverage_incomplete",
+            "fixture_count": valid_fixture_count,
             "distinct_fixture_count": distinct_fixture_count,
             "team_count": len(participating_teams),
             "expected_team_count": expected_team_count,
@@ -388,7 +569,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         return {
             "verified": False,
             "reason": "team_universe_mismatch",
-            "fixture_count": fixture_count,
+            "fixture_count": valid_fixture_count,
             "distinct_fixture_count": distinct_fixture_count,
             "team_count": len(participating_teams),
             "expected_team_count": expected_team_count,
@@ -399,11 +580,11 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "expected_fixture_count": expected_fixture_count,
         }
 
-    if distinct_fixture_count != expected_fixture_count or fixture_count != expected_fixture_count:
+    if distinct_fixture_count != expected_fixture_count or valid_fixture_count != expected_fixture_count:
         return {
             "verified": False,
             "reason": "fixture_count_mismatch",
-            "fixture_count": fixture_count,
+            "fixture_count": valid_fixture_count,
             "distinct_fixture_count": distinct_fixture_count,
             "team_count": len(participating_teams),
             "expected_team_count": expected_team_count,
@@ -424,7 +605,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             return {
                 "verified": False,
                 "reason": "team_participation_imbalance",
-                "fixture_count": fixture_count,
+                "fixture_count": valid_fixture_count,
                 "distinct_fixture_count": distinct_fixture_count,
                 "team_count": len(participating_teams),
                 "expected_team_count": expected_team_count,
@@ -438,7 +619,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     return {
         "verified": True,
         "reason": None,
-        "fixture_count": fixture_count,
+        "fixture_count": valid_fixture_count,
         "distinct_fixture_count": distinct_fixture_count,
         "team_count": len(participating_teams),
         "expected_team_count": expected_team_count,

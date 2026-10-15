@@ -110,6 +110,10 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False, verify_only=False)
             storage.init_db()
 
         source_cursor = source_conn.cursor()
+        existing_tables = {
+            row[0]
+            for row in source_cursor.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
 
         # -------------------------------------------------------------
         # 1. Migrate Football Predictions
@@ -689,6 +693,174 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False, verify_only=False)
                         )
                         if cur.rowcount >= 1:
                             report["backtest_market_metrics"]["migrated"] += 1
+
+        # -------------------------------------------------------------
+        # 13. Migrate Team Identities
+        # -------------------------------------------------------------
+        if "team_identities" in existing_tables:
+            try:
+                ti_rows = source_cursor.execute(
+                    """
+                    SELECT sport, canonical_id, provider, provider_team_id,
+                           normalized_name, display_name, league_id, created_at, updated_at
+                    FROM team_identities
+                    """
+                ).fetchall()
+            except sqlite3.OperationalError:
+                ti_rows = []
+            report["team_identities"]["source"] = len(ti_rows)
+
+            if not dry_run and not verify_only and ti_rows:
+                with target_conn.transaction():
+                    with target_conn.cursor() as cur:
+                        for r in ti_rows:
+                            spt, cid, prov, ptid, norm, disp, lid, cat, uat = r
+                            cur.execute(
+                                """
+                                INSERT INTO team_identities (
+                                    sport, canonical_id, provider, provider_team_id,
+                                    normalized_name, display_name, league_id, created_at, updated_at
+                                )
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                ON CONFLICT (sport, provider, provider_team_id) DO UPDATE SET
+                                    canonical_id = EXCLUDED.canonical_id,
+                                    normalized_name = EXCLUDED.normalized_name,
+                                    display_name = EXCLUDED.display_name,
+                                    league_id = COALESCE(EXCLUDED.league_id, team_identities.league_id),
+                                    updated_at = EXCLUDED.updated_at
+                                """,
+                                (spt or 'football', cid, prov, ptid, norm, disp, lid, cat, uat),
+                            )
+                            if cur.rowcount >= 1:
+                                report["team_identities"]["migrated"] += 1
+        else:
+            report["team_identities"]["status"] = "NOT_APPLICABLE"
+
+        # -------------------------------------------------------------
+        # 14. Migrate Prediction Snapshots
+        # -------------------------------------------------------------
+        if "prediction_snapshots" in existing_tables:
+            try:
+                ps_rows = source_cursor.execute(
+                    """
+                    SELECT fixture_id, prediction_timestamp, kickoff_at, sport,
+                           league_id, season, canonical_home_id, canonical_away_id,
+                           home_team, away_team, prediction_context, model_version,
+                           feature_version, calibration_version, data_cutoff_timestamp,
+                           markets_json, features_json, confidence_json, quality_gate,
+                           reason_codes_json, odds_comparison_json, edge, ev,
+                           uncertainty_state, created_at
+                    FROM prediction_snapshots
+                    """
+                ).fetchall()
+            except sqlite3.OperationalError:
+                ps_rows = []
+            report["prediction_snapshots"]["source"] = len(ps_rows)
+
+            if not dry_run and not verify_only and ps_rows:
+                with target_conn.transaction():
+                    with target_conn.cursor() as cur:
+                        for r in ps_rows:
+                            (
+                                fid, pts, kick, spt, lid, ssn, chid, caid,
+                                hname, aname, pctx, mv, fv, cv, dcutoff,
+                                mjson, fjson, cjson, qgate, rjson, ojson,
+                                edg, ev_val, unc_st, cat
+                            ) = r
+                            m_str = storage._json_dumps(storage._json_loads(mjson), "mjson") if mjson else "{}"
+                            f_str = storage._json_dumps(storage._json_loads(fjson), "fjson") if fjson else None
+                            c_str = storage._json_dumps(storage._json_loads(cjson), "cjson") if cjson else None
+                            r_str = storage._json_dumps(storage._json_loads(rjson), "rjson") if rjson else None
+                            o_str = storage._json_dumps(storage._json_loads(ojson), "ojson") if ojson else None
+
+                            cur.execute(
+                                """
+                                INSERT INTO prediction_snapshots (
+                                    fixture_id, prediction_timestamp, kickoff_at, sport,
+                                    league_id, season, canonical_home_id, canonical_away_id,
+                                    home_team, away_team, prediction_context, model_version,
+                                    feature_version, calibration_version, data_cutoff_timestamp,
+                                    markets_json, features_json, confidence_json, quality_gate,
+                                    reason_codes_json, odds_comparison_json, edge, ev,
+                                    uncertainty_state, created_at
+                                )
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                """,
+                                (
+                                    fid, pts, kick, spt or 'football', lid, ssn, chid, caid,
+                                    hname, aname, pctx or 'PRE_MATCH', mv, fv, cv, dcutoff,
+                                    m_str, f_str, c_str, qgate, r_str, o_str,
+                                    edg, ev_val, unc_st, cat
+                                ),
+                            )
+                            if cur.rowcount >= 1:
+                                report["prediction_snapshots"]["migrated"] += 1
+        else:
+            report["prediction_snapshots"]["status"] = "NOT_APPLICABLE"
+
+        # -------------------------------------------------------------
+        # 15. Migrate Operation Requests
+        # -------------------------------------------------------------
+        if "operation_requests" in existing_tables:
+            try:
+                op_rows = source_cursor.execute(
+                    """
+                    SELECT request_id, telegram_update_id, chat_id, operation, sport,
+                           parameters_json, status, github_run_id, created_at, started_at,
+                           completed_at, error_code, error_message, result_summary_json
+                    FROM operation_requests
+                    """
+                ).fetchall()
+            except sqlite3.OperationalError:
+                op_rows = []
+            report["operation_requests"]["source"] = len(op_rows)
+
+            if not dry_run and not verify_only and op_rows:
+                with target_conn.transaction():
+                    with target_conn.cursor() as cur:
+                        for r in op_rows:
+                            req_id, t_upd_id, cid, op, spt, params_j, st, gh_run, cat, sat, comp_at, err_code, err_msg, res_sum_j = r
+                            params_str = storage._json_dumps(storage._json_loads(params_j), "params") if params_j else None
+                            sum_str = storage._json_dumps(storage._json_loads(res_sum_j), "res_sum") if res_sum_j else None
+
+                            if t_upd_id and str(t_upd_id).strip() != "":
+                                cur.execute(
+                                    """
+                                    INSERT INTO operation_requests (
+                                        request_id, telegram_update_id, chat_id, operation, sport,
+                                        parameters_json, status, github_run_id, created_at, started_at,
+                                        completed_at, error_code, error_message, result_summary_json
+                                    )
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                    ON CONFLICT (telegram_update_id) WHERE telegram_update_id IS NOT NULL DO NOTHING
+                                    """,
+                                    (
+                                        req_id, str(t_upd_id).strip(), cid, op, spt,
+                                        params_str, st, gh_run, cat, sat,
+                                        comp_at, err_code, err_msg, sum_str
+                                    ),
+                                )
+                            else:
+                                cur.execute(
+                                    """
+                                    INSERT INTO operation_requests (
+                                        request_id, telegram_update_id, chat_id, operation, sport,
+                                        parameters_json, status, github_run_id, created_at, started_at,
+                                        completed_at, error_code, error_message, result_summary_json
+                                    )
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                    ON CONFLICT (request_id) DO NOTHING
+                                    """,
+                                    (
+                                        req_id, None, cid, op, spt,
+                                        params_str, st, gh_run, cat, sat,
+                                        comp_at, err_code, err_msg, sum_str
+                                    ),
+                                )
+                            if cur.rowcount >= 1:
+                                report["operation_requests"]["migrated"] += 1
+        else:
+            report["operation_requests"]["status"] = "NOT_APPLICABLE"
 
         # -------------------------------------------------------------
         # 13. Exact Source-vs-Destination Deterministic Verification

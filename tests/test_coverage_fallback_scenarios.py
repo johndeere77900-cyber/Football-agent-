@@ -193,6 +193,10 @@ def test_4_primary_api_football_380_complete_dataset(mock_api_fb):
 
 # TEST 5 — Unknown competition format
 def test_5_unknown_competition_format():
+    import team_identity
+    c1 = team_identity.bootstrap_historical_team_identity("Real Madrid", "api_football", 1, league_id=2)
+    c2 = team_identity.bootstrap_historical_team_identity("Stuttgart", "api_football", 2, league_id=2)
+
     cl_fixtures = [
         make_test_fixture(2001, h_name="Real Madrid", a_name="Stuttgart", h_id=1, a_id=2, league_id=2, season=2025)
     ]
