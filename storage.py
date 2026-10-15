@@ -3935,6 +3935,7 @@ def save_team_identity(
 ):
     """
     Store or update a provider-to-canonical team identity mapping.
+    Rejects silent reassignments when an existing mapping points to a different canonical team.
     """
     sport = _validate_text(sport, "sport").lower()
     canonical_id = _validate_text(canonical_id, "canonical_id")
@@ -3947,6 +3948,13 @@ def save_team_identity(
     normalized_name = _validate_text(normalized_name, "normalized_name")
     display_name = _validate_text(display_name, "display_name")
     league_id = _validate_optional_positive_int(league_id, "league_id")
+
+    existing = get_team_identity_by_provider(sport, provider, provider_team_id)
+    if existing and existing["canonical_id"] != canonical_id:
+        raise ValueError(
+            f"Team identity conflict: provider {provider} ID {provider_team_id} already mapped to "
+            f"'{existing['canonical_id']}', cannot reassign to '{canonical_id}'."
+        )
 
     now_str = _utc_now()
     conn, db_type = _connect()

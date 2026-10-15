@@ -36,8 +36,8 @@ def normalize_team_name(name: str) -> str:
     nfkd = unicodedata.normalize("NFKD", name)
     no_accents = "".join([c for c in nfkd if not unicodedata.combining(c)])
 
-    # Lowercase and replace underscores/punctuation with space
-    text = no_accents.lower().replace("_", " ")
+    # Lowercase, expand ampersands to 'and', replace underscores with space
+    text = no_accents.lower().replace("_", " ").replace("&", " and ")
 
     # Replace remaining punctuation / non-alphanumeric with space
     text = re.sub(r"[^\w\s]", " ", text)
@@ -105,6 +105,7 @@ def resolve_canonical_team_id(
 
     Order:
     1. Check existing verified provider mapping in DB (`team_identities`).
+       Validates canonical ID, sport, provider namespace, normalized incoming team name, and league context.
     2. Check exact normalized_name lookup in DB (`team_identities`).
     3. Check competition-aware alias in `config.CANONICAL_TEAM_ALIASES`.
     4. Check national team variant matching ('Nigeria National Team' -> 'Nigeria').
@@ -112,26 +113,63 @@ def resolve_canonical_team_id(
     6. If auto_register is True, generate a new canonical identity.
        Otherwise, if unresolved, FAIL CLOSED and return None.
     """
-    if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
-        return None
-
-    provider = str(provider).strip().lower()
-    if provider in INVALID_IDENTITY_PROVIDERS:
+    provider = str(provider).strip().lower() if provider else ""
+    if provider in INVALID_IDENTITY_PROVIDERS or not provider:
         return None
 
     p_team_id_str = None
     if provider_team_id is not None and str(provider_team_id).strip().lower() not in ("", "none", "nan"):
         p_team_id_str = str(provider_team_id).strip()
 
-    norm_name = normalize_team_name(raw_name)
-    if not norm_name:
-        return None
+    norm_name = normalize_team_name(raw_name) if (raw_name and isinstance(raw_name, str)) else ""
 
-    # Step 1: Existing verified provider mapping in DB (only if provider team ID is present)
+    # Step 1: Check existing verified provider mapping in DB (only if provider team ID is present)
     if p_team_id_str:
         existing = storage.get_team_identity_by_provider(sport, provider, p_team_id_str)
-        if existing:
-            return existing["canonical_id"]
+        if existing and isinstance(existing, dict) and existing.get("canonical_id"):
+            stored_norm = existing.get("normalized_name", "")
+            stored_canonical = existing.get("canonical_id")
+            stored_league = existing.get("league_id")
+
+            if norm_name:
+                is_name_match = (
+                    norm_name == stored_norm
+                    or safe_stripped_team_name(raw_name) == safe_stripped_team_name(stored_norm)
+                    or strip_national_team_words(raw_name) == strip_national_team_words(stored_norm)
+                )
+
+                if not is_name_match:
+                    alias_dict = getattr(config, "CANONICAL_TEAM_ALIASES", {})
+                    for alias_key, target_val in alias_dict.items():
+                        target_cid = f"{sport}_team_{sanitize_canonical_slug(target_val)}"
+                        if target_cid == stored_canonical:
+                            if isinstance(alias_key, tuple) and len(alias_key) == 2:
+                                k_name, k_league = alias_key
+                                if normalize_team_name(str(k_name)) == norm_name and (league_id is None or k_league == league_id):
+                                    is_name_match = True
+                                    break
+                            elif isinstance(alias_key, str):
+                                if normalize_team_name(alias_key) == norm_name:
+                                    is_name_match = True
+                                    break
+
+                context_conflict = (
+                    league_id is not None
+                    and stored_league is not None
+                    and league_id != stored_league
+                    and not is_name_match
+                )
+
+                if is_name_match and not context_conflict:
+                    return stored_canonical
+                elif not is_name_match:
+                    # Name conflict against stored provider team ID -> FAIL CLOSED
+                    return None
+            else:
+                return stored_canonical
+
+    if not norm_name:
+        return None
 
     # Step 2: Exact normalized_name lookup in DB
     target_canonical_id = None
@@ -145,10 +183,16 @@ def resolve_canonical_team_id(
     if not target_canonical_id:
         alias_dict = getattr(config, "CANONICAL_TEAM_ALIASES", {})
         canonical_alias = None
-        if league_id and (norm_name, league_id) in alias_dict:
-            canonical_alias = alias_dict[(norm_name, league_id)]
-        elif norm_name in alias_dict:
-            canonical_alias = alias_dict[norm_name]
+        for alias_key, target_val in alias_dict.items():
+            if isinstance(alias_key, tuple) and len(alias_key) == 2:
+                key_name, key_league = alias_key
+                if normalize_team_name(str(key_name)) == norm_name and (league_id is None or key_league == league_id):
+                    canonical_alias = target_val
+                    break
+            elif isinstance(alias_key, str):
+                if normalize_team_name(alias_key) == norm_name:
+                    canonical_alias = target_val
+                    break
 
         if canonical_alias:
             target_canonical_id = f"{sport}_team_{sanitize_canonical_slug(canonical_alias)}"

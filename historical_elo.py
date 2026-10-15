@@ -167,6 +167,8 @@ def fixture_elo_snapshot(
     away_team_id,
     cutoff,
     initial_rating=DEFAULT_RATING,
+    canonical_home_id=None,
+    canonical_away_id=None,
 ):
     """
     Return the pre-match Elo ratings for both requested teams.
@@ -185,16 +187,24 @@ def fixture_elo_snapshot(
         initial_rating=initial_rating,
     )
 
+    home_key = canonical_home_id or (home_team_id if isinstance(home_team_id, str) and home_team_id.startswith("football_team_") else None)
+    if not home_key or home_key not in ratings:
+        home_key = home_team_id
+
+    away_key = canonical_away_id or (away_team_id if isinstance(away_team_id, str) and away_team_id.startswith("football_team_") else None)
+    if not away_key or away_key not in ratings:
+        away_key = away_team_id
+
     return {
         "cutoff": cutoff,
         "home_team_id": home_team_id,
         "away_team_id": away_team_id,
         "home_rating": ratings.get(
-            home_team_id,
+            home_key,
             initial_rating,
         ),
         "away_rating": ratings.get(
-            away_team_id,
+            away_key,
             initial_rating,
         ),
   }

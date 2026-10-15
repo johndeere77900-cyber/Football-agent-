@@ -82,7 +82,9 @@ def calculate_outcome_market_analysis(
         except ProbabilityValidationError:
             c_prob = None
 
-    # Validate decimal odds
+    # Validate decimal odds (reject non-finite, zero, negative, or boolean odds)
+    import math
+
     if decimal_odds is None or isinstance(decimal_odds, bool):
         return {
             "odds": None,
@@ -105,9 +107,9 @@ def calculate_outcome_market_analysis(
             "odds_status": "INVALID_ODDS",
         }
 
-    if odds_val <= 1.0:
+    if not math.isfinite(odds_val) or odds_val <= 1.0:
         return {
-            "odds": odds_val,
+            "odds": None,
             "implied_probability": None,
             "edge": None,
             "ev": None,

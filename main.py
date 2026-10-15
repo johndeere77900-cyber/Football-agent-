@@ -1325,6 +1325,7 @@ def predict_fixture(
             league_id=league["id"],
             season=league["season"],
             fixture_date=fixture_data.get("date"),
+            team_name=home_team["name"],
         )
 
         recent_away = _recent_feature(
@@ -1333,6 +1334,7 @@ def predict_fixture(
             league_id=league["id"],
             season=league["season"],
             fixture_date=fixture_data.get("date"),
+            team_name=away_team["name"],
         )
 
         if (
@@ -1351,6 +1353,8 @@ def predict_fixture(
             away_team["id"],
             config.HEAD_TO_HEAD_MATCHES,
             fixture_date=fixture_data.get("date"),
+            home_team_name=home_team["name"],
+            away_team_name=away_team["name"],
         )
 
     home_elo = storage.get_team_rating(

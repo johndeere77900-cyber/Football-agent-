@@ -33,10 +33,19 @@ def init_test_db(tmp_path, monkeypatch):
 def mock_team_universe(monkeypatch):
     def _mock_get_team_ids(league_id, season, *args, **kwargs):
         if league_id in (39, 140, 135, 78, 2):
-            return list(range(1, 21))
+            raw_ids = list(range(1, 21))
         elif league_id in (61, 88, 94):
-            return list(range(1, 19))
-        return []
+            raw_ids = list(range(1, 19))
+        else:
+            return []
+        canonical_ids = []
+        for tid in raw_ids:
+            cid = team_identity.bootstrap_historical_team_identity(
+                f"Team {tid}", "football_data_org", tid, league_id=league_id
+            )
+            if cid:
+                canonical_ids.append(cid)
+        return canonical_ids
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
 
 

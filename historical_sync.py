@@ -49,7 +49,14 @@ def _is_historical_provider_complete(
     if not page_source or not isinstance(page_source, str):
         return False
 
-    supported_providers = {"api_football", "football_data_org", "soccerdata", "mixed"}
+    supported_providers = {
+        "api_football",
+        "football_data_org",
+        "soccerdata",
+        "soccerdata_match_history",
+        "soccerdata_sofascore",
+        "mixed",
+    }
     prov = page_source.strip().lower()
 
     if prov not in supported_providers:
@@ -59,7 +66,7 @@ def _is_historical_provider_complete(
     if not isinstance(prov_meta, dict):
         prov_meta = {}
 
-    if prov_meta.get("is_partial") is True:
+    if prov_meta.get("is_partial") is True or prov_meta.get("is_complete") is False:
         return False
 
     structural_coverage = prov_meta.get("structural_coverage", {})
@@ -72,8 +79,21 @@ def _is_historical_provider_complete(
     if prov == "api_football":
         if expected_pages <= 0 or pages_completed < expected_pages:
             return False
+    elif prov == "mixed":
+        contribs = prov_meta.get("providers_contributed", [])
+        if not contribs or not isinstance(contribs, list):
+            return False
+        for c in contribs:
+            c_info = prov_meta.get(c, {})
+            if isinstance(c_info, dict) and c_info.get("is_partial") is True:
+                return False
+    else:
+        if pages_completed <= 0:
+            return False
+        c_info = prov_meta.get(prov, {})
+        if isinstance(c_info, dict) and c_info.get("is_partial") is True:
+            return False
 
-    # Require independently verified structural evidence
     return True
 
 
@@ -111,25 +131,48 @@ def sync_historical_fixtures(
     current_status = dataset_info["status"]
     existing_before = dataset_info["fixture_count"] or storage.get_historical_fixture_count(league_id, season)
 
-    # Invariant: If COMPLETE and not refresh -> skip acquisition completely with 0 API calls
+    # Revalidate persisted fixture integrity and coverage before early return
     if current_status == "COMPLETE" and not refresh:
-        print(f"Dataset already COMPLETE for league {league_id} season {season}; API acquisition skipped.", flush=True)
-        return {
-            "league_id": league_id,
-            "season": season,
-            "status": "COMPLETE",
-            "existing_before": existing_before,
-            "fixtures_received": 0,
-            "valid_fixtures": 0,
-            "duplicates_skipped": 0,
-            "newly_stored": 0,
-            "already_existing_skipped": 0,
-            "api_requests_consumed": 0,
-            "quota_budget_stopped": False,
-            "final_stored_count": existing_before,
-            "enrichment_stored": 0,
-            "skipped_reason": "Dataset already COMPLETE",
-        }
+        stored_fixtures = storage.get_historical_fixtures(league_id, season)
+        exp_team_ids = data_resolver._get_authoritative_historical_team_ids(league_id, season, max_budget=historical_budget)
+        comp_fmt = "double_round_robin" if league_id in data_resolver.DOUBLE_ROUND_ROBIN_LEAGUE_IDS else "unknown"
+        reval_coverage = data_resolver._validate_historical_structural_coverage(
+            stored_fixtures,
+            season=season,
+            provider_metadata={
+                "competition_format": comp_fmt,
+                "expected_team_ids": exp_team_ids,
+            },
+            league_id=league_id,
+        )
+        if reval_coverage.get("verified") is True:
+            print(f"Dataset already COMPLETE and revalidated for league {league_id} season {season}; API acquisition skipped.", flush=True)
+            return {
+                "league_id": league_id,
+                "season": season,
+                "status": "COMPLETE",
+                "existing_before": existing_before,
+                "fixtures_received": 0,
+                "valid_fixtures": 0,
+                "duplicates_skipped": 0,
+                "newly_stored": 0,
+                "already_existing_skipped": 0,
+                "api_requests_consumed": 0,
+                "quota_budget_stopped": False,
+                "final_stored_count": existing_before,
+                "enrichment_stored": 0,
+                "skipped_reason": "Dataset already COMPLETE and revalidated",
+            }
+        else:
+            print(f"Dataset was marked COMPLETE but revalidation failed for league {league_id} season {season} ({reval_coverage.get('reason')}). Proceeding with sync.", flush=True)
+            storage.mark_historical_dataset_incomplete(
+                league_id,
+                season,
+                fixture_count=len(stored_fixtures),
+                sport="football",
+                error_reason=f"revalidation_failed_{reval_coverage.get('reason')}",
+            )
+            current_status = "INCOMPLETE"
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     initial_request_count = storage.get_api_request_count("api_football", today_str)
@@ -524,6 +567,73 @@ def _print_sync_report(report: dict) -> None:
 import basketball_api
 
 
+def _validate_historical_basketball_dataset(stored_games: list, league_id: int, season: int, dataset_info: dict) -> bool:
+    """
+    Validate persisted basketball games against basketball-specific completeness rules:
+    - Non-empty game list matching count metadata.
+    - Game IDs present, valid, and unique.
+    - Requested league and season match.
+    - Participating home and away teams valid and distinct.
+    - Required game date and status present.
+    - Dataset manifest page counts and rejected counts valid.
+    """
+    if not isinstance(stored_games, list) or not stored_games:
+        return False
+
+    seen_game_ids = set()
+    for game in stored_games:
+        if not isinstance(game, dict):
+            return False
+
+        gid = game.get("id")
+        if gid is None or isinstance(gid, bool) or not isinstance(gid, int) or gid <= 0:
+            return False
+        if gid in seen_game_ids:
+            return False
+        seen_game_ids.add(gid)
+
+        g_league = game.get("league")
+        if isinstance(g_league, dict):
+            gl_id = g_league.get("id")
+            gl_ssn = g_league.get("season")
+            if gl_id is not None and int(gl_id) != int(league_id):
+                return False
+            if gl_ssn is not None and str(gl_ssn) != str(season):
+                return False
+
+        teams = game.get("teams")
+        if not isinstance(teams, dict):
+            return False
+        home = teams.get("home")
+        away = teams.get("away")
+        if not isinstance(home, dict) or not isinstance(away, dict):
+            return False
+        hid = home.get("id")
+        aid = away.get("id")
+        if not hid or not aid or hid == aid:
+            return False
+        if not home.get("name") or not away.get("name"):
+            return False
+
+        if not game.get("date"):
+            return False
+        status_short = game.get("status", {}).get("short") if isinstance(game.get("status"), dict) else None
+        if not status_short:
+            return False
+
+    e_pages = dataset_info.get("expected_pages", 0) if isinstance(dataset_info, dict) else 0
+    p_completed = dataset_info.get("pages_completed", 0) if isinstance(dataset_info, dict) else 0
+    rej_cnt = dataset_info.get("rejected_count", 0) if isinstance(dataset_info, dict) else 0
+
+    if e_pages <= 0 or p_completed < e_pages or rej_cnt > 0:
+        return False
+
+    if len(seen_game_ids) != len(stored_games):
+        return False
+
+    return True
+
+
 def sync_historical_basketball_games(
     league_id: int,
     season: int,
@@ -541,23 +651,35 @@ def sync_historical_basketball_games(
     existing_before = dataset_info["fixture_count"] or storage.get_historical_basketball_game_count(league_id, season)
 
     if current_status == "COMPLETE" and not refresh:
-        print(f"Basketball dataset already COMPLETE for league {league_id} season {season}; API acquisition skipped.", flush=True)
-        return {
-            "sport": "basketball",
-            "league_id": league_id,
-            "season": season,
-            "status": "COMPLETE",
-            "existing_before": existing_before,
-            "fixtures_received": 0,
-            "valid_fixtures": 0,
-            "duplicates_skipped": 0,
-            "newly_stored": 0,
-            "already_existing_skipped": 0,
-            "api_requests_consumed": 0,
-            "quota_budget_stopped": False,
-            "final_stored_count": existing_before,
-            "skipped_reason": "Dataset already COMPLETE",
-        }
+        stored_games = storage.get_historical_basketball_games(league_id, season)
+        if _validate_historical_basketball_dataset(stored_games, league_id, season, dataset_info):
+            print(f"Basketball dataset already COMPLETE and revalidated for league {league_id} season {season}; API acquisition skipped.", flush=True)
+            return {
+                "sport": "basketball",
+                "league_id": league_id,
+                "season": season,
+                "status": "COMPLETE",
+                "existing_before": existing_before,
+                "fixtures_received": 0,
+                "valid_fixtures": 0,
+                "duplicates_skipped": 0,
+                "newly_stored": 0,
+                "already_existing_skipped": 0,
+                "api_requests_consumed": 0,
+                "quota_budget_stopped": False,
+                "final_stored_count": existing_before,
+                "skipped_reason": "Dataset already COMPLETE and revalidated",
+            }
+        else:
+            print(f"Basketball dataset was marked COMPLETE but revalidation failed for league {league_id} season {season}. Proceeding with sync.", flush=True)
+            storage.mark_historical_dataset_incomplete(
+                league_id,
+                season,
+                fixture_count=len(stored_games),
+                sport="basketball",
+                error_reason="revalidation_failed",
+            )
+            current_status = "INCOMPLETE"
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     initial_request_count = storage.get_api_request_count("api_basketball", today_str)
