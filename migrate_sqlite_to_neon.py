@@ -96,6 +96,9 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False, verify_only=False)
         "historical_datasets": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
         "backtest_runs": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
         "backtest_market_metrics": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "team_identities": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "prediction_snapshots": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
+        "operation_requests": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},
         "key_field_verification": "PENDING",
         "verification": "PENDING",
     }

@@ -115,25 +115,48 @@ def sync_historical_fixtures(
     current_status = dataset_info["status"]
     existing_before = dataset_info["fixture_count"] or storage.get_historical_fixture_count(league_id, season)
 
-    # Invariant: If COMPLETE and not refresh -> skip acquisition completely with 0 API calls
+    # Revalidate persisted fixture integrity and coverage before early return
     if current_status == "COMPLETE" and not refresh:
-        print(f"Dataset already COMPLETE for league {league_id} season {season}; API acquisition skipped.", flush=True)
-        return {
-            "league_id": league_id,
-            "season": season,
-            "status": "COMPLETE",
-            "existing_before": existing_before,
-            "fixtures_received": 0,
-            "valid_fixtures": 0,
-            "duplicates_skipped": 0,
-            "newly_stored": 0,
-            "already_existing_skipped": 0,
-            "api_requests_consumed": 0,
-            "quota_budget_stopped": False,
-            "final_stored_count": existing_before,
-            "enrichment_stored": 0,
-            "skipped_reason": "Dataset already COMPLETE",
-        }
+        stored_fixtures = storage.get_historical_fixtures(league_id, season)
+        exp_team_ids = data_resolver._get_authoritative_historical_team_ids(league_id, season, max_budget=historical_budget)
+        comp_fmt = "double_round_robin" if league_id in data_resolver.DOUBLE_ROUND_ROBIN_LEAGUE_IDS else "unknown"
+        reval_coverage = data_resolver._validate_historical_structural_coverage(
+            stored_fixtures,
+            season=season,
+            provider_metadata={
+                "competition_format": comp_fmt,
+                "expected_team_ids": exp_team_ids,
+            },
+            league_id=league_id,
+        )
+        if reval_coverage.get("verified") is True:
+            print(f"Dataset already COMPLETE and revalidated for league {league_id} season {season}; API acquisition skipped.", flush=True)
+            return {
+                "league_id": league_id,
+                "season": season,
+                "status": "COMPLETE",
+                "existing_before": existing_before,
+                "fixtures_received": 0,
+                "valid_fixtures": 0,
+                "duplicates_skipped": 0,
+                "newly_stored": 0,
+                "already_existing_skipped": 0,
+                "api_requests_consumed": 0,
+                "quota_budget_stopped": False,
+                "final_stored_count": existing_before,
+                "enrichment_stored": 0,
+                "skipped_reason": "Dataset already COMPLETE and revalidated",
+            }
+        else:
+            print(f"Dataset was marked COMPLETE but revalidation failed for league {league_id} season {season} ({reval_coverage.get('reason')}). Proceeding with sync.", flush=True)
+            storage.mark_historical_dataset_incomplete(
+                league_id,
+                season,
+                fixture_count=len(stored_fixtures),
+                sport="football",
+                error_reason=f"revalidation_failed_{reval_coverage.get('reason')}",
+            )
+            current_status = "INCOMPLETE"
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     initial_request_count = storage.get_api_request_count("api_football", today_str)
@@ -545,23 +568,38 @@ def sync_historical_basketball_games(
     existing_before = dataset_info["fixture_count"] or storage.get_historical_basketball_game_count(league_id, season)
 
     if current_status == "COMPLETE" and not refresh:
-        print(f"Basketball dataset already COMPLETE for league {league_id} season {season}; API acquisition skipped.", flush=True)
-        return {
-            "sport": "basketball",
-            "league_id": league_id,
-            "season": season,
-            "status": "COMPLETE",
-            "existing_before": existing_before,
-            "fixtures_received": 0,
-            "valid_fixtures": 0,
-            "duplicates_skipped": 0,
-            "newly_stored": 0,
-            "already_existing_skipped": 0,
-            "api_requests_consumed": 0,
-            "quota_budget_stopped": False,
-            "final_stored_count": existing_before,
-            "skipped_reason": "Dataset already COMPLETE",
-        }
+        stored_games = storage.get_historical_basketball_games(league_id, season)
+        e_pages = dataset_info.get("expected_pages", 0)
+        p_completed = dataset_info.get("pages_completed", 0)
+        rej_cnt = dataset_info.get("rejected_count", 0)
+        if len(stored_games) > 0 and e_pages > 0 and p_completed == e_pages and rej_cnt == 0:
+            print(f"Basketball dataset already COMPLETE and revalidated for league {league_id} season {season}; API acquisition skipped.", flush=True)
+            return {
+                "sport": "basketball",
+                "league_id": league_id,
+                "season": season,
+                "status": "COMPLETE",
+                "existing_before": existing_before,
+                "fixtures_received": 0,
+                "valid_fixtures": 0,
+                "duplicates_skipped": 0,
+                "newly_stored": 0,
+                "already_existing_skipped": 0,
+                "api_requests_consumed": 0,
+                "quota_budget_stopped": False,
+                "final_stored_count": existing_before,
+                "skipped_reason": "Dataset already COMPLETE and revalidated",
+            }
+        else:
+            print(f"Basketball dataset was marked COMPLETE but revalidation failed for league {league_id} season {season}. Proceeding with sync.", flush=True)
+            storage.mark_historical_dataset_incomplete(
+                league_id,
+                season,
+                fixture_count=len(stored_games),
+                sport="basketball",
+                error_reason="revalidation_failed",
+            )
+            current_status = "INCOMPLETE"
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     initial_request_count = storage.get_api_request_count("api_basketball", today_str)

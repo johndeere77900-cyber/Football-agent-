@@ -25,13 +25,5 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pytest pytest-xdist
 
-      - name: Run unit & architecture boundary tests
-        run: |
-          python -m pytest tests/test_architecture_boundary.py \
-                           tests/test_storage.py \
-                           tests/test_team_identity.py \
-                           tests/test_provider_identity_regression.py \
-                           tests/test_historical_features.py \
-                           tests/test_historical_h2h.py \
-                           tests/test_historical_elo.py \
-                           -v
+      - name: Run full test suite
+        run: python -m pytest tests -v

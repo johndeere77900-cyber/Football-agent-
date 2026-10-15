@@ -16,6 +16,8 @@ def isolate_test_db(tmp_path, monkeypatch):
     """
     db_file = tmp_path / "test_isolated.db"
     monkeypatch.setattr(config, "DB_PATH", str(db_file))
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
+    monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
     monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr(config, "ENVIRONMENT", "development")
     storage.init_db()

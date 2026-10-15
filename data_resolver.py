@@ -359,15 +359,17 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     if not is_double_round_robin:
         # Non-double-round-robin (tournament, cup, international)
+        has_authoritative_evidence = (expected_fixture_count is not None) or bool(expected_team_set)
         is_verified = (
-            fixture_count > 0
+            has_authoritative_evidence
+            and fixture_count > 0
             and len(seen_fixture_ids) == fixture_count
             and (expected_fixture_count is None or fixture_count == expected_fixture_count)
             and (not expected_team_set or expected_team_set.issubset(participating_teams))
         )
         return {
             "verified": is_verified,
-            "reason": None if is_verified else "tournament_coverage_incomplete",
+            "reason": None if is_verified else ("tournament_coverage_incomplete" if has_authoritative_evidence else "structural_coverage_unverifiable"),
             "fixture_count": fixture_count,
             "distinct_fixture_count": distinct_fixture_count,
             "team_count": len(participating_teams),
