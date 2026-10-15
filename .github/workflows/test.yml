@@ -1,0 +1,37 @@
+name: PR Test Suite CI
+
+on:
+  pull_request:
+    branches: [ main, "jules-*" ]
+  push:
+    branches: [ "jules-*" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest pytest-xdist
+
+      - name: Run unit & architecture boundary tests
+        run: |
+          python -m pytest tests/test_architecture_boundary.py \
+                           tests/test_storage.py \
+                           tests/test_team_identity.py \
+                           tests/test_provider_identity_regression.py \
+                           tests/test_historical_features.py \
+                           tests/test_historical_h2h.py \
+                           tests/test_historical_elo.py \
+                           -v
