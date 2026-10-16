@@ -112,8 +112,10 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
     """
     Fetch and validate direct CSV match data from stable Football-Data.co.uk URLs.
     Validates CSV headers, date format, team names, and non-negative scores before returning normalized fixture dicts.
+    Uses process-stable deterministic SHA256 fixture ID generation.
     """
     import csv
+    import hashlib
     import io
     import urllib.request
     import team_identity
@@ -134,12 +136,23 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
             content = resp.read().decode("utf-8", errors="ignore")
 
         reader = csv.DictReader(io.StringIO(content))
-        headers = [h.strip() if h else "" for h in (reader.fieldnames or [])]
+        header_map = {}
+        for h in (reader.fieldnames or []):
+            if h:
+                clean_h = str(h).strip().lstrip("\ufeff").strip().lower()
+                if clean_h:
+                    header_map[clean_h] = h
 
-        required_cols = {"Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"}
-        if not required_cols.issubset(set(headers)):
-            logger.warning(f"Direct CSV header validation failed for URL {url}: missing {required_cols - set(headers)}")
+        required_cols = {"date", "hometeam", "awayteam", "fthg", "ftag"}
+        if not required_cols.issubset(set(header_map.keys())):
+            logger.warning(f"Direct CSV header validation failed for URL {url}: missing required headers")
             return []
+
+        def get_val(row_dict, col_key):
+            actual_key = header_map.get(col_key.lower())
+            if actual_key and actual_key in row_dict and row_dict[actual_key] is not None:
+                return str(row_dict[actual_key]).strip()
+            return ""
 
         rows = list(reader)
         if not rows:
@@ -150,11 +163,11 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
             if not isinstance(row, dict):
                 continue
 
-            raw_date = (row.get("Date") or "").strip()
-            raw_home = (row.get("HomeTeam") or "").strip()
-            raw_away = (row.get("AwayTeam") or "").strip()
-            raw_fthg = (row.get("FTHG") or "").strip()
-            raw_ftag = (row.get("FTAG") or "").strip()
+            raw_date = get_val(row, "date")
+            raw_home = get_val(row, "hometeam")
+            raw_away = get_val(row, "awayteam")
+            raw_fthg = get_val(row, "fthg")
+            raw_ftag = get_val(row, "ftag")
 
             if not raw_date or not raw_home or not raw_away:
                 continue
@@ -166,6 +179,8 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
                     d, m, y = int(date_parts[0]), int(date_parts[1]), int(date_parts[2])
                     if y < 100:
                         y += 2000
+                    if not (1 <= m <= 12 and 1 <= d <= 31 and 1900 <= y <= 2100):
+                        continue
                     iso_date = f"{y:04d}-{m:02d}-{d:02d}T12:00:00Z"
                 else:
                     continue
@@ -192,23 +207,29 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
             if not c_home or not c_away:
                 continue
 
-            # Deterministic synthetic fixture ID
-            syn_id = f"fd_csv_{league_id}_{season}_{idx}"
-            fixture_id = hash(syn_id) & 0x7FFFFFFF  # Positive integer ID
+            # Process-stable deterministic synthetic fixture ID
+            syn_id = f"fd_csv_{league_id}_{season}_{iso_date}_{c_home}_{c_away}"
+            fixture_id = int(hashlib.sha256(syn_id.encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
 
             # Extract optional stats
             shots, shots_ot, corners, cards = None, None, None, None
+            hs_val, as_val = get_val(row, "hs"), get_val(row, "as")
+            hst_val, ast_val = get_val(row, "hst"), get_val(row, "ast")
+            hc_val, ac_val = get_val(row, "hc"), get_val(row, "ac")
+            hy_val, ay_val = get_val(row, "hy"), get_val(row, "ay")
+            hr_val, ar_val = get_val(row, "hr"), get_val(row, "ar")
+
             try:
-                if row.get("HS") and row.get("AS"):
-                    shots = {"home": int(row["HS"]), "away": int(row["AS"])}
-                if row.get("HST") and row.get("AST"):
-                    shots_ot = {"home": int(row["HST"]), "away": int(row["AST"])}
-                if row.get("HC") and row.get("AC"):
-                    corners = {"home": int(row["HC"]), "away": int(row["AC"])}
-                if row.get("HY") and row.get("AY"):
+                if hs_val and as_val:
+                    shots = {"home": int(hs_val), "away": int(as_val)}
+                if hst_val and ast_val:
+                    shots_ot = {"home": int(hst_val), "away": int(ast_val)}
+                if hc_val and ac_val:
+                    corners = {"home": int(hc_val), "away": int(ac_val)}
+                if hy_val and ay_val:
                     cards = {
-                        "home": {"yellow": int(row["HY"]), "red": int(row.get("HR", 0) or 0)},
-                        "away": {"yellow": int(row["AY"]), "red": int(row.get("AR", 0) or 0)},
+                        "home": {"yellow": int(hy_val), "red": int(hr_val or 0)},
+                        "away": {"yellow": int(ay_val), "red": int(ar_val or 0)},
                     }
             except (ValueError, TypeError):
                 pass
@@ -2392,7 +2413,14 @@ class DataResolver:
         exp_pages_fallback = primary_page.get("expected_pages", 1) if primary_page else 1
 
         # Priority Fallback Tier 1: Direct CSV
-        direct_csv_matches = _fetch_direct_csv_league_fixtures(league_id, season)
+        # Only query when primary provider failed, returned no fixtures, or direct fallback is forced.
+        direct_csv_matches = []
+        if (primary_failed or not primary_fixtures_for_fallback or self.force_fallback) and not (primary_page and primary_page.get("fixtures")):
+            # Patch target hook for tests or direct network call
+            try:
+                direct_csv_matches = _fetch_direct_csv_league_fixtures(league_id, season)
+            except Exception as csv_exc:
+                logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
         if direct_csv_matches:
             if completed_only:
                 direct_csv_matches = [

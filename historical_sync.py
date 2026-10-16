@@ -39,7 +39,11 @@ def _is_historical_provider_complete(
     Validates provider metadata, acquisition unit execution, fixture count, and error states.
     Fails closed if completeness cannot be established.
     """
-    if quota_budget_stopped or acquisition_failed:
+    if acquisition_failed:
+        return False
+
+    prov = (page_source or "").strip().lower()
+    if quota_budget_stopped and prov == "api_football":
         return False
     if valid_fixtures_count <= 0 or final_stored_count <= 0:
         return False
@@ -191,42 +195,9 @@ def sync_historical_fixtures(
     if initial_request_count >= historical_budget:
         quota_budget_stopped = True
         print(
-            f"Historical daily budget ceiling reached ({initial_request_count}/{historical_budget} requests used today). Skipping API acquisition.",
+            f"Historical daily budget ceiling reached ({initial_request_count}/{historical_budget} requests used today). Attempting quota-free direct URL / secondary fallbacks.",
             flush=True,
         )
-        final_count = storage.get_historical_fixture_count(league_id, season)
-        storage.mark_historical_dataset_incomplete(
-            league_id,
-            season,
-            fixture_count=final_count,
-            sport="football",
-            expected_pages=dataset_info.get("expected_pages", 0),
-            pages_completed=dataset_info.get("pages_completed", 0),
-            acquisition_complete=dataset_info.get("acquisition_complete", False),
-            enrichment_status=dataset_info.get("enrichment_status", "NONE"),
-            rejected_count=dataset_info.get("rejected_count", 0),
-            empty_pages_count=dataset_info.get("empty_pages_count", 0),
-            error_reason="quota_budget_exhausted_before_acquisition",
-        )
-        return {
-            "league_id": league_id,
-            "season": season,
-            "status": "INCOMPLETE",
-            "existing_before": existing_before,
-            "fixtures_received": 0,
-            "valid_fixtures": 0,
-            "duplicates_skipped": 0,
-            "newly_stored": 0,
-            "already_existing_skipped": 0,
-            "pages_completed": dataset_info.get("pages_completed", 0),
-            "expected_pages": dataset_info.get("expected_pages", 0),
-            "rejected_count": dataset_info.get("rejected_count", 0),
-            "empty_pages_count": dataset_info.get("empty_pages_count", 0),
-            "api_requests_consumed": 0,
-            "quota_budget_stopped": True,
-            "final_stored_count": final_count,
-            "enrichment_stored": 0,
-        }
 
     fixtures_received = []
     start_p = dataset_info.get("pages_completed", 0) + 1 if (dataset_info.get("pages_completed", 0) > 0 and not dataset_info.get("acquisition_complete") and not refresh) else 1
@@ -346,7 +317,7 @@ def sync_historical_fixtures(
     if acquisition_failed or total_valid_fixtures == 0 or storage.get_historical_fixture_count(league_id, season) == 0:
         acquisition_failed = True
         if not last_error_reason:
-            last_error_reason = "fallback_providers_returned_no_fixtures"
+            last_error_reason = "secondary_provider_returned_no_fixtures"
         storage.mark_historical_dataset_incomplete(
             league_id,
             season,
