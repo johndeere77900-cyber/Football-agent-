@@ -1187,6 +1187,9 @@ def verify_persisted_historical_datasets(
 
             distinct_count = len(seen_ids)
 
+            if manifest_status != "COMPLETE":
+                issues.append(f"manifest_not_complete(status={manifest_status})")
+
             if manifest_count != actual_count:
                 issues.append(f"count_mismatch(manifest={manifest_count},actual={actual_count})")
 
@@ -1211,6 +1214,9 @@ def verify_persisted_historical_datasets(
 
             distinct_count = len(seen_ids)
 
+            if manifest_status != "COMPLETE":
+                issues.append(f"manifest_not_complete(status={manifest_status})")
+
             if manifest_count != actual_count:
                 issues.append(f"count_mismatch(manifest={manifest_count},actual={actual_count})")
 
@@ -1219,7 +1225,7 @@ def verify_persisted_historical_datasets(
                 if not cov.get("verified"):
                     issues.append(f"failed_football_structural_coverage({cov.get('reason')})")
 
-        is_passed = (len(issues) == 0 and manifest_count == actual_count and distinct_count == actual_count)
+        is_passed = (len(issues) == 0 and manifest_count == actual_count and distinct_count == actual_count and manifest_status == "COMPLETE")
 
         if is_passed:
             verified_count += 1

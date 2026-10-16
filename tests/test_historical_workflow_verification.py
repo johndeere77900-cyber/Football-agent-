@@ -41,18 +41,47 @@ def test_verify_persisted_historical_datasets_football_and_basketball_pass(tmp_p
     }
     storage.save_historical_basketball_games([valid_game], 12, 2024)
 
+    storage.mark_historical_dataset_complete(league_id=39, season=2024, fixture_count=1, sport="football", source="api_football")
+    storage.mark_historical_dataset_complete(league_id=12, season=2024, fixture_count=1, sport="basketball", expected_pages=1, pages_completed=1)
+
+    with patch("data_resolver._validate_historical_structural_coverage", return_value={"verified": True}):
+        res_fb = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2024)
+        assert res_fb["success"] is True
+        assert res_fb["verified_count"] == 1
+        assert res_fb["failed_count"] == 0
+
+        res_bb = historical_sync.verify_persisted_historical_datasets(sport="basketball", league_id=12, season=2024)
+        assert res_bb["success"] is True
+        assert res_bb["verified_count"] == 1
+        assert res_bb["failed_count"] == 0
+
+
+def test_verify_persisted_historical_datasets_fails_when_incomplete_even_if_counts_match():
+    valid_fixture = {
+        "fixture": {"id": 10001, "date": "2024-09-15T15:00:00+00:00", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024, "name": "Premier League"},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+        "goals": {"home": 2, "away": 1},
+    }
+    storage.save_historical_fixtures([valid_fixture], 39, 2024)
+
+    # Manifest status is INCOMPLETE, but count matches actual count (1)
     storage.mark_historical_dataset_incomplete(league_id=39, season=2024, fixture_count=1, sport="football")
-    storage.mark_historical_dataset_incomplete(league_id=12, season=2024, fixture_count=1, sport="basketball")
 
-    res_fb = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2024)
-    assert res_fb["success"] is True
-    assert res_fb["verified_count"] == 1
-    assert res_fb["failed_count"] == 0
+    res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2024)
+    assert res["success"] is False
+    assert res["failed_count"] == 1
+    assert any("manifest_not_complete" in str(iss) for iss in res["results"][0]["issues"])
 
-    res_bb = historical_sync.verify_persisted_historical_datasets(sport="basketball", league_id=12, season=2024)
-    assert res_bb["success"] is True
-    assert res_bb["verified_count"] == 1
-    assert res_bb["failed_count"] == 0
+
+def test_verify_persisted_historical_datasets_fails_for_zero_record_incomplete_dataset():
+    # Dataset has 0 records stored and manifest count is 0, but manifest status is INCOMPLETE
+    storage.mark_historical_dataset_incomplete(league_id=39, season=2024, fixture_count=0, sport="football")
+
+    res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2024)
+    assert res["success"] is False
+    assert res["failed_count"] == 1
+    assert any("manifest_not_complete" in str(iss) for iss in res["results"][0]["issues"])
 
 
 def test_verify_persisted_historical_datasets_detects_count_mismatch():
