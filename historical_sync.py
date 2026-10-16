@@ -1172,7 +1172,7 @@ def verify_persisted_historical_datasets(
 
         import datetime as dt_mod
         current_year = dt_mod.datetime.now(dt_mod.timezone.utc).year
-        is_active_season = (ssn >= current_year)
+        is_active_season = (ssn == current_year)
 
         if sp == "basketball":
             records = storage.get_historical_basketball_games(lid, ssn)

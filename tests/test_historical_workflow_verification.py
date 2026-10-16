@@ -2,7 +2,9 @@
 Tests for historical workflow season selection and post-acquisition dataset verification.
 """
 
+import json
 import os
+import sqlite3
 import subprocess
 import pytest
 from unittest.mock import patch, MagicMock
@@ -58,7 +60,7 @@ def test_verify_persisted_historical_datasets_football_and_basketball_pass(tmp_p
 
 
 def test_verify_persisted_historical_datasets_active_ongoing_season_incomplete_passes():
-    # Ongoing active season (e.g. 2026) in INCOMPLETE status with matching counts passes
+    # Current active season (2026) in INCOMPLETE status with matching counts passes
     active_fixture = {
         "fixture": {"id": 10002, "date": "2026-03-01T15:00:00+00:00", "status": {"short": "FT"}},
         "league": {"id": 39, "season": 2026, "name": "Premier League"},
@@ -73,11 +75,36 @@ def test_verify_persisted_historical_datasets_active_ongoing_season_incomplete_p
     assert res["verified_count"] == 1
     assert res["results"][0]["issues"] == []
 
-    # Count mismatch for active season still fails
+    # Count mismatch for active season fails
     storage.mark_historical_dataset_incomplete(league_id=39, season=2026, fixture_count=99, sport="football")
     res_mismatch = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2026)
     assert res_mismatch["success"] is False
     assert any("count_mismatch" in str(i) for i in res_mismatch["results"][0]["issues"])
+
+    # Duplicate IDs for active season fails
+    storage.mark_historical_dataset_incomplete(league_id=39, season=2026, fixture_count=2, sport="football")
+    conn = sqlite3.connect(config.DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO historical_fixtures (fixture_id, source, league_id, season, kickoff_at, raw_json, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (10002, "soccerdata", 39, 2026, "2026-03-01T15:00:00+00:00", json.dumps(active_fixture), "2026-03-01T15:00:00+00:00")
+    )
+    conn.commit()
+    conn.close()
+
+    res_dup = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2026)
+    assert res_dup["success"] is False
+    assert any("duplicate_fixture_id" in str(i) for i in res_dup["results"][0]["issues"])
+
+
+def test_verify_persisted_historical_datasets_future_season_incomplete_fails():
+    # Future season (2027) with INCOMPLETE status and zero records fails verification
+    storage.mark_historical_dataset_incomplete(league_id=39, season=2027, fixture_count=0, sport="football")
+
+    res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2027)
+    assert res["success"] is False
+    assert res["failed_count"] == 1
+    assert any("manifest_not_complete" in str(i) for i in res["results"][0]["issues"])
 
 
 def test_verify_persisted_historical_datasets_fails_when_incomplete_for_past_season():
