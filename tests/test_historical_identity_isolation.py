@@ -108,3 +108,39 @@ def test_3_chronological_elo_reconstruction_with_canonical_ids():
 
     assert elo_snap["home_rating"] > 1500.0
     assert elo_snap["away_rating"] < 1500.0
+
+
+def test_4_equal_numeric_ids_different_providers_independent_elo_history():
+    """
+    Team ID 10 in Provider A is Alpha (football_team_alpha).
+    Team ID 10 in Provider B is Beta (football_team_beta).
+    Provider A win updates football_team_alpha, NOT football_team_beta.
+    """
+    fixtures = [
+        {
+            "fixture": {"id": 401, "date": "2024-01-01T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "teams": {"home": {"id": 10, "name": "Alpha"}, "away": {"id": 20, "name": "Opponent X"}},
+            "goals": {"home": 3, "away": 0},
+            "canonical_home_id": "football_team_alpha",
+            "canonical_away_id": "football_team_opponent_x",
+            "source": "api_football",
+        },
+    ]
+
+    cutoff = "2024-01-05T00:00:00+00:00"
+
+    ratings = historical_elo.reconstruct_ratings(fixtures, cutoff)
+
+    assert ratings.get("football_team_alpha", 1500.0) > 1500.0
+    assert ratings.get("football_team_beta") is None
+
+    snap_alpha = historical_elo.fixture_elo_snapshot(
+        fixtures, home_team_id=10, away_team_id=20, cutoff=cutoff, canonical_home_id="football_team_alpha", canonical_away_id="football_team_opponent_x"
+    )
+    snap_beta = historical_elo.fixture_elo_snapshot(
+        fixtures, home_team_id=10, away_team_id=30, cutoff=cutoff, canonical_home_id="football_team_beta", canonical_away_id="football_team_opponent_y"
+    )
+
+    assert snap_alpha["home_rating"] > 1500.0
+    assert snap_beta["home_rating"] == 1500.0

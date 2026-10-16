@@ -42,7 +42,7 @@ def dataset_with_history():
 
 
 def test_complete_dataset_zero_api_calls(temp_db):
-    fixtures = [sample_fixture(9001), sample_fixture(9002)]
+    fixtures = [sample_fixture(9001, home_id=1, away_id=2), sample_fixture(9002, home_id=2, away_id=1)]
     storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
     storage.mark_historical_dataset_complete(league_id=39, season=2024, fixture_count=2)
 

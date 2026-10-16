@@ -110,14 +110,11 @@ def reconstruct_ratings(
         home_id, away_id = _valid_team_ids(fixture)
         home_goals, away_goals = _valid_goals(fixture)
 
-        home_rating = ratings.get(
-            home_id,
-            initial_rating,
-        )
-        away_rating = ratings.get(
-            away_id,
-            initial_rating,
-        )
+        home_key = fixture.get("canonical_home_id") or home_id
+        away_key = fixture.get("canonical_away_id") or away_id
+
+        home_rating = ratings.get(home_key, initial_rating)
+        away_rating = ratings.get(away_key, initial_rating)
 
         new_home_rating, new_away_rating = update_ratings(
             home_rating,
@@ -126,8 +123,8 @@ def reconstruct_ratings(
             away_goals,
         )
 
-        ratings[home_id] = new_home_rating
-        ratings[away_id] = new_away_rating
+        ratings[home_key] = new_home_rating
+        ratings[away_key] = new_away_rating
 
     return ratings
 
@@ -187,13 +184,16 @@ def fixture_elo_snapshot(
         initial_rating=initial_rating,
     )
 
-    home_key = canonical_home_id or (home_team_id if isinstance(home_team_id, str) and home_team_id.startswith("football_team_") else None)
-    if not home_key or home_key not in ratings:
-        home_key = home_team_id
-
-    away_key = canonical_away_id or (away_team_id if isinstance(away_team_id, str) and away_team_id.startswith("football_team_") else None)
-    if not away_key or away_key not in ratings:
-        away_key = away_team_id
+    home_key = (
+        canonical_home_id
+        if canonical_home_id is not None
+        else home_team_id
+    )
+    away_key = (
+        canonical_away_id
+        if canonical_away_id is not None
+        else away_team_id
+    )
 
     return {
         "cutoff": cutoff,

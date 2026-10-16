@@ -137,8 +137,11 @@ def sync_historical_fixtures(
         exp_team_ids = data_resolver._get_authoritative_historical_team_ids(league_id, season, max_budget=historical_budget)
         comp_fmt = "double_round_robin" if league_id in data_resolver.DOUBLE_ROUND_ROBIN_LEAGUE_IDS else "unknown"
 
-        # If dataset was explicitly marked complete in database manifest and has stored fixtures, trust stored status for complete bypass
-        reval_meta = {"competition_format": comp_fmt}
+        # A COMPLETE manifest is accepted only after structural revalidation.
+        reval_meta = {
+            "competition_format": comp_fmt,
+            "max_budget": historical_budget,
+        }
         if exp_team_ids:
             reval_meta["expected_team_ids"] = exp_team_ids
 

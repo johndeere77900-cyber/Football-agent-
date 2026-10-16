@@ -169,7 +169,20 @@ def resolve_canonical_team_id(
             else:
                 return stored_canonical
 
-    if not norm_name:
+    if not norm_name or norm_name == p_team_id_str:
+        # If raw_name was empty or numeric equal to provider_team_id and no stored mapping exists, check if auto_register requested
+        if auto_register and p_team_id_str:
+            canonical_id = f"{sport}_team_{league_id}_{p_team_id_str}" if league_id else f"{sport}_team_{p_team_id_str}"
+            storage.save_team_identity(
+                sport=sport,
+                canonical_id=canonical_id,
+                provider=provider,
+                provider_team_id=p_team_id_str,
+                normalized_name=p_team_id_str,
+                display_name=f"Team {p_team_id_str}",
+                league_id=league_id,
+            )
+            return canonical_id
         return None
 
     # Step 2: Exact normalized_name lookup in DB
@@ -242,7 +255,7 @@ def resolve_canonical_team_id(
             provider=provider,
             provider_team_id=p_team_id_str,
             normalized_name=norm_name,
-            display_name=raw_name.strip() if raw_name else f"Team {p_team_id_str}",
+            display_name=raw_str or f"Team {p_team_id_str}",
             league_id=league_id,
         )
 
@@ -273,8 +286,9 @@ def bootstrap_historical_team_identity(
     if provider_team_id is not None and str(provider_team_id).strip().lower() not in ("", "none", "nan"):
         p_team_id_str = str(provider_team_id).strip()
 
-    norm_name = normalize_team_name(raw_name)
-    if not norm_name:
+    raw_str = str(raw_name).strip() if (raw_name is not None and not isinstance(raw_name, bool)) else ""
+    norm_name = normalize_team_name(raw_str) if raw_str else ""
+    if not norm_name and not p_team_id_str:
         return None
 
     # First check if resolution succeeds via existing verified mapping or alias

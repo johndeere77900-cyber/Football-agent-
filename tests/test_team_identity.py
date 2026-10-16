@@ -35,6 +35,15 @@ def test_ambiguous_or_empty_name_fails_closed():
     assert team_identity.resolve_canonical_team_id("   ", "api_football", 124) is None
 
 
+def test_numeric_team_name_registration():
+    cid = team_identity.resolve_canonical_team_id(123, "api_football", 456, league_id=39, auto_register=True)
+    assert cid is not None
+    mapping = storage.get_team_identity_by_provider("football", "api_football", "456")
+    assert mapping is not None
+    assert isinstance(mapping["display_name"], str)
+    assert mapping["display_name"] == "123"
+
+
 def test_resolve_canonical_team_id_read_only_when_auto_register_false():
     """
     Verify that resolve_canonical_team_id with auto_register=False performs ZERO identity DB writes.

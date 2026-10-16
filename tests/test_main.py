@@ -178,16 +178,45 @@ def patch_prediction_dependencies(monkeypatch):
         h2h_matches(),
     )
 
-    monkeypatch.setattr(
-        main.storage,
-        "get_team_rating",
-        lambda team_id: 1500.0,
-    )
 
 
 # ----------------------------------------------------------------------
 # Prediction engine / production path
 # ----------------------------------------------------------------------
+
+def test_production_prediction_obtains_pre_match_elo_from_canonical_identities(
+    monkeypatch,
+    football_fixture,
+):
+    patch_prediction_dependencies(monkeypatch)
+
+    snapshot_called = {}
+
+    def mock_fixture_elo_snapshot(fixtures, home_team_id, away_team_id, cutoff, **kwargs):
+        snapshot_called["home_team_id"] = home_team_id
+        snapshot_called["away_team_id"] = away_team_id
+        snapshot_called["canonical_home_id"] = kwargs.get("canonical_home_id")
+        snapshot_called["canonical_away_id"] = kwargs.get("canonical_away_id")
+        return {
+            "cutoff": cutoff,
+            "home_team_id": home_team_id,
+            "away_team_id": away_team_id,
+            "home_rating": 1550.0,
+            "away_rating": 1450.0,
+        }
+
+    monkeypatch.setattr(main.historical_elo, "fixture_elo_snapshot", mock_fixture_elo_snapshot)
+
+    def fail_get_team_rating(*args, **kwargs):
+        pytest.fail("storage.get_team_rating called instead of canonical historical_elo snapshot!")
+
+    monkeypatch.setattr(main.storage, "get_team_rating", fail_get_team_rating)
+
+    main.predict_fixture(football_fixture, 1.35)
+
+    assert snapshot_called.get("canonical_home_id") is not None
+    assert snapshot_called.get("canonical_away_id") is not None
+
 
 def test_predict_fixture_uses_shared_prediction_engine(
     monkeypatch,

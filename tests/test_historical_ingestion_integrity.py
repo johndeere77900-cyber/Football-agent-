@@ -21,19 +21,21 @@ def make_fixture(
     date="2025-01-10T15:00:00+00:00",
     home_id=1,
     away_id=2,
-    home_name="Home FC",
-    away_name="Away FC",
+    home_name=None,
+    away_name=None,
     league_id=39,
     season=2024,
     status="FT",
     home_goals=1,
     away_goals=0,
 ):
+    h_name = home_name if home_name is not None else f"Team {home_id}"
+    a_name = away_name if away_name is not None else f"Team {away_id}"
     fix = {
         "fixture": {"id": fid, "date": date, "status": {"short": status}},
         "teams": {
-            "home": {"id": home_id, "name": home_name},
-            "away": {"id": away_id, "name": away_name},
+            "home": {"id": home_id, "name": h_name},
+            "away": {"id": away_id, "name": a_name},
         },
         "goals": {"home": home_goals, "away": away_goals},
     }
