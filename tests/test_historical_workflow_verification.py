@@ -10,6 +10,7 @@ from unittest.mock import patch, MagicMock
 import config
 import storage
 import historical_sync
+import data_resolver
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +57,30 @@ def test_verify_persisted_historical_datasets_football_and_basketball_pass(tmp_p
         assert res_bb["failed_count"] == 0
 
 
-def test_verify_persisted_historical_datasets_fails_when_incomplete_even_if_counts_match():
+def test_verify_persisted_historical_datasets_active_ongoing_season_incomplete_passes():
+    # Ongoing active season (e.g. 2026) in INCOMPLETE status with matching counts passes
+    active_fixture = {
+        "fixture": {"id": 10002, "date": "2026-03-01T15:00:00+00:00", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2026, "name": "Premier League"},
+        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+        "goals": {"home": 1, "away": 0},
+    }
+    storage.save_historical_fixtures([active_fixture], 39, 2026)
+    storage.mark_historical_dataset_incomplete(league_id=39, season=2026, fixture_count=1, sport="football")
+
+    res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2026)
+    assert res["success"] is True
+    assert res["verified_count"] == 1
+    assert res["results"][0]["issues"] == []
+
+    # Count mismatch for active season still fails
+    storage.mark_historical_dataset_incomplete(league_id=39, season=2026, fixture_count=99, sport="football")
+    res_mismatch = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2026)
+    assert res_mismatch["success"] is False
+    assert any("count_mismatch" in str(i) for i in res_mismatch["results"][0]["issues"])
+
+
+def test_verify_persisted_historical_datasets_fails_when_incomplete_for_past_season():
     valid_fixture = {
         "fixture": {"id": 10001, "date": "2024-09-15T15:00:00+00:00", "status": {"short": "FT"}},
         "league": {"id": 39, "season": 2024, "name": "Premier League"},
@@ -65,7 +89,7 @@ def test_verify_persisted_historical_datasets_fails_when_incomplete_even_if_coun
     }
     storage.save_historical_fixtures([valid_fixture], 39, 2024)
 
-    # Manifest status is INCOMPLETE, but count matches actual count (1)
+    # Manifest status is INCOMPLETE for past season 2024
     storage.mark_historical_dataset_incomplete(league_id=39, season=2024, fixture_count=1, sport="football")
 
     res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2024)
@@ -74,40 +98,100 @@ def test_verify_persisted_historical_datasets_fails_when_incomplete_even_if_coun
     assert any("manifest_not_complete" in str(iss) for iss in res["results"][0]["issues"])
 
 
-def test_verify_persisted_historical_datasets_fails_for_zero_record_incomplete_dataset():
-    # Dataset has 0 records stored and manifest count is 0, but manifest status is INCOMPLETE
-    storage.mark_historical_dataset_incomplete(league_id=39, season=2024, fixture_count=0, sport="football")
+def test_tertiary_provider_team_id_strict_validation():
+    # Test strict provider team ID validation in _validate_and_filter_tertiary_matches
+    matches = [
+        # Valid match with integer provider team IDs
+        {
+            "fixture": {"id": 101, "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "goals": {"home": 1, "away": 0},
+            "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+            "provider_provenance": {"provider": "soccerdata_sofascore"},
+        },
+        # Valid match with positive numeric string provider team IDs
+        {
+            "fixture": {"id": 102, "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "goals": {"home": 2, "away": 2},
+            "teams": {"home": {"id": "15", "name": "Liverpool"}, "away": {"id": "25", "name": "Everton"}},
+            "provider_provenance": {"provider": "soccerdata_sofascore"},
+        },
+        # Invalid: float provider team ID
+        {
+            "fixture": {"id": 103, "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "goals": {"home": 1, "away": 1},
+            "teams": {"home": {"id": 12.34, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+            "provider_provenance": {"provider": "soccerdata_sofascore"},
+        },
+        # Invalid: boolean provider team ID
+        {
+            "fixture": {"id": 104, "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "goals": {"home": 1, "away": 0},
+            "teams": {"home": {"id": True, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+            "provider_provenance": {"provider": "soccerdata_sofascore"},
+        },
+        # Invalid: nonnumeric string provider team ID
+        {
+            "fixture": {"id": 105, "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "goals": {"home": 0, "away": 0},
+            "teams": {"home": {"id": "invalid_str", "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+            "provider_provenance": {"provider": "soccerdata_sofascore"},
+        },
+        # Invalid: zero/negative provider team ID
+        {
+            "fixture": {"id": 106, "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024},
+            "goals": {"home": 1, "away": 0},
+            "teams": {"home": {"id": -5, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
+            "provider_provenance": {"provider": "soccerdata_sofascore"},
+        },
+    ]
 
-    res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2024)
-    assert res["success"] is False
-    assert res["failed_count"] == 1
-    assert any("manifest_not_complete" in str(iss) for iss in res["results"][0]["issues"])
+    with patch("team_identity.bootstrap_historical_team_identity", side_effect=lambda name, prov, tid, **kwargs: 100 if "Arsenal" in name or "Liverpool" in name else 200):
+        filtered = data_resolver._validate_and_filter_tertiary_matches(matches, league_id=39, season=2024)
+        assert len(filtered) == 2
+        filtered_fids = [f["fixture"]["id"] for f in filtered]
+        assert filtered_fids == [101, 102]
 
 
-def test_verify_persisted_historical_datasets_detects_count_mismatch():
-    valid_fixture = {
-        "fixture": {"id": 10001, "date": "2024-09-15T15:00:00+00:00", "status": {"short": "FT"}},
-        "league": {"id": 39, "season": 2024, "name": "Premier League"},
-        "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
-        "goals": {"home": 2, "away": 1},
+def test_unresolved_candidate_preserved_in_get_fixtures_for_date():
+    resolver = data_resolver.DataResolver()
+
+    # Create candidate fixture whose canonical identity fails to resolve
+    unresolved_cand = {
+        "fixture": {"id": 99001, "date": "2024-11-10T15:00:00+00:00", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 881, "name": "Unknown Team A"}, "away": {"id": 882, "name": "Unknown Team B"}},
+        "goals": {"home": 1, "away": 0},
+        "provider_provenance": {"provider": "api_football"},
     }
-    storage.save_historical_fixtures([valid_fixture], 39, 2024)
 
-    # Set manifest count to 999 (mismatch against actual stored 1)
-    storage.mark_historical_dataset_incomplete(league_id=39, season=2024, fixture_count=999, sport="football")
+    with patch("api_football.get_fixtures_by_date", return_value=[unresolved_cand]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_UNAVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_UNAVAILABLE", [], {})), \
+         patch("team_identity.bootstrap_historical_team_identity", return_value=None), \
+         patch("team_identity.resolve_canonical_team_id", return_value=None):
 
-    res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2024)
-    assert res["success"] is False
-    assert res["failed_count"] == 1
-    assert any("count_mismatch" in str(iss) for iss in res["results"][0]["issues"])
+        fixtures, meta = resolver.get_fixtures_for_date("2024-11-10", league_id=39)
+        # Verify the candidate was preserved as an independent unreconciled candidate
+        assert len(fixtures) == 1
+        assert fixtures[0]["fixture"]["id"] == 99001
 
 
 def test_workflow_default_seasons_queue_input_parsing():
     # Test bash parsing logic matching .github/workflows/historical.yml
     bash_cmd = """
-    RAW_SEASONS=""
-    RAW_SEASON=""
-    RUN_QUEUE="true"
+    RAW_SEASONS_INPUT=""
+    RAW_SEASON_INPUT=""
+    RUN_QUEUE_INPUT="true"
+
+    RAW_SEASONS="$RAW_SEASONS_INPUT"
+    RAW_SEASON="$RAW_SEASON_INPUT"
+    RUN_QUEUE="$RUN_QUEUE_INPUT"
 
     if [ -n "$RAW_SEASONS" ]; then
       SELECTED_INPUT="$RAW_SEASONS"

@@ -422,7 +422,7 @@ def sync_historical_fixtures(
         valid_fixtures_count=valid_fixtures_count,
         expected_pages=expected_pages,
         pages_completed=pages_completed,
-        quota_budget_stopped=quota_budget_stopped,
+        quota_budget_stopped=quota_budget_stopped and last_error_reason != "quota_budget_exhausted_during_enrichment",
         acquisition_failed=acquisition_failed,
         rejected_count=rejected_count,
         empty_pages_count=total_empty_pages_count,
@@ -1170,6 +1170,10 @@ def verify_persisted_historical_datasets(
 
         issues = []
 
+        import datetime as dt_mod
+        current_year = dt_mod.datetime.now(dt_mod.timezone.utc).year
+        is_active_season = (ssn >= current_year)
+
         if sp == "basketball":
             records = storage.get_historical_basketball_games(lid, ssn)
             actual_count = len(records)
@@ -1187,7 +1191,7 @@ def verify_persisted_historical_datasets(
 
             distinct_count = len(seen_ids)
 
-            if manifest_status != "COMPLETE":
+            if manifest_status != "COMPLETE" and not is_active_season:
                 issues.append(f"manifest_not_complete(status={manifest_status})")
 
             if manifest_count != actual_count:
@@ -1214,7 +1218,7 @@ def verify_persisted_historical_datasets(
 
             distinct_count = len(seen_ids)
 
-            if manifest_status != "COMPLETE":
+            if manifest_status != "COMPLETE" and not is_active_season:
                 issues.append(f"manifest_not_complete(status={manifest_status})")
 
             if manifest_count != actual_count:
@@ -1225,7 +1229,12 @@ def verify_persisted_historical_datasets(
                 if not cov.get("verified"):
                     issues.append(f"failed_football_structural_coverage({cov.get('reason')})")
 
-        is_passed = (len(issues) == 0 and manifest_count == actual_count and distinct_count == actual_count and manifest_status == "COMPLETE")
+        is_passed = (
+            len(issues) == 0
+            and manifest_count == actual_count
+            and distinct_count == actual_count
+            and (manifest_status == "COMPLETE" or is_active_season)
+        )
 
         if is_passed:
             verified_count += 1

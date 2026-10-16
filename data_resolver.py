@@ -1065,21 +1065,21 @@ def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_
         h_prov_id = h_obj.get("id")
         a_prov_id = a_obj.get("id")
 
-        # Storage requires non-empty provider team IDs.
-        if h_prov_id is None or a_prov_id is None or isinstance(h_prov_id, bool) or isinstance(a_prov_id, bool):
+        def _is_valid_provider_team_id(val) -> bool:
+            if val is None or isinstance(val, (bool, float)):
+                return False
+            if isinstance(val, int):
+                return val > 0
+            if isinstance(val, str):
+                s = val.strip()
+                return s.isdigit() and int(s) > 0
+            return False
+
+        if not _is_valid_provider_team_id(h_prov_id) or not _is_valid_provider_team_id(a_prov_id):
             continue
 
-        if isinstance(h_prov_id, int) and h_prov_id <= 0:
-            continue
-
-        if isinstance(a_prov_id, int) and a_prov_id <= 0:
-            continue
-
-        if not str(h_prov_id).strip() or not str(a_prov_id).strip():
-            continue
-
-        h_obj["id"] = h_prov_id
-        a_obj["id"] = a_prov_id
+        h_obj["id"] = int(h_prov_id) if isinstance(h_prov_id, str) else h_prov_id
+        a_obj["id"] = int(a_prov_id) if isinstance(a_prov_id, str) else a_prov_id
 
         c_home = team_identity.bootstrap_historical_team_identity(h_name, prov_source, h_prov_id, league_id=league_id)
         c_away = team_identity.bootstrap_historical_team_identity(a_name, prov_source, a_prov_id, league_id=league_id)
@@ -2059,24 +2059,62 @@ class DataResolver:
             cand["canonical_away_id"] = c_away
 
             matching_records = [c for c in all_candidates if _strict_fixture_match(cand, c)]
-            for m in matching_records:
-                processed_candidates.add(id(m))
+            if matching_records:
+                for m in matching_records:
+                    processed_candidates.add(id(m))
 
-            # Sort matching records by tier priority: primary -> secondary -> tertiary
-            def record_tier_priority(r):
-                p = r.get("provider_provenance", {}).get("provider", "")
-                if p == "api_football":
-                    return 0
-                elif p in ("football_data_org", "football_data_csv"):
-                    return 1
-                return 2
+                # Sort matching records by tier priority: primary -> secondary -> tertiary
+                def record_tier_priority(r):
+                    p = r.get("provider_provenance", {}).get("provider", "")
+                    if p == "api_football":
+                        return 0
+                    elif p in ("football_data_org", "football_data_csv"):
+                        return 1
+                    return 2
 
-            matching_records.sort(key=record_tier_priority)
-            merged = reconcile_fixture_records(matching_records)
-            if merged:
-                merged["canonical_home_id"] = c_home
-                merged["canonical_away_id"] = c_away
-                reconciled_fixtures.append(merged)
+                matching_records.sort(key=record_tier_priority)
+                merged = reconcile_fixture_records(matching_records)
+                if merged:
+                    if c_home:
+                        merged["canonical_home_id"] = c_home
+                    if c_away:
+                        merged["canonical_away_id"] = c_away
+                    reconciled_fixtures.append(merged)
+            else:
+                # Unresolved candidate (cannot match itself via _strict_fixture_match due to unresolved canonical identity)
+                processed_candidates.add(cand_id)
+
+                # Validate whether candidate meets required validity rules to be preserved independently
+                fix_obj = cand.get("fixture", {}) if isinstance(cand.get("fixture"), dict) else {}
+                fid = fix_obj.get("id")
+                fdate = fix_obj.get("date")
+                teams_obj = cand.get("teams", {}) if isinstance(cand.get("teams"), dict) else {}
+                h_n = teams_obj.get("home", {}).get("name") if isinstance(teams_obj.get("home"), dict) else None
+                a_n = teams_obj.get("away", {}).get("name") if isinstance(teams_obj.get("away"), dict) else None
+                cand_lid = cand.get("league", {}).get("id") or league_id
+                cand_ssn = cand.get("league", {}).get("season")
+                prov_id = cand.get("provider_provenance", {}).get("provider") if isinstance(cand.get("provider_provenance"), dict) else "unknown"
+
+                rejection_reason = None
+                if fid is None or fid == "" or isinstance(fid, bool):
+                    rejection_reason = "missing_or_invalid_fixture_id"
+                elif not fdate or not str(fdate).strip():
+                    rejection_reason = "missing_fixture_date"
+                elif not cand_lid or not cand_ssn:
+                    rejection_reason = "missing_league_or_season"
+                elif not h_n or not a_n:
+                    rejection_reason = "missing_team_names"
+                elif not prov_id:
+                    rejection_reason = "missing_provider_identifier"
+
+                if not rejection_reason:
+                    # Preserve candidate as an independent, unreconciled candidate without merging or marking reconciled across providers
+                    unrec = dict(cand)
+                    if "provider_provenance" not in unrec or not isinstance(unrec["provider_provenance"], dict):
+                        unrec["provider_provenance"] = {"provider": prov_id or "unknown"}
+                    reconciled_fixtures.append(unrec)
+                else:
+                    logger.warning(f"Rejected unresolved candidate fixture (id={fid}) in get_fixtures_for_date: {rejection_reason}")
 
         if reconciled_fixtures:
             # Persist newly reconciled fixtures permanently into PostgreSQL if season is known

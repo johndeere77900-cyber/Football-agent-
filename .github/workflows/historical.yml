@@ -61,10 +61,15 @@ jobs:
 
       - name: Parse and Validate Season Parameters
         id: parse_seasons
+        env:
+          RAW_SEASONS_INPUT: ${{ inputs.seasons }}
+          RAW_SEASON_INPUT: ${{ inputs.season }}
+          RUN_QUEUE_INPUT: ${{ inputs.run_queue }}
         run: |
-          RAW_SEASONS="${{ inputs.seasons }}"
-          RAW_SEASON="${{ inputs.season }}"
-          RUN_QUEUE="${{ inputs.run_queue }}"
+          set -euo pipefail
+          RAW_SEASONS="$RAW_SEASONS_INPUT"
+          RAW_SEASON="$RAW_SEASON_INPUT"
+          RUN_QUEUE="$RUN_QUEUE_INPUT"
 
           if [ -n "$RAW_SEASONS" ]; then
             SELECTED_INPUT="$RAW_SEASONS"
@@ -105,13 +110,17 @@ jobs:
           echo "Validated seasons: '$VALIDATED_SEASONS'"
 
       - name: Verify credentials
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
-          if [ -z "${{ secrets.NEON_DATABASE_URL }}" ]; then
+          set -euo pipefail
+          if [ -z "$NEON_DATABASE_URL" ]; then
             echo "ERROR: NEON_DATABASE_URL secret is missing."
             exit 1
           fi
           # Do not require API_FOOTBALL_KEY just to start URL-based acquisition.
-          if [ -n "${{ secrets.API_FOOTBALL_KEY }}" ]; then
+          if [ -n "$API_FOOTBALL_KEY" ]; then
             echo "API_FOOTBALL_KEY secret is present."
           else
             echo "NOTICE: API_FOOTBALL_KEY secret is missing. Acquisition will rely on direct CSV / secondary fallbacks."
@@ -132,6 +141,7 @@ jobs:
           INPUT_WITH_ENRICHMENT: ${{ inputs.with_enrichment }}
           INPUT_REFRESH: ${{ inputs.refresh }}
         run: |
+          set -euo pipefail
           if [ "$INPUT_RUN_QUEUE" = "true" ]; then
             ARGS=("--historical-queue" "--seasons")
             for YR in $INPUT_SEASONS_ARG; do
@@ -163,6 +173,7 @@ jobs:
           INPUT_SEASONS_ARG: ${{ steps.parse_seasons.outputs.seasons_arg }}
           INPUT_FIRST_SEASON: ${{ steps.parse_seasons.outputs.first_season }}
         run: |
+          set -euo pipefail
           if [ "$INPUT_RUN_QUEUE" = "true" ]; then
             ARGS=("--verify-historical-datasets" "--seasons")
             for YR in $INPUT_SEASONS_ARG; do
