@@ -32,6 +32,7 @@ Provider Identity & Field-Level Reconciliation:
 
 import logging
 from datetime import datetime, timezone
+import config
 import api_football
 from api_football import APIFootballError, APIFootballQuotaExhaustedError
 import football_data_api
@@ -1341,13 +1342,13 @@ def get_match_identity_key(fixture_dict, sport="football"):
     c_home = fixture_dict.get("canonical_home_id")
     c_away = fixture_dict.get("canonical_away_id")
 
+    teams_obj = fixture_dict.get("teams", {}) if isinstance(fixture_dict.get("teams"), dict) else {}
+    h_obj = teams_obj.get("home", {}) if isinstance(teams_obj.get("home"), dict) else {}
+    a_obj = teams_obj.get("away", {}) if isinstance(teams_obj.get("away"), dict) else {}
+    p_prov = fixture_dict.get("provider_provenance", {}).get("provider", "unknown") if isinstance(fixture_dict.get("provider_provenance"), dict) else "unknown"
+
     if not c_home or not c_away:
         import team_identity
-        teams_obj = fixture_dict.get("teams", {}) if isinstance(fixture_dict.get("teams"), dict) else {}
-        h_obj = teams_obj.get("home", {}) if isinstance(teams_obj.get("home"), dict) else {}
-        a_obj = teams_obj.get("away", {}) if isinstance(teams_obj.get("away"), dict) else {}
-        p_prov = fixture_dict.get("provider_provenance", {}).get("provider", "unknown") if isinstance(fixture_dict.get("provider_provenance"), dict) else "unknown"
-
         if not c_home:
             c_home = team_identity.resolve_canonical_team_id(
                 raw_name=h_obj.get("name", "") or (str(h_obj.get("id")) if h_obj.get("id") is not None else ""),
@@ -1357,6 +1358,18 @@ def get_match_identity_key(fixture_dict, sport="football"):
                 sport=sport,
                 auto_register=False,
             )
+            if not c_home and h_obj.get("name"):
+                prov_for_bs = p_prov if (p_prov and p_prov not in team_identity.INVALID_IDENTITY_PROVIDERS) else "soccerdata"
+                c_home = team_identity.bootstrap_historical_team_identity(
+                    raw_name=h_obj.get("name"),
+                    provider=prov_for_bs,
+                    provider_team_id=h_obj.get("id"),
+                    league_id=lid,
+                    sport=sport,
+                )
+            if c_home:
+                fixture_dict["canonical_home_id"] = c_home
+
         if not c_away:
             c_away = team_identity.resolve_canonical_team_id(
                 raw_name=a_obj.get("name", "") or (str(a_obj.get("id")) if a_obj.get("id") is not None else ""),
@@ -1366,6 +1379,17 @@ def get_match_identity_key(fixture_dict, sport="football"):
                 sport=sport,
                 auto_register=False,
             )
+            if not c_away and a_obj.get("name"):
+                prov_for_bs = p_prov if (p_prov and p_prov not in team_identity.INVALID_IDENTITY_PROVIDERS) else "soccerdata"
+                c_away = team_identity.bootstrap_historical_team_identity(
+                    raw_name=a_obj.get("name"),
+                    provider=prov_for_bs,
+                    provider_team_id=a_obj.get("id"),
+                    league_id=lid,
+                    sport=sport,
+                )
+            if c_away:
+                fixture_dict["canonical_away_id"] = c_away
 
     if not lid or not ssn or not c_home or not c_away:
         return None
@@ -1377,11 +1401,9 @@ def _strict_fixture_match(primary_rec, candidate_rec, match_date_strict=True):
     """
     Strict cross-provider fixture match rule.
 
-    Requires BOTH canonical HOME and canonical AWAY identities to resolve and match.
-    Optionally matches on calendar date (YYYY-MM-DD) if available.
+    Matches fixtures using sport, league, season, date (YYYY-MM-DD), canonical team identity, and home/away roles.
+    Never matches solely by numeric provider fixture ID.
     """
-    import team_identity
-
     if not isinstance(primary_rec, dict) or not isinstance(candidate_rec, dict):
         return False
 
@@ -1389,50 +1411,11 @@ def _strict_fixture_match(primary_rec, candidate_rec, match_date_strict=True):
     c_key = get_match_identity_key(candidate_rec)
 
     if p_key and c_key:
-        if match_date_strict and p_key[3] and c_key[3]:
+        if match_date_strict:
             return p_key == c_key
-        # Compare sport, league_id, season, c_home, c_away
         return (p_key[0], p_key[1], p_key[2], p_key[4], p_key[5]) == (c_key[0], c_key[1], c_key[2], c_key[4], c_key[5])
 
-    p_prov = primary_rec.get("provider_provenance", {}).get("provider", "api_football") if isinstance(primary_rec.get("provider_provenance"), dict) else "api_football"
-    c_prov = candidate_rec.get("provider_provenance", {}).get("provider", "fallback") if isinstance(candidate_rec.get("provider_provenance"), dict) else "fallback"
-
-    p_league = primary_rec.get("league", {}) if isinstance(primary_rec.get("league"), dict) else {}
-    c_league = candidate_rec.get("league", {}) if isinstance(candidate_rec.get("league"), dict) else {}
-
-    p_lid = p_league.get("id")
-    c_lid = c_league.get("id")
-
-    p_teams = primary_rec.get("teams", {}) if isinstance(primary_rec.get("teams"), dict) else {}
-    c_teams = candidate_rec.get("teams", {}) if isinstance(candidate_rec.get("teams"), dict) else {}
-
-    p_home = p_teams.get("home", {}) if isinstance(p_teams.get("home"), dict) else {}
-    p_away = p_teams.get("away", {}) if isinstance(p_teams.get("away"), dict) else {}
-    c_home = c_teams.get("home", {}) if isinstance(c_teams.get("home"), dict) else {}
-    c_away = c_teams.get("away", {}) if isinstance(c_teams.get("away"), dict) else {}
-
-    p_h_id = primary_rec.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
-        raw_name=p_home.get("name", "") or (str(p_home.get("id")) if p_home.get("id") is not None else ""),
-        provider=p_prov, provider_team_id=p_home.get("id"), league_id=p_lid, sport="football", auto_register=False
-    )
-    p_a_id = primary_rec.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
-        raw_name=p_away.get("name", "") or (str(p_away.get("id")) if p_away.get("id") is not None else ""),
-        provider=p_prov, provider_team_id=p_away.get("id"), league_id=p_lid, sport="football", auto_register=False
-    )
-
-    c_h_id = candidate_rec.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
-        raw_name=c_home.get("name", "") or (str(c_home.get("id")) if c_home.get("id") is not None else ""),
-        provider=c_prov, provider_team_id=c_home.get("id"), league_id=c_lid, sport="football", auto_register=False
-    )
-    c_a_id = candidate_rec.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
-        raw_name=c_away.get("name", "") or (str(c_away.get("id")) if c_away.get("id") is not None else ""),
-        provider=c_prov, provider_team_id=c_away.get("id"), league_id=c_lid, sport="football", auto_register=False
-    )
-
-    if not p_h_id or not p_a_id or not c_h_id or not c_a_id:
-        return False
-
-    return p_h_id == c_h_id and p_a_id == c_a_id
+    return False
 
 
 def validate_fixtures_sufficiency(fixtures_list):
@@ -2516,92 +2499,40 @@ class DataResolver:
 
                 primary_fixtures_for_fallback = list(reconciled)
 
-        # Fallback Hierarchy: direct CSV -> football-data.org -> SoccerData MatchHistory -> SoccerData Sofascore
+        # Fallback Hierarchy: football-data.org (API or direct CSV) -> SoccerData MatchHistory -> SoccerData Sofascore
         # Merges candidate matches into combined_matches (retaining primary fixtures if available)
         combined_matches = list(primary_fixtures_for_fallback)
         exp_pages_fallback = primary_page.get("expected_pages", 1) if primary_page else 1
 
-        # Priority Fallback Tier 1: Direct CSV
-        # Only query when primary provider failed, returned no fixtures, or direct fallback is forced.
-        direct_csv_matches = []
-        if (primary_failed or not primary_fixtures_for_fallback or self.force_fallback) and not (primary_page and primary_page.get("fixtures")):
-            # Patch target hook for tests or direct network call
-            try:
-                direct_csv_matches = _fetch_direct_csv_league_fixtures(league_id, season)
-            except Exception as csv_exc:
-                logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
-        if direct_csv_matches:
-            if completed_only:
-                direct_csv_matches = [
-                    f for f in direct_csv_matches
-                    if isinstance(f, dict) and f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN")
-                ]
-
-            for cm in direct_csv_matches:
-                matching = [c for c in combined_matches if _strict_fixture_match(c, cm)]
-                if matching:
-                    idx = combined_matches.index(matching[0])
-                    reconciled_rec = reconcile_fixture_records([matching[0], cm])
-                    if reconciled_rec:
-                        combined_matches[idx] = reconciled_rec
-                else:
-                    combined_matches.append(cm)
-
-            csv_coverage = _validate_historical_structural_coverage(
-                combined_matches,
-                season=season,
-                provider_metadata={
-                    "competition_format": competition_format,
-                    "expected_team_ids": expected_team_ids,
-                },
-                league_id=league_id,
-            )
-
-            if csv_coverage["verified"] is True:
-                contribs = [
-                    p for p, count in [
-                        ("api_football", len(primary_fixtures_for_fallback)),
-                        ("football_data_csv", len(direct_csv_matches)),
-                    ] if count > 0
-                ]
-                source_val = "mixed" if len(contribs) > 1 else "football_data_csv"
-                csv_provider_meta = {
-                    "competition_format": competition_format,
-                    "expected_team_ids": expected_team_ids,
-                    "is_complete": True,
-                    "is_partial": False,
-                    "structural_coverage": csv_coverage,
-                    "providers_contributed": contribs,
-                    "football_data_csv": {
-                        "count": len(direct_csv_matches),
-                        "is_complete": True,
-                        "is_partial": False,
-                    },
-                }
-                return {
-                    "fixtures": combined_matches,
-                    "expected_pages": exp_pages_fallback,
-                    "current_page": page,
-                    "source": source_val,
-                    "provider_metadata": csv_provider_meta,
-                    "primary_failed": primary_failed,
-                    "primary_quota_exhausted": primary_quota_exhausted,
-                }
-
+        # Secondary Fallback: football-data.org (API if comp_code exists, otherwise direct CSV)
         fd_matches = []
         fd_meta = {}
+        fd_key_missing = False
         comp_code = LEAGUE_TO_FD_CODE.get(league_id)
-        if comp_code:
-            try:
-                fd_res = football_data_api.get_competition_matches(comp_code, season=season)
-                if isinstance(fd_res, dict):
-                    matches = fd_res.get("matches", [])
-                    fd_meta = fd_res.get("metadata", {}) or {}
-                else:
-                    matches = fd_res if isinstance(fd_res, list) else []
-                fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
-            except Exception as fd_exc:
-                logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
+
+        if page == 1:
+            if comp_code:
+                try:
+                    fd_res = football_data_api.get_competition_matches(comp_code, season=season)
+                    if isinstance(fd_res, dict):
+                        matches = fd_res.get("matches", [])
+                        fd_meta = fd_res.get("metadata", {}) or {}
+                    else:
+                        matches = fd_res if isinstance(fd_res, list) else []
+                    fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
+                except Exception as fd_exc:
+                    if "FOOTBALL_DATA_API_KEY" in str(fd_exc):
+                        fd_key_missing = True
+                    else:
+                        logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
+
+            if not fd_matches and (fd_key_missing or not comp_code) and (primary_failed or not primary_fixtures_for_fallback or self.force_fallback):
+                try:
+                    direct_csv_matches = _fetch_direct_csv_league_fixtures(league_id, season)
+                    if direct_csv_matches:
+                        fd_matches = direct_csv_matches
+                except Exception as csv_exc:
+                    logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
 
         if completed_only and fd_matches:
             fd_matches = [
@@ -2675,7 +2606,7 @@ class DataResolver:
         sd_mh_matches = []
         sd_mh_meta = {}
 
-        if sd_mh_code:
+        if page == 1 and sd_mh_code:
             try:
                 sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
                 if sd_status == "SOURCE_AVAILABLE" and sd_games:
@@ -2754,7 +2685,7 @@ class DataResolver:
         sd_ss_matches = []
         sd_ss_meta = {}
 
-        if sd_ss_code:
+        if page == 1 and sd_ss_code:
             try:
                 sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
                 if sd_status == "SOURCE_AVAILABLE" and sd_games:

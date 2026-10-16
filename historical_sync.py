@@ -61,7 +61,7 @@ def _is_historical_provider_complete(
     if prov not in supported_providers:
         return False
 
-    if quota_budget_stopped and prov == "api_football":
+    if quota_budget_stopped:
         return False
 
     prov_meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else {}
