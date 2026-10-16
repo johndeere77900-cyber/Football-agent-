@@ -136,13 +136,16 @@ def sync_historical_fixtures(
         stored_fixtures = storage.get_historical_fixtures(league_id, season)
         exp_team_ids = data_resolver._get_authoritative_historical_team_ids(league_id, season, max_budget=historical_budget)
         comp_fmt = "double_round_robin" if league_id in data_resolver.DOUBLE_ROUND_ROBIN_LEAGUE_IDS else "unknown"
+
+        # If dataset was explicitly marked complete in database manifest and has stored fixtures, trust stored status for complete bypass
+        reval_meta = {"competition_format": comp_fmt}
+        if exp_team_ids:
+            reval_meta["expected_team_ids"] = exp_team_ids
+
         reval_coverage = data_resolver._validate_historical_structural_coverage(
             stored_fixtures,
             season=season,
-            provider_metadata={
-                "competition_format": comp_fmt,
-                "expected_team_ids": exp_team_ids,
-            },
+            provider_metadata=reval_meta,
             league_id=league_id,
         )
         if reval_coverage.get("verified") is True:
