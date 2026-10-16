@@ -2978,6 +2978,9 @@ def main():
         # --------------------------------------------------------------
         import historical_sync
 
+        if args.season is not None and getattr(args, "seasons", None) is not None:
+            raise ValueError("Cannot specify both --season and --seasons together.")
+
         if args.historical_queue:
             storage.init_db()
 
@@ -2987,6 +2990,19 @@ def main():
                 with_enrichment=args.with_enrichment,
                 refresh=args.refresh,
             )
+
+            reports = summary.get("reports", []) if isinstance(summary, dict) else []
+            incomplete_count = sum(
+                1 for r in reports
+                if isinstance(r, dict) and r.get("status") != "COMPLETE"
+            )
+            if incomplete_count > 0:
+                print(
+                    f"Historical queue finished with {incomplete_count} incomplete dataset(s) out of {len(reports)}.",
+                    file=sys.stderr,
+                )
+                return 1
+
             return 0
 
         if args.historical_sync:

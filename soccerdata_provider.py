@@ -22,7 +22,7 @@ import time_utils
 logger = logging.getLogger(__name__)
 
 # Standard default timeout for SoccerData calls in seconds
-DEFAULT_SOCCERDATA_TIMEOUT = 12.0
+DEFAULT_SOCCERDATA_TIMEOUT = 60.0
 
 
 def _parse_row_season(raw_s, default_s=None):
@@ -377,7 +377,7 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
     }
 
 
-def get_match_history_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None):
+def get_match_history_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None, max_retries=2):
     """
     Retrieve matches for league_code (e.g., 'ENG-Premier League', 'ESP-La Liga') and season via SoccerData MatchHistory.
     Executes in a clean subprocess to prevent C-level library crashes from affecting the main process.
@@ -415,23 +415,43 @@ try:
         records = df_reset.to_dict(orient='records')
         print(json.dumps(records, default=str))
 except Exception as exc:
+    sys.stderr.write(f"MatchHistory Subprocess Error: {{exc}}\\n")
     sys.exit(1)
 """
 
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", code_str],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            raw_records = json.loads(proc.stdout)
-        else:
-            raw_records = []
-    except Exception as exc:
-        logger.warning(f"SoccerData subprocess execution failed or timed out: {exc}")
-        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": str(exc), "source": "soccerdata_match_history"}
+    last_error = None
+    proc = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", code_str],
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                try:
+                    raw_records = json.loads(proc.stdout)
+                    break
+                except json.JSONDecodeError as exc:
+                    err_msg = f"JSON parse error on stdout: {exc}. Raw stdout: {proc.stdout[:200]!r}"
+                    logger.warning(f"Attempt {attempt}/{max_retries} - {err_msg}")
+                    return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": err_msg, "stderr": proc.stderr, "source": "soccerdata_match_history"}
+            else:
+                stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
+                last_error = stderr_msg
+                logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory subprocess failed: {stderr_msg}")
+        except subprocess.TimeoutExpired as exc:
+            last_error = f"Subprocess timed out after {timeout_seconds}s"
+            logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory timeout: {last_error}")
+        except Exception as exc:
+            last_error = f"Subprocess execution error: {exc}"
+            logger.warning(f"Attempt {attempt}/{max_retries} - {last_error}")
+
+    else:
+        # All retries exhausted due to transient subprocess error or non-zero exit code
+        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_match_history"}
 
     if not raw_records:
         meta = {
@@ -472,7 +492,7 @@ except Exception as exc:
         return "SOURCE_FAILED", [], meta
 
 
-def get_sofascore_historical_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None):
+def get_sofascore_historical_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None, max_retries=2):
     """
     Retrieve matches for league_code (e.g., 'ENG-Premier League', 'INT-European Championship') and season via SoccerData Sofascore.
     Executes in a clean subprocess to prevent C-level library crashes from affecting the main process.
@@ -617,33 +637,53 @@ try:
         }}
         print(json.dumps(output_payload, default=str))
 except Exception as exc:
+    sys.stderr.write(f"Sofascore Subprocess Error: {{exc}}\\n")
     sys.exit(1)
 """
 
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", code_str],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            payload = json.loads(proc.stdout)
-            if isinstance(payload, dict) and "records" in payload:
-                raw_records = payload.get("records", [])
-                enrichment_error = payload.get("enrichment_error")
-            elif isinstance(payload, list):
-                raw_records = payload
-                enrichment_error = None
+    last_error = None
+    proc = None
+    enrichment_error = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", code_str],
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                try:
+                    payload = json.loads(proc.stdout)
+                    if isinstance(payload, dict) and "records" in payload:
+                        raw_records = payload.get("records", [])
+                        enrichment_error = payload.get("enrichment_error")
+                    elif isinstance(payload, list):
+                        raw_records = payload
+                        enrichment_error = None
+                    else:
+                        raw_records = []
+                        enrichment_error = None
+                    break
+                except json.JSONDecodeError as exc:
+                    err_msg = f"JSON parse error on stdout: {exc}. Raw stdout: {proc.stdout[:200]!r}"
+                    logger.warning(f"Attempt {attempt}/{max_retries} - {err_msg}")
+                    return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": err_msg, "stderr": proc.stderr, "source": "soccerdata_sofascore"}
             else:
-                raw_records = []
-                enrichment_error = None
-        else:
-            raw_records = []
-            enrichment_error = "Subprocess returned non-zero code or empty stdout"
-    except Exception as exc:
-        logger.warning(f"SoccerData Sofascore subprocess execution failed or timed out: {exc}")
-        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": str(exc), "source": "soccerdata_sofascore"}
+                stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
+                last_error = stderr_msg
+                logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore subprocess failed: {stderr_msg}")
+        except subprocess.TimeoutExpired as exc:
+            last_error = f"Subprocess timed out after {timeout_seconds}s"
+            logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore timeout: {last_error}")
+        except Exception as exc:
+            last_error = f"Subprocess execution error: {exc}"
+            logger.warning(f"Attempt {attempt}/{max_retries} - {last_error}")
+
+    else:
+        # All retries exhausted due to transient subprocess error or non-zero exit code
+        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_sofascore"}
 
     if not raw_records:
         meta = {

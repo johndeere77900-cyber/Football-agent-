@@ -87,6 +87,176 @@ LEAGUE_TO_SD_CODE = LEAGUE_TO_SD_MH_CODE
 # Configured domestic double-round-robin league competitions
 DOUBLE_ROUND_ROBIN_LEAGUE_IDS = {39, 140, 135, 78, 61, 88, 94}
 
+# Football-Data.co.uk direct CSV league codes mapping
+LEAGUE_TO_FD_CSV_CODE = {
+    39: "E0",    # Premier League
+    140: "SP1",  # La Liga
+    135: "I1",   # Serie A
+    78: "D1",    # Bundesliga
+    61: "F1",    # Ligue 1
+    88: "N1",    # Eredivisie
+    94: "P1",    # Primeira Liga
+}
+
+
+def _format_fd_csv_season_code(season: int) -> str:
+    """Format season year into Football-Data.co.uk 4-digit season code (e.g. 2024 -> '2425')."""
+    if not isinstance(season, int) or season < 1900 or season > 2100:
+        return ""
+    y1 = season % 100
+    y2 = (season + 1) % 100
+    return f"{y1:02d}{y2:02d}"
+
+
+def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -> list:
+    """
+    Fetch and validate direct CSV match data from stable Football-Data.co.uk URLs.
+    Validates CSV headers, date format, team names, and non-negative scores before returning normalized fixture dicts.
+    """
+    import csv
+    import io
+    import urllib.request
+    import team_identity
+
+    code = LEAGUE_TO_FD_CSV_CODE.get(league_id)
+    if not code:
+        return []
+
+    s_code = _format_fd_csv_season_code(season)
+    if not s_code:
+        return []
+
+    url = f"https://www.football-data.co.uk/mmz4281/{s_code}/{code}.csv"
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            content = resp.read().decode("utf-8", errors="ignore")
+
+        reader = csv.DictReader(io.StringIO(content))
+        headers = [h.strip() if h else "" for h in (reader.fieldnames or [])]
+
+        required_cols = {"Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"}
+        if not required_cols.issubset(set(headers)):
+            logger.warning(f"Direct CSV header validation failed for URL {url}: missing {required_cols - set(headers)}")
+            return []
+
+        rows = list(reader)
+        if not rows:
+            return []
+
+        fixtures = []
+        for idx, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                continue
+
+            raw_date = (row.get("Date") or "").strip()
+            raw_home = (row.get("HomeTeam") or "").strip()
+            raw_away = (row.get("AwayTeam") or "").strip()
+            raw_fthg = (row.get("FTHG") or "").strip()
+            raw_ftag = (row.get("FTAG") or "").strip()
+
+            if not raw_date or not raw_home or not raw_away:
+                continue
+
+            # Validate date string (DD/MM/YYYY or DD/MM/YY)
+            try:
+                date_parts = raw_date.split("/")
+                if len(date_parts) == 3:
+                    d, m, y = int(date_parts[0]), int(date_parts[1]), int(date_parts[2])
+                    if y < 100:
+                        y += 2000
+                    iso_date = f"{y:04d}-{m:02d}-{d:02d}T12:00:00Z"
+                else:
+                    continue
+            except (ValueError, TypeError):
+                continue
+
+            # Validate scores
+            try:
+                fthg = int(raw_fthg)
+                ftag = int(raw_ftag)
+                if fthg < 0 or ftag < 0:
+                    continue
+            except (ValueError, TypeError):
+                continue
+
+            # Resolve canonical identities
+            c_home = team_identity.bootstrap_historical_team_identity(
+                raw_name=raw_home, provider="football_data_csv", provider_team_id=None, league_id=league_id, sport="football"
+            )
+            c_away = team_identity.bootstrap_historical_team_identity(
+                raw_name=raw_away, provider="football_data_csv", provider_team_id=None, league_id=league_id, sport="football"
+            )
+
+            if not c_home or not c_away:
+                continue
+
+            # Deterministic synthetic fixture ID
+            syn_id = f"fd_csv_{league_id}_{season}_{idx}"
+            fixture_id = hash(syn_id) & 0x7FFFFFFF  # Positive integer ID
+
+            # Extract optional stats
+            shots, shots_ot, corners, cards = None, None, None, None
+            try:
+                if row.get("HS") and row.get("AS"):
+                    shots = {"home": int(row["HS"]), "away": int(row["AS"])}
+                if row.get("HST") and row.get("AST"):
+                    shots_ot = {"home": int(row["HST"]), "away": int(row["AST"])}
+                if row.get("HC") and row.get("AC"):
+                    corners = {"home": int(row["HC"]), "away": int(row["AC"])}
+                if row.get("HY") and row.get("AY"):
+                    cards = {
+                        "home": {"yellow": int(row["HY"]), "red": int(row.get("HR", 0) or 0)},
+                        "away": {"yellow": int(row["AY"]), "red": int(row.get("AR", 0) or 0)},
+                    }
+            except (ValueError, TypeError):
+                pass
+
+            fixture_dict = {
+                "fixture": {
+                    "id": fixture_id,
+                    "date": iso_date,
+                    "status": {"short": "FT", "long": "Finished"},
+                },
+                "league": {
+                    "id": league_id,
+                    "season": season,
+                    "name": LEAGUE_TO_FD_CODE.get(league_id, "League"),
+                },
+                "teams": {
+                    "home": {"id": None, "name": raw_home},
+                    "away": {"id": None, "name": raw_away},
+                },
+                "goals": {
+                    "home": fthg,
+                    "away": ftag,
+                },
+                "canonical_home_id": c_home,
+                "canonical_away_id": c_away,
+                "statistics": {
+                    "shots": shots,
+                    "shots_on_target": shots_ot,
+                    "corners": corners,
+                    "cards": cards,
+                    "xG": None,
+                },
+                "provider_provenance": {
+                    "provider": "football_data_csv",
+                    "provider_type": "direct_url",
+                    "provider_fixture_id": fixture_id,
+                    "provider_team_ids": {"home": None, "away": None},
+                    "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
+                },
+            }
+            fixtures.append(fixture_dict)
+
+        return fixtures
+
+    except Exception as exc:
+        logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season} ({url}): {exc}")
+        return []
+
 
 def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *args, **kwargs):
     """
@@ -2216,10 +2386,70 @@ class DataResolver:
 
                 primary_fixtures_for_fallback = list(reconciled)
 
-        # Fallback Hierarchy: football-data.org -> SoccerData MatchHistory -> SoccerData Sofascore
+        # Fallback Hierarchy: direct CSV -> football-data.org -> SoccerData MatchHistory -> SoccerData Sofascore
         # Merges candidate matches into combined_matches (retaining primary fixtures if available)
         combined_matches = list(primary_fixtures_for_fallback)
         exp_pages_fallback = primary_page.get("expected_pages", 1) if primary_page else 1
+
+        # Priority Fallback Tier 1: Direct CSV
+        direct_csv_matches = _fetch_direct_csv_league_fixtures(league_id, season)
+        if direct_csv_matches:
+            if completed_only:
+                direct_csv_matches = [
+                    f for f in direct_csv_matches
+                    if isinstance(f, dict) and f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN")
+                ]
+
+            for cm in direct_csv_matches:
+                matching = [c for c in combined_matches if _strict_fixture_match(c, cm)]
+                if matching:
+                    idx = combined_matches.index(matching[0])
+                    reconciled_rec = reconcile_fixture_records([matching[0], cm])
+                    if reconciled_rec:
+                        combined_matches[idx] = reconciled_rec
+                else:
+                    combined_matches.append(cm)
+
+            csv_coverage = _validate_historical_structural_coverage(
+                combined_matches,
+                season=season,
+                provider_metadata={
+                    "competition_format": competition_format,
+                    "expected_team_ids": expected_team_ids,
+                },
+                league_id=league_id,
+            )
+
+            if csv_coverage["verified"] is True:
+                contribs = [
+                    p for p, count in [
+                        ("api_football", len(primary_fixtures_for_fallback)),
+                        ("football_data_csv", len(direct_csv_matches)),
+                    ] if count > 0
+                ]
+                source_val = "mixed" if len(contribs) > 1 else "football_data_csv"
+                csv_provider_meta = {
+                    "competition_format": competition_format,
+                    "expected_team_ids": expected_team_ids,
+                    "is_complete": True,
+                    "is_partial": False,
+                    "structural_coverage": csv_coverage,
+                    "providers_contributed": contribs,
+                    "football_data_csv": {
+                        "count": len(direct_csv_matches),
+                        "is_complete": True,
+                        "is_partial": False,
+                    },
+                }
+                return {
+                    "fixtures": combined_matches,
+                    "expected_pages": exp_pages_fallback,
+                    "current_page": page,
+                    "source": source_val,
+                    "provider_metadata": csv_provider_meta,
+                    "primary_failed": primary_failed,
+                    "primary_quota_exhausted": primary_quota_exhausted,
+                }
 
         fd_matches = []
         fd_meta = {}

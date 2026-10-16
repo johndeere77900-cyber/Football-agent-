@@ -23,10 +23,15 @@ on:
         required: false
         default: '39'
 
+      seasons:
+        description: 'Season year(s), e.g. "2020", "2020 2021 2022"'
+        required: false
+        default: ''
+
       season:
-        description: 'Season year (e.g., 2024)'
-        required: true
-        default: '2024'
+        description: 'Backward-compatible single-year season option (e.g. 2024)'
+        required: false
+        default: ''
 
       with_enrichment:
         description: 'Fetch statistical enrichment (corners/cards)'
@@ -54,15 +59,59 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Parse and Validate Season Parameters
+        id: parse_seasons
+        run: |
+          RAW_SEASONS="${{ inputs.seasons }}"
+          RAW_SEASON="${{ inputs.season }}"
+
+          if [ -n "$RAW_SEASONS" ]; then
+            SELECTED_INPUT="$RAW_SEASONS"
+          elif [ -n "$RAW_SEASON" ]; then
+            SELECTED_INPUT="$RAW_SEASON"
+          else
+            SELECTED_INPUT="2024"
+          fi
+
+          # Trim leading/trailing whitespace and normalize internal whitespace
+          CLEAN_SEASONS=$(echo "$SELECTED_INPUT" | xargs)
+
+          if [ -z "$CLEAN_SEASONS" ]; then
+            echo "ERROR: Supplied season input is empty."
+            exit 1
+          fi
+
+          VALIDATED_SEASONS=""
+          for YR in $CLEAN_SEASONS; do
+            if ! [[ "$YR" =~ ^[0-9]{4}$ ]]; then
+              echo "ERROR: Invalid season year '$YR'. Must be a 4-digit year between 1900 and 2100."
+              exit 1
+            fi
+            if [ "$YR" -lt 1900 ] || [ "$YR" -gt 2100 ]; then
+              echo "ERROR: Season year '$YR' out of allowed range [1900, 2100]."
+              exit 1
+            fi
+            VALIDATED_SEASONS="$VALIDATED_SEASONS $YR"
+          done
+
+          VALIDATED_SEASONS=$(echo "$VALIDATED_SEASONS" | xargs)
+          FIRST_SEASON=$(echo "$VALIDATED_SEASONS" | awk '{print $1}')
+
+          echo "seasons_arg=$VALIDATED_SEASONS" >> $GITHUB_OUTPUT
+          echo "first_season=$FIRST_SEASON" >> $GITHUB_OUTPUT
+          echo "Validated seasons: '$VALIDATED_SEASONS'"
+
       - name: Verify credentials
         run: |
           if [ -z "${{ secrets.NEON_DATABASE_URL }}" ]; then
             echo "ERROR: NEON_DATABASE_URL secret is missing."
             exit 1
           fi
-          if [ -z "${{ secrets.API_FOOTBALL_KEY }}" ]; then
-            echo "ERROR: API_FOOTBALL_KEY secret is missing."
-            exit 1
+          # Do not require API_FOOTBALL_KEY just to start URL-based acquisition.
+          if [ -n "${{ secrets.API_FOOTBALL_KEY }}" ]; then
+            echo "API_FOOTBALL_KEY secret is present."
+          else
+            echo "NOTICE: API_FOOTBALL_KEY secret is missing. Acquisition will rely on direct CSV / secondary fallbacks."
           fi
 
       - name: Historical Data Sync
@@ -75,14 +124,18 @@ jobs:
           INPUT_RUN_QUEUE: ${{ inputs.run_queue }}
           INPUT_SPORT: ${{ inputs.sport }}
           INPUT_LEAGUE_ID: ${{ inputs.league_id }}
-          INPUT_SEASON: ${{ inputs.season }}
+          INPUT_SEASONS_ARG: ${{ steps.parse_seasons.outputs.seasons_arg }}
+          INPUT_FIRST_SEASON: ${{ steps.parse_seasons.outputs.first_season }}
           INPUT_WITH_ENRICHMENT: ${{ inputs.with_enrichment }}
           INPUT_REFRESH: ${{ inputs.refresh }}
         run: |
           if [ "$INPUT_RUN_QUEUE" = "true" ]; then
-            ARGS=("--historical-queue" "--season" "$INPUT_SEASON")
+            ARGS=("--historical-queue" "--seasons")
+            for YR in $INPUT_SEASONS_ARG; do
+              ARGS+=("$YR")
+            done
           else
-            ARGS=("--historical-sync" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--season" "$INPUT_SEASON")
+            ARGS=("--historical-sync" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--season" "$INPUT_FIRST_SEASON")
           fi
 
           if [ "$INPUT_WITH_ENRICHMENT" = "true" ]; then
@@ -91,6 +144,7 @@ jobs:
           if [ "$INPUT_REFRESH" = "true" ]; then
             ARGS+=("--refresh")
           fi
+
           python3 main.py "${ARGS[@]}"
 
       - name: Check Dataset Completion Status
@@ -101,7 +155,7 @@ jobs:
           ENVIRONMENT: "production"
           INPUT_SPORT: ${{ inputs.sport }}
           INPUT_LEAGUE_ID: ${{ inputs.league_id }}
-          INPUT_SEASON: ${{ inputs.season }}
+          INPUT_SEASON: ${{ steps.parse_seasons.outputs.first_season }}
         run: |
           STATUS_OUTPUT=$(python3 main.py --dataset-status --sport "$INPUT_SPORT" --league "$INPUT_LEAGUE_ID" --season "$INPUT_SEASON")
           echo "$STATUS_OUTPUT"

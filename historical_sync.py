@@ -52,6 +52,7 @@ def _is_historical_provider_complete(
     supported_providers = {
         "api_football",
         "football_data_org",
+        "football_data_csv",
         "soccerdata",
         "soccerdata_match_history",
         "soccerdata_sofascore",
