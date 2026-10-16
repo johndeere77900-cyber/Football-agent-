@@ -232,3 +232,46 @@ def test_8_failed_validation_does_not_erase_existing_records(mock_page):
     assert report["status"] == "INCOMPLETE"
     stored = storage.get_historical_fixtures(39, 2024)
     assert len(stored) == 100
+
+
+def test_missing_authoritative_team_universe_cannot_trigger_unbudgeted_repeat_request(monkeypatch):
+    """
+    Missing authoritative team universe cannot trigger an unbudgeted repeat request.
+    """
+    called_budget = []
+
+    def _mock_get_team_ids_budget(league_id, season, max_budget=None, *args, **kwargs):
+        called_budget.append(max_budget)
+        return []
+
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids_budget)
+
+    cov = data_resolver._validate_historical_structural_coverage(
+        [], season=2024, provider_metadata={"max_budget": 5, "competition_format": "double_round_robin"}, league_id=39
+    )
+
+    assert cov["verified"] is False
+    assert cov["reason"] == "authoritative_team_universe_unavailable"
+    assert 5 in called_budget
+
+
+@patch("data_resolver.DataResolver.get_league_fixtures_page")
+def test_failed_revalidation_never_returns_complete(mock_page):
+    """
+    A failed revalidation never returns COMPLETE.
+    """
+    # Fixtures marked COMPLETE but failing structural revalidation due to missing fixtures
+    fixtures = make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20)[:5]
+    storage.save_historical_fixtures(fixtures, 39, 2024, source="api_football", require_completed=True)
+    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+
+    mock_page.return_value = {
+        "fixtures": [],
+        "expected_pages": 2,
+        "current_page": 1,
+        "primary_failed": True,
+    }
+
+    report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    assert report["status"] != "COMPLETE"
+    assert report["status"] == "INCOMPLETE"

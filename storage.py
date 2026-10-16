@@ -3921,6 +3921,13 @@ def validate_historical_fixture(item, target_league_id=None, target_season=None,
         norm_goals["away"] = a_goals
         normalized["goals"] = norm_goals
 
+    norm_league = dict(league_obj) if isinstance(league_obj, dict) else {}
+    if target_league_id is not None and norm_league.get("id") is None:
+        norm_league["id"] = target_league_id
+    if target_season is not None and norm_league.get("season") is None:
+        norm_league["season"] = target_season
+    normalized["league"] = norm_league
+
     return True, "valid", normalized
 
 
@@ -4057,6 +4064,33 @@ def get_team_identity_by_provider(sport, provider, provider_team_id):
             "display_name": row[5],
             "league_id": row[6],
         }
+    finally:
+        conn.close()
+
+
+def get_team_identities_by_league(sport, league_id):
+    """Retrieve all canonical team IDs registered for a sport and league_id."""
+    sport = _validate_text(sport, "sport").lower()
+    league_id = _validate_optional_positive_int(league_id, "league_id")
+    if not league_id:
+        return []
+
+    conn, db_type = _connect()
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT canonical_id FROM team_identities WHERE sport = %s AND league_id = %s",
+                    (sport, league_id),
+                )
+                rows = cur.fetchall()
+        else:
+            cur = conn.cursor()
+            rows = cur.execute(
+                "SELECT canonical_id FROM team_identities WHERE sport = ? AND league_id = ?",
+                (sport, league_id),
+            ).fetchall()
+        return sorted(list({r[0] for r in rows if r and r[0]}))
     finally:
         conn.close()
 

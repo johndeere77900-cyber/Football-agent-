@@ -200,6 +200,21 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                 exc,
             )
 
+    # Tertiary fallback: stored canonical team identities for double round-robin league
+    if league_id and league_id in DOUBLE_ROUND_ROBIN_LEAGUE_IDS:
+        try:
+            import storage
+            stored_c_ids = storage.get_team_identities_by_league("football", league_id)
+            min_expected = 18 if league_id in {78, 61, 88, 94} else 20
+            if len(stored_c_ids) >= min_expected:
+                return stored_c_ids
+        except Exception as exc:
+            logger.warning(
+                "Unable to obtain authoritative DB team universe for league %s: %s",
+                league_id,
+                exc,
+            )
+
     return []
 
 
@@ -222,6 +237,8 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         "expected_fixture_count": int or None,
     }
     """
+    import team_identity
+
     if not isinstance(fixtures, list):
         fixtures = []
 
@@ -245,6 +262,13 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     expected_team_ids = provider_metadata.get("expected_team_ids", [])
     if not expected_team_ids and is_double_round_robin:
+        expected_team_ids = _get_authoritative_historical_team_ids(
+            league_id,
+            season,
+            max_budget=provider_metadata.get("max_budget"),
+        )
+
+    if not expected_team_ids and is_double_round_robin:
         return {
             "verified": False,
             "reason": "authoritative_team_universe_unavailable",
@@ -259,7 +283,36 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "expected_fixture_count": None,
         }
 
-    expected_team_set = set(expected_team_ids) if expected_team_ids else set()
+    import team_identity
+
+    canonical_expected_set = set()
+    for tid in expected_team_ids:
+        if isinstance(tid, str) and tid.startswith("football_team_"):
+            canonical_expected_set.add(tid)
+        else:
+            cid = team_identity.resolve_canonical_team_id(
+                raw_name=f"Team {tid}",
+                provider="api_football",
+                provider_team_id=tid,
+                league_id=league_id,
+                sport="football",
+                auto_register=False,
+            )
+            if not cid:
+                cid = team_identity.resolve_canonical_team_id(
+                    raw_name="",
+                    provider="api_football",
+                    provider_team_id=tid,
+                    league_id=league_id,
+                    sport="football",
+                    auto_register=False,
+                )
+            if cid:
+                canonical_expected_set.add(cid)
+            else:
+                canonical_expected_set.add(str(tid))
+
+    expected_team_set = canonical_expected_set if canonical_expected_set else (set(expected_team_ids) if expected_team_ids else set())
     expected_team_count = len(expected_team_set)
 
     expected_fixture_count = (
@@ -835,6 +888,19 @@ def _normalize_api_football_fixture(fixture, league_id=None, season=None):
         "provider_team_ids": {"home": home_id, "away": away_id},
         "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
     }
+
+    import team_identity
+    c_home = team_identity.bootstrap_historical_team_identity(
+        raw_name=home_name, provider="api_football", provider_team_id=home_id, league_id=league_id, sport="football"
+    )
+    c_away = team_identity.bootstrap_historical_team_identity(
+        raw_name=away_name, provider="api_football", provider_team_id=away_id, league_id=league_id, sport="football"
+    )
+    if c_home:
+        res["canonical_home_id"] = c_home
+    if c_away:
+        res["canonical_away_id"] = c_away
+
     return res
 
 
@@ -904,6 +970,21 @@ def _normalize_football_data_match(match, league_id, season):
     }
     if match.get("statistics") and isinstance(match.get("statistics"), dict):
         res["statistics"] = match["statistics"]
+
+    import team_identity
+    h_name = home_team.get("shortName") or home_team.get("name")
+    a_name = away_team.get("shortName") or away_team.get("name")
+    c_home = team_identity.bootstrap_historical_team_identity(
+        raw_name=h_name, provider="football_data_org", provider_team_id=fd_home_id, league_id=league_id, sport="football"
+    )
+    c_away = team_identity.bootstrap_historical_team_identity(
+        raw_name=a_name, provider="football_data_org", provider_team_id=fd_away_id, league_id=league_id, sport="football"
+    )
+    if c_home:
+        res["canonical_home_id"] = c_home
+    if c_away:
+        res["canonical_away_id"] = c_away
+
     return res
 
 

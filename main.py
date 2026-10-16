@@ -32,6 +32,7 @@ import basketball_model
 import confidence
 import config
 import elo
+import historical_elo
 import live_model
 import odds_api
 import poisson_model
@@ -1357,13 +1358,16 @@ def predict_fixture(
             away_team_name=away_team["name"],
         )
 
-    home_elo = storage.get_team_rating(
-        home_team["id"]
+    elo_snap = historical_elo.fixture_elo_snapshot(
+        db_fixtures,
+        home_team["id"],
+        away_team["id"],
+        cutoff,
+        canonical_home_id=c_home_id,
+        canonical_away_id=c_away_id,
     )
-
-    away_elo = storage.get_team_rating(
-        away_team["id"]
-    )
+    home_elo = elo_snap["home_rating"]
+    away_elo = elo_snap["away_rating"]
 
     elo_probabilities = (
         elo.win_draw_loss_probabilities(

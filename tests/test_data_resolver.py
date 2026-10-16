@@ -5,8 +5,16 @@ from data_resolver import DataResolver
 import storage
 
 
+import config
+import team_identity
+
+
 @pytest.fixture(autouse=True)
-def init_test_db():
+def init_test_db(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_data_resolver.db"
+    monkeypatch.setattr(config, "DB_PATH", str(db_file))
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
+    monkeypatch.setattr(config, "ENVIRONMENT", "development")
     storage.init_db()
 
 
@@ -14,10 +22,19 @@ def init_test_db():
 def mock_team_universe(monkeypatch):
     def _mock_get_team_ids(league_id, season, *args, **kwargs):
         if league_id in (39, 140, 135, 78, 2):
-            return list(range(1, 21))
+            raw_ids = list(range(1, 21))
         elif league_id in (61, 88, 94):
-            return list(range(1, 19))
-        return []
+            raw_ids = list(range(1, 19))
+        else:
+            return []
+        canonical_ids = []
+        for tid in raw_ids:
+            cid = team_identity.bootstrap_historical_team_identity(
+                f"Team {tid}", "api_football", tid, league_id=league_id
+            )
+            if cid:
+                canonical_ids.append(cid)
+        return canonical_ids
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
 
 
@@ -218,7 +235,7 @@ def test_B_api_football_partial_multipage_incomplete(mock_api_fb):
                     {
                         "fixture": {"id": 8001, "date": "2024-08-17T14:00:00Z", "status": {"short": "FT"}},
                         "league": {"id": 39, "season": 2024},
-                        "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+                        "teams": {"home": {"id": 1, "name": "Team 1"}, "away": {"id": 2, "name": "Team 2"}},
                         "goals": {"home": 1, "away": 0},
                     }
                 ],
@@ -265,12 +282,14 @@ def test_C_football_data_org_partial_response_incomplete(mock_api_fb, mock_fd):
 
 
 # Test D — football-data.org trustworthy complete metadata without quota exhaustion -> COMPLETE
+@patch("football_data_api.get_competition_teams")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_D_football_data_org_complete_metadata_complete(mock_api_fb, mock_fd):
+def test_D_football_data_org_complete_metadata_complete(mock_api_fb, mock_fd, mock_fd_teams):
     import historical_sync
 
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+    mock_fd_teams.return_value = {"teams": [{"id": tid, "name": f"Team {tid}"} for tid in range(1, 21)]}
     teams = list(range(1, 21))
     pairings = [(h, a) for h in teams for a in teams if h != a]
     matches = [
@@ -392,14 +411,16 @@ def test_E_soccerdata_no_completeness_metadata_incomplete(mock_api_fb, mock_fd, 
 
 
 # Test F — SoccerData with explicit trustworthy completeness metadata -> COMPLETE
+@patch("football_data_api.get_competition_teams")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_F_soccerdata_with_complete_metadata_complete(mock_api_fb, mock_fd, mock_sd):
+def test_F_soccerdata_with_complete_metadata_complete(mock_api_fb, mock_fd, mock_sd, mock_fd_teams):
     import historical_sync
 
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
     mock_fd.side_effect = football_data_api.FootballDataAPIError("Secondary error")
+    mock_fd_teams.return_value = {"teams": [{"id": tid, "name": f"Team {tid}"} for tid in range(1, 21)]}
     teams = list(range(1, 21))
     pairings = [(h, a) for h in teams for a in teams if h != a]
     sd_fixtures = [
