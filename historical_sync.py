@@ -1123,7 +1123,7 @@ def verify_persisted_historical_datasets(
     """
     storage.init_db()
 
-    if is_queue or (seasons and len(seasons) > 1) or (league_id is None and season is None):
+    if is_queue or (league_id is None and season is None and not seasons):
         target_seasons = seasons if seasons else list(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
         football_targets = [
             {"sport": "football", "league_id": lid, "season": ssn}
@@ -1136,16 +1136,11 @@ def verify_persisted_historical_datasets(
             for lid in getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", [])
         ]
         targets = football_targets + basketball_targets
-    elif sport == "basketball":
-        target_seasons = seasons if seasons else ([season] if season else [2024])
-        targets = [
-            {"sport": "basketball", "league_id": league_id, "season": ssn}
-            for ssn in target_seasons
-        ]
     else:
-        target_seasons = seasons if seasons else ([season] if season else [2024])
+        sp = sport or "football"
+        target_seasons = seasons if seasons else ([season] if season is not None else [2024])
         targets = [
-            {"sport": "football", "league_id": league_id, "season": ssn}
+            {"sport": sp, "league_id": league_id, "season": ssn}
             for ssn in target_seasons
         ]
 

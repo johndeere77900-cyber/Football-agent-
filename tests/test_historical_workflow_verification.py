@@ -125,6 +125,32 @@ def test_verify_persisted_historical_datasets_fails_when_incomplete_for_past_sea
     assert any("manifest_not_complete" in str(iss) for iss in res["results"][0]["issues"])
 
 
+def test_single_season_non_queue_verification():
+    summary = historical_sync.verify_persisted_historical_datasets(
+        sport="football", league_id=39, seasons=[2024], is_queue=False
+    )
+    assert summary["total_requested"] == 1
+    assert summary["results"][0]["league_id"] == 39
+    assert summary["results"][0]["season"] == 2024
+
+
+def test_multiple_seasons_non_queue_verification():
+    summary = historical_sync.verify_persisted_historical_datasets(
+        sport="football", league_id=39, seasons=[2022, 2023, 2024], is_queue=False
+    )
+    assert summary["total_requested"] == 3
+    requested_pairs = [(r["league_id"], r["season"]) for r in summary["results"]]
+    assert requested_pairs == [(39, 2022), (39, 2023), (39, 2024)]
+
+
+def test_multiple_seasons_queue_verification():
+    summary = historical_sync.verify_persisted_historical_datasets(
+        seasons=[2022, 2023], is_queue=True
+    )
+    expected_total = len(getattr(config, "ALLOWED_LEAGUE_IDS", [])) * 2 + len(getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", [])) * 2
+    assert summary["total_requested"] == expected_total
+
+
 def test_tertiary_provider_team_id_strict_validation():
     # Test strict provider team ID validation in _validate_and_filter_tertiary_matches
     matches = [
@@ -235,3 +261,29 @@ def test_workflow_default_seasons_queue_input_parsing():
     proc = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, check=True)
     parsed = proc.stdout.strip()
     assert parsed == "2020 2021 2022 2023 2024 2025 2026"
+
+
+def test_workflow_bash_args_construction_non_queue_multiple_seasons():
+    bash_cmd = """
+    INPUT_RUN_QUEUE="false"
+    INPUT_SPORT="football"
+    INPUT_LEAGUE_ID="39"
+    INPUT_SEASONS_ARG="2022 2023 2024"
+
+    if [ "$INPUT_RUN_QUEUE" = "true" ]; then
+      ARGS=("--historical-queue" "--seasons")
+      for YR in $INPUT_SEASONS_ARG; do
+        ARGS+=("$YR")
+      done
+    else
+      ARGS=("--historical-sync" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--seasons")
+      for YR in $INPUT_SEASONS_ARG; do
+        ARGS+=("$YR")
+      done
+    fi
+
+    echo "${ARGS[@]}"
+    """
+    proc = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, check=True)
+    parsed = proc.stdout.strip()
+    assert parsed == "--historical-sync --sport football --league 39 --seasons 2022 2023 2024"

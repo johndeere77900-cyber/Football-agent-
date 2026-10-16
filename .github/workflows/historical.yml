@@ -137,7 +137,6 @@ jobs:
           INPUT_SPORT: ${{ inputs.sport }}
           INPUT_LEAGUE_ID: ${{ inputs.league_id }}
           INPUT_SEASONS_ARG: ${{ steps.parse_seasons.outputs.seasons_arg }}
-          INPUT_FIRST_SEASON: ${{ steps.parse_seasons.outputs.first_season }}
           INPUT_WITH_ENRICHMENT: ${{ inputs.with_enrichment }}
           INPUT_REFRESH: ${{ inputs.refresh }}
         run: |
@@ -148,7 +147,10 @@ jobs:
               ARGS+=("$YR")
             done
           else
-            ARGS=("--historical-sync" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--season" "$INPUT_FIRST_SEASON")
+            ARGS=("--historical-sync" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--seasons")
+            for YR in $INPUT_SEASONS_ARG; do
+              ARGS+=("$YR")
+            done
           fi
 
           if [ "$INPUT_WITH_ENRICHMENT" = "true" ]; then
@@ -171,7 +173,6 @@ jobs:
           INPUT_SPORT: ${{ inputs.sport }}
           INPUT_LEAGUE_ID: ${{ inputs.league_id }}
           INPUT_SEASONS_ARG: ${{ steps.parse_seasons.outputs.seasons_arg }}
-          INPUT_FIRST_SEASON: ${{ steps.parse_seasons.outputs.first_season }}
         run: |
           set -euo pipefail
           if [ "$INPUT_RUN_QUEUE" = "true" ]; then
@@ -180,7 +181,10 @@ jobs:
               ARGS+=("$YR")
             done
           else
-            ARGS=("--verify-historical-datasets" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--season" "$INPUT_FIRST_SEASON")
+            ARGS=("--verify-historical-datasets" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--seasons")
+            for YR in $INPUT_SEASONS_ARG; do
+              ARGS+=("$YR")
+            done
           fi
 
           python3 main.py "${ARGS[@]}"
