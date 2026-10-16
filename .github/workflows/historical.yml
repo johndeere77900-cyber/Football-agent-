@@ -64,11 +64,14 @@ jobs:
         run: |
           RAW_SEASONS="${{ inputs.seasons }}"
           RAW_SEASON="${{ inputs.season }}"
+          RUN_QUEUE="${{ inputs.run_queue }}"
 
           if [ -n "$RAW_SEASONS" ]; then
             SELECTED_INPUT="$RAW_SEASONS"
           elif [ -n "$RAW_SEASON" ]; then
             SELECTED_INPUT="$RAW_SEASON"
+          elif [ "$RUN_QUEUE" = "true" ]; then
+            SELECTED_INPUT="2020 2021 2022 2023 2024 2025 2026"
           else
             SELECTED_INPUT="2024"
           fi
@@ -147,21 +150,26 @@ jobs:
 
           python3 main.py "${ARGS[@]}"
 
-      - name: Check Dataset Completion Status
-        if: ${{ inputs.run_queue != true }}
+      - name: Verify Persisted Historical Datasets
         env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           REQUIRE_NEON: "true"
           ENVIRONMENT: "production"
+          INPUT_RUN_QUEUE: ${{ inputs.run_queue }}
           INPUT_SPORT: ${{ inputs.sport }}
           INPUT_LEAGUE_ID: ${{ inputs.league_id }}
-          INPUT_SEASON: ${{ steps.parse_seasons.outputs.first_season }}
+          INPUT_SEASONS_ARG: ${{ steps.parse_seasons.outputs.seasons_arg }}
+          INPUT_FIRST_SEASON: ${{ steps.parse_seasons.outputs.first_season }}
         run: |
-          STATUS_OUTPUT=$(python3 main.py --dataset-status --sport "$INPUT_SPORT" --league "$INPUT_LEAGUE_ID" --season "$INPUT_SEASON")
-          echo "$STATUS_OUTPUT"
-          EXACT_STATUS=$(echo "$STATUS_OUTPUT" | grep -E "^[[:space:]]*Status:" | head -n 1 | awk '{print $2}')
-          echo "Extracted Exact Status: '$EXACT_STATUS'"
-          if [ "$EXACT_STATUS" != "COMPLETE" ]; then
-            echo "ERROR: Historical dataset status is '$EXACT_STATUS', expected 'COMPLETE'."
-            exit 1
+          if [ "$INPUT_RUN_QUEUE" = "true" ]; then
+            ARGS=("--verify-historical-datasets" "--seasons")
+            for YR in $INPUT_SEASONS_ARG; do
+              ARGS+=("$YR")
+            done
+          else
+            ARGS=("--verify-historical-datasets" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--season" "$INPUT_FIRST_SEASON")
           fi
+
+          python3 main.py "${ARGS[@]}"

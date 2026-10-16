@@ -1109,6 +1109,162 @@ def run_historical_queue(
     }
 
 
+def verify_persisted_historical_datasets(
+    sport: str = None,
+    league_id: int = None,
+    seasons: list = None,
+    season: int = None,
+    is_queue: bool = False,
+) -> dict:
+    """
+    Independently verify persisted historical records and manifest statuses against actual DB state.
+    Reconciles stored counts, distinct record IDs, date coverage, and structural integrity for football and basketball.
+    Returns summary dict and prints a formatted report.
+    """
+    storage.init_db()
+
+    if is_queue or (seasons and len(seasons) > 1) or (league_id is None and season is None):
+        target_seasons = seasons if seasons else list(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+        football_targets = [
+            {"sport": "football", "league_id": lid, "season": ssn}
+            for ssn in target_seasons
+            for lid in getattr(config, "ALLOWED_LEAGUE_IDS", [])
+        ]
+        basketball_targets = [
+            {"sport": "basketball", "league_id": lid, "season": ssn}
+            for ssn in target_seasons
+            for lid in getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", [])
+        ]
+        targets = football_targets + basketball_targets
+    elif sport == "basketball":
+        target_seasons = seasons if seasons else ([season] if season else [2024])
+        targets = [
+            {"sport": "basketball", "league_id": league_id, "season": ssn}
+            for ssn in target_seasons
+        ]
+    else:
+        target_seasons = seasons if seasons else ([season] if season else [2024])
+        targets = [
+            {"sport": "football", "league_id": league_id, "season": ssn}
+            for ssn in target_seasons
+        ]
+
+    results = []
+    total_requested = len(targets)
+    verified_count = 0
+    failed_count = 0
+
+    print("\n==================================================", flush=True)
+    print("PERSISTED HISTORICAL DATASET VERIFICATION AUDIT", flush=True)
+    print("==================================================", flush=True)
+    print(f"Total requested datasets: {total_requested}\n", flush=True)
+
+    for target in targets:
+        sp = target["sport"]
+        lid = target["league_id"]
+        ssn = target["season"]
+
+        status_info = storage.get_historical_dataset_status(lid, ssn, sport=sp)
+        manifest_status = status_info.get("status", "INCOMPLETE")
+        manifest_count = status_info.get("fixture_count", 0)
+
+        issues = []
+
+        if sp == "basketball":
+            records = storage.get_historical_basketball_games(lid, ssn)
+            actual_count = len(records)
+            seen_ids = set()
+            dates = []
+            for r in records:
+                gid = r.get("id")
+                if gid:
+                    if gid in seen_ids:
+                        issues.append(f"duplicate_game_id_{gid}")
+                    seen_ids.add(gid)
+                d = r.get("date")
+                if d:
+                    dates.append(str(d)[:10])
+
+            distinct_count = len(seen_ids)
+
+            if manifest_count != actual_count:
+                issues.append(f"count_mismatch(manifest={manifest_count},actual={actual_count})")
+
+            if manifest_status == "COMPLETE":
+                if not _validate_historical_basketball_dataset(records, lid, ssn, status_info):
+                    issues.append("failed_basketball_structural_validation")
+
+        else:
+            records = storage.get_historical_fixtures(lid, ssn)
+            actual_count = len(records)
+            seen_ids = set()
+            dates = []
+            for r in records:
+                fid = r.get("fixture", {}).get("id") if isinstance(r.get("fixture"), dict) else None
+                if fid:
+                    if fid in seen_ids:
+                        issues.append(f"duplicate_fixture_id_{fid}")
+                    seen_ids.add(fid)
+                d = r.get("fixture", {}).get("date") if isinstance(r.get("fixture"), dict) else None
+                if d:
+                    dates.append(str(d)[:10])
+
+            distinct_count = len(seen_ids)
+
+            if manifest_count != actual_count:
+                issues.append(f"count_mismatch(manifest={manifest_count},actual={actual_count})")
+
+            if manifest_status == "COMPLETE":
+                cov = data_resolver._validate_historical_structural_coverage(records, season=ssn, league_id=lid)
+                if not cov.get("verified"):
+                    issues.append(f"failed_football_structural_coverage({cov.get('reason')})")
+
+        is_passed = (len(issues) == 0 and manifest_count == actual_count and distinct_count == actual_count)
+
+        if is_passed:
+            verified_count += 1
+        else:
+            failed_count += 1
+
+        min_date = min(dates) if dates else "N/A"
+        max_date = max(dates) if dates else "N/A"
+
+        res_item = {
+            "sport": sp,
+            "league_id": lid,
+            "season": ssn,
+            "manifest_status": manifest_status,
+            "manifest_count": manifest_count,
+            "actual_stored_count": actual_count,
+            "distinct_records": distinct_count,
+            "duplicate_count": actual_count - distinct_count,
+            "date_range": f"{min_date} to {max_date}",
+            "verified": is_passed,
+            "issues": issues,
+        }
+        results.append(res_item)
+
+        status_flag = "PASS" if is_passed else "FAIL"
+        print(
+            f"[{status_flag}] [{sp.upper()}] League {lid} Season {ssn}: Status={manifest_status}, ManifestCount={manifest_count}, Actual={actual_count}, Distinct={distinct_count}, DateRange={min_date}..{max_date}"
+            + (f", Issues={issues}" if issues else ""),
+            flush=True,
+        )
+
+    print("\n==================================================", flush=True)
+    print(f"VERIFICATION AUDIT SUMMARY: Requested={total_requested}, Verified={verified_count}, Failed={failed_count}", flush=True)
+    print("==================================================\n", flush=True)
+
+    summary = {
+        "total_requested": total_requested,
+        "verified_count": verified_count,
+        "failed_count": failed_count,
+        "success": failed_count == 0,
+        "results": results,
+    }
+    return summary
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Historical Data Collector for API-Football/API-Basketball fixtures."
