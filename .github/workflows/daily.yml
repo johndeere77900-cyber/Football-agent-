@@ -78,13 +78,19 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           ENVIRONMENT: production
+          FOOTBALL_GAMES_INPUT: ${{ inputs.football_games }}
         run: |
           set -euo pipefail
 
-          LIMIT="${{ github.event.inputs.football_games }}"
+          LIMIT="$FOOTBALL_GAMES_INPUT"
 
           if [ -z "$LIMIT" ]; then
             LIMIT="12"
+          fi
+
+          if ! [[ "$LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: Invalid limit '$LIMIT'."
+            exit 1
           fi
 
           python3 main.py --limit "$LIMIT"
@@ -128,13 +134,19 @@ jobs:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           ENVIRONMENT: production
+          BASKETBALL_GAMES_INPUT: ${{ inputs.basketball_games }}
         run: |
           set -euo pipefail
 
-          LIMIT="${{ github.event.inputs.basketball_games }}"
+          LIMIT="$BASKETBALL_GAMES_INPUT"
 
           if [ -z "$LIMIT" ]; then
             LIMIT="10"
+          fi
+
+          if ! [[ "$LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: Invalid limit '$LIMIT'."
+            exit 1
           fi
 
           python3 main.py \

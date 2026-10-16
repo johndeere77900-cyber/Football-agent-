@@ -2841,6 +2841,12 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--verify-historical-datasets",
+        action="store_true",
+        help="Verify persisted historical datasets and manifest statuses.",
+    )
+
+    parser.add_argument(
         "--backtest-history",
         action="store_true",
         help="Show past backtest runs.",
@@ -3052,6 +3058,20 @@ def main():
 
             if not isinstance(report, dict) or report.get("status") != "COMPLETE":
                 print(f"Historical sync ended with status '{report.get('status', 'FAILED')}' (non-COMPLETE). Exiting with code 1.", file=sys.stderr)
+                return 1
+            return 0
+
+        if args.verify_historical_datasets:
+            storage.init_db()
+            summary = historical_sync.verify_persisted_historical_datasets(
+                sport=args.sport,
+                league_id=args.league,
+                seasons=getattr(args, "seasons", None),
+                season=args.season,
+                is_queue=args.historical_queue,
+            )
+            if not summary.get("success"):
+                print("Verification failed for one or more requested historical datasets.", file=sys.stderr)
                 return 1
             return 0
 
