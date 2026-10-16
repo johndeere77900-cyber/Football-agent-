@@ -177,6 +177,7 @@ def sync_historical_fixtures(
 
     if initial_request_count >= historical_budget:
         quota_budget_stopped = True
+        last_error_reason = "quota_budget_exhausted_before_acquisition"
         print(
             f"Historical daily budget ceiling reached ({initial_request_count}/{historical_budget} requests used today). Attempting quota-free direct URL / secondary fallbacks.",
             flush=True,
@@ -212,7 +213,8 @@ def sync_historical_fixtures(
 
             if page_meta.get("primary_quota_exhausted"):
                 quota_budget_stopped = True
-                last_error_reason = "quota_budget_exhausted_during_acquisition"
+                if not last_error_reason:
+                    last_error_reason = "quota_budget_exhausted_during_acquisition"
 
             if page_meta.get("primary_failed") and not page_fixtures:
                 if page_meta.get("primary_quota_exhausted"):
@@ -386,14 +388,15 @@ def sync_historical_fixtures(
     ]
     stored_enrichments = storage.get_historical_enrichment(finished_fixture_ids) if finished_fixture_ids else {}
 
-    if not finished_fixture_ids:
-        enrichment_status = "NONE"
-    elif len(stored_enrichments) >= len(finished_fixture_ids):
-        enrichment_status = "COMPLETE"
-    elif len(stored_enrichments) > 0:
-        enrichment_status = "PARTIAL"
+    if finished_fixture_ids:
+        if len(stored_enrichments) >= len(finished_fixture_ids):
+            enrichment_status = "COMPLETE"
+        elif len(stored_enrichments) > 0:
+            enrichment_status = "PARTIAL"
+        else:
+            enrichment_status = "NONE"
     else:
-        enrichment_status = "NONE"
+        enrichment_status = dataset_info.get("enrichment_status") or "NONE"
 
     # Determine exact source semantics and re-read persisted fixtures for final structural validation
     stored_fixtures_all = storage.get_historical_fixtures(league_id, season)
