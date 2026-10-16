@@ -250,40 +250,6 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         expected_team_ids = _get_authoritative_historical_team_ids(league_id, season)
 
     if not expected_team_ids and is_double_round_robin:
-        # Infer team universe from fixtures if canonical home and away team IDs (or raw team IDs/names) are present
-        inferred_teams = set()
-        for f in fixtures:
-            if isinstance(f, dict):
-                p_prov = f.get("provider_provenance", {}).get("provider", "api_football") if isinstance(f.get("provider_provenance"), dict) else "api_football"
-                f_lid = f.get("league", {}).get("id") if isinstance(f.get("league"), dict) else league_id
-                teams_obj = f.get("teams", {}) if isinstance(f.get("teams"), dict) else {}
-                h_obj = teams_obj.get("home", {}) if isinstance(teams_obj.get("home"), dict) else {}
-                a_obj = teams_obj.get("away", {}) if isinstance(teams_obj.get("away"), dict) else {}
-
-                ch = f.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
-                    raw_name=h_obj.get("name", "") or (str(h_obj.get("id")) if h_obj.get("id") is not None else ""),
-                    provider=p_prov,
-                    provider_team_id=h_obj.get("id"),
-                    league_id=f_lid,
-                    sport="football",
-                    auto_register=False,
-                )
-                ca = f.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
-                    raw_name=a_obj.get("name", "") or (str(a_obj.get("id")) if a_obj.get("id") is not None else ""),
-                    provider=p_prov,
-                    provider_team_id=a_obj.get("id"),
-                    league_id=f_lid,
-                    sport="football",
-                    auto_register=False,
-                )
-                if ch and ca:
-                    inferred_teams.add(ch)
-                    inferred_teams.add(ca)
-
-        if inferred_teams and len(inferred_teams) >= 2:
-            expected_team_ids = sorted(inferred_teams)
-
-    if not expected_team_ids and is_double_round_robin:
         return {
             "verified": False,
             "reason": "authoritative_team_universe_unavailable",
@@ -385,14 +351,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
         # FIX 1 Requirement 1: Explicit league ID & season check on every fixture
         f_league = f.get("league")
-        if isinstance(f_league, dict):
-            f_lid = f_league.get("id")
-            f_ssn = f_league.get("season")
-        else:
-            f_lid = league_id
-            f_ssn = season
-
-        if f_lid is not None and league_id is not None and f_lid != league_id:
+        if not isinstance(f_league, dict):
             return {
                 "verified": False,
                 "reason": "invalid_fixture_metadata",
@@ -407,7 +366,25 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
                 "expected_fixture_count": expected_fixture_count,
             }
 
-        if f_ssn is not None and season is not None and str(f_ssn) != str(season):
+        f_lid = f_league.get("id")
+        f_ssn = f_league.get("season")
+
+        if f_lid is None or (league_id is not None and f_lid != league_id):
+            return {
+                "verified": False,
+                "reason": "invalid_fixture_metadata",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+
+        if f_ssn is None or (season is not None and str(f_ssn) != str(season)):
             return {
                 "verified": False,
                 "reason": "invalid_fixture_metadata",
