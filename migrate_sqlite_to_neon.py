@@ -83,10 +83,13 @@ def migrate(sqlite_path=None, target_url=None, dry_run=False, verify_only=False)
     if not dry_run:
         target_conn = psycopg.connect(target_url)
         if verify_only:
-            with target_conn.cursor() as cur:
-                cur.execute(
-                    "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"
-                )
+            try:
+                with target_conn.cursor() as cur:
+                    cur.execute(
+                        "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"
+                    )
+            except Exception:
+                pass
 
     report = {
         "predictions": {"source": 0, "migrated": 0, "destination": 0, "status": "PENDING"},

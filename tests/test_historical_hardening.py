@@ -41,7 +41,16 @@ def dataset_with_history():
     return fixtures
 
 
-def test_complete_dataset_zero_api_calls(temp_db):
+import team_identity
+
+
+def test_complete_dataset_zero_api_calls(temp_db, monkeypatch):
+    c1 = team_identity.bootstrap_historical_team_identity("Team 1", "api_football", 1, league_id=39)
+    c2 = team_identity.bootstrap_historical_team_identity("Team 2", "api_football", 2, league_id=39)
+    monkeypatch.setattr(
+        "data_resolver._get_authoritative_historical_team_ids",
+        lambda l, s, *args, **kwargs: [c1, c2]
+    )
     fixtures = [sample_fixture(9001, home_id=1, away_id=2), sample_fixture(9002, home_id=2, away_id=1)]
     storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
     storage.mark_historical_dataset_complete(league_id=39, season=2024, fixture_count=2)

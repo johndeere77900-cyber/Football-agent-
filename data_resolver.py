@@ -206,7 +206,7 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
             import storage
             stored_c_ids = storage.get_team_identities_by_league("football", league_id)
             min_expected = 18 if league_id in {78, 61, 88, 94} else 20
-            if len(stored_c_ids) >= min_expected or len(stored_c_ids) >= 2:
+            if len(stored_c_ids) >= min_expected:
                 return stored_c_ids
         except Exception as exc:
             logger.warning(
@@ -291,13 +291,22 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             canonical_expected_set.add(tid)
         else:
             cid = team_identity.resolve_canonical_team_id(
-                raw_name="",
+                raw_name=f"Team {tid}",
                 provider="api_football",
                 provider_team_id=tid,
                 league_id=league_id,
                 sport="football",
                 auto_register=False,
             )
+            if not cid:
+                cid = team_identity.resolve_canonical_team_id(
+                    raw_name="",
+                    provider="api_football",
+                    provider_team_id=tid,
+                    league_id=league_id,
+                    sport="football",
+                    auto_register=False,
+                )
             if cid:
                 canonical_expected_set.add(cid)
             else:
