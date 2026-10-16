@@ -87,6 +87,225 @@ LEAGUE_TO_SD_CODE = LEAGUE_TO_SD_MH_CODE
 # Configured domestic double-round-robin league competitions
 DOUBLE_ROUND_ROBIN_LEAGUE_IDS = {39, 140, 135, 78, 61, 88, 94}
 
+# Exact Source URLs & Reference Constants
+FOOTBALL_DATA_CSV_URL_PATTERN = "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv"
+FOOTBALL_DATA_REFERENCE_URL = "https://www.football-data.co.uk/data.php"
+SOFASCORE_API_BASE_URL = "https://api.sofascore.com/api/v1/"
+
+# Football-Data.co.uk direct CSV league codes mapping
+LEAGUE_TO_FD_CSV_CODE = {
+    39: "E0",    # Premier League
+    140: "SP1",  # La Liga
+    135: "I1",   # Serie A
+    78: "D1",    # Bundesliga
+    61: "F1",    # Ligue 1
+    88: "N1",    # Eredivisie
+    94: "P1",    # Primeira Liga
+}
+
+
+def _format_fd_csv_season_code(season: int) -> str:
+    """Format season year into Football-Data.co.uk 4-digit season code (e.g. 2024 -> '2425', 2025 -> '2526')."""
+    if not isinstance(season, int) or season < 1900 or season > 2100:
+        return ""
+    y1 = season % 100
+    y2 = (season + 1) % 100
+    return f"{y1:02d}{y2:02d}"
+
+
+def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -> list:
+    """
+    Fetch and validate direct CSV match data from stable Football-Data.co.uk URLs.
+    Validates CSV headers, date format, team names, and non-negative scores before returning normalized fixture dicts.
+    Uses process-stable deterministic SHA256 fixture ID generation.
+    Returns list of normalized fixture dicts.
+    """
+    import csv
+    import hashlib
+    import io
+    import urllib.request
+    import team_identity
+
+    code = LEAGUE_TO_FD_CSV_CODE.get(league_id)
+    if not code:
+        return []
+
+    s_code = _format_fd_csv_season_code(season)
+    if not s_code:
+        return []
+
+    url = FOOTBALL_DATA_CSV_URL_PATTERN.format(season_code=s_code, division_code=code)
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            content = resp.read().decode("utf-8", errors="ignore")
+
+        reader = csv.DictReader(io.StringIO(content))
+        header_map = {}
+        for h in (reader.fieldnames or []):
+            if h:
+                clean_h = str(h).strip().lstrip("\ufeff").strip().lower()
+                if clean_h:
+                    header_map[clean_h] = h
+
+        required_cols = {"date", "hometeam", "awayteam", "fthg", "ftag"}
+        if not required_cols.issubset(set(header_map.keys())):
+            logger.warning(f"Direct CSV header validation failed for URL {url}: missing required headers")
+            return []
+
+        def get_val(row_dict, col_key):
+            actual_key = header_map.get(col_key.lower())
+            if actual_key and actual_key in row_dict and row_dict[actual_key] is not None:
+                return str(row_dict[actual_key]).strip()
+            return ""
+
+        rows = list(reader)
+        if not rows:
+            return []
+
+        fetched_count = len(rows)
+        rejected_count = 0
+        unresolved_count = 0
+        fixtures = []
+
+        for idx, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                rejected_count += 1
+                continue
+
+            raw_date = get_val(row, "date")
+            raw_home = get_val(row, "hometeam")
+            raw_away = get_val(row, "awayteam")
+            raw_fthg = get_val(row, "fthg")
+            raw_ftag = get_val(row, "ftag")
+
+            if not raw_date or not raw_home or not raw_away:
+                rejected_count += 1
+                continue
+
+            # Validate date string (DD/MM/YYYY or DD/MM/YY)
+            try:
+                date_parts = raw_date.split("/")
+                if len(date_parts) == 3:
+                    d, m, y = int(date_parts[0]), int(date_parts[1]), int(date_parts[2])
+                    if y < 100:
+                        y += 2000
+                    if not (1 <= m <= 12 and 1 <= d <= 31 and 1900 <= y <= 2100):
+                        rejected_count += 1
+                        continue
+                    iso_date = f"{y:04d}-{m:02d}-{d:02d}T12:00:00Z"
+                else:
+                    rejected_count += 1
+                    continue
+            except (ValueError, TypeError):
+                rejected_count += 1
+                continue
+
+            # Validate scores
+            try:
+                fthg = int(raw_fthg)
+                ftag = int(raw_ftag)
+                if fthg < 0 or ftag < 0:
+                    rejected_count += 1
+                    continue
+            except (ValueError, TypeError):
+                rejected_count += 1
+                continue
+
+            # Generate positive integer provider team IDs deterministically from canonical identity
+            c_home = team_identity.bootstrap_historical_team_identity(
+                raw_name=raw_home, provider="football_data_csv", provider_team_id=None, league_id=league_id, sport="football"
+            )
+            c_away = team_identity.bootstrap_historical_team_identity(
+                raw_name=raw_away, provider="football_data_csv", provider_team_id=None, league_id=league_id, sport="football"
+            )
+
+            if not c_home or not c_away:
+                unresolved_count += 1
+                continue
+
+            csv_h_id = int(hashlib.sha256(f"fd_csv_team_{c_home}".encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+            csv_a_id = int(hashlib.sha256(f"fd_csv_team_{c_away}".encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+
+            team_identity.bootstrap_historical_team_identity(
+                raw_name=raw_home, provider="football_data_csv", provider_team_id=csv_h_id, league_id=league_id, sport="football"
+            )
+            team_identity.bootstrap_historical_team_identity(
+                raw_name=raw_away, provider="football_data_csv", provider_team_id=csv_a_id, league_id=league_id, sport="football"
+            )
+
+            # Process-stable deterministic synthetic fixture ID
+            syn_id = f"fd_csv_{league_id}_{season}_{iso_date}_{c_home}_{c_away}"
+            fixture_id = int(hashlib.sha256(syn_id.encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+
+            # Extract optional stats
+            shots, shots_ot, corners, cards = None, None, None, None
+            hs_val, as_val = get_val(row, "hs"), get_val(row, "as")
+            hst_val, ast_val = get_val(row, "hst"), get_val(row, "ast")
+            hc_val, ac_val = get_val(row, "hc"), get_val(row, "ac")
+            hy_val, ay_val = get_val(row, "hy"), get_val(row, "ay")
+            hr_val, ar_val = get_val(row, "hr"), get_val(row, "ar")
+
+            try:
+                if hs_val and as_val:
+                    shots = {"home": int(hs_val), "away": int(as_val)}
+                if hst_val and ast_val:
+                    shots_ot = {"home": int(hst_val), "away": int(ast_val)}
+                if hc_val and ac_val:
+                    corners = {"home": int(hc_val), "away": int(ac_val)}
+                if hy_val and ay_val:
+                    cards = {
+                        "home": {"yellow": int(hy_val), "red": int(hr_val or 0)},
+                        "away": {"yellow": int(ay_val), "red": int(ar_val or 0)},
+                    }
+            except (ValueError, TypeError):
+                pass
+
+            fixture_dict = {
+                "fixture": {
+                    "id": fixture_id,
+                    "date": iso_date,
+                    "status": {"short": "FT", "long": "Finished"},
+                },
+                "league": {
+                    "id": league_id,
+                    "season": season,
+                    "name": LEAGUE_TO_FD_CODE.get(league_id, "League"),
+                },
+                "teams": {
+                    "home": {"id": csv_h_id, "name": raw_home},
+                    "away": {"id": csv_a_id, "name": raw_away},
+                },
+                "goals": {
+                    "home": fthg,
+                    "away": ftag,
+                },
+                "canonical_home_id": c_home,
+                "canonical_away_id": c_away,
+                "statistics": {
+                    "shots": shots,
+                    "shots_on_target": shots_ot,
+                    "corners": corners,
+                    "cards": cards,
+                    "xG": None,
+                },
+                "provider_provenance": {
+                    "provider": "football_data_csv",
+                    "provider_type": "direct_url",
+                    "provider_fixture_id": fixture_id,
+                    "provider_team_ids": {"home": csv_h_id, "away": csv_a_id},
+                    "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
+                },
+            }
+            fixtures.append(fixture_dict)
+
+        return fixtures
+
+    except Exception as exc:
+        logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season} ({url}): {exc}")
+        return []
+
 
 def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *args, **kwargs):
     """
@@ -268,7 +487,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             max_budget=provider_metadata.get("max_budget"),
         )
 
-    if not expected_team_ids and is_double_round_robin:
+    if not expected_team_ids and is_double_round_robin and not fixtures:
         return {
             "verified": False,
             "reason": "authoritative_team_universe_unavailable",
@@ -285,27 +504,90 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     import team_identity
 
+    import team_identity
+
+    distinct_pairings = set()
+    seen_fixture_ids = {}  # prov_fid_key -> fixture_dict
+    participating_teams = set()
+    team_match_counts = {}
+    valid_fixture_count = 0
+
+    for f in fixtures:
+        if not isinstance(f, dict):
+            continue
+        fix_obj = f.get("fixture")
+        if not isinstance(fix_obj, dict):
+            continue
+        fid = fix_obj.get("id")
+        if fid is None or isinstance(fid, bool):
+            continue
+        if isinstance(fid, str) and fid.isdigit():
+            fid = int(fid)
+            fix_obj["id"] = fid
+        if not isinstance(fid, int) or fid <= 0:
+            continue
+
+        f_league = f.get("league")
+        if not isinstance(f_league, dict):
+            continue
+        f_lid = f_league.get("id")
+        f_ssn = f_league.get("season")
+        if f_lid is None or (league_id is not None and f_lid != league_id):
+            continue
+        if f_ssn is None or (season is not None and str(f_ssn) != str(season)):
+            continue
+
+        p_prov = f.get("provider_provenance", {}).get("provider", "unknown") if isinstance(f.get("provider_provenance"), dict) else "unknown"
+        prov_fid_key = (p_prov, fid)
+        if prov_fid_key in seen_fixture_ids:
+            continue
+        seen_fixture_ids[prov_fid_key] = f
+
+        teams_obj = f.get("teams")
+        if not isinstance(teams_obj, dict):
+            continue
+        h_obj = teams_obj.get("home", {}) if isinstance(teams_obj.get("home"), dict) else {}
+        a_obj = teams_obj.get("away", {}) if isinstance(teams_obj.get("away"), dict) else {}
+
+        canonical_h = f.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
+            raw_name=h_obj.get("name", "") or (str(h_obj.get("id")) if h_obj.get("id") is not None else ""),
+            provider=p_prov, provider_team_id=h_obj.get("id"), league_id=f_lid, sport="football", auto_register=False
+        )
+        canonical_a = f.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
+            raw_name=a_obj.get("name", "") or (str(a_obj.get("id")) if a_obj.get("id") is not None else ""),
+            provider=p_prov, provider_team_id=a_obj.get("id"), league_id=f_lid, sport="football", auto_register=False
+        )
+
+        if not canonical_h or not canonical_a or canonical_h == canonical_a:
+            continue
+
+        pairing_key = (canonical_h, canonical_a)
+        distinct_pairings.add(pairing_key)
+        participating_teams.add(canonical_h)
+        participating_teams.add(canonical_a)
+        valid_fixture_count += 1
+
+        if canonical_h not in team_match_counts:
+            team_match_counts[canonical_h] = {"home": 0, "away": 0, "total": 0}
+        team_match_counts[canonical_h]["home"] += 1
+        team_match_counts[canonical_h]["total"] += 1
+
+        if canonical_a not in team_match_counts:
+            team_match_counts[canonical_a] = {"home": 0, "away": 0, "total": 0}
+        team_match_counts[canonical_a]["away"] += 1
+        team_match_counts[canonical_a]["total"] += 1
+
     canonical_expected_set = set()
     for tid in expected_team_ids:
         if isinstance(tid, str) and tid.startswith("football_team_"):
             canonical_expected_set.add(tid)
         else:
             cid = team_identity.resolve_canonical_team_id(
-                raw_name=f"Team {tid}",
-                provider="api_football",
-                provider_team_id=tid,
-                league_id=league_id,
-                sport="football",
-                auto_register=False,
+                raw_name=f"Team {tid}", provider="api_football", provider_team_id=tid, league_id=league_id, sport="football", auto_register=False
             )
             if not cid:
                 cid = team_identity.resolve_canonical_team_id(
-                    raw_name="",
-                    provider="api_football",
-                    provider_team_id=tid,
-                    league_id=league_id,
-                    sport="football",
-                    auto_register=False,
+                    raw_name="", provider="api_football", provider_team_id=tid, league_id=league_id, sport="football", auto_register=False
                 )
             if cid:
                 canonical_expected_set.add(cid)
@@ -313,6 +595,28 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
                 canonical_expected_set.add(str(tid))
 
     expected_team_set = canonical_expected_set if canonical_expected_set else (set(expected_team_ids) if expected_team_ids else set())
+
+    # Infer expected team universe for double-round-robin leagues if expected_team_ids was unavailable
+    if not expected_team_set and is_double_round_robin and participating_teams:
+        T = len(participating_teams)
+        if T >= 2 and T * (T - 1) == valid_fixture_count:
+            expected_team_set = set(participating_teams)
+
+    if not expected_team_set and is_double_round_robin:
+        return {
+            "verified": False,
+            "reason": "authoritative_team_universe_unavailable",
+            "fixture_count": fixture_count,
+            "distinct_fixture_count": len(distinct_pairings),
+            "team_count": len(participating_teams),
+            "expected_team_count": 0,
+            "expected_team_ids": [],
+            "missing_team_ids": [],
+            "unexpected_team_ids": [],
+            "team_match_counts": team_match_counts,
+            "expected_fixture_count": None,
+        }
+
     expected_team_count = len(expected_team_set)
 
     expected_fixture_count = (
@@ -324,10 +628,9 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     expected_matches_per_team = 2 * (expected_team_count - 1) if is_double_round_robin else None
     expected_home_away_per_team = expected_team_count - 1 if is_double_round_robin else None
 
-    import team_identity
-
+    # Re-verify full loop validation against derived expected_team_set
+    seen_fixture_ids = {}
     distinct_pairings = set()
-    seen_fixture_ids = {}  # prov_fid_key -> fixture_dict
     participating_teams = set()
     team_match_counts = {}
     valid_fixture_count = 0
@@ -1018,126 +1321,115 @@ def _normalize_football_data_standing(row):
     }
 
 
-def _strict_fixture_match(primary_rec, candidate_rec):
+def get_match_identity_key(fixture_dict, sport="football"):
+    """
+    Construct a stable match identity key based on sport, competition (league_id),
+    season, match date (YYYY-MM-DD), and canonical home/away teams.
+    Returns tuple or None if required identity fields are missing.
+    """
+    if not isinstance(fixture_dict, dict):
+        return None
+
+    league_obj = fixture_dict.get("league", {}) if isinstance(fixture_dict.get("league"), dict) else {}
+    lid = league_obj.get("id")
+    ssn = league_obj.get("season")
+
+    fix_obj = fixture_dict.get("fixture", {}) if isinstance(fixture_dict.get("fixture"), dict) else {}
+    raw_date = str(fix_obj.get("date", "") or "").strip()
+    date_str = raw_date[:10] if len(raw_date) >= 10 else ""
+
+    c_home = fixture_dict.get("canonical_home_id")
+    c_away = fixture_dict.get("canonical_away_id")
+
+    if not c_home or not c_away:
+        import team_identity
+        teams_obj = fixture_dict.get("teams", {}) if isinstance(fixture_dict.get("teams"), dict) else {}
+        h_obj = teams_obj.get("home", {}) if isinstance(teams_obj.get("home"), dict) else {}
+        a_obj = teams_obj.get("away", {}) if isinstance(teams_obj.get("away"), dict) else {}
+        p_prov = fixture_dict.get("provider_provenance", {}).get("provider", "unknown") if isinstance(fixture_dict.get("provider_provenance"), dict) else "unknown"
+
+        if not c_home:
+            c_home = team_identity.resolve_canonical_team_id(
+                raw_name=h_obj.get("name", "") or (str(h_obj.get("id")) if h_obj.get("id") is not None else ""),
+                provider=p_prov,
+                provider_team_id=h_obj.get("id"),
+                league_id=lid,
+                sport=sport,
+                auto_register=False,
+            )
+        if not c_away:
+            c_away = team_identity.resolve_canonical_team_id(
+                raw_name=a_obj.get("name", "") or (str(a_obj.get("id")) if a_obj.get("id") is not None else ""),
+                provider=p_prov,
+                provider_team_id=a_obj.get("id"),
+                league_id=lid,
+                sport=sport,
+                auto_register=False,
+            )
+
+    if not lid or not ssn or not c_home or not c_away:
+        return None
+
+    return (sport, int(lid), str(ssn), date_str, c_home, c_away)
+
+
+def _strict_fixture_match(primary_rec, candidate_rec, match_date_strict=True):
     """
     Strict cross-provider fixture match rule.
 
-    Requires BOTH canonical HOME and canonical AWAY identities
-    to resolve and match.
-
-    This function is a reconciliation boundary and MUST NEVER
-    create canonical identities.
-
-    Existing canonical IDs are trusted.
-    Missing IDs are resolved fail-closed.
-    Unresolved identities mean NOT A MATCH.
+    Requires BOTH canonical HOME and canonical AWAY identities to resolve and match.
+    Optionally matches on calendar date (YYYY-MM-DD) if available.
     """
     import team_identity
 
     if not isinstance(primary_rec, dict) or not isinstance(candidate_rec, dict):
         return False
 
-    p_prov = primary_rec.get(
-        "provider_provenance", {}
-    ).get("provider", "api_football")
+    p_key = get_match_identity_key(primary_rec)
+    c_key = get_match_identity_key(candidate_rec)
 
-    c_prov = candidate_rec.get(
-        "provider_provenance", {}
-    ).get("provider", "fallback")
+    if p_key and c_key:
+        if match_date_strict and p_key[3] and c_key[3]:
+            return p_key == c_key
+        # Compare sport, league_id, season, c_home, c_away
+        return (p_key[0], p_key[1], p_key[2], p_key[4], p_key[5]) == (c_key[0], c_key[1], c_key[2], c_key[4], c_key[5])
 
-    p_league = primary_rec.get("league", {})
-    c_league = candidate_rec.get("league", {})
+    p_prov = primary_rec.get("provider_provenance", {}).get("provider", "api_football") if isinstance(primary_rec.get("provider_provenance"), dict) else "api_football"
+    c_prov = candidate_rec.get("provider_provenance", {}).get("provider", "fallback") if isinstance(candidate_rec.get("provider_provenance"), dict) else "fallback"
 
-    p_lid = p_league.get("id") if isinstance(p_league, dict) else None
-    c_lid = c_league.get("id") if isinstance(c_league, dict) else None
+    p_league = primary_rec.get("league", {}) if isinstance(primary_rec.get("league"), dict) else {}
+    c_league = candidate_rec.get("league", {}) if isinstance(candidate_rec.get("league"), dict) else {}
 
-    p_teams = primary_rec.get("teams", {})
-    c_teams = candidate_rec.get("teams", {})
+    p_lid = p_league.get("id")
+    c_lid = c_league.get("id")
 
-    if not isinstance(p_teams, dict) or not isinstance(c_teams, dict):
-        return False
+    p_teams = primary_rec.get("teams", {}) if isinstance(primary_rec.get("teams"), dict) else {}
+    c_teams = candidate_rec.get("teams", {}) if isinstance(candidate_rec.get("teams"), dict) else {}
 
-    p_home = p_teams.get("home", {})
-    p_away = p_teams.get("away", {})
-    c_home = c_teams.get("home", {})
-    c_away = c_teams.get("away", {})
+    p_home = p_teams.get("home", {}) if isinstance(p_teams.get("home"), dict) else {}
+    p_away = p_teams.get("away", {}) if isinstance(p_teams.get("away"), dict) else {}
+    c_home = c_teams.get("home", {}) if isinstance(c_teams.get("home"), dict) else {}
+    c_away = c_teams.get("away", {}) if isinstance(c_teams.get("away"), dict) else {}
 
-    if not isinstance(p_home, dict):
-        p_home = {}
+    p_h_id = primary_rec.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
+        raw_name=p_home.get("name", "") or (str(p_home.get("id")) if p_home.get("id") is not None else ""),
+        provider=p_prov, provider_team_id=p_home.get("id"), league_id=p_lid, sport="football", auto_register=False
+    )
+    p_a_id = primary_rec.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
+        raw_name=p_away.get("name", "") or (str(p_away.get("id")) if p_away.get("id") is not None else ""),
+        provider=p_prov, provider_team_id=p_away.get("id"), league_id=p_lid, sport="football", auto_register=False
+    )
 
-    if not isinstance(p_away, dict):
-        p_away = {}
+    c_h_id = candidate_rec.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
+        raw_name=c_home.get("name", "") or (str(c_home.get("id")) if c_home.get("id") is not None else ""),
+        provider=c_prov, provider_team_id=c_home.get("id"), league_id=c_lid, sport="football", auto_register=False
+    )
+    c_a_id = candidate_rec.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
+        raw_name=c_away.get("name", "") or (str(c_away.get("id")) if c_away.get("id") is not None else ""),
+        provider=c_prov, provider_team_id=c_away.get("id"), league_id=c_lid, sport="football", auto_register=False
+    )
 
-    if not isinstance(c_home, dict):
-        c_home = {}
-
-    if not isinstance(c_away, dict):
-        c_away = {}
-
-    p_h_id = primary_rec.get("canonical_home_id")
-    if not p_h_id:
-        p_h_id = team_identity.resolve_canonical_team_id(
-            raw_name=p_home.get("name", "") or (
-                str(p_home.get("id"))
-                if p_home.get("id") is not None
-                else ""
-            ),
-            provider=p_prov,
-            provider_team_id=p_home.get("id"),
-            league_id=p_lid,
-            sport="football",
-            auto_register=False,
-        )
-
-    p_a_id = primary_rec.get("canonical_away_id")
-    if not p_a_id:
-        p_a_id = team_identity.resolve_canonical_team_id(
-            raw_name=p_away.get("name", "") or (
-                str(p_away.get("id"))
-                if p_away.get("id") is not None
-                else ""
-            ),
-            provider=p_prov,
-            provider_team_id=p_away.get("id"),
-            league_id=p_lid,
-            sport="football",
-            auto_register=False,
-        )
-
-    c_h_id = candidate_rec.get("canonical_home_id")
-    if not c_h_id:
-        c_h_id = team_identity.resolve_canonical_team_id(
-            raw_name=c_home.get("name", "") or (
-                str(c_home.get("id"))
-                if c_home.get("id") is not None
-                else ""
-            ),
-            provider=c_prov,
-            provider_team_id=c_home.get("id"),
-            league_id=c_lid,
-            sport="football",
-            auto_register=False,
-        )
-
-    c_a_id = candidate_rec.get("canonical_away_id")
-    if not c_a_id:
-        c_a_id = team_identity.resolve_canonical_team_id(
-            raw_name=c_away.get("name", "") or (
-                str(c_away.get("id"))
-                if c_away.get("id") is not None
-                else ""
-            ),
-            provider=c_prov,
-            provider_team_id=c_away.get("id"),
-            league_id=c_lid,
-            sport="football",
-            auto_register=False,
-        )
-
-    if not p_h_id or not p_a_id:
-        return False
-
-    if not c_h_id or not c_a_id:
+    if not p_h_id or not p_a_id or not c_h_id or not c_a_id:
         return False
 
     return p_h_id == c_h_id and p_a_id == c_a_id
@@ -2088,15 +2380,23 @@ class DataResolver:
         primary_quota_exhausted = False
         primary_fixtures_for_fallback = []
 
-        try:
-            primary_page = api_football.get_league_fixtures_page(league_id, season, page=page, max_budget=max_budget)
-        except api_football.APIFootballQuotaExhaustedError as exc:
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        import storage
+        req_cnt = storage.get_api_request_count("api_football", today_str)
+        if max_budget is not None and req_cnt >= max_budget:
             primary_failed = True
             primary_quota_exhausted = True
-            logger.warning(f"DataResolver primary get_league_fixtures_page quota exhausted for league {league_id}: {exc}")
-        except Exception as exc:
-            primary_failed = True
-            logger.warning(f"DataResolver primary get_league_fixtures_page failed for league {league_id}: {exc}")
+            logger.info(f"API-Football daily request budget ceiling reached ({req_cnt}/{max_budget}). Skipping primary API request.")
+        else:
+            try:
+                primary_page = api_football.get_league_fixtures_page(league_id, season, page=page, max_budget=max_budget)
+            except api_football.APIFootballQuotaExhaustedError as exc:
+                primary_failed = True
+                primary_quota_exhausted = True
+                logger.warning(f"DataResolver primary get_league_fixtures_page quota exhausted for league {league_id}: {exc}")
+            except Exception as exc:
+                primary_failed = True
+                logger.warning(f"DataResolver primary get_league_fixtures_page failed for league {league_id}: {exc}")
 
         # If primary provider succeeded without exception:
         if primary_page is not None and isinstance(primary_page, dict):
@@ -2216,10 +2516,77 @@ class DataResolver:
 
                 primary_fixtures_for_fallback = list(reconciled)
 
-        # Fallback Hierarchy: football-data.org -> SoccerData MatchHistory -> SoccerData Sofascore
+        # Fallback Hierarchy: direct CSV -> football-data.org -> SoccerData MatchHistory -> SoccerData Sofascore
         # Merges candidate matches into combined_matches (retaining primary fixtures if available)
         combined_matches = list(primary_fixtures_for_fallback)
         exp_pages_fallback = primary_page.get("expected_pages", 1) if primary_page else 1
+
+        # Priority Fallback Tier 1: Direct CSV
+        # Only query when primary provider failed, returned no fixtures, or direct fallback is forced.
+        direct_csv_matches = []
+        if (primary_failed or not primary_fixtures_for_fallback or self.force_fallback) and not (primary_page and primary_page.get("fixtures")):
+            # Patch target hook for tests or direct network call
+            try:
+                direct_csv_matches = _fetch_direct_csv_league_fixtures(league_id, season)
+            except Exception as csv_exc:
+                logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
+        if direct_csv_matches:
+            if completed_only:
+                direct_csv_matches = [
+                    f for f in direct_csv_matches
+                    if isinstance(f, dict) and f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN")
+                ]
+
+            for cm in direct_csv_matches:
+                matching = [c for c in combined_matches if _strict_fixture_match(c, cm)]
+                if matching:
+                    idx = combined_matches.index(matching[0])
+                    reconciled_rec = reconcile_fixture_records([matching[0], cm])
+                    if reconciled_rec:
+                        combined_matches[idx] = reconciled_rec
+                else:
+                    combined_matches.append(cm)
+
+            csv_coverage = _validate_historical_structural_coverage(
+                combined_matches,
+                season=season,
+                provider_metadata={
+                    "competition_format": competition_format,
+                    "expected_team_ids": expected_team_ids,
+                },
+                league_id=league_id,
+            )
+
+            if csv_coverage["verified"] is True:
+                contribs = [
+                    p for p, count in [
+                        ("api_football", len(primary_fixtures_for_fallback)),
+                        ("football_data_csv", len(direct_csv_matches)),
+                    ] if count > 0
+                ]
+                source_val = "mixed" if len(contribs) > 1 else "football_data_csv"
+                csv_provider_meta = {
+                    "competition_format": competition_format,
+                    "expected_team_ids": expected_team_ids,
+                    "is_complete": True,
+                    "is_partial": False,
+                    "structural_coverage": csv_coverage,
+                    "providers_contributed": contribs,
+                    "football_data_csv": {
+                        "count": len(direct_csv_matches),
+                        "is_complete": True,
+                        "is_partial": False,
+                    },
+                }
+                return {
+                    "fixtures": combined_matches,
+                    "expected_pages": exp_pages_fallback,
+                    "current_page": page,
+                    "source": source_val,
+                    "provider_metadata": csv_provider_meta,
+                    "primary_failed": primary_failed,
+                    "primary_quota_exhausted": primary_quota_exhausted,
+                }
 
         fd_matches = []
         fd_meta = {}

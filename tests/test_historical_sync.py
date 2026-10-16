@@ -133,7 +133,11 @@ def test_historical_sync_respects_quota_budget(temp_db, monkeypatch):
     for i in range(5):
         storage.record_api_request("api_football", "fixtures")
 
-    with patch("api_football.get_league_fixtures") as mock_get:
+    with patch("api_football.get_league_fixtures_page") as mock_get, \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("football_data_api.get_competition_matches", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_UNAVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_UNAVAILABLE", [], {})):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         mock_get.assert_not_called()
 
@@ -167,7 +171,11 @@ def test_historical_sync_page_by_page_resumability(temp_db):
         raise RuntimeError("Unexpected page")
 
     # Run 1: Page 1 succeeds, Page 2 fails
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("football_data_api.get_competition_matches", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_UNAVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_UNAVAILABLE", [], {})):
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report1["status"] == "INCOMPLETE"
@@ -186,7 +194,11 @@ def test_historical_sync_page_by_page_resumability(temp_db):
             return {"fixtures": page2_fixtures, "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch_resume) as mock_resume:
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch_resume) as mock_resume, \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("football_data_api.get_competition_matches", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_UNAVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_UNAVAILABLE", [], {})):
         report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report2["status"] == "COMPLETE"
@@ -214,7 +226,11 @@ def test_historical_sync_empty_pages_count_persisted_on_resume(temp_db):
             raise RuntimeError("Network error on page 2")
         raise RuntimeError("Unexpected page")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("football_data_api.get_competition_matches", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_UNAVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_UNAVAILABLE", [], {})):
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report1["status"] == "INCOMPLETE"
@@ -226,7 +242,11 @@ def test_historical_sync_empty_pages_count_persisted_on_resume(temp_db):
             return {"fixtures": page2_fixtures, "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch_resume):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_page_fetch_resume), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("football_data_api.get_competition_matches", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_UNAVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_UNAVAILABLE", [], {})):
         report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report2["status"] == "INCOMPLETE"
