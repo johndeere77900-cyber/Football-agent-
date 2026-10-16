@@ -42,17 +42,13 @@ def _is_historical_provider_complete(
     if acquisition_failed:
         return False
 
-    prov = (page_source or "").strip().lower()
-    if quota_budget_stopped and prov == "api_football":
-        return False
     if valid_fixtures_count <= 0 or final_stored_count <= 0:
-        return False
-    if rejected_count > 0 or empty_pages_count > 0:
         return False
 
     if not page_source or not isinstance(page_source, str):
         return False
 
+    prov = page_source.strip().lower()
     supported_providers = {
         "api_football",
         "football_data_org",
@@ -62,9 +58,10 @@ def _is_historical_provider_complete(
         "soccerdata_sofascore",
         "mixed",
     }
-    prov = page_source.strip().lower()
-
     if prov not in supported_providers:
+        return False
+
+    if quota_budget_stopped and prov == "api_football":
         return False
 
     prov_meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else {}
@@ -83,20 +80,6 @@ def _is_historical_provider_complete(
 
     if prov == "api_football":
         if expected_pages <= 0 or pages_completed < expected_pages:
-            return False
-    elif prov == "mixed":
-        contribs = prov_meta.get("providers_contributed", [])
-        if not contribs or not isinstance(contribs, list):
-            return False
-        for c in contribs:
-            c_info = prov_meta.get(c, {})
-            if isinstance(c_info, dict) and c_info.get("is_partial") is True:
-                return False
-    else:
-        if pages_completed <= 0:
-            return False
-        c_info = prov_meta.get(prov, {})
-        if isinstance(c_info, dict) and c_info.get("is_partial") is True:
             return False
 
     return True
@@ -225,7 +208,7 @@ def sync_historical_fixtures(
             )
             page_fixtures = page_meta.get("fixtures", [])
             page_expected = page_meta.get("expected_pages", 1)
-            page_source = page_meta.get("source", "api_football")
+            page_source = str(page_meta.get("source") or "api_football")
 
             if page_meta.get("primary_quota_exhausted"):
                 quota_budget_stopped = True
@@ -234,22 +217,26 @@ def sync_historical_fixtures(
             if page_meta.get("primary_failed") and not page_fixtures:
                 if page_meta.get("primary_quota_exhausted"):
                     print(f"API Quota exhausted during fixture fetch on page {current_page}", flush=True)
+                    break
                 else:
                     acquisition_failed = True
                     last_error_reason = "secondary_provider_returned_no_fixtures"
                     print(f"Primary acquisition unavailable; fallback returned no fixtures on page {current_page}", flush=True)
-                break
+                    break
 
-            if expected_pages == 0 or page_source != "api_football":
-                expected_pages = page_expected
-            elif page_expected != expected_pages and page_fixtures:
-                acquisition_failed = True
-                last_error_reason = "pagination_metadata_mismatch"
-                print(
-                    f"Pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
-                    flush=True,
-                )
-                break
+            if isinstance(page_expected, int) and page_expected > 0:
+                if expected_pages == 0 or page_source != "api_football":
+                    expected_pages = page_expected
+                elif page_expected != expected_pages and page_fixtures:
+                    acquisition_failed = True
+                    last_error_reason = "pagination_metadata_mismatch"
+                    print(
+                        f"Pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
+                        flush=True,
+                    )
+                    break
+            else:
+                expected_pages = expected_pages or 1
 
             if not page_fixtures:
                 total_empty_pages_count += 1
@@ -286,12 +273,13 @@ def sync_historical_fixtures(
             current_stored_count = storage.get_historical_fixture_count(league_id, season)
 
             # Update progress in manifest immediately
+            safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
             storage.mark_historical_dataset_incomplete(
                 league_id,
                 season,
                 fixture_count=current_stored_count,
                 sport="football",
-                expected_pages=expected_pages,
+                expected_pages=safe_exp_pages,
                 pages_completed=pages_completed,
                 acquisition_complete=False,
                 rejected_count=total_rejected_count,
@@ -299,7 +287,7 @@ def sync_historical_fixtures(
                 error_reason=last_error_reason,
                 source=page_source,
             )
-            if current_page >= expected_pages:
+            if current_page >= safe_exp_pages:
                 break
             current_page += 1
 
@@ -314,6 +302,7 @@ def sync_historical_fixtures(
             print(f"Primary acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
             break
 
+    safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
     if acquisition_failed or total_valid_fixtures == 0 or storage.get_historical_fixture_count(league_id, season) == 0:
         acquisition_failed = True
         if not last_error_reason:
@@ -323,7 +312,7 @@ def sync_historical_fixtures(
             season,
             fixture_count=storage.get_historical_fixture_count(league_id, season),
             sport="football",
-            expected_pages=expected_pages,
+            expected_pages=safe_exp_pages,
             pages_completed=pages_completed,
             acquisition_complete=False,
             rejected_count=total_rejected_count,
@@ -409,7 +398,7 @@ def sync_historical_fixtures(
     # Determine exact source semantics and re-read persisted fixtures for final structural validation
     stored_fixtures_all = storage.get_historical_fixtures(league_id, season)
 
-    page_source_val = page_source if 'page_source' in locals() else "api_football"
+    page_source_val = str(page_source) if ('page_source' in locals() and page_source is not None) else "api_football"
     page_meta_val = page_meta if 'page_meta' in locals() else {}
 
     db_coverage = data_resolver._validate_historical_structural_coverage(
@@ -465,7 +454,7 @@ def sync_historical_fixtures(
             fixture_count=final_stored_count,
             source=manifest_source,
             sport="football",
-            expected_pages=expected_pages,
+            expected_pages=safe_exp_pages,
             pages_completed=pages_completed,
             acquisition_complete=True,
             enrichment_status=enrichment_status,
@@ -482,7 +471,7 @@ def sync_historical_fixtures(
             fixture_count=final_stored_count,
             source=manifest_source,
             sport="football",
-            expected_pages=expected_pages,
+            expected_pages=safe_exp_pages,
             pages_completed=pages_completed,
             acquisition_complete=False,
             enrichment_status=enrichment_status,

@@ -105,7 +105,10 @@ def test_07_08_09_verified_mapping_and_competition_context_aliasing():
 
 def test_12_zero_fixtures_fallback_marks_dataset_incomplete():
     with patch("main.check_competition_coverage", return_value=("season_not_available", "Season 2024 unavailable")), \
-         patch("football_data_api.get_competition_matches", return_value=[]):
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("football_data_api.get_competition_matches", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_UNAVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_UNAVAILABLE", [], {})):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         assert report["status"] == "INCOMPLETE"
         st = storage.get_historical_dataset_status(39, 2024)

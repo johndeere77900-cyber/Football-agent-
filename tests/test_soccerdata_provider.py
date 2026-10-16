@@ -339,11 +339,12 @@ def test_sofascore_status_available_when_team_ids_present(mock_subproc):
 
 
 # Fallback hierarchy check: Sofascore is NOT called if MatchHistory returns structurally complete data
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
 @patch("soccerdata_provider.get_sofascore_historical_games")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_sofascore_not_used_when_match_history_returns_usable_data(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+def test_sofascore_not_used_when_match_history_returns_usable_data(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss, mock_csv):
     mock_api_fb.side_effect = Exception("Primary error")
     mock_fd.side_effect = Exception("Secondary error")
 
@@ -376,11 +377,12 @@ def test_sofascore_not_used_when_match_history_returns_usable_data(mock_api_fb, 
 
 
 # Test: SoccerData MatchHistory & Sofascore reached when football-data.org returns non-empty but structurally incomplete dataset
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
 @patch("soccerdata_provider.get_sofascore_historical_games")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_soccerdata_reached_when_fd_returns_structurally_incomplete_dataset(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+def test_soccerdata_reached_when_fd_returns_structurally_incomplete_dataset(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss, mock_csv):
     mock_api_fb.side_effect = Exception("Primary error")
 
     # football-data.org returns 305 fixtures (structurally incomplete for 18-team Ligue 1 2025) and claims complete

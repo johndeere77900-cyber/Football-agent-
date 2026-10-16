@@ -10,6 +10,29 @@ import config
 
 class TestDirectCSVAndResiliency(unittest.TestCase):
 
+    def test_exact_urls_and_landing_pages(self):
+        self.assertEqual(data_resolver.FOOTBALL_DATA_CSV_URL_PATTERN, "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv")
+        self.assertEqual(data_resolver.FOOTBALL_DATA_REFERENCE_URL, "https://www.football-data.co.uk/data.php")
+        self.assertEqual(data_resolver.SOFASCORE_API_BASE_URL, "https://api.sofascore.com/api/v1/")
+
+    def test_deduplication_merging_key(self):
+        f1 = {
+            "fixture": {"id": 1001, "date": "2024-09-01T15:00:00Z"},
+            "league": {"id": 39, "season": 2024},
+            "canonical_home_id": "football_team_A",
+            "canonical_away_id": "football_team_B",
+        }
+        f2 = {
+            "fixture": {"id": 2002, "date": "2024-09-01T18:00:00Z"},
+            "league": {"id": 39, "season": 2024},
+            "canonical_home_id": "football_team_A",
+            "canonical_away_id": "football_team_B",
+        }
+        k1 = data_resolver.get_match_identity_key(f1)
+        k2 = data_resolver.get_match_identity_key(f2)
+        self.assertEqual(k1, ("football", 39, "2024", "2024-09-01", "football_team_A", "football_team_B"))
+        self.assertEqual(k1, k2)
+
     def test_season_code_formatting(self):
         self.assertEqual(data_resolver._format_fd_csv_season_code(2025), "2526")
         self.assertEqual(data_resolver._format_fd_csv_season_code(2024), "2425")

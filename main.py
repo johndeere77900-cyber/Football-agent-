@@ -3008,9 +3008,34 @@ def main():
         if args.historical_sync:
             sport = args.sport or "football"
             league_id = args.league or (config.ALLOWED_BASKETBALL_LEAGUE_IDS[0] if sport == "basketball" else config.ALLOWED_LEAGUE_IDS[0])
-            season = args.season or (datetime.now(timezone.utc).year - 1)
             storage.init_db()
 
+            seasons_list = getattr(args, "seasons", None)
+            if seasons_list and isinstance(seasons_list, (list, tuple)):
+                reports = []
+                for ssn in seasons_list:
+                    if sport == "basketball":
+                        rep = historical_sync.sync_historical_basketball_games(
+                            league_id=league_id, season=ssn, refresh=args.refresh
+                        )
+                    else:
+                        rep = historical_sync.sync_historical_fixtures(
+                            league_id=league_id, season=ssn, with_enrichment=args.with_enrichment, refresh=args.refresh
+                        )
+                    reports.append(rep)
+
+                incomplete_count = sum(
+                    1 for r in reports if not isinstance(r, dict) or r.get("status") != "COMPLETE"
+                )
+                if incomplete_count > 0:
+                    print(
+                        f"Historical sync ended with {incomplete_count} incomplete dataset(s) out of {len(reports)}. Exiting with code 1.",
+                        file=sys.stderr,
+                    )
+                    return 1
+                return 0
+
+            season = args.season or (datetime.now(timezone.utc).year - 1)
             if sport == "basketball":
                 report = historical_sync.sync_historical_basketball_games(
                     league_id=league_id,
