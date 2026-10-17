@@ -35,13 +35,19 @@ def test_ambiguous_or_empty_name_fails_closed():
     assert team_identity.resolve_canonical_team_id("   ", "api_football", 124) is None
 
 
-def test_numeric_team_name_registration():
-    cid = team_identity.resolve_canonical_team_id(123, "api_football", 456, league_id=39, auto_register=True)
-    assert cid is not None
+def test_explicit_team_identity_registration():
+    cid = team_identity.register_canonical_team_identity("football_team_39_123", "Team 123", "api_football", 456, league_id=39)
+    assert cid == "football_team_39_123"
     mapping = storage.get_team_identity_by_provider("football", "api_football", "456")
     assert mapping is not None
-    assert isinstance(mapping["display_name"], str)
-    assert mapping["display_name"] == "123"
+    assert mapping["canonical_id"] == "football_team_39_123"
+
+
+def test_unknown_team_returns_unresolved_and_no_mapping_written():
+    cid = team_identity.bootstrap_historical_team_identity("Unknown Team XYZ FC", "api_football", 9999, league_id=39)
+    assert cid is None
+    mapping = storage.get_team_identity_by_provider("football", "api_football", "9999")
+    assert mapping is None
 
 
 def test_resolve_canonical_team_id_read_only_when_auto_register_false():

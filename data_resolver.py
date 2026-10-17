@@ -593,21 +593,6 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     expected_team_set = canonical_expected_set if canonical_expected_set else (set(expected_team_ids) if expected_team_ids else set())
 
-    # Resolve provider team IDs in expected_team_set to canonical team IDs via team_identity
-    mapped_expected_set = set()
-    for etid in expected_team_set:
-        if isinstance(etid, str) and (etid.startswith("football_team_") or etid.startswith("basketball_team_")):
-            mapped_expected_set.add(etid)
-        else:
-            cid = team_identity.resolve_canonical_team_id(
-                raw_name="", provider="api_football", provider_team_id=etid, league_id=league_id, sport="football", auto_register=False
-            )
-            if cid:
-                mapped_expected_set.add(cid)
-            else:
-                mapped_expected_set.add(str(etid))
-    expected_team_set = mapped_expected_set
-
     # Infer expected team universe for double-round-robin leagues if expected_team_ids was unavailable
     if not expected_team_set and is_double_round_robin and participating_teams:
         T = len(participating_teams)
@@ -886,6 +871,24 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         team_match_counts[a_id]["total"] += 1
 
     distinct_fixture_count = len(distinct_pairings)
+
+    # Re-map expected_team_set using established DB mappings after fixture loop
+    if expected_team_ids:
+        canonical_expected_set = set()
+        for tid in expected_team_ids:
+            if isinstance(tid, str) and (tid.startswith("football_team_") or tid.startswith("basketball_team_")):
+                canonical_expected_set.add(tid)
+            else:
+                cid = team_identity.resolve_canonical_team_id(
+                    raw_name="", provider="api_football", provider_team_id=tid, league_id=league_id, sport="football", auto_register=False
+                )
+                if cid:
+                    canonical_expected_set.add(cid)
+                else:
+                    canonical_expected_set.add(str(tid))
+        if canonical_expected_set:
+            expected_team_set = canonical_expected_set
+            expected_team_count = len(expected_team_set)
 
     if not is_double_round_robin:
         # Non-double-round-robin (tournament, cup, international)

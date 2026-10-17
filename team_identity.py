@@ -240,21 +240,18 @@ def resolve_canonical_team_id(
                 if len(candidate_ids) == 1:
                     target_canonical_id = list(candidate_ids)[0]
 
-    # Step 6: Auto-register if explicitly requested
-    if not target_canonical_id and auto_register:
-        clean_base = strip_national_team_words(raw_name) or raw_name
-        slug = sanitize_canonical_slug(clean_base)
-        if league_id:
-            target_canonical_id = f"{sport}_team_{league_id}_{slug}"
-        else:
-            target_canonical_id = f"{sport}_team_{slug}"
-
-    # FAIL CLOSED: If no trusted canonical identity is resolved, return None
+    # FAIL CLOSED: If no trusted canonical identity is resolved via steps 1-5, return None.
+    # Unknown or ambiguous team names MUST NOT automatically generate synthetic canonical IDs.
     if not target_canonical_id:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Unresolved canonical team identity for raw_name=%r, provider=%r, provider_team_id=%r, league_id=%r",
+            raw_name, provider, provider_team_id, league_id
+        )
         return None
 
-    # Persist newly resolved mapping ONLY if auto_register is True and real provider team ID exists
-    if p_team_id_str and auto_register:
+    # Save provider mapping into DB ONLY if auto_register is True, target_canonical_id was resolved, and provider ID exists
+    if p_team_id_str and target_canonical_id and auto_register:
         storage.save_team_identity(
             sport=sport,
             canonical_id=target_canonical_id,
@@ -268,6 +265,34 @@ def resolve_canonical_team_id(
     return target_canonical_id
 
 
+def register_canonical_team_identity(
+    canonical_id: str,
+    display_name: str,
+    provider: str,
+    provider_team_id: str | int,
+    league_id: int = None,
+    sport: str = "football",
+) -> str:
+    """
+    Explicitly register a new canonical team identity with verified provider mapping.
+    Used for controlled competition initialization and explicit seeding.
+    """
+    provider = str(provider).strip().lower()
+    p_team_id_str = str(provider_team_id).strip()
+    norm_name = normalize_team_name(display_name)
+
+    storage.save_team_identity(
+        sport=sport,
+        canonical_id=canonical_id,
+        provider=provider,
+        provider_team_id=p_team_id_str,
+        normalized_name=norm_name,
+        display_name=display_name,
+        league_id=league_id,
+    )
+    return canonical_id
+
+
 def bootstrap_historical_team_identity(
     raw_name: str,
     provider: str,
@@ -276,11 +301,11 @@ def bootstrap_historical_team_identity(
     sport: str = "football",
 ) -> str | None:
     """
-    Controlled historical canonical team identity bootstrap mechanism.
+    Controlled historical canonical team identity resolution.
 
-    Used ONLY during trusted historical ingestion.
-    Reuses existing verified DB mappings and configured aliases across providers
-    to prevent duplicate canonical identity creation.
+    Resolves against verified provider mappings, exact normalized DB names, and configured aliases.
+    Unknown or ambiguous teams return None without creating synthetic duplicate canonical identities.
+    For resolved canonical teams, persists provider mapping to DB.
     """
     if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
         return None
