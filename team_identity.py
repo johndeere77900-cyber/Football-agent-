@@ -301,11 +301,12 @@ def bootstrap_historical_team_identity(
     sport: str = "football",
 ) -> str | None:
     """
-    Controlled historical canonical team identity resolution.
+    Controlled historical canonical team identity bootstrap mechanism.
 
-    Resolves against verified provider mappings, exact normalized DB names, and configured aliases.
-    Unknown or ambiguous teams return None without creating synthetic duplicate canonical identities.
-    For resolved canonical teams, persists provider mapping to DB.
+    Used ONLY during trusted historical ingestion.
+    Reuses existing verified DB mappings and configured aliases across providers.
+    Unknown or ambiguous team names return None without creating synthetic duplicate canonical IDs.
+    For resolved canonical teams, persists verified provider mapping to DB.
     """
     if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
         return None
@@ -323,11 +324,32 @@ def bootstrap_historical_team_identity(
     if not norm_name and not p_team_id_str:
         return None
 
-    return resolve_canonical_team_id(
+    resolved = resolve_canonical_team_id(
         raw_name=raw_name,
         provider=provider,
         provider_team_id=p_team_id_str,
         league_id=league_id,
         sport=sport,
-        auto_register=True,
+        auto_register=False,
     )
+
+    if not resolved:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Bootstrap historical team identity unresolved for raw_name=%r, provider=%r, provider_team_id=%r, league_id=%r",
+            raw_name, provider, provider_team_id, league_id
+        )
+        return None
+
+    if p_team_id_str and resolved:
+        storage.save_team_identity(
+            sport=sport,
+            canonical_id=resolved,
+            provider=provider,
+            provider_team_id=p_team_id_str,
+            normalized_name=norm_name,
+            display_name=raw_str or f"Team {p_team_id_str}",
+            league_id=league_id,
+        )
+
+    return resolved
