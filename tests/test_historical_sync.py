@@ -52,7 +52,10 @@ def test_historical_sync_saves_fixtures(temp_db, monkeypatch):
         "expected_pages": 1,
     }
 
-    with patch("api_football.get_league_fixtures_page", return_value=meta_return):
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report["league_id"] == 39
@@ -90,7 +93,10 @@ def test_historical_sync_repeated_runs_are_idempotent(temp_db):
         "expected_pages": 1,
     }
 
-    with patch("api_football.get_league_fixtures_page", return_value=meta_return) as mock_get:
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return) as mock_get, \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         # Second run on COMPLETE dataset must NOT call get_league_fixtures_page
@@ -334,6 +340,9 @@ def test_resume_incomplete_dataset_single_page_retries_page_1(temp_db):
         return meta_return
 
     with patch("api_football.get_league_fixtures_page", side_effect=mock_fetch), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
          patch("data_resolver._get_authoritative_historical_team_ids", return_value=list(range(1, 21))):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2023)
 
@@ -392,6 +401,9 @@ def test_resume_incomplete_dataset_stale_expected_pages_retries_page_1(temp_db):
         return meta_return
 
     with patch("api_football.get_league_fixtures_page", side_effect=mock_fetch), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
          patch("data_resolver._get_authoritative_historical_team_ids", return_value=list(range(1, 21))):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2023)
 
