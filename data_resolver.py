@@ -320,7 +320,7 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
         return []
 
 
-def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *args, **kwargs):
+def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, allow_network=True, *args, **kwargs):
     """
     Return the authoritative canonical competition team IDs for structural validation.
 
@@ -330,8 +330,8 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
 
     Priority:
     1. Stored DB team identities (read-first persistence without external API calls)
-    2. API-Football standings
-    3. football-data.org competition teams
+    2. API-Football standings (if allow_network=True)
+    3. football-data.org competition teams (if allow_network=True)
 
     Returns:
         list[str|int] of verified canonical team IDs, or [] when unavailable/incomplete.
@@ -352,6 +352,9 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                 league_id,
                 exc,
             )
+
+    if not allow_network:
+        return []
 
     # Primary authoritative source: API-Football standings
     try:
@@ -501,6 +504,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             league_id,
             season,
             max_budget=provider_metadata.get("max_budget"),
+            allow_network=provider_metadata.get("allow_network", True),
         )
 
     if not expected_team_ids and is_double_round_robin and not fixtures:
@@ -2416,7 +2420,6 @@ class DataResolver:
         2. Primary Route: Try direct CSV/downloadable historical sources first, then SoccerData MatchHistory and Sofascore as appropriate.
         3. Secondary Route: Use API-Football and football-data.org API only when validated primary coverage remains insufficient.
         """
-        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget)
         competition_format = (
             "double_round_robin"
             if league_id in DOUBLE_ROUND_ROBIN_LEAGUE_IDS
@@ -2431,12 +2434,16 @@ class DataResolver:
             if ds_status.get("status") == "COMPLETE":
                 db_stored = storage.get_historical_fixtures(league_id, season)
                 if db_stored:
+                    expected_team_ids_db = _get_authoritative_historical_team_ids(
+                        league_id, season, max_budget=max_budget, allow_network=False
+                    )
                     db_coverage = _validate_historical_structural_coverage(
                         db_stored,
                         season=season,
                         provider_metadata={
                             "competition_format": competition_format,
-                            "expected_team_ids": expected_team_ids,
+                            "expected_team_ids": expected_team_ids_db,
+                            "allow_network": False,
                         },
                         league_id=league_id,
                     )
@@ -2448,7 +2455,7 @@ class DataResolver:
                             "source": "internal_db",
                             "provider_metadata": {
                                 "competition_format": competition_format,
-                                "expected_team_ids": expected_team_ids,
+                                "expected_team_ids": expected_team_ids_db,
                                 "is_complete": True,
                                 "is_partial": False,
                                 "structural_coverage": db_coverage,
@@ -2458,6 +2465,7 @@ class DataResolver:
                             "primary_quota_exhausted": False,
                         }
 
+        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget, allow_network=True)
         combined_fixtures = []
 
         # 2. Primary Route: Direct CSV -> SoccerData MatchHistory -> SoccerData Sofascore
@@ -2994,7 +3002,8 @@ class DataResolver:
         # Tier 1: API-Football
         if team_id and not self.force_fallback:
             try:
-                af_stats = api_football.get_team_statistics(team_id, league_id, season)
+                historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
+                af_stats = api_football.get_team_statistics(team_id, league_id, season, max_budget=historical_budget)
                 if validate_team_stats_sufficiency(af_stats):
                     return af_stats
             except Exception as exc:
@@ -3183,7 +3192,8 @@ class DataResolver:
         # Tier 1: API-Football
         if home_id and away_id and not self.force_fallback:
             try:
-                af_raw = api_football.get_head_to_head(home_id, away_id, last=last * 2)
+                historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
+                af_raw = api_football.get_head_to_head(home_id, away_id, last=last * 2, max_budget=historical_budget)
                 if af_raw:
                     for m in af_raw:
                         norm = _normalize_api_football_fixture(m) if isinstance(m, dict) else None
@@ -3265,10 +3275,11 @@ class DataResolver:
         if not self.force_fallback:
             primary_attempted = True
             try:
+                historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
                 try:
-                    standings = api_football.get_league_standings(league_id, season)
+                    standings = api_football.get_league_standings(league_id, season, max_budget=historical_budget)
                 except TypeError:
-                    standings = api_football.get_league_standings(league_id)
+                    standings = api_football.get_league_standings(league_id, season)
 
                 suff_code, clean_standings = validate_standings_sufficiency(standings)
                 if suff_code in ("VALID_DATA", "VALID_EMPTY"):

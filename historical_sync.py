@@ -122,13 +122,16 @@ def sync_historical_fixtures(
     # Revalidate persisted fixture integrity and coverage before early return
     if current_status == "COMPLETE" and not refresh:
         stored_fixtures = storage.get_historical_fixtures(league_id, season)
-        exp_team_ids = data_resolver._get_authoritative_historical_team_ids(league_id, season, max_budget=historical_budget)
+        exp_team_ids = data_resolver._get_authoritative_historical_team_ids(
+            league_id, season, max_budget=historical_budget, allow_network=False
+        )
         comp_fmt = "double_round_robin" if league_id in data_resolver.DOUBLE_ROUND_ROBIN_LEAGUE_IDS else "unknown"
 
         # A COMPLETE manifest is accepted only after structural revalidation.
         reval_meta = {
             "competition_format": comp_fmt,
             "max_budget": historical_budget,
+            "allow_network": False,
         }
         if exp_team_ids:
             reval_meta["expected_team_ids"] = exp_team_ids

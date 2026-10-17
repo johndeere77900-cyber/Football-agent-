@@ -160,7 +160,7 @@ def patch_prediction_dependencies(monkeypatch):
     monkeypatch.setattr(
         data_resolver.api_football,
         "get_team_statistics",
-        lambda team_id, league_id, season:
+        lambda team_id, league_id, season, **kwargs:
         team_stats(),
     )
 
@@ -174,7 +174,7 @@ def patch_prediction_dependencies(monkeypatch):
     monkeypatch.setattr(
         data_resolver.api_football,
         "get_head_to_head",
-        lambda home_id, away_id, last:
+        lambda home_id, away_id, last, **kwargs:
         h2h_matches(),
     )
 
@@ -670,7 +670,7 @@ def test_missing_card_data_does_not_create_fabricated_cards_market(
     monkeypatch.setattr(
         data_resolver.api_football,
         "get_team_statistics",
-        lambda team_id, league_id, season:
+            lambda team_id, league_id, season, **kwargs:
         stats_without_cards(),
     )
 
@@ -1175,7 +1175,7 @@ def test_h2h_feature_uses_average_goals_per_meeting(
     monkeypatch.setattr(
         data_resolver.api_football,
         "get_head_to_head",
-        lambda home_id, away_id, last: [
+        lambda home_id, away_id, last, **kwargs: [
             {
                 "fixture": {"id": 201, "date": "2024-01-10T15:00:00+00:00", "status": {"short": "FT"}},
                 "teams": {
