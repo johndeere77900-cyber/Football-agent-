@@ -1,11 +1,23 @@
 """
 Provider-neutral Data Resolver for Football data.
 
-Implements strict 3-tier provider hierarchy with field-level merging and reconciliation:
-1. Primary: API-Football (api_football.py)
-2. Secondary Fallback: football-data.org (football_data_api.py)
-3. Tertiary Fallback: SoccerData MatchHistory & Sofascore (soccerdata_provider.py)
-4. Permanent Memory: Neon PostgreSQL / SQLite (storage.py)
+Implements Two-Route Architecture for Historical Acquisition:
+1. Read-first persistence: Reuse stored DB dataset when COMPLETE and verified without external calls.
+2. Primary Route: Direct Football-Data CSV -> SoccerData MatchHistory -> SoccerData Sofascore.
+3. Secondary Route: API-Football -> football-data.org API.
+
+Historical API-Football requests enforce a strict 50 requests/day budget ceiling (API_FOOTBALL_HISTORICAL_DAILY_BUDGET = 50).
+
+Result Status Codes:
+- PRIMARY_SUCCESS: Primary provider returned valid, sufficient data (including valid empty fixture lists).
+- PRIMARY_INSUFFICIENT: Primary provider response was missing or malformed.
+- PRIMARY_UNAVAILABLE: Primary provider failed (exception / rate limit).
+- SECONDARY_SUCCESS: Secondary provider returned valid fallback data.
+- SECONDARY_INSUFFICIENT: Secondary provider response was missing or malformed.
+- TERTIARY_SUCCESS: Tertiary provider returned valid fallback data.
+- TERTIARY_INSUFFICIENT: Tertiary provider response was missing or malformed.
+- NO_DATA: No provider supplied usable data.
+- ERROR: Operational error occurred.
 
 Result Status Codes:
 - PRIMARY_SUCCESS: Primary provider returned valid, sufficient data (including valid empty fixture lists).
@@ -317,13 +329,29 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
     If ANY expected team fails resolution, or if partial results are produced, returns [].
 
     Priority:
-    1. API-Football standings
-    2. football-data.org competition teams
+    1. Stored DB team identities (read-first persistence without external API calls)
+    2. API-Football standings
+    3. football-data.org competition teams
 
     Returns:
         list[str|int] of verified canonical team IDs, or [] when unavailable/incomplete.
     """
     import team_identity
+
+    # 1. Read-first persistence: stored canonical team identities for double round-robin league
+    if league_id and league_id in DOUBLE_ROUND_ROBIN_LEAGUE_IDS:
+        try:
+            import storage
+            stored_c_ids = storage.get_team_identities_by_league("football", league_id)
+            min_expected = 18 if league_id in {78, 61, 88, 94} else 20
+            if len(stored_c_ids) >= min_expected:
+                return stored_c_ids
+        except Exception as exc:
+            logger.warning(
+                "Unable to obtain authoritative DB team universe for league %s: %s",
+                league_id,
+                exc,
+            )
 
     # Primary authoritative source: API-Football standings
     try:
@@ -420,20 +448,6 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                 exc,
             )
 
-    # Tertiary fallback: stored canonical team identities for double round-robin league
-    if league_id and league_id in DOUBLE_ROUND_ROBIN_LEAGUE_IDS:
-        try:
-            import storage
-            stored_c_ids = storage.get_team_identities_by_league("football", league_id)
-            min_expected = 18 if league_id in {78, 61, 88, 94} else 20
-            if len(stored_c_ids) >= min_expected:
-                return stored_c_ids
-        except Exception as exc:
-            logger.warning(
-                "Unable to obtain authoritative DB team universe for league %s: %s",
-                league_id,
-                exc,
-            )
 
     return []
 
@@ -2812,13 +2826,13 @@ class DataResolver:
         import main as main_mod
         return main_mod.check_competition_coverage(league_id, season)
 
-    def search_leagues(self, name):
+    def search_leagues(self, name, max_budget=None):
         """DataResolver owner for searching leagues by name."""
-        return api_football.search_leagues(name)
+        return api_football.search_leagues(name, max_budget=max_budget)
 
-    def get_league_coverage(self, league_id):
+    def get_league_coverage(self, league_id, max_budget=None):
         """DataResolver owner for getting league coverage metadata."""
-        return api_football.get_league_coverage(league_id)
+        return api_football.get_league_coverage(league_id, max_budget=max_budget)
 
     def raw_debug_call(self, endpoint, params):
         """DataResolver owner for raw debug calls."""

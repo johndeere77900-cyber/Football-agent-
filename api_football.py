@@ -218,14 +218,18 @@ def _check_and_consume_quota(endpoint, max_budget=None):
     APIFootballQuotaExhaustedError to prevent unauthorized/untracked external API requests.
     """
     global_limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
+    historical_limit = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
+
     limit = global_limit
     if max_budget is not None:
         try:
             budget_val = int(max_budget)
-            if budget_val > 0:
-                limit = min(limit, budget_val)
+            if budget_val <= 0:
+                budget_val = historical_limit
         except (TypeError, ValueError):
-            pass
+            budget_val = historical_limit
+
+        limit = min(global_limit, historical_limit, budget_val)
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -747,9 +751,9 @@ def get_league_standings(league_id, season, max_budget=None):
     return flattened
 
 
-def search_leagues(name):
+def search_leagues(name, max_budget=None):
     name = _validate_nonempty_text(name, "name")
-    data = _get("leagues", {"search": name})
+    data = _get("leagues", {"search": name}, max_budget=max_budget)
     response = data.get("response", [])
 
     if not isinstance(response, list):
@@ -758,9 +762,9 @@ def search_leagues(name):
     return response
 
 
-def get_league_coverage(league_id):
+def get_league_coverage(league_id, max_budget=None):
     league_id = _validate_positive_int_like(league_id, "league_id")
-    data = _get("leagues", {"id": league_id})
+    data = _get("leagues", {"id": league_id}, max_budget=max_budget)
     response = data.get("response", [])
 
     if not isinstance(response, list) or not response:
