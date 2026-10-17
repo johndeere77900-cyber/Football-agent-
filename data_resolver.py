@@ -1,10 +1,11 @@
 """
 Provider-neutral Data Resolver for Football data.
 
-Implements strict Two-Route Football Data Architecture with field-level merging and reconciliation:
-1. Primary Route: Direct URLs & Downloadable Datasets (Football-Data direct CSV) + SoccerData (MatchHistory, Sofascore)
-2. Secondary Route: API-Football (api_football.py) & football-data.org API (football_data_api.py)
-3. Read-First Persistence: Neon PostgreSQL / SQLite (storage.py)
+Implements strict 3-tier provider hierarchy with field-level merging and reconciliation:
+1. Primary: API-Football (api_football.py)
+2. Secondary Fallback: football-data.org (football_data_api.py)
+3. Tertiary Fallback: SoccerData MatchHistory & Sofascore (soccerdata_provider.py)
+4. Permanent Memory: Neon PostgreSQL / SQLite (storage.py)
 
 Result Status Codes:
 - PRIMARY_SUCCESS: Primary provider returned valid, sufficient data (including valid empty fixture lists).
@@ -1015,9 +1016,9 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     return res
 
 
-def _validate_and_filter_primary_soccerdata_matches(matches, league_id, season, completed_only=True):
+def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_only=True):
     """
-    Validate and filter primary SoccerData matches.
+    Validate and filter tertiary SoccerData matches.
     Strictly enforces:
     - requested season isolation: fixture.league.season == requested season
     - rejects records where season is missing or does not equal requested season
@@ -1125,9 +1126,6 @@ def _validate_and_filter_primary_soccerdata_matches(matches, league_id, season, 
         valid_matches.append(m)
 
     return valid_matches
-
-
-_validate_and_filter_tertiary_matches = _validate_and_filter_primary_soccerdata_matches
 
 
 def generate_synthetic_fixture_id(provider, home_name, away_name, date_str, league_id=None, season=None, home_id=None, away_id=None):
@@ -1897,7 +1895,7 @@ def reconcile_fixture_records(records):
 
 class DataResolver:
     """
-    DataResolver encapsulates two-route acquisition architecture (Primary: Direct URLs/CSV & SoccerData; Secondary: API-Football & football-data.org API).
+    DataResolver encapsulates API-Football -> football-data.org -> SoccerData 3-tier fallback hierarchy.
     Judges data sufficiency at each tier and performs field-level data reconciliation.
     """
 
@@ -2399,12 +2397,11 @@ class DataResolver:
 
     def get_league_fixtures_page(self, league_id, season, page=1, max_budget=None, completed_only=True):
         """
-        DataResolver wrapper for league fixtures page acquisition with two-route fallback.
-        1. Attempts API-Football. If API-Football returns valid, complete data for the page, returns immediately.
-        2. If API-Football fails, is incomplete, or quota exhausted, attempts Secondary Route:
-           - football-data.org API
-           - Football-Data.co.uk direct CSV (Direct URL acquisition belongs to Primary Route and is never gated behind football-data.org API key or competition code)
-           - SoccerData (MatchHistory -> Sofascore)
+        DataResolver wrapper for league fixtures page acquisition with multi-provider gap filling and fallback.
+        Attempts API-Football first. If API-Football fails, returns incomplete or quota exhausted, continues to
+        football-data.org -> SoccerData (MatchHistory -> Sofascore).
+        Calculates missing fields for finished matches and fills gaps across secondary and tertiary providers.
+        When completed_only=True, returned fixtures are strictly filtered to FT, AET, PEN status.
         """
         expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget)
         competition_format = (
@@ -2478,7 +2475,7 @@ class DataResolver:
                                 if sd_status == "SOURCE_AVAILABLE" and sd_games:
                                     sd_matches = sd_games
                             except Exception as sd_exc:
-                                logger.warning(f"DataResolver MatchHistory get_league_fixtures_page failed for league {league_id}: {sd_exc}")
+                                logger.warning(f"DataResolver tertiary MatchHistory get_league_fixtures_page failed for league {league_id}: {sd_exc}")
 
                         if not sd_matches:
                             sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
@@ -2488,7 +2485,7 @@ class DataResolver:
                                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                                         sd_matches = sd_games
                                 except Exception as sd_exc:
-                                    logger.warning(f"DataResolver Sofascore get_league_fixtures_page failed for league {league_id}: {sd_exc}")
+                                    logger.warning(f"DataResolver tertiary Sofascore get_league_fixtures_page failed for league {league_id}: {sd_exc}")
 
                 reconciled = []
                 for pf in primary_fixtures:
@@ -2554,12 +2551,15 @@ class DataResolver:
 
                 primary_fixtures_for_fallback = list(reconciled)
 
-        # Fallback Hierarchy: football-data.org API -> direct CSV -> SoccerData MatchHistory -> SoccerData Sofascore
+        # Fallback Hierarchy: football-data.org (API or direct CSV) -> SoccerData MatchHistory -> SoccerData Sofascore
+        # Merges candidate matches into combined_matches (retaining primary fixtures if available)
         combined_matches = list(primary_fixtures_for_fallback)
         exp_pages_fallback = primary_page.get("expected_pages", 1) if primary_page else 1
 
+        # Secondary Fallback: football-data.org (API if comp_code exists, otherwise direct CSV)
         fd_matches = []
         fd_meta = {}
+        fd_key_missing = False
         comp_code = LEAGUE_TO_FD_CODE.get(league_id)
 
         if page == 1:
@@ -2573,11 +2573,12 @@ class DataResolver:
                         matches = fd_res if isinstance(fd_res, list) else []
                     fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
                 except Exception as fd_exc:
-                    logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
+                    if "FOOTBALL_DATA_API_KEY" in str(fd_exc):
+                        fd_key_missing = True
+                    else:
+                        logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
 
-            # DIRECT-CSV FIX: Direct CSV is attempted whenever fd_matches is empty or fails,
-            # regardless of whether a football-data.org key is configured or competition code exists.
-            if not fd_matches:
+            if not fd_matches and (fd_key_missing or not comp_code) and (primary_failed or not primary_fixtures_for_fallback or self.force_fallback):
                 try:
                     direct_csv_matches = _fetch_direct_csv_league_fixtures(league_id, season)
                     if direct_csv_matches:
@@ -2652,7 +2653,7 @@ class DataResolver:
                 "primary_quota_exhausted": primary_quota_exhausted,
             }
 
-        # SoccerData MatchHistory
+        # Tertiary Tier 1: SoccerData MatchHistory
         sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
         sd_mh_matches = []
         sd_mh_meta = {}
@@ -2661,10 +2662,10 @@ class DataResolver:
             try:
                 sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
                 if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                    sd_mh_matches = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
+                    sd_mh_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
                     sd_mh_meta = sd_meta_res or {}
             except Exception as sd_exc:
-                logger.warning(f"DataResolver MatchHistory fallback failed for league {league_id}: {sd_exc}")
+                logger.warning(f"DataResolver tertiary MatchHistory fallback failed for league {league_id}: {sd_exc}")
 
         if sd_mh_matches:
             for sm in sd_mh_matches:
@@ -2731,7 +2732,7 @@ class DataResolver:
                 "primary_quota_exhausted": primary_quota_exhausted,
             }
 
-        # SoccerData Sofascore (covers all 12 configured football leagues)
+        # Tertiary Tier 2: SoccerData Sofascore (covers all 12 configured football leagues)
         sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
         sd_ss_matches = []
         sd_ss_meta = {}
@@ -2741,13 +2742,13 @@ class DataResolver:
                 sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
                 sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
                 if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                    sd_ss_matches = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
+                    sd_ss_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
                 else:
                     if "status" not in sd_ss_meta:
                         sd_ss_meta["status"] = sd_status
             except Exception as sd_exc:
                 sd_ss_meta = {"status": "SOURCE_FAILED", "error": str(sd_exc)}
-                logger.warning(f"DataResolver Sofascore fallback failed for league {league_id}: {sd_exc}")
+                logger.warning(f"DataResolver tertiary Sofascore fallback failed for league {league_id}: {sd_exc}")
 
         if sd_ss_matches:
             for sm in sd_ss_matches:
