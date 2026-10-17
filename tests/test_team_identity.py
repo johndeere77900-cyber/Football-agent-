@@ -98,3 +98,29 @@ def test_repeated_bootstrap_creates_no_duplicate_identities():
     cid3 = team_identity.bootstrap_historical_team_identity("Brighton & Hove Albion FC", "api_football", 51, league_id=39)
 
     assert cid1 == cid2 == cid3 == "football_team_brighton"
+
+
+def test_legacy_provider_mappings_preserved():
+    # Seed legacy provider mappings directly in DB
+    storage.save_team_identity("football", "football_team_39_luton_town", "api_football", "1359", "luton town", "Luton Town", 39)
+    storage.save_team_identity("football", "football_team_39_nottingham", "api_football", "65", "nottingham forest", "Nottingham Forest", 39)
+    storage.save_team_identity("football", "football_team_39_wolverhampton", "api_football", "39", "wolverhampton wanderers", "Wolverhampton Wanderers", 39)
+
+    # Resolve through provider ID
+    assert team_identity.resolve_canonical_team_id("Luton Town FC", "api_football", 1359, league_id=39) == "football_team_39_luton_town"
+    assert team_identity.resolve_canonical_team_id("Nottingham Forest FC", "api_football", 65, league_id=39) == "football_team_39_nottingham"
+    assert team_identity.resolve_canonical_team_id("Wolverhampton Wanderers FC", "api_football", 39, league_id=39) == "football_team_39_wolverhampton"
+
+    # Resolve through alternate names/aliases
+    assert team_identity.resolve_canonical_team_id("39_luton", "football_data_org", 389, league_id=39) == "football_team_39_luton_town"
+    assert team_identity.resolve_canonical_team_id("39_nottingham_forest", "football_data_org", 351, league_id=39) == "football_team_39_nottingham"
+    assert team_identity.resolve_canonical_team_id("Wolves", "football_data_org", 76, league_id=39) == "football_team_39_wolverhampton"
+
+    # Assert legacy mappings remain intact in DB without overwrite
+    mapping_luton = storage.get_team_identity_by_provider("football", "api_football", "1359")
+    mapping_nottingham = storage.get_team_identity_by_provider("football", "api_football", "65")
+    mapping_wolves = storage.get_team_identity_by_provider("football", "api_football", "39")
+
+    assert mapping_luton["canonical_id"] == "football_team_39_luton_town"
+    assert mapping_nottingham["canonical_id"] == "football_team_39_nottingham"
+    assert mapping_wolves["canonical_id"] == "football_team_39_wolverhampton"

@@ -185,12 +185,10 @@ def sync_historical_fixtures(
 
     fixtures_received = []
     exp_p_stored = dataset_info.get("expected_pages", 0) if not refresh else 0
-    if exp_p_stored <= 1:
-        start_p = 1
-    else:
-        start_p = dataset_info.get("pages_completed", 0) + 1 if (dataset_info.get("pages_completed", 0) > 0 and not dataset_info.get("acquisition_complete") and not refresh) else 1
+    # For incomplete datasets, restart acquisition from page 1 to obtain fresh provider metadata
+    start_p = 1
     expected_pages = exp_p_stored
-    pages_completed = dataset_info.get("pages_completed", 0) if not refresh else 0
+    pages_completed = 0 if (refresh or not dataset_info.get("acquisition_complete")) else dataset_info.get("pages_completed", 0)
     acquisition_complete = False
 
     total_valid_fixtures = 0
@@ -231,7 +229,7 @@ def sync_historical_fixtures(
                     break
 
             if isinstance(page_expected, int) and page_expected > 0:
-                if expected_pages == 0 or page_source != "api_football":
+                if expected_pages == 0 or current_page == 1 or page_source != "api_football":
                     expected_pages = page_expected
                 elif page_expected != expected_pages and page_fixtures:
                     acquisition_failed = True
