@@ -26,7 +26,9 @@ def normalize_team_name(name: str) -> str:
     Performs:
     - Unicode normalization (NFD / strip accents)
     - Lowercase conversion
+    - Ampersand expansion ('&' -> 'and')
     - Punctuation removal
+    - General noise word / 'FC' / 'CF' / 'AFC' suffix stripping
     - Whitespace collapse
     """
     if not isinstance(name, str) or not name.strip():
@@ -42,9 +44,13 @@ def normalize_team_name(name: str) -> str:
     # Replace remaining punctuation / non-alphanumeric with space
     text = re.sub(r"[^\w\s]", " ", text)
 
-    # Collapse multiple whitespace
+    # Strip noise tokens like 'fc', 'cf', 'afc', 'club'
     tokens = text.split()
-    return " ".join(tokens)
+    noise_tokens = {"fc", "cf", "afc", "sc", "club"}
+    filtered = [t for t in tokens if t not in noise_tokens]
+    if not filtered:
+        filtered = tokens
+    return " ".join(filtered)
 
 
 def sanitize_canonical_slug(name: str) -> str:

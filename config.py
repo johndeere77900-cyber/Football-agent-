@@ -124,11 +124,14 @@ CANONICAL_TEAM_ALIASES = {
     ("west ham united fc", 39): "west ham",
     ("west ham united", 39): "west ham",
     ("west ham", 39): "west ham",
-    ("brighton & hove albion fc", 39): "brighton",
-    ("brighton & hove albion", 39): "brighton",
+    ("brighton and hove albion", 39): "brighton",
     ("brighton", 39): "brighton",
-    ("wolverhampton wanderers fc", 39): "wolves",
+    ("luton town", 39): "39_luton",
+    ("luton", 39): "39_luton",
+    ("nottingham forest", 39): "39_nottingham_forest",
+    ("nottingham", 39): "39_nottingham_forest",
     ("wolverhampton wanderers", 39): "wolves",
+    ("wolverhampton", 39): "wolves",
     ("wolves", 39): "wolves",
 
     # La Liga (140)

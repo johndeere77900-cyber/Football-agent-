@@ -58,3 +58,37 @@ def test_resolve_canonical_team_id_read_only_when_auto_register_false():
         )
         assert cid == "football_team_arsenal"
         mock_save.assert_not_called()
+
+
+def test_four_pl_clubs_general_alias_resolution():
+    # Brighton variants
+    for b in ["Brighton & Hove Albion FC", "Brighton & Hove Albion", "Brighton"]:
+        assert team_identity.resolve_canonical_team_id(b, "football_data_org", 107, league_id=39) == "football_team_brighton"
+
+    # Luton variants
+    for l in ["Luton Town FC", "Luton Town", "Luton"]:
+        assert team_identity.resolve_canonical_team_id(l, "football_data_org", 389, league_id=39) == "football_team_39_luton"
+
+    # Nottingham Forest variants
+    for n in ["Nottingham Forest FC", "Nottingham Forest", "Nottingham"]:
+        assert team_identity.resolve_canonical_team_id(n, "football_data_org", 351, league_id=39) == "football_team_39_nottingham_forest"
+
+    # Wolves variants
+    for w in ["Wolverhampton Wanderers FC", "Wolverhampton Wanderers", "Wolverhampton", "Wolves"]:
+        assert team_identity.resolve_canonical_team_id(w, "football_data_org", 76, league_id=39) == "football_team_wolves"
+
+
+def test_distinct_clubs_never_merged():
+    mancity = team_identity.resolve_canonical_team_id("Manchester City", "api_football", 50, league_id=39)
+    manutd = team_identity.resolve_canonical_team_id("Manchester United", "api_football", 33, league_id=39)
+    assert mancity != manutd
+    assert mancity == "football_team_manchester_city"
+    assert manutd == "football_team_manchester_united"
+
+
+def test_repeated_bootstrap_creates_no_duplicate_identities():
+    cid1 = team_identity.bootstrap_historical_team_identity("Brighton & Hove Albion FC", "football_data_org", 107, league_id=39)
+    cid2 = team_identity.bootstrap_historical_team_identity("Brighton & Hove Albion", "football_data_org", 107, league_id=39)
+    cid3 = team_identity.bootstrap_historical_team_identity("Brighton & Hove Albion FC", "api_football", 51, league_id=39)
+
+    assert cid1 == cid2 == cid3 == "football_team_brighton"

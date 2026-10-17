@@ -590,7 +590,7 @@ def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
             "expected_pages": total,
         }
 
-    if current != page and current != 1:
+    if current != page:
         raise APIFootballError(
             f"Inconsistent pagination metadata: current page ({current}) != requested page ({page})."
         )

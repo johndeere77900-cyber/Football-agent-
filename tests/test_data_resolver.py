@@ -287,33 +287,59 @@ def test_premier_league_2023_24_structural_coverage_passes(tmp_path, monkeypatch
     monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "pl2023.db"))
     storage.init_db()
 
-    # Create 20 teams
-    teams = [{"id": i, "name": f"Team {i}"} for i in range(1, 21)]
+    # Real 20 Premier League 2023/24 clubs including Brighton, Luton, Nottingham Forest, and Wolves
+    pl_teams = [
+        {"id": 42, "name": "Arsenal"},
+        {"id": 66, "name": "Aston Villa"},
+        {"id": 35, "name": "Bournemouth"},
+        {"id": 55, "name": "Brentford"},
+        {"id": 51, "name": "Brighton & Hove Albion FC"},
+        {"id": 44, "name": "Burnley"},
+        {"id": 49, "name": "Chelsea"},
+        {"id": 52, "name": "Crystal Palace"},
+        {"id": 45, "name": "Everton"},
+        {"id": 36, "name": "Fulham"},
+        {"id": 40, "name": "Liverpool"},
+        {"id": 1359, "name": "Luton Town FC"},
+        {"id": 50, "name": "Manchester City"},
+        {"id": 33, "name": "Manchester United"},
+        {"id": 34, "name": "Newcastle United"},
+        {"id": 65, "name": "Nottingham Forest FC"},
+        {"id": 62, "name": "Sheffield United"},
+        {"id": 47, "name": "Tottenham Hotspur"},
+        {"id": 48, "name": "West Ham United"},
+        {"id": 39, "name": "Wolverhampton Wanderers FC"},
+    ]
+
+    expected_team_ids = [t["id"] for t in pl_teams]
+
+    # Bootstrap identity mapping for all 20 clubs
+    for t in pl_teams:
+        team_identity.bootstrap_historical_team_identity(
+            raw_name=t["name"],
+            provider="api_football",
+            provider_team_id=t["id"],
+            league_id=39,
+            sport="football",
+        )
+
     fixtures = []
-    fid = 5000
+    fid = 7000
     for i in range(20):
         for j in range(20):
             if i != j:
                 fid += 1
+                c_home = team_identity.resolve_canonical_team_id(pl_teams[i]["name"], "api_football", pl_teams[i]["id"], league_id=39)
+                c_away = team_identity.resolve_canonical_team_id(pl_teams[j]["name"], "api_football", pl_teams[j]["id"], league_id=39)
                 fixtures.append({
                     "fixture": {"id": fid},
                     "league": {"id": 39, "season": 2023},
-                    "teams": {"home": teams[i], "away": teams[j]},
+                    "teams": {"home": pl_teams[i], "away": pl_teams[j]},
+                    "canonical_home_id": c_home,
+                    "canonical_away_id": c_away,
                     "goals": {"home": 1, "away": 0},
                     "provider_provenance": {"provider": "api_football"},
                 })
-
-    expected_team_ids = [t["id"] for t in teams]
-    for t in teams:
-        storage.save_team_identity(
-            sport="football",
-            canonical_id=f"football_team_{t['id']}",
-            provider="api_football",
-            provider_team_id=t["id"],
-            normalized_name=team_identity.normalize_team_name(t["name"]),
-            display_name=t["name"],
-            league_id=39,
-        )
 
     meta = {
         "competition_format": "double_round_robin",
@@ -327,6 +353,7 @@ def test_premier_league_2023_24_structural_coverage_passes(tmp_path, monkeypatch
     assert res["verified"] is True
     assert res["reason"] is None
     assert res["fixture_count"] == 380
+    assert res["distinct_fixture_count"] == 380
     assert res["team_count"] == 20
 
 

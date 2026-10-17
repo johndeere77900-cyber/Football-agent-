@@ -593,19 +593,20 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     expected_team_set = canonical_expected_set if canonical_expected_set else (set(expected_team_ids) if expected_team_ids else set())
 
-    # Align provider team IDs in expected_team_set with canonical team IDs present in participating_teams
-    if expected_team_set and participating_teams:
-        mapped_expected_set = set()
-        for etid in expected_team_set:
-            if etid in participating_teams:
-                mapped_expected_set.add(etid)
-            elif f"football_team_{etid}" in participating_teams:
-                mapped_expected_set.add(f"football_team_{etid}")
-            elif league_id and f"football_team_{league_id}_{etid}" in participating_teams:
-                mapped_expected_set.add(f"football_team_{league_id}_{etid}")
+    # Resolve provider team IDs in expected_team_set to canonical team IDs via team_identity
+    mapped_expected_set = set()
+    for etid in expected_team_set:
+        if isinstance(etid, str) and (etid.startswith("football_team_") or etid.startswith("basketball_team_")):
+            mapped_expected_set.add(etid)
+        else:
+            cid = team_identity.resolve_canonical_team_id(
+                raw_name="", provider="api_football", provider_team_id=etid, league_id=league_id, sport="football", auto_register=False
+            )
+            if cid:
+                mapped_expected_set.add(cid)
             else:
-                mapped_expected_set.add(etid)
-        expected_team_set = mapped_expected_set
+                mapped_expected_set.add(str(etid))
+    expected_team_set = mapped_expected_set
 
     # Infer expected team universe for double-round-robin leagues if expected_team_ids was unavailable
     if not expected_team_set and is_double_round_robin and participating_teams:
