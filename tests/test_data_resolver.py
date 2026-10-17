@@ -406,11 +406,12 @@ def test_premier_league_2023_24_mismatched_teams_fails(tmp_path, monkeypatch):
     assert "99" in str(res["unexpected_team_ids"]) or "football_team_99" in str(res["unexpected_team_ids"])
 
 
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
 @patch("soccerdata_provider.get_sofascore_historical_games")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_sofascore_fallback_error_reporting_captured(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+def test_sofascore_fallback_error_reporting_captured(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss, mock_csv):
     mock_api_fb.side_effect = api_football.APIFootballQuotaExhaustedError("Quota exhausted")
     mock_fd.side_effect = Exception("FD Error")
     mock_sd_mh.return_value = ("SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": "MatchHistory Failed"})
@@ -555,11 +556,12 @@ def test_E_soccerdata_no_completeness_metadata_incomplete(mock_api_fb, mock_fd, 
 
 
 # Test F — SoccerData with explicit trustworthy completeness metadata -> COMPLETE
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
 @patch("football_data_api.get_competition_teams")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_F_soccerdata_with_complete_metadata_complete(mock_api_fb, mock_fd, mock_sd, mock_fd_teams):
+def test_F_soccerdata_with_complete_metadata_complete(mock_api_fb, mock_fd, mock_sd, mock_fd_teams, mock_csv):
     import historical_sync
 
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")

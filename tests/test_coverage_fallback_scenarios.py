@@ -89,10 +89,11 @@ def make_test_fixture(fid, h_name="Arsenal", a_name="Chelsea", h_id=1, a_id=2, s
 
 
 # TEST 1 — Primary API-Football structural gap triggers fallback
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_1_primary_api_football_structural_gap_triggers_fallback(mock_api_fb, mock_fd, mock_sd_mh):
+def test_1_primary_api_football_structural_gap_triggers_fallback(mock_api_fb, mock_fd, mock_sd_mh, mock_csv):
     primary_305 = [
         make_test_fixture(610000 + i, h_name=f"Team {h_id}", a_name=f"Team {a_id}", h_id=h_id, a_id=a_id, league_id=61, season=2025)
         for i, (h_id, a_id) in enumerate([(h, a) for h in range(1, 19) for a in range(1, 19) if h != a and (h, a) != (17, 18)])
@@ -209,10 +210,11 @@ def test_5_unknown_competition_format():
 
 
 # Additional fallback scenario tests
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_scenario_1_fd_zero_fixtures_triggers_match_history(mock_api_fb, mock_fd, mock_sd_mh):
+def test_scenario_1_fd_zero_fixtures_triggers_match_history(mock_api_fb, mock_fd, mock_sd_mh, mock_csv):
     mock_api_fb.side_effect = api_football.APIFootballError("Primary failure")
     mock_fd.return_value = {"matches": [], "metadata": {"count": 0}}
 

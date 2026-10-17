@@ -205,7 +205,7 @@ def _normalize_match_history_row(row, league_id=None, season=None):
         "field_availability": field_availability,
         "provider_provenance": {
             "provider": "soccerdata_match_history",
-            "provider_type": "tertiary",
+            "provider_type": "primary",
             "provider_fixture_id": fixture_id,
             "provider_team_ids": {
                 "home": home_id,
@@ -366,7 +366,7 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
         "field_availability": field_availability,
         "provider_provenance": {
             "provider": "soccerdata_sofascore",
-            "provider_type": "tertiary",
+            "provider_type": "primary",
             "provider_fixture_id": fixture_id,
             "provider_team_ids": {
                 "home": home_id,

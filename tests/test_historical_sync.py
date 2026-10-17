@@ -119,7 +119,8 @@ def test_historical_sync_refresh_forces_reacquisition(temp_db):
         "expected_pages": 1,
     }
 
-    with patch("api_football.get_league_fixtures_page", return_value=meta_return) as mock_get:
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return) as mock_get, \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024, refresh=True)
         assert mock_get.call_count == 2
@@ -439,7 +440,8 @@ def test_ongoing_2026_fixtures_handled_by_status():
         "expected_pages": 1,
     }
 
-    with patch("api_football.get_league_fixtures_page", return_value=meta_return):
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2026)
 
     assert report["final_stored_count"] == 1
@@ -499,7 +501,8 @@ def test_sync_historical_fixtures_unplayed_fixtures_not_persisted(temp_db):
         "expected_pages": 1,
     }
 
-    with patch("api_football.get_league_fixtures_page", return_value=meta_return):
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report["final_stored_count"] == 3
