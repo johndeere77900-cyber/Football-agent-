@@ -438,7 +438,7 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
     return []
 
 
-def _validate_historical_structural_coverage(fixtures, season, provider_metadata=None, league_id=None):
+def _validate_historical_structural_coverage(fixtures, season, provider_metadata=None, league_id=None, sport="football"):
     """
     Independently verify structural completeness of a historical fixture dataset.
 
@@ -465,6 +465,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     if provider_metadata is None or not isinstance(provider_metadata, dict):
         provider_metadata = {}
 
+    sport = provider_metadata.get("sport") or sport or "football"
     fixture_count = len(fixtures)
 
     if league_id is None and fixtures:
@@ -552,11 +553,11 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
         canonical_h = f.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
             raw_name=h_obj.get("name", "") or (str(h_obj.get("id")) if h_obj.get("id") is not None else ""),
-            provider=p_prov, provider_team_id=h_obj.get("id"), league_id=f_lid, sport="football", auto_register=False
+            provider=p_prov, provider_team_id=h_obj.get("id"), league_id=f_lid, sport=sport, auto_register=False
         )
         canonical_a = f.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
             raw_name=a_obj.get("name", "") or (str(a_obj.get("id")) if a_obj.get("id") is not None else ""),
-            provider=p_prov, provider_team_id=a_obj.get("id"), league_id=f_lid, sport="football", auto_register=False
+            provider=p_prov, provider_team_id=a_obj.get("id"), league_id=f_lid, sport=sport, auto_register=False
         )
 
         if not canonical_h or not canonical_a or canonical_h == canonical_a:
