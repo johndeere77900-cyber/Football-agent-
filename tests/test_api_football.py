@@ -449,16 +449,39 @@ def test_get_league_fixtures_page_pagination_validation(tmp_path, monkeypatch):
     # A. Missing paging object
     monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": []}))
     try:
-        api_football.get_league_fixtures_page(39, 2020, page=10)
+        api_football.get_league_fixtures_page(39, 2020, page=1)
         assert False, "Expected APIFootballError for missing paging"
     except api_football.APIFootballError:
         pass
 
-    # B. Malformed paging object
-    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": "invalid", "total": 1}}))
+    # Null paging object
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": None}))
     try:
-        api_football.get_league_fixtures_page(39, 2021, page=11)
-        assert False, "Expected APIFootballError for malformed paging"
+        api_football.get_league_fixtures_page(39, 2020, page=1)
+        assert False, "Expected APIFootballError for null paging"
+    except api_football.APIFootballError:
+        pass
+
+    # B. Malformed paging object (string values)
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": "1", "total": 1}}))
+    try:
+        api_football.get_league_fixtures_page(39, 2021, page=1)
+        assert False, "Expected APIFootballError for string current page"
+    except api_football.APIFootballError:
+        pass
+
+    # Zero or negative paging metadata
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": 0, "total": 1}}))
+    try:
+        api_football.get_league_fixtures_page(39, 2021, page=1)
+        assert False, "Expected APIFootballError for zero current page"
+    except api_football.APIFootballError:
+        pass
+
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": 1, "total": -5}}))
+    try:
+        api_football.get_league_fixtures_page(39, 2021, page=1)
+        assert False, "Expected APIFootballError for negative total pages"
     except api_football.APIFootballError:
         pass
 
