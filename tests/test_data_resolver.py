@@ -1,7 +1,8 @@
 from unittest.mock import MagicMock, patch
 import pytest
 
-from data_resolver import DataResolver
+import data_resolver
+from data_resolver import DataResolver, _validate_historical_structural_coverage
 import storage
 
 
@@ -279,6 +280,122 @@ def test_C_football_data_org_partial_response_incomplete(mock_api_fb, mock_fd):
 
     assert report["status"] == "INCOMPLETE"
     assert report["acquisition_complete"] is False
+
+
+def test_premier_league_2023_24_structural_coverage_passes(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "pl2023.db"))
+    storage.init_db()
+
+    # Create 20 teams
+    teams = [{"id": i, "name": f"Team {i}"} for i in range(1, 21)]
+    fixtures = []
+    fid = 5000
+    for i in range(20):
+        for j in range(20):
+            if i != j:
+                fid += 1
+                fixtures.append({
+                    "fixture": {"id": fid},
+                    "league": {"id": 39, "season": 2023},
+                    "teams": {"home": teams[i], "away": teams[j]},
+                    "goals": {"home": 1, "away": 0},
+                    "provider_provenance": {"provider": "api_football"},
+                })
+
+    expected_team_ids = [t["id"] for t in teams]
+    for t in teams:
+        storage.save_team_identity(
+            sport="football",
+            canonical_id=f"football_team_{t['id']}",
+            provider="api_football",
+            provider_team_id=t["id"],
+            normalized_name=team_identity.normalize_team_name(t["name"]),
+            display_name=t["name"],
+            league_id=39,
+        )
+
+    meta = {
+        "competition_format": "double_round_robin",
+        "expected_team_ids": expected_team_ids,
+    }
+
+    res = _validate_historical_structural_coverage(
+        fixtures, season=2023, provider_metadata=meta, league_id=39
+    )
+
+    assert res["verified"] is True
+    assert res["reason"] is None
+    assert res["fixture_count"] == 380
+    assert res["team_count"] == 20
+
+
+def test_premier_league_2023_24_mismatched_teams_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "pl2023_fail.db"))
+    storage.init_db()
+
+    # Expected teams 1..20
+    expected_team_ids = list(range(1, 21))
+
+    # Fixtures contain team 99 instead of team 20
+    teams = [{"id": i, "name": f"Team {i}"} for i in range(1, 20)] + [{"id": 99, "name": "Team 99"}]
+    for t in teams:
+        storage.save_team_identity(
+            sport="football",
+            canonical_id=f"football_team_{t['id']}",
+            provider="api_football",
+            provider_team_id=t["id"],
+            normalized_name=team_identity.normalize_team_name(t["name"]),
+            display_name=t["name"],
+            league_id=39,
+        )
+
+    fixtures = []
+    fid = 6000
+    for i in range(20):
+        for j in range(20):
+            if i != j:
+                fid += 1
+                fixtures.append({
+                    "fixture": {"id": fid},
+                    "league": {"id": 39, "season": 2023},
+                    "teams": {"home": teams[i], "away": teams[j]},
+                    "goals": {"home": 1, "away": 0},
+                    "provider_provenance": {"provider": "api_football"},
+                })
+
+    meta = {
+        "competition_format": "double_round_robin",
+        "expected_team_ids": expected_team_ids,
+    }
+
+    res = data_resolver._validate_historical_structural_coverage(
+        fixtures, season=2023, provider_metadata=meta, league_id=39
+    )
+
+    assert res["verified"] is False
+    assert res["reason"] == "team_universe_mismatch"
+    assert "99" in str(res["unexpected_team_ids"]) or "football_team_99" in str(res["unexpected_team_ids"])
+
+
+@patch("soccerdata_provider.get_sofascore_historical_games")
+@patch("soccerdata_provider.get_match_history_games")
+@patch("football_data_api.get_competition_matches")
+@patch("api_football.get_league_fixtures_page")
+def test_sofascore_fallback_error_reporting_captured(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+    mock_api_fb.side_effect = api_football.APIFootballQuotaExhaustedError("Quota exhausted")
+    mock_fd.side_effect = Exception("FD Error")
+    mock_sd_mh.return_value = ("SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": "MatchHistory Failed"})
+    mock_sd_ss.return_value = ("SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": "Sofascore Timeout Error"})
+
+    resolver = DataResolver()
+    res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
+
+    assert res["source"] == "none"
+    meta = res.get("provider_metadata", {})
+    ss_meta = meta.get("soccerdata_sofascore", {}).get("raw_metadata", {})
+    assert ss_meta.get("status") == "SOURCE_FAILED" or "error" in ss_meta
 
 
 # Test D — football-data.org trustworthy complete metadata without quota exhaustion -> COMPLETE

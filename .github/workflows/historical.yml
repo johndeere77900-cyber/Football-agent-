@@ -127,6 +127,7 @@ jobs:
           fi
 
       - name: Historical Data Sync
+        id: sync
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
@@ -140,7 +141,7 @@ jobs:
           INPUT_WITH_ENRICHMENT: ${{ inputs.with_enrichment }}
           INPUT_REFRESH: ${{ inputs.refresh }}
         run: |
-          set -euo pipefail
+          set +e
           if [ "$INPUT_RUN_QUEUE" = "true" ]; then
             ARGS=("--historical-queue" "--seasons")
             for YR in $INPUT_SEASONS_ARG; do
@@ -161,8 +162,13 @@ jobs:
           fi
 
           python3 main.py "${ARGS[@]}"
+          SYNC_EXIT=$?
+          echo "sync_exit=$SYNC_EXIT" >> $GITHUB_OUTPUT
+          exit $SYNC_EXIT
 
       - name: Verify Persisted Historical Datasets
+        if: always() && steps.sync.outcome != 'skipped'
+        id: verify
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
@@ -174,7 +180,7 @@ jobs:
           INPUT_LEAGUE_ID: ${{ inputs.league_id }}
           INPUT_SEASONS_ARG: ${{ steps.parse_seasons.outputs.seasons_arg }}
         run: |
-          set -euo pipefail
+          set +e
           if [ "$INPUT_RUN_QUEUE" = "true" ]; then
             ARGS=("--verify-historical-datasets" "--seasons")
             for YR in $INPUT_SEASONS_ARG; do
@@ -188,3 +194,14 @@ jobs:
           fi
 
           python3 main.py "${ARGS[@]}"
+          VERIFY_EXIT=$?
+
+          SYNC_EXIT="${{ steps.sync.outputs.sync_exit }}"
+          if [ "$SYNC_EXIT" != "0" ]; then
+            echo "ERROR: Historical Data Sync step failed with exit code $SYNC_EXIT"
+            exit "$SYNC_EXIT"
+          fi
+          if [ "$VERIFY_EXIT" != "0" ]; then
+            echo "ERROR: Verify Persisted Historical Datasets step failed with exit code $VERIFY_EXIT"
+            exit "$VERIFY_EXIT"
+          fi

@@ -466,8 +466,14 @@ def sync_historical_fixtures(
         )
         final_status = "COMPLETE"
     else:
-        if not last_error_reason and page_source_val != "api_football":
-            last_error_reason = "provider_coverage_incomplete"
+        if not last_error_reason:
+            if isinstance(db_coverage, dict) and db_coverage.get("verified") is not True:
+                last_error_reason = f"structural_coverage_failed_{db_coverage.get('reason')}"
+            elif page_source_val != "api_football":
+                last_error_reason = "provider_coverage_incomplete"
+            else:
+                last_error_reason = "acquisition_incomplete"
+
         storage.mark_historical_dataset_incomplete(
             league_id,
             season,
