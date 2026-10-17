@@ -370,7 +370,7 @@ def test_sofascore_not_used_when_match_history_returns_usable_data(mock_api_fb, 
     resolver = DataResolver()
     res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
 
-    assert res["source"] == "soccerdata"
+    assert res["source"] in ("soccerdata", "soccerdata_match_history")
     assert len(res["fixtures"]) == 380
     assert res["fixtures"][0]["provider_provenance"]["provider"] == "soccerdata_match_history"
     mock_sd_ss.assert_not_called()

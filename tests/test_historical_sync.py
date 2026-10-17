@@ -52,7 +52,10 @@ def test_historical_sync_saves_fixtures(temp_db, monkeypatch):
         "expected_pages": 1,
     }
 
-    with patch("api_football.get_league_fixtures_page", return_value=meta_return):
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report["league_id"] == 39
@@ -90,11 +93,25 @@ def test_historical_sync_repeated_runs_are_idempotent(temp_db):
         "expected_pages": 1,
     }
 
-    with patch("api_football.get_league_fixtures_page", return_value=meta_return) as mock_get:
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return) as mock_get, \
+         patch("api_football.get_league_standings") as mock_standings, \
+         patch("football_data_api.get_competition_teams") as mock_fd_teams, \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+
+        # Reset mocks after run 1
+        mock_get.reset_mock()
+        mock_standings.reset_mock()
+        mock_fd_teams.reset_mock()
+
+        # Run 2 on COMPLETE dataset must trigger ZERO network requests across all providers and helpers
         report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
-        # Second run on COMPLETE dataset must NOT call get_league_fixtures_page
-        mock_get.assert_called_once()
+
+        mock_get.assert_not_called()
+        mock_standings.assert_not_called()
+        mock_fd_teams.assert_not_called()
 
     assert report1["newly_stored"] == 2
     assert report1["status"] == "COMPLETE"
@@ -119,7 +136,8 @@ def test_historical_sync_refresh_forces_reacquisition(temp_db):
         "expected_pages": 1,
     }
 
-    with patch("api_football.get_league_fixtures_page", return_value=meta_return) as mock_get:
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return) as mock_get, \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         report2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024, refresh=True)
         assert mock_get.call_count == 2
@@ -333,6 +351,9 @@ def test_resume_incomplete_dataset_single_page_retries_page_1(temp_db):
         return meta_return
 
     with patch("api_football.get_league_fixtures_page", side_effect=mock_fetch), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
          patch("data_resolver._get_authoritative_historical_team_ids", return_value=list(range(1, 21))):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2023)
 
@@ -391,6 +412,9 @@ def test_resume_incomplete_dataset_stale_expected_pages_retries_page_1(temp_db):
         return meta_return
 
     with patch("api_football.get_league_fixtures_page", side_effect=mock_fetch), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
          patch("data_resolver._get_authoritative_historical_team_ids", return_value=list(range(1, 21))):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2023)
 
@@ -439,7 +463,8 @@ def test_ongoing_2026_fixtures_handled_by_status():
         "expected_pages": 1,
     }
 
-    with patch("api_football.get_league_fixtures_page", return_value=meta_return):
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2026)
 
     assert report["final_stored_count"] == 1
@@ -499,7 +524,8 @@ def test_sync_historical_fixtures_unplayed_fixtures_not_persisted(temp_db):
         "expected_pages": 1,
     }
 
-    with patch("api_football.get_league_fixtures_page", return_value=meta_return):
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert report["final_stored_count"] == 3

@@ -17,8 +17,9 @@ ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 
 # --- API Quotas & Limits -----------------------------------------------------
 API_FOOTBALL_DAILY_CREDIT_LIMIT = 100
-API_FOOTBALL_HISTORICAL_DAILY_BUDGET = int(
-    os.environ.get("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50)
+API_FOOTBALL_HISTORICAL_DAILY_BUDGET = min(
+    50,
+    int(os.environ.get("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
 )
 API_BASKETBALL_DAILY_CREDIT_LIMIT = int(
     os.environ.get("API_BASKETBALL_DAILY_CREDIT_LIMIT", 100)

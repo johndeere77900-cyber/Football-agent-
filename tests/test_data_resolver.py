@@ -178,8 +178,11 @@ import soccerdata_provider
 
 
 # Test A — API-Football multi-page acquisition COMPLETE when all pages processed
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
+@patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
+@patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
 @patch("api_football.get_league_fixtures_page")
-def test_A_api_football_multipage_complete(mock_api_fb):
+def test_A_api_football_multipage_complete(mock_api_fb, mock_sd_mh, mock_sd_ss, mock_csv):
     import historical_sync
 
     pairings = [(h, a) for h in range(1, 21) for a in range(1, 21) if h != a]
@@ -406,11 +409,12 @@ def test_premier_league_2023_24_mismatched_teams_fails(tmp_path, monkeypatch):
     assert "99" in str(res["unexpected_team_ids"]) or "football_team_99" in str(res["unexpected_team_ids"])
 
 
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
 @patch("soccerdata_provider.get_sofascore_historical_games")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_sofascore_fallback_error_reporting_captured(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss):
+def test_sofascore_fallback_error_reporting_captured(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss, mock_csv):
     mock_api_fb.side_effect = api_football.APIFootballQuotaExhaustedError("Quota exhausted")
     mock_fd.side_effect = Exception("FD Error")
     mock_sd_mh.return_value = ("SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": "MatchHistory Failed"})
@@ -426,10 +430,13 @@ def test_sofascore_fallback_error_reporting_captured(mock_api_fb, mock_fd, mock_
 
 
 # Test D — football-data.org trustworthy complete metadata without quota exhaustion -> COMPLETE
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
+@patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
+@patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
 @patch("football_data_api.get_competition_teams")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_D_football_data_org_complete_metadata_complete(mock_api_fb, mock_fd, mock_fd_teams):
+def test_D_football_data_org_complete_metadata_complete(mock_api_fb, mock_fd, mock_fd_teams, mock_sd_mh, mock_sd_ss, mock_csv):
     import historical_sync
 
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
@@ -468,10 +475,12 @@ def test_D_football_data_org_complete_metadata_complete(mock_api_fb, mock_fd, mo
     assert report["valid_fixtures"] == 380
 
 
-@patch("soccerdata_provider.get_match_history_games")
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
+@patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
+@patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_quota_exhaustion_with_fallback_fixtures_remains_incomplete(mock_api_fb, mock_fd, mock_sd):
+def test_quota_exhaustion_with_fallback_fixtures_remains_incomplete(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss, mock_csv):
     import historical_sync
 
     # 1. API-Football raises quota exhaustion
@@ -555,11 +564,12 @@ def test_E_soccerdata_no_completeness_metadata_incomplete(mock_api_fb, mock_fd, 
 
 
 # Test F — SoccerData with explicit trustworthy completeness metadata -> COMPLETE
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
 @patch("football_data_api.get_competition_teams")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_F_soccerdata_with_complete_metadata_complete(mock_api_fb, mock_fd, mock_sd, mock_fd_teams):
+def test_F_soccerdata_with_complete_metadata_complete(mock_api_fb, mock_fd, mock_sd, mock_fd_teams, mock_csv):
     import historical_sync
 
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
@@ -606,10 +616,12 @@ def test_G_api_quota_exhaustion_no_retry(mock_api_fb, mock_fd, mock_sd):
 
 
 # Test H — Successful empty API-Football historical response falls through to fallback
-@patch("soccerdata_provider.get_match_history_games")
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
+@patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
+@patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_H_api_empty_historical_falls_through(mock_api_fb, mock_fd, mock_sd):
+def test_H_api_empty_historical_falls_through(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss, mock_csv):
     mock_api_fb.return_value = {"fixtures": [], "expected_pages": 1, "current_page": 1}
     mock_fd.return_value = {
         "matches": [
@@ -647,6 +659,122 @@ def test_I_normal_date_lookup_valid_empty_unchanged(mock_api_fb_date, mock_fd_ma
     assert meta["resolver_status"] == "PRIMARY_SUCCESS"
     assert meta["fallback_used"] is False
     assert mock_fd_matches.call_count == 0  # Zero secondary calls for date lookup!
+
+
+
+
+def test_provider_execution_order_primary_before_secondary():
+    """
+    Prove provider execution order in get_league_fixtures_page:
+    1. Direct CSV & SoccerData (Primary Route) are attempted first.
+    2. If Direct CSV provides sufficient complete data, Secondary APIs (API-Football, football-data.org) are NOT called.
+    """
+    call_order = []
+
+    def mock_csv(league_id, season):
+        call_order.append("direct_csv")
+        teams = [{"id": i, "name": f"Team {i}"} for i in range(1, 21)]
+        fixtures = []
+        fid = 1000
+        for i in range(20):
+            for j in range(20):
+                if i != j:
+                    fid += 1
+                    h_team = teams[i]
+                    a_team = teams[j]
+                    c_home = team_identity.resolve_canonical_team_id(
+                        h_team["name"], "api_football", h_team["id"], league_id=league_id
+                    )
+                    c_away = team_identity.resolve_canonical_team_id(
+                        a_team["name"], "api_football", a_team["id"], league_id=league_id
+                    )
+                    fixtures.append({
+                        "fixture": {"id": fid, "date": "2024-08-17T14:00:00Z", "status": {"short": "FT"}},
+                        "league": {"id": league_id, "season": season, "name": "Premier League"},
+                        "teams": {"home": h_team, "away": a_team},
+                        "goals": {"home": 1, "away": 0},
+                        "canonical_home_id": c_home,
+                        "canonical_away_id": c_away,
+                        "provider_provenance": {"provider": "football_data_csv", "provider_type": "primary"},
+                    })
+        return fixtures
+
+    def mock_sd_mh(*args, **kwargs):
+        call_order.append("soccerdata_mh")
+        return ("SOURCE_NOT_AVAILABLE", [], {})
+
+    def mock_sd_ss(*args, **kwargs):
+        call_order.append("soccerdata_ss")
+        return ("SOURCE_NOT_AVAILABLE", [], {})
+
+    def mock_api_fb(*args, **kwargs):
+        call_order.append("api_football")
+        return {"fixtures": [], "expected_pages": 1, "current_page": 1}
+
+    def mock_fd(*args, **kwargs):
+        call_order.append("football_data_org")
+        return {"matches": [], "metadata": {}}
+
+    resolver = DataResolver()
+    with patch("data_resolver._fetch_direct_csv_league_fixtures", side_effect=mock_csv), \
+         patch("soccerdata_provider.get_match_history_games", side_effect=mock_sd_mh), \
+         patch("soccerdata_provider.get_sofascore_historical_games", side_effect=mock_sd_ss), \
+         patch("api_football.get_league_fixtures_page", side_effect=mock_api_fb), \
+         patch("football_data_api.get_competition_matches", side_effect=mock_fd):
+
+        res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
+
+    assert res["source"] == "football_data_csv"
+    assert len(res["fixtures"]) == 380
+    assert call_order == ["direct_csv"]
+    assert "api_football" not in call_order
+    assert "football_data_org" not in call_order
+
+
+def test_provider_execution_order_fallthrough_to_secondary():
+    """
+    Prove that if primary route (CSV and SoccerData) fails / returns empty,
+    execution falls through to Secondary APIs in sequence (API-Football -> football-data.org).
+    """
+    call_order = []
+
+    def mock_csv(*args, **kwargs):
+        call_order.append("direct_csv")
+        return []
+
+    def mock_sd_mh(*args, **kwargs):
+        call_order.append("soccerdata_mh")
+        return ("SOURCE_NOT_AVAILABLE", [], {})
+
+    def mock_sd_ss(*args, **kwargs):
+        call_order.append("soccerdata_ss")
+        return ("SOURCE_NOT_AVAILABLE", [], {})
+
+    def mock_api_fb(*args, **kwargs):
+        call_order.append("api_football")
+        return {
+            "fixtures": [
+                {
+                    "fixture": {"id": 101, "date": "2024-08-17T14:00:00Z", "status": {"short": "FT"}},
+                    "league": {"id": 39, "season": 2024},
+                    "teams": {"home": {"id": 1, "name": "Team 1"}, "away": {"id": 2, "name": "Team 2"}},
+                    "goals": {"home": 1, "away": 0},
+                }
+            ],
+            "expected_pages": 1,
+            "current_page": 1,
+        }
+
+    resolver = DataResolver()
+    with patch("data_resolver._fetch_direct_csv_league_fixtures", side_effect=mock_csv), \
+         patch("soccerdata_provider.get_match_history_games", side_effect=mock_sd_mh), \
+         patch("soccerdata_provider.get_sofascore_historical_games", side_effect=mock_sd_ss), \
+         patch("api_football.get_league_fixtures_page", side_effect=mock_api_fb):
+
+        res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
+
+    assert call_order == ["direct_csv", "soccerdata_mh", "soccerdata_ss", "api_football"]
+    assert res["source"] in ("api_football", "mixed")
 
 
 # Test J — Prove arbitrary counts (1, 10, 11, 50, 100) alone cannot cause COMPLETE without explicit provider metadata

@@ -2987,6 +2987,20 @@ def main():
         if args.season is not None and getattr(args, "seasons", None) is not None:
             raise ValueError("Cannot specify both --season and --seasons together.")
 
+        if args.verify_historical_datasets:
+            storage.init_db()
+            summary = historical_sync.verify_persisted_historical_datasets(
+                sport=args.sport,
+                league_id=args.league,
+                seasons=getattr(args, "seasons", None),
+                season=args.season,
+                is_queue=args.historical_queue,
+            )
+            if not summary.get("success"):
+                print("Verification failed for one or more requested historical datasets.", file=sys.stderr)
+                return 1
+            return 0
+
         if args.historical_queue:
             storage.init_db()
 
@@ -3058,20 +3072,6 @@ def main():
 
             if not isinstance(report, dict) or report.get("status") != "COMPLETE":
                 print(f"Historical sync ended with status '{report.get('status', 'FAILED')}' (non-COMPLETE). Exiting with code 1.", file=sys.stderr)
-                return 1
-            return 0
-
-        if args.verify_historical_datasets:
-            storage.init_db()
-            summary = historical_sync.verify_persisted_historical_datasets(
-                sport=args.sport,
-                league_id=args.league,
-                seasons=getattr(args, "seasons", None),
-                season=args.season,
-                is_queue=args.historical_queue,
-            )
-            if not summary.get("success"):
-                print("Verification failed for one or more requested historical datasets.", file=sys.stderr)
                 return 1
             return 0
 

@@ -216,7 +216,10 @@ def test_req14_duplicate_fixture_idempotent(temp_db):
 
 
 # 15. Malformed fixture cannot cause a dataset to become COMPLETE
-def test_req15_malformed_fixture_cannot_cause_complete(temp_db):
+@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
+@patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
+@patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
+def test_req15_malformed_fixture_cannot_cause_complete(mock_sd_mh, mock_sd_ss, mock_csv, temp_db):
     valid_fix = make_fixture(fid=3001)
     malformed_fix = make_fixture(fid=3002, home_id=None)
 

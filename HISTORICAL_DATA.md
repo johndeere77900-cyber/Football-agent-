@@ -27,9 +27,14 @@ The historical acquisition and backtesting pipeline is decoupled from live predi
 1. **NORMAL BACKTEST INVARIANT**:
    - `Neon/SQLite historical dataset` -> `zero API-Football/API-Basketball network calls`.
    - Backtests read strictly from database storage and fail closed if a dataset is missing, incomplete, or count-mismatched.
-2. **HISTORICAL ACQUISITION INVARIANT**:
-   - `Provider API` -> `persistent quota / cache` -> `validated storage` -> `manifest`.
-3. **COMPLETE Datasets**:
+2. **HISTORICAL ACQUISITION & TWO-ROUTE FALLBACK ARCHITECTURE**:
+   - Step 1 (Read-first persistence): Reuse stored DB dataset if COMPLETE and verified without external calls.
+   - Step 2 (Primary Route): Direct Football-Data CSV $\rightarrow$ SoccerData MatchHistory $\rightarrow$ SoccerData Sofascore.
+   - Step 3 (Secondary Route): API-Football $\rightarrow$ football-data.org API.
+3. **API-FOOTBALL HISTORICAL BUDGET CEILING**:
+   - Historical operations enforce a hard ceiling of 50 requests/day (`API_FOOTBALL_HISTORICAL_DAILY_BUDGET = 50`).
+   - Omitted, invalid, zero, or negative `max_budget` parameters clamp to 50 for historical acquisition.
+4. **COMPLETE Datasets**:
    - A dataset marked `COMPLETE` bypasses API calls completely (0 requests made) unless `--refresh` is explicitly specified.
 4. **Exact Budget Completion**:
    - Reaching the exact final allowed credit quota slot on a successful final response allows a dataset to become `COMPLETE` provided all expected pages/games were successfully retrieved.
@@ -51,6 +56,15 @@ API-Football payloads contain both top-level `goals` and nested `score` objects:
    - Backtest results, market-level metrics (Brier score, log loss, calibration/ECE), sample sizes, and seed details are permanently recorded in `backtest_runs` and `backtest_market_metrics`.
 
 ## CLI Commands
+
+To verify persisted historical datasets:
+```bash
+# Queue mode verification (checks all target seasons across configured leagues)
+python3 main.py --verify-historical-datasets --historical-queue --seasons 2020 2021 2022 2023 2024 2025 2026
+
+# Single dataset verification (requires --league-id)
+python3 main.py --verify-historical-datasets --league-id 39 --seasons 2024
+```
 
 To check historical dataset manifest status:
 ```bash

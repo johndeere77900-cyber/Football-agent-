@@ -182,7 +182,7 @@ jobs:
         run: |
           set +e
           if [ "$INPUT_RUN_QUEUE" = "true" ]; then
-            ARGS=("--verify-historical-datasets" "--seasons")
+            ARGS=("--verify-historical-datasets" "--historical-queue" "--seasons")
             for YR in $INPUT_SEASONS_ARG; do
               ARGS+=("$YR")
             done

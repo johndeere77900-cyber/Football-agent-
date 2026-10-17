@@ -212,6 +212,38 @@ def test_get_league_standings_passes_max_budget(
     assert ("standings", 25) in budget_checks
 
 
+def test_historical_budget_limit_clamping(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test-key")
+    monkeypatch.setattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100)
+    monkeypatch.setattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50)
+
+    reserved_limits = []
+
+    def fake_reserve(provider, date1, date2, endpoint, limit):
+        reserved_limits.append(limit)
+        return True
+
+    monkeypatch.setattr(api_football.storage, "reserve_api_request", fake_reserve)
+
+    # When max_budget is provided as 0 or negative or >50, it clamps to min(100, 50, budget) -> <= 50
+    api_football._check_and_consume_quota("fixtures", max_budget=0)
+    assert reserved_limits[-1] == 50
+
+    api_football._check_and_consume_quota("fixtures", max_budget=-10)
+    assert reserved_limits[-1] == 50
+
+    api_football._check_and_consume_quota("fixtures", max_budget=100)
+    assert reserved_limits[-1] == 50
+
+    api_football._check_and_consume_quota("fixtures", max_budget=20)
+    assert reserved_limits[-1] == 20
+
+    # When max_budget is None, it uses live global limit (100)
+    api_football._check_and_consume_quota("fixtures", max_budget=None)
+    assert reserved_limits[-1] == 100
+
+
 def test_permanent_http_error_is_not_retried(
     tmp_path,
     monkeypatch,
