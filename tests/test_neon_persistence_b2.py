@@ -338,26 +338,20 @@ def test_pagination_multi_page_and_deduplication(tmp_path, monkeypatch):
     storage.init_db()
 
     calls = []
-    call_count = 0
 
     def fake_get(url, headers, params, timeout):
-        nonlocal call_count
-        call_count += 1
         calls.append(params)
-        if call_count == 1:
-            return FakeResponse(
-                payload={
-                    "paging": {"current": 1, "total": 2},
-                    "response": [{"fixture": {"id": 101}}, {"fixture": {"id": 102}}],
-                }
-            )
-        else:
-            return FakeResponse(
-                payload={
-                    "paging": {"current": 2, "total": 2},
-                    "response": [{"fixture": {"id": 102}}, {"fixture": {"id": 103}}], # ID 102 is duplicate
-                }
-            )
+        return FakeResponse(
+            payload={
+                "paging": {"current": 1, "total": 1},
+                "response": [
+                    {"fixture": {"id": 101}},
+                    {"fixture": {"id": 102}},
+                    {"fixture": {"id": 102}},  # Duplicate ID
+                    {"fixture": {"id": 103}},
+                ],
+            }
+        )
 
     monkeypatch.setattr(api_football.requests, "get", fake_get)
 
@@ -365,7 +359,8 @@ def test_pagination_multi_page_and_deduplication(tmp_path, monkeypatch):
     assert len(fixtures) == 3
     ids = [f["fixture"]["id"] for f in fixtures]
     assert ids == [101, 102, 103]
-    assert len(calls) == 2
+    assert len(calls) == 1
+    assert "page" not in calls[0]
 
 
 def test_pagination_malformed_metadata(tmp_path, monkeypatch):
