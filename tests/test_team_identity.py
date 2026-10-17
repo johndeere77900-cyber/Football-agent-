@@ -71,17 +71,17 @@ def test_four_pl_clubs_general_alias_resolution():
     for b in ["Brighton & Hove Albion FC", "Brighton & Hove Albion", "Brighton"]:
         assert team_identity.resolve_canonical_team_id(b, "football_data_org", 107, league_id=39) == "football_team_brighton"
 
-    # Luton variants
-    for l in ["Luton Town FC", "Luton Town", "Luton"]:
-        assert team_identity.resolve_canonical_team_id(l, "football_data_org", 389, league_id=39) == "football_team_39_luton"
+    # Luton variants (legacy & alias compatibility)
+    for l in ["Luton Town FC", "Luton Town", "Luton", "39_luton"]:
+        assert team_identity.resolve_canonical_team_id(l, "football_data_org", 389, league_id=39) == "football_team_39_luton_town"
 
-    # Nottingham Forest variants
-    for n in ["Nottingham Forest FC", "Nottingham Forest", "Nottingham"]:
-        assert team_identity.resolve_canonical_team_id(n, "football_data_org", 351, league_id=39) == "football_team_39_nottingham_forest"
+    # Nottingham Forest variants (legacy & alias compatibility)
+    for n in ["Nottingham Forest FC", "Nottingham Forest", "Nottingham", "39_nottingham_forest"]:
+        assert team_identity.resolve_canonical_team_id(n, "football_data_org", 351, league_id=39) == "football_team_39_nottingham"
 
-    # Wolves variants
+    # Wolves variants (legacy & alias compatibility)
     for w in ["Wolverhampton Wanderers FC", "Wolverhampton Wanderers", "Wolverhampton", "Wolves"]:
-        assert team_identity.resolve_canonical_team_id(w, "football_data_org", 76, league_id=39) == "football_team_wolves"
+        assert team_identity.resolve_canonical_team_id(w, "football_data_org", 76, league_id=39) == "football_team_39_wolverhampton"
 
 
 def test_distinct_clubs_never_merged():

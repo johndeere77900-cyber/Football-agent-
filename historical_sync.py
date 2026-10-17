@@ -184,8 +184,12 @@ def sync_historical_fixtures(
         )
 
     fixtures_received = []
-    start_p = dataset_info.get("pages_completed", 0) + 1 if (dataset_info.get("pages_completed", 0) > 0 and not dataset_info.get("acquisition_complete") and not refresh) else 1
-    expected_pages = dataset_info.get("expected_pages", 0) if not refresh else 0
+    exp_p_stored = dataset_info.get("expected_pages", 0) if not refresh else 0
+    if exp_p_stored <= 1:
+        start_p = 1
+    else:
+        start_p = dataset_info.get("pages_completed", 0) + 1 if (dataset_info.get("pages_completed", 0) > 0 and not dataset_info.get("acquisition_complete") and not refresh) else 1
+    expected_pages = exp_p_stored
     pages_completed = dataset_info.get("pages_completed", 0) if not refresh else 0
     acquisition_complete = False
 
