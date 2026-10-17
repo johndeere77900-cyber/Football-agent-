@@ -279,7 +279,8 @@ def bootstrap_historical_team_identity(
     Controlled historical canonical team identity bootstrap mechanism.
 
     Used ONLY during trusted historical ingestion.
-    Supports international and domestic team identity bootstrapping.
+    Reuses existing verified DB mappings and configured aliases across providers
+    to prevent duplicate canonical identity creation.
     """
     if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
         return None
@@ -297,37 +298,11 @@ def bootstrap_historical_team_identity(
     if not norm_name and not p_team_id_str:
         return None
 
-    # First check if resolution succeeds via existing verified mapping or alias
-    resolved = resolve_canonical_team_id(
+    return resolve_canonical_team_id(
         raw_name=raw_name,
         provider=provider,
         provider_team_id=p_team_id_str,
         league_id=league_id,
         sport=sport,
-        auto_register=False,
+        auto_register=True,
     )
-
-    if resolved:
-        canonical_id = resolved
-    else:
-        # Otherwise, generate controlled canonical identity using base team slug
-        clean_base = strip_national_team_words(raw_name) or raw_name
-        slug = sanitize_canonical_slug(clean_base)
-        if league_id:
-            canonical_id = f"{sport}_team_{league_id}_{slug}"
-        else:
-            canonical_id = f"{sport}_team_{slug}"
-
-    # Save provider mapping ONLY if a real provider team ID exists
-    if p_team_id_str:
-        storage.save_team_identity(
-            sport=sport,
-            canonical_id=canonical_id,
-            provider=provider,
-            provider_team_id=p_team_id_str,
-            normalized_name=norm_name,
-            display_name=raw_name.strip(),
-            league_id=league_id,
-        )
-
-    return canonical_id
