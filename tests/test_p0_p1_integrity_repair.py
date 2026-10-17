@@ -77,7 +77,10 @@ def test_A_to_G_football_pagination_failure_persistence_and_resumption(isolated_
         raise api_football.APIFootballQuotaExhaustedError("Quota exhausted on page 2")
 
     # A, B, C, G: page 1 succeeds, page 2 fails with quota exhaustion
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_p1_ok_p2_fail):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_p1_ok_p2_fail), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert rep1["status"] == "INCOMPLETE" # C
@@ -96,7 +99,10 @@ def test_A_to_G_football_pagination_failure_persistence_and_resumption(isolated_
             return {"fixtures": [fix1, fix2], "page": 2, "expected_pages": 2} # fix1 duplicate
         raise RuntimeError("Unexpected page")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_p2_resume):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_p2_resume), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert rep2["status"] == "COMPLETE" # F
@@ -358,7 +364,10 @@ def test_later_page_quota_interruption_and_resume_football_and_basketball(isolat
             return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
         raise api_football.APIFootballQuotaExhaustedError("Quota exhausted on page 2")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1_p2_p3):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1_p2_p3), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert rep["pages_completed"] == 1
@@ -374,7 +383,10 @@ def test_later_page_quota_interruption_and_resume_football_and_basketball(isolat
             return {"fixtures": [fix2], "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p2_resume):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p2_resume), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep_res = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert rep_res["status"] == "COMPLETE"
@@ -422,7 +434,10 @@ def test_early_quota_exhaustion_preserves_persisted_manifest_state_football_and_
             return {"fixtures": [fix_ok, fix_bad], "page": 1, "expected_pages": 2}
         raise api_football.APIFootballQuotaExhaustedError("Quota exhausted")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024, historical_budget=50)
 
     assert rep1["pages_completed"] == 1
@@ -520,7 +535,10 @@ def test_empty_page_acquisition_scenarios_football_and_basketball(isolated_db):
     def mock_empty_p1(league_id, season, page=1, max_budget=None):
         return {"fixtures": [], "page": 1, "expected_pages": 1}
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_p1):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_p1), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep_fb_empty = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
     assert rep_fb_empty["status"] == "INCOMPLETE"
 
@@ -535,7 +553,10 @@ def test_empty_page_acquisition_scenarios_football_and_basketball(isolated_db):
             return {"fixtures": [], "page": 2, "expected_pages": 3}
         return {"fixtures": [fix2], "page": 3, "expected_pages": 3}
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_middle_p2):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_middle_p2), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep_fb_mid = historical_sync.sync_historical_fixtures(league_id=61, season=2024)
     assert rep_fb_mid["status"] == "INCOMPLETE"
 
@@ -546,7 +567,10 @@ def test_empty_page_acquisition_scenarios_football_and_basketball(isolated_db):
             return {"fixtures": [fix303], "page": 1, "expected_pages": 2}
         return {"fixtures": [], "page": 2, "expected_pages": 2}
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_final_p2):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_final_p2), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep_fb_fin = historical_sync.sync_historical_fixtures(league_id=78, season=2024)
     assert rep_fb_fin["status"] == "INCOMPLETE"
 
@@ -556,7 +580,10 @@ def test_empty_page_acquisition_scenarios_football_and_basketball(isolated_db):
     def mock_valid_1p(league_id, season, page=1, max_budget=None):
         return {"fixtures": [fix304_a, fix304_b], "page": 1, "expected_pages": 1}
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_valid_1p):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_valid_1p), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep_fb_valid = historical_sync.sync_historical_fixtures(league_id=140, season=2024)
     assert rep_fb_valid["status"] == "COMPLETE"
     assert rep_fb_valid["final_stored_count"] == 2
