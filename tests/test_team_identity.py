@@ -44,7 +44,7 @@ def test_explicit_team_identity_registration():
 
 
 def test_unknown_team_returns_unresolved_and_no_mapping_written():
-    cid = team_identity.bootstrap_historical_team_identity("Unknown Team XYZ FC", "api_football", 9999, league_id=39)
+    cid = team_identity.resolve_canonical_team_id("Unknown Team XYZ FC", "api_football", 9999, league_id=39, auto_register=False)
     assert cid is None
     mapping = storage.get_team_identity_by_provider("football", "api_football", "9999")
     assert mapping is None

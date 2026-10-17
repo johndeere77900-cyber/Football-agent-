@@ -304,9 +304,9 @@ def bootstrap_historical_team_identity(
     Controlled historical canonical team identity bootstrap mechanism.
 
     Used ONLY during trusted historical ingestion.
-    Reuses existing verified DB mappings and configured aliases across providers.
-    Unknown or ambiguous team names return None without creating synthetic duplicate canonical IDs.
-    For resolved canonical teams, persists verified provider mapping to DB.
+    First resolves against existing DB mappings, exact DB normalized names, and CANONICAL_TEAM_ALIASES.
+    If an existing canonical ID matches, reuses that canonical ID across providers without creating duplicate IDs.
+    Otherwise, generates a controlled canonical ID and saves the provider mapping to DB.
     """
     if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
         return None
@@ -333,18 +333,20 @@ def bootstrap_historical_team_identity(
         auto_register=False,
     )
 
-    if not resolved:
-        import logging
-        logging.getLogger(__name__).warning(
-            "Bootstrap historical team identity unresolved for raw_name=%r, provider=%r, provider_team_id=%r, league_id=%r",
-            raw_name, provider, provider_team_id, league_id
-        )
-        return None
+    if resolved:
+        canonical_id = resolved
+    else:
+        clean_base = strip_national_team_words(raw_name) or raw_name
+        slug = sanitize_canonical_slug(clean_base)
+        if league_id:
+            canonical_id = f"{sport}_team_{league_id}_{slug}"
+        else:
+            canonical_id = f"{sport}_team_{slug}"
 
-    if p_team_id_str and resolved:
+    if p_team_id_str:
         storage.save_team_identity(
             sport=sport,
-            canonical_id=resolved,
+            canonical_id=canonical_id,
             provider=provider,
             provider_team_id=p_team_id_str,
             normalized_name=norm_name,
@@ -352,4 +354,4 @@ def bootstrap_historical_team_identity(
             league_id=league_id,
         )
 
-    return resolved
+    return canonical_id
