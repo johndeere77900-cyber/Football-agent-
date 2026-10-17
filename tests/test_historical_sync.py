@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 import config
 import storage
 import historical_sync
+import team_identity
 
 
 @pytest.fixture
@@ -281,6 +282,121 @@ def test_unknown_provenance_fails_closed():
         empty_pages_count=0,
         final_stored_count=100,
     ) is False
+
+
+def test_resume_incomplete_dataset_single_page_retries_page_1(temp_db):
+    """
+    Regression test: An incomplete dataset with 380 stored fixtures, expected_pages=1,
+    pages_completed=1, and acquisition_complete=false must retry from page 1, NOT page 2.
+    """
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
+    fixtures = []
+    for i, (h_id, a_id) in enumerate(pairings):
+        c_home = team_identity.bootstrap_historical_team_identity(f"Team {h_id}", "api_football", h_id, league_id=39)
+        c_away = team_identity.bootstrap_historical_team_identity(f"Team {a_id}", "api_football", a_id, league_id=39)
+        fixtures.append({
+            "fixture": {"id": 2000 + i, "date": "2023-09-15T15:00:00Z", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2023, "name": "Premier League"},
+            "teams": {"home": {"id": h_id, "name": f"Team {h_id}"}, "away": {"id": a_id, "name": f"Team {a_id}"}},
+            "canonical_home_id": c_home,
+            "canonical_away_id": c_away,
+            "goals": {"home": 2, "away": 1},
+            "provider_provenance": {"provider": "api_football"},
+        })
+    storage.save_historical_fixtures(fixtures, 39, 2023, source="api_football", require_completed=True)
+
+    storage.mark_historical_dataset_incomplete(
+        league_id=39,
+        season=2023,
+        fixture_count=380,
+        source="api_football",
+        expected_pages=1,
+        pages_completed=1,
+        acquisition_complete=False,
+    )
+
+    meta_return = {
+        "fixtures": fixtures,
+        "page": 1,
+        "expected_pages": 1,
+        "provider_metadata": {
+            "is_complete": True,
+            "structural_coverage": {"verified": True},
+        },
+    }
+
+    pages_requested = []
+
+    def mock_fetch(league_id, season, page=1, max_budget=None):
+        pages_requested.append(page)
+        return meta_return
+
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fetch), \
+         patch("data_resolver._get_authoritative_historical_team_ids", return_value=list(range(1, 21))):
+        report = historical_sync.sync_historical_fixtures(league_id=39, season=2023)
+
+    assert pages_requested == [1]
+    assert report["status"] == "COMPLETE"
+    assert report["acquisition_complete"] is True
+
+
+def test_resume_incomplete_dataset_stale_expected_pages_retries_page_1(temp_db):
+    """
+    Regression test: An incomplete dataset with stale expected_pages=2 and pages_completed=1
+    must restart acquisition from page 1 to obtain fresh provider metadata rather than skipping page 1.
+    """
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
+    fixtures = []
+    for i, (h_id, a_id) in enumerate(pairings):
+        c_home = team_identity.bootstrap_historical_team_identity(f"Team {h_id}", "api_football", h_id, league_id=39)
+        c_away = team_identity.bootstrap_historical_team_identity(f"Team {a_id}", "api_football", a_id, league_id=39)
+        fixtures.append({
+            "fixture": {"id": 3000 + i, "date": "2023-09-15T15:00:00Z", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2023, "name": "Premier League"},
+            "teams": {"home": {"id": h_id, "name": f"Team {h_id}"}, "away": {"id": a_id, "name": f"Team {a_id}"}},
+            "canonical_home_id": c_home,
+            "canonical_away_id": c_away,
+            "goals": {"home": 1, "away": 0},
+            "provider_provenance": {"provider": "api_football"},
+        })
+    storage.save_historical_fixtures(fixtures, 39, 2023, source="api_football", require_completed=True)
+
+    # Stale manifest metadata: expected_pages=2, pages_completed=1, acquisition_complete=False
+    storage.mark_historical_dataset_incomplete(
+        league_id=39,
+        season=2023,
+        fixture_count=190,
+        source="api_football",
+        expected_pages=2,
+        pages_completed=1,
+        acquisition_complete=False,
+    )
+
+    meta_return = {
+        "fixtures": fixtures,
+        "page": 1,
+        "expected_pages": 1,
+        "provider_metadata": {
+            "is_complete": True,
+            "structural_coverage": {"verified": True},
+        },
+    }
+
+    pages_requested = []
+
+    def mock_fetch(league_id, season, page=1, max_budget=None):
+        pages_requested.append(page)
+        return meta_return
+
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fetch), \
+         patch("data_resolver._get_authoritative_historical_team_ids", return_value=list(range(1, 21))):
+        report = historical_sync.sync_historical_fixtures(league_id=39, season=2023)
+
+    assert pages_requested == [1]
+    assert report["status"] == "COMPLETE"
+    assert report["acquisition_complete"] is True
 
     assert historical_sync._is_historical_provider_complete(
         page_source="unsupported_provider",

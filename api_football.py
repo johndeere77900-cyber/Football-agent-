@@ -522,9 +522,10 @@ def get_fixture_result(fixture_id):
 
 def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
     """
-    Retrieve one single page of fixtures for a league season with strict pagination metadata validation.
+    Retrieve one single page of fixtures for a league season according to API-Football contract.
 
-    Fails closed if pagination metadata is missing, malformed, or inconsistent with requested page.
+    API-Football /fixtures endpoint returns all fixtures in a single request response without
+    a 'page' query parameter. If page > expected_pages, an empty list is returned.
 
     Returns dict:
         {
@@ -539,14 +540,14 @@ def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
         raise ValueError("page must be a positive integer.")
 
     kwargs = {"max_budget": max_budget} if max_budget is not None else {}
+    params = {
+        "league": league_id,
+        "season": season,
+        "status": "FT-AET-PEN",
+    }
     page_data = _get(
         "fixtures",
-        {
-            "league": league_id,
-            "season": season,
-            "status": "FT-AET-PEN",
-            "page": page,
-        },
+        params,
         **kwargs,
     )
 
@@ -577,14 +578,17 @@ def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
         isinstance(current, bool)
         or not isinstance(current, int)
         or current < 1
-        or isinstance(total, bool)
-        or not isinstance(total, int)
-        or total < 1
-        or current > total
     ):
         raise APIFootballError(
             f"Malformed pagination metadata from API-Football: current={current!r}, total={total!r}"
         )
+
+    if page > total:
+        return {
+            "fixtures": [],
+            "page": page,
+            "expected_pages": total,
+        }
 
     if current != page:
         raise APIFootballError(

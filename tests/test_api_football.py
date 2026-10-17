@@ -386,7 +386,7 @@ def test_get_enriched_fixtures_batches_and_deduplicates(
     ]
 
 
-def test_get_league_fixtures_page_sends_page_param(tmp_path, monkeypatch):
+def test_get_league_fixtures_page_does_not_send_page_param(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test-key")
 
@@ -394,39 +394,52 @@ def test_get_league_fixtures_page_sends_page_param(tmp_path, monkeypatch):
 
     def fake_get(url, headers, params, timeout):
         calls.append(params)
-        current_page = params.get("page", 1)
         return FakeResponse(
             payload={
-                "response": [{"fixture": {"id": 100 + current_page}}],
-                "paging": {"current": current_page, "total": 3},
+                "response": [{"fixture": {"id": 101}}],
+                "paging": {"current": 1, "total": 1},
             }
         )
 
     monkeypatch.setattr(api_football.requests, "get", fake_get)
 
-    res2 = api_football.get_league_fixtures_page(39, 2024, page=2)
+    res1 = api_football.get_league_fixtures_page(39, 2024, page=1)
 
     assert len(calls) == 1
+    assert "page" not in calls[0]
     assert calls[0] == {
         "league": 39,
         "season": 2024,
-        "page": 2,
         "status": "FT-AET-PEN",
     }
-    assert res2["expected_pages"] == 3
-    assert len(res2["fixtures"]) == 1
+    assert res1["expected_pages"] == 1
+    assert len(res1["fixtures"]) == 1
 
-    res3 = api_football.get_league_fixtures_page(39, 2024, page=3)
+    # Requesting page 2 uses cached single response and returns empty list
+    res2 = api_football.get_league_fixtures_page(39, 2024, page=2)
 
-    assert len(calls) == 2
-    assert calls[1]["page"] == 3
-    assert calls[1] == {
-        "league": 39,
-        "season": 2024,
-        "page": 3,
-        "status": "FT-AET-PEN",
-    }
-    assert res3["expected_pages"] == 3
+    assert len(calls) == 1
+    assert res2["expected_pages"] == 1
+    assert res2["fixtures"] == []
+
+
+def test_get_league_fixtures_page_provider_error_visible(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test-key")
+
+    def fake_get(url, headers, params, timeout):
+        return FakeResponse(
+            status_code=403,
+            payload={"errors": {"token": "Invalid API key"}},
+        )
+
+    monkeypatch.setattr(api_football.requests, "get", fake_get)
+
+    try:
+        api_football.get_league_fixtures_page(39, 2024, page=1)
+        assert False, "Expected APIFootballError for provider error"
+    except api_football.APIFootballError as exc:
+        assert "Invalid API key" in str(exc) or "403" in str(exc)
 
 
 def test_get_league_fixtures_page_pagination_validation(tmp_path, monkeypatch):
@@ -436,43 +449,66 @@ def test_get_league_fixtures_page_pagination_validation(tmp_path, monkeypatch):
     # A. Missing paging object
     monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": []}))
     try:
-        api_football.get_league_fixtures_page(39, 2020, page=10)
+        api_football.get_league_fixtures_page(39, 2020, page=1)
         assert False, "Expected APIFootballError for missing paging"
     except api_football.APIFootballError:
         pass
 
-    # B. Malformed paging object
-    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": "invalid", "total": 1}}))
+    # Null paging object
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": None}))
     try:
-        api_football.get_league_fixtures_page(39, 2021, page=11)
-        assert False, "Expected APIFootballError for malformed paging"
+        api_football.get_league_fixtures_page(39, 2020, page=1)
+        assert False, "Expected APIFootballError for null paging"
     except api_football.APIFootballError:
         pass
 
-    # C. Current page mismatch
-    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": 2, "total": 2}}))
+    # B. Malformed paging object (string values)
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": "1", "total": 1}}))
     try:
-        api_football.get_league_fixtures_page(39, 2022, page=12)
+        api_football.get_league_fixtures_page(39, 2021, page=1)
+        assert False, "Expected APIFootballError for string current page"
+    except api_football.APIFootballError:
+        pass
+
+    # Zero or negative paging metadata
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": 0, "total": 1}}))
+    try:
+        api_football.get_league_fixtures_page(39, 2021, page=1)
+        assert False, "Expected APIFootballError for zero current page"
+    except api_football.APIFootballError:
+        pass
+
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": 1, "total": -5}}))
+    try:
+        api_football.get_league_fixtures_page(39, 2021, page=1)
+        assert False, "Expected APIFootballError for negative total pages"
+    except api_football.APIFootballError:
+        pass
+
+    # C. Current page mismatch when page <= total
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": 2, "total": 5}}))
+    try:
+        api_football.get_league_fixtures_page(39, 2022, page=1)
         assert False, "Expected APIFootballError for page mismatch"
     except api_football.APIFootballError:
         pass
 
-    # E. Empty response with valid pagination
-    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": 13, "total": 13}}))
+    # E. Empty response with valid pagination beyond total pages
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [], "paging": {"current": 1, "total": 1}}))
     res_empty = api_football.get_league_fixtures_page(39, 2023, page=13)
     assert res_empty["fixtures"] == []
-    assert res_empty["expected_pages"] == 13
+    assert res_empty["expected_pages"] == 1
 
     # F. Genuine valid single-page response
-    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [{"fixture": {"id": 101}}], "paging": {"current": 14, "total": 14}}))
-    res_single = api_football.get_league_fixtures_page(39, 2024, page=14)
-    assert res_single["expected_pages"] == 14
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [{"fixture": {"id": 101}}], "paging": {"current": 1, "total": 1}}))
+    res_single = api_football.get_league_fixtures_page(39, 2024, page=1)
+    assert res_single["expected_pages"] == 1
     assert len(res_single["fixtures"]) == 1
 
     # G. Genuine valid multi-page response
-    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [{"fixture": {"id": 102}}], "paging": {"current": 15, "total": 20}}))
-    res_multi = api_football.get_league_fixtures_page(39, 2025, page=15)
-    assert res_multi["expected_pages"] == 20
+    monkeypatch.setattr(api_football.requests, "get", lambda *args, **kwargs: FakeResponse(payload={"response": [{"fixture": {"id": 102}}], "paging": {"current": 2, "total": 5}}))
+    res_multi = api_football.get_league_fixtures_page(39, 2025, page=2)
+    assert res_multi["expected_pages"] == 5
     assert len(res_multi["fixtures"]) == 1
 
 

@@ -438,7 +438,7 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
     return []
 
 
-def _validate_historical_structural_coverage(fixtures, season, provider_metadata=None, league_id=None):
+def _validate_historical_structural_coverage(fixtures, season, provider_metadata=None, league_id=None, sport="football"):
     """
     Independently verify structural completeness of a historical fixture dataset.
 
@@ -465,6 +465,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     if provider_metadata is None or not isinstance(provider_metadata, dict):
         provider_metadata = {}
 
+    sport = provider_metadata.get("sport") or sport or "football"
     fixture_count = len(fixtures)
 
     if league_id is None and fixtures:
@@ -552,11 +553,11 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
         canonical_h = f.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
             raw_name=h_obj.get("name", "") or (str(h_obj.get("id")) if h_obj.get("id") is not None else ""),
-            provider=p_prov, provider_team_id=h_obj.get("id"), league_id=f_lid, sport="football", auto_register=False
+            provider=p_prov, provider_team_id=h_obj.get("id"), league_id=f_lid, sport=sport, auto_register=False
         )
         canonical_a = f.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
             raw_name=a_obj.get("name", "") or (str(a_obj.get("id")) if a_obj.get("id") is not None else ""),
-            provider=p_prov, provider_team_id=a_obj.get("id"), league_id=f_lid, sport="football", auto_register=False
+            provider=p_prov, provider_team_id=a_obj.get("id"), league_id=f_lid, sport=sport, auto_register=False
         )
 
         if not canonical_h or not canonical_a or canonical_h == canonical_a:
@@ -580,16 +581,12 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     canonical_expected_set = set()
     for tid in expected_team_ids:
-        if isinstance(tid, str) and tid.startswith("football_team_"):
+        if isinstance(tid, str) and (tid.startswith("football_team_") or tid.startswith("basketball_team_")):
             canonical_expected_set.add(tid)
         else:
             cid = team_identity.resolve_canonical_team_id(
-                raw_name=f"Team {tid}", provider="api_football", provider_team_id=tid, league_id=league_id, sport="football", auto_register=False
+                raw_name="", provider="api_football", provider_team_id=tid, league_id=league_id, sport="football", auto_register=False
             )
-            if not cid:
-                cid = team_identity.resolve_canonical_team_id(
-                    raw_name="", provider="api_football", provider_team_id=tid, league_id=league_id, sport="football", auto_register=False
-                )
             if cid:
                 canonical_expected_set.add(cid)
             else:
@@ -876,6 +873,24 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     distinct_fixture_count = len(distinct_pairings)
 
+    # Re-map expected_team_set using established DB mappings after fixture loop
+    if expected_team_ids:
+        canonical_expected_set = set()
+        for tid in expected_team_ids:
+            if isinstance(tid, str) and (tid.startswith("football_team_") or tid.startswith("basketball_team_")):
+                canonical_expected_set.add(tid)
+            else:
+                cid = team_identity.resolve_canonical_team_id(
+                    raw_name="", provider="api_football", provider_team_id=tid, league_id=league_id, sport="football", auto_register=False
+                )
+                if cid:
+                    canonical_expected_set.add(cid)
+                else:
+                    canonical_expected_set.add(str(tid))
+        if canonical_expected_set:
+            expected_team_set = canonical_expected_set
+            expected_team_count = len(expected_team_set)
+
     if not is_double_round_robin:
         # Non-double-round-robin (tournament, cup, international)
         # FIX 1 Requirement 6: Require credible provider-specific completeness evidence.
@@ -922,8 +937,9 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     missing_team_ids = expected_team_set - participating_teams
     unexpected_team_ids = participating_teams - expected_team_set
 
+    res = None
     if missing_team_ids or unexpected_team_ids or len(participating_teams) != expected_team_count:
-        return {
+        res = {
             "verified": False,
             "reason": "team_universe_mismatch",
             "fixture_count": valid_fixture_count,
@@ -936,9 +952,8 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
         }
-
-    if distinct_fixture_count != expected_fixture_count or valid_fixture_count != expected_fixture_count:
-        return {
+    elif distinct_fixture_count != expected_fixture_count or valid_fixture_count != expected_fixture_count:
+        res = {
             "verified": False,
             "reason": "fixture_count_mismatch",
             "fixture_count": valid_fixture_count,
@@ -951,41 +966,54 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
         }
+    else:
+        for t_id in expected_team_set:
+            counts = team_match_counts.get(t_id, {"home": 0, "away": 0, "total": 0})
+            if (
+                counts["home"] != expected_home_away_per_team
+                or counts["away"] != expected_home_away_per_team
+                or counts["total"] != expected_matches_per_team
+            ):
+                res = {
+                    "verified": False,
+                    "reason": "team_participation_imbalance",
+                    "fixture_count": valid_fixture_count,
+                    "distinct_fixture_count": distinct_fixture_count,
+                    "team_count": len(participating_teams),
+                    "expected_team_count": expected_team_count,
+                    "expected_team_ids": sorted(expected_team_set),
+                    "missing_team_ids": sorted(missing_team_ids),
+                    "unexpected_team_ids": sorted(unexpected_team_ids),
+                    "team_match_counts": team_match_counts,
+                    "expected_fixture_count": expected_fixture_count,
+                }
+                break
 
-    for t_id in expected_team_set:
-        counts = team_match_counts.get(t_id, {"home": 0, "away": 0, "total": 0})
-        if (
-            counts["home"] != expected_home_away_per_team
-            or counts["away"] != expected_home_away_per_team
-            or counts["total"] != expected_matches_per_team
-        ):
-            return {
-                "verified": False,
-                "reason": "team_participation_imbalance",
-                "fixture_count": valid_fixture_count,
-                "distinct_fixture_count": distinct_fixture_count,
-                "team_count": len(participating_teams),
-                "expected_team_count": expected_team_count,
-                "expected_team_ids": sorted(expected_team_set),
-                "missing_team_ids": sorted(missing_team_ids),
-                "unexpected_team_ids": sorted(unexpected_team_ids),
-                "team_match_counts": team_match_counts,
-                "expected_fixture_count": expected_fixture_count,
-            }
+    if res is None:
+        res = {
+            "verified": True,
+            "reason": None,
+            "fixture_count": valid_fixture_count,
+            "distinct_fixture_count": distinct_fixture_count,
+            "team_count": len(participating_teams),
+            "expected_team_count": expected_team_count,
+            "expected_team_ids": sorted(expected_team_set),
+            "missing_team_ids": sorted(missing_team_ids),
+            "unexpected_team_ids": sorted(unexpected_team_ids),
+            "team_match_counts": team_match_counts,
+            "expected_fixture_count": expected_fixture_count,
+        }
 
-    return {
-        "verified": True,
-        "reason": None,
-        "fixture_count": valid_fixture_count,
-        "distinct_fixture_count": distinct_fixture_count,
-        "team_count": len(participating_teams),
-        "expected_team_count": expected_team_count,
-        "expected_team_ids": sorted(expected_team_set),
-        "missing_team_ids": sorted(missing_team_ids),
-        "unexpected_team_ids": sorted(unexpected_team_ids),
-        "team_match_counts": team_match_counts,
-        "expected_fixture_count": expected_fixture_count,
-    }
+    if not res["verified"]:
+        logger.warning(
+            f"Structural coverage validation REJECTED for league {league_id} season {season}: "
+            f"reason={res['reason']}, fixture_count={res['fixture_count']}, "
+            f"distinct_fixture_count={res['distinct_fixture_count']}, "
+            f"team_count={res['team_count']}, expected_team_count={res['expected_team_count']}, "
+            f"missing_team_ids={res['missing_team_ids']}, unexpected_team_ids={res['unexpected_team_ids']}"
+        )
+
+    return res
 
 
 def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_only=True):
@@ -2712,10 +2740,14 @@ class DataResolver:
         if page == 1 and sd_ss_code:
             try:
                 sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
+                sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
                 if sd_status == "SOURCE_AVAILABLE" and sd_games:
                     sd_ss_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
-                    sd_ss_meta = sd_meta_res or {}
+                else:
+                    if "status" not in sd_ss_meta:
+                        sd_ss_meta["status"] = sd_status
             except Exception as sd_exc:
+                sd_ss_meta = {"status": "SOURCE_FAILED", "error": str(sd_exc)}
                 logger.warning(f"DataResolver tertiary Sofascore fallback failed for league {league_id}: {sd_exc}")
 
         if sd_ss_matches:

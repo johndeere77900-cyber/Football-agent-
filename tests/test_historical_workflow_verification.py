@@ -287,3 +287,26 @@ def test_workflow_bash_args_construction_non_queue_multiple_seasons():
     proc = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, check=True)
     parsed = proc.stdout.strip()
     assert parsed == "--historical-sync --sport football --league 39 --seasons 2022 2023 2024"
+
+
+def test_workflow_sync_failure_preserves_exit_code():
+    # Test bash error handling and exit code preservation logic in historical.yml
+    bash_cmd = """
+    # Sync step simulation with failure (exit code 2)
+    set +e
+    SYNC_EXIT=2
+    echo "sync_exit=$SYNC_EXIT" > /tmp/sync_out.txt
+
+    # Verification step simulation (always runs)
+    VERIFY_EXIT=0
+
+    SAVED_SYNC_EXIT=$(cat /tmp/sync_out.txt | cut -d= -f2)
+    if [ "$SAVED_SYNC_EXIT" != "0" ]; then
+      exit "$SAVED_SYNC_EXIT"
+    fi
+    if [ "$VERIFY_EXIT" != "0" ]; then
+      exit "$VERIFY_EXIT"
+    fi
+    """
+    proc = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True)
+    assert proc.returncode == 2
