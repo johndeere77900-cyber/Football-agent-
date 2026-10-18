@@ -25,7 +25,7 @@ def enriched_fixture(fixture_id):
 def test_enriched_fixture_ids_are_batched(monkeypatch):
     calls = []
 
-    def fake_get(endpoint, params):
+    def fake_get(endpoint, params, **kwargs):
         calls.append(
             (
                 endpoint,
@@ -68,7 +68,7 @@ def test_enriched_fixture_ids_are_batched(monkeypatch):
 def test_enriched_fixture_ids_are_deduplicated():
     calls = []
 
-    def fake_get(endpoint, params):
+    def fake_get(endpoint, params, **kwargs):
         calls.append(params)
 
         return {
@@ -114,7 +114,7 @@ def test_empty_fixture_ids_make_no_api_call(monkeypatch):
 def test_invalid_fixture_ids_are_ignored(monkeypatch):
     calls = []
 
-    def fake_get(endpoint, params):
+    def fake_get(endpoint, params, **kwargs):
         calls.append(params)
 
         return {

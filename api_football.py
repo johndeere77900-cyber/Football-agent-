@@ -220,11 +220,18 @@ def _check_and_consume_quota(endpoint, max_budget=None, request_type="historical
     global_limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
     historical_limit = min(50, int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50)))
 
-    if request_type == "live" and max_budget is None:
+    if request_type == "live":
         limit = global_limit
+        if max_budget is not None:
+            try:
+                budget_val = int(max_budget)
+                if budget_val > 0:
+                    limit = min(limit, budget_val)
+            except (TypeError, ValueError):
+                pass
     else:
-        # Historical context or explicit caller budget
-        limit = historical_limit
+        # Historical context
+        limit = min(global_limit, historical_limit)
         if max_budget is not None:
             try:
                 budget_val = int(max_budget)
@@ -390,7 +397,7 @@ def _get(endpoint, params, max_budget=None, request_type="historical"):
 # ============================================================================
 
 
-def get_fixtures_by_date(date_str, league_id=None, max_budget=None, request_type="historical"):
+def get_fixtures_by_date(date_str, league_id=None, max_budget=None, request_type="live"):
     """
     Return fixtures for a calendar date.
 
@@ -798,7 +805,7 @@ def raw_debug_call(endpoint, params):
     backoff = RETRY_BACKOFF_SECONDS
 
     for attempt in range(1, MAX_RETRIES + 1):
-        _check_and_consume_quota(endpoint)
+        _check_and_consume_quota(endpoint, request_type="live")
 
         try:
             response = requests.get(
