@@ -213,10 +213,8 @@ def sync_historical_fixtures(
     total_empty_pages_count = dataset_info.get("empty_pages_count", 0) if not refresh else 0
     all_rejection_reasons = {}
 
-    # Preflight coverage check via DataResolver
+    # DataResolver instance initialized without preflight network calls
     resolver = DataResolver()
-    cov_status, cov_reason = resolver.check_competition_coverage(league_id, season, max_budget=historical_budget)
-    primary_available = (cov_status != "season_not_available")
 
     current_page = start_p
     while True:
@@ -467,6 +465,8 @@ def sync_historical_fixtures(
     else:
         manifest_source = page_source_val
 
+    exp_team_ids_to_save = db_coverage.get("expected_team_ids") if isinstance(db_coverage, dict) else None
+
     if is_fully_complete:
         storage.mark_historical_dataset_complete(
             league_id,
@@ -480,6 +480,7 @@ def sync_historical_fixtures(
             enrichment_status=enrichment_status,
             rejected_count=rejected_count,
             empty_pages_count=total_empty_pages_count,
+            expected_team_ids=exp_team_ids_to_save,
         )
         final_status = "COMPLETE"
     else:
@@ -504,6 +505,7 @@ def sync_historical_fixtures(
             rejected_count=rejected_count,
             empty_pages_count=total_empty_pages_count,
             error_reason=last_error_reason,
+            expected_team_ids=exp_team_ids_to_save,
         )
         final_status = "INCOMPLETE"
 
