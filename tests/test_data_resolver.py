@@ -335,7 +335,7 @@ def test_premier_league_2023_24_structural_coverage_passes(tmp_path, monkeypatch
                 c_home = team_identity.resolve_canonical_team_id(pl_teams[i]["name"], "api_football", pl_teams[i]["id"], league_id=39)
                 c_away = team_identity.resolve_canonical_team_id(pl_teams[j]["name"], "api_football", pl_teams[j]["id"], league_id=39)
                 fixtures.append({
-                    "fixture": {"id": fid},
+                    "fixture": {"id": fid, "date": f"2023-09-{(i%28)+1:02d}T15:00:00Z", "status": {"short": "FT"}},
                     "league": {"id": 39, "season": 2023},
                     "teams": {"home": pl_teams[i], "away": pl_teams[j]},
                     "canonical_home_id": c_home,
@@ -388,7 +388,7 @@ def test_premier_league_2023_24_mismatched_teams_fails(tmp_path, monkeypatch):
             if i != j:
                 fid += 1
                 fixtures.append({
-                    "fixture": {"id": fid},
+                    "fixture": {"id": fid, "date": f"2023-09-{(i%28)+1:02d}T15:00:00Z", "status": {"short": "FT"}},
                     "league": {"id": 39, "season": 2023},
                     "teams": {"home": teams[i], "away": teams[j]},
                     "goals": {"home": 1, "away": 0},

@@ -27,8 +27,10 @@ def _parse_historical_daily_budget(env_var_name, default=50, max_cap=50):
         return 0
     if val_str.lower() in ("true", "none", "null"):
         return default
+    if "." in val_str:
+        return default
     try:
-        val = int(float(val_str))
+        val = int(val_str)
         if val < 0:
             return 0
         return min(max_cap, val)

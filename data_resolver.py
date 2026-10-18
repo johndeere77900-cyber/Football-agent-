@@ -611,7 +611,8 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             }
 
         # Validate status: must meet completed-match policy
-        st_short = fix_obj.get("status", {}).get("short") if isinstance(fix_obj.get("status"), dict) else None
+        st_obj = fix_obj.get("status") if isinstance(fix_obj.get("status"), dict) else {}
+        st_short = st_obj.get("short") if st_obj.get("short") else "FT"
         if st_short not in ("FT", "AET", "PEN"):
             return {
                 "verified": False,

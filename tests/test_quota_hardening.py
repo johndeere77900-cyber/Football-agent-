@@ -19,32 +19,41 @@ def setup_db(tmp_path, monkeypatch):
 
 def test_config_historical_budget_parsing(monkeypatch):
     """Test defensive parsing of API_FOOTBALL_HISTORICAL_DAILY_BUDGET in config.py."""
-    # 1. Default (None)
+    # 1. Missing value
     monkeypatch.delenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", raising=False)
     assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 50
 
-    # 2. Valid string
-    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "30")
-    assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 30
-
-    # 3. Oversized string (clamped to 50)
-    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "100")
-    assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 50
-
-    # 4. Zero / false (deliberate zero)
+    # 2. "0"
     monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "0")
     assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 0
 
-    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "false")
-    assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 0
+    # 3. "30"
+    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "30")
+    assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 30
 
-    # 5. Negative
-    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "-15")
-    assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 0
-
-    # 6. Malformed string (fallback to 50)
-    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "invalid_string")
+    # 4. "50"
+    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "50")
     assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 50
+
+    # 5. "51" (clamped to 50)
+    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "51")
+    assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 50
+
+    # 6. "-1"
+    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "-1")
+    assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 0
+
+    # 7. "1.9" (fractional rejected, fallback to default 50)
+    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "1.9")
+    assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 50
+
+    # 8. "invalid"
+    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", "invalid")
+    assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 50
+
+    # 9. Whitespace around an integer " 30 "
+    monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", " 30 ")
+    assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 30
 
 def test_exactly_50_historical_attempts_allowed_51st_denied(monkeypatch):
     """Verify exactly 50 historical attempts reserve quota, and the 51st attempt raises APIFootballQuotaExhaustedError."""

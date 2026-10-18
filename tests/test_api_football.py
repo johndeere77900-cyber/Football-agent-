@@ -220,15 +220,15 @@ def test_historical_budget_limit_clamping(tmp_path, monkeypatch):
 
     reserved_limits = []
 
-    def fake_reserve(provider, date1, date2, endpoint, limit):
+    def fake_reserve(provider, date1, date2, endpoint, limit, request_type=None, global_limit=None, *args, **kwargs):
         reserved_limits.append(limit)
         return True
 
     monkeypatch.setattr(api_football.storage, "reserve_api_request", fake_reserve)
 
-    # When max_budget is provided as 0 or negative or >50, it clamps to min(100, 50, budget) -> <= 50
+    # When max_budget is 0 (deliberate zero remaining budget), limit is 0
     api_football._check_and_consume_quota("fixtures", max_budget=0)
-    assert reserved_limits[-1] == 50
+    assert reserved_limits[-1] == 0
 
     api_football._check_and_consume_quota("fixtures", max_budget=-10)
     assert reserved_limits[-1] == 50
