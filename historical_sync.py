@@ -213,7 +213,7 @@ def sync_historical_fixtures(
 
     # Preflight coverage check via DataResolver
     resolver = DataResolver()
-    cov_status, cov_reason = resolver.check_competition_coverage(league_id, season)
+    cov_status, cov_reason = resolver.check_competition_coverage(league_id, season, max_budget=historical_budget)
     primary_available = (cov_status != "season_not_available")
 
     current_page = start_p

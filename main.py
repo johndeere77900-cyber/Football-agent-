@@ -202,7 +202,7 @@ def _valid_goal(value):
 _coverage_preflight_cache = {}
 
 
-def check_competition_coverage(league_id, season):
+def check_competition_coverage(league_id, season, max_budget=None):
     """
     Preflight check for provider coverage for a league + season.
     Cached per (league_id, season).
@@ -218,7 +218,7 @@ def check_competition_coverage(league_id, season):
 
     try:
         resolver = DataResolver()
-        seasons = resolver.get_league_coverage(league_id)
+        seasons = resolver.get_league_coverage(league_id, max_budget=max_budget)
     except Exception as exc:
         res = ("UNKNOWN", f"Provider coverage call failed: {exc}")
         _coverage_preflight_cache[cache_key] = res

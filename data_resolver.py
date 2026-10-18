@@ -2348,13 +2348,14 @@ class DataResolver:
         # Tier 1: API-Football for missing history
         if len(records) < last and team_id and not self.force_fallback:
             try:
+                historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
                 try:
-                    af_matches = api_football.get_recent_form(team_id, last=last * 2, league_id=league_id, season=season)
+                    af_matches = api_football.get_recent_form(team_id, last=last * 2, league_id=league_id, season=season, max_budget=historical_budget)
                 except TypeError:
                     try:
-                        af_matches = api_football.get_recent_form(team_id, last=last * 2, league_id=league_id)
+                        af_matches = api_football.get_recent_form(team_id, last=last * 2, league_id=league_id, max_budget=historical_budget)
                     except TypeError:
-                        af_matches = api_football.get_recent_form(team_id, last=last * 2)
+                        af_matches = api_football.get_recent_form(team_id, last=last * 2, max_budget=historical_budget)
 
                 if af_matches:
                     normalized = [_normalize_api_football_fixture(m) for m in af_matches if isinstance(m, dict)]
@@ -2829,10 +2830,10 @@ class DataResolver:
             "primary_quota_exhausted": primary_quota_exhausted,
         }
 
-    def check_competition_coverage(self, league_id, season):
+    def check_competition_coverage(self, league_id, season, max_budget=None):
         """DataResolver owner for checking provider coverage for league + season."""
         import main as main_mod
-        return main_mod.check_competition_coverage(league_id, season)
+        return main_mod.check_competition_coverage(league_id, season, max_budget=max_budget)
 
     def search_leagues(self, name, max_budget=None):
         """DataResolver owner for searching leagues by name."""
