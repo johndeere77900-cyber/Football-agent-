@@ -130,3 +130,16 @@ def test_quota_db_error_fails_closed(monkeypatch):
     with patch("storage.reserve_api_request", side_effect=RuntimeError("Database transaction lock failure")):
         with pytest.raises(APIFootballQuotaExhaustedError):
             api_football._check_and_consume_quota("fixtures", request_type="historical")
+
+def test_unsupported_request_type_rejected_before_reservation_or_network(monkeypatch):
+    """Unsupported or missing request_type must raise ValueError and produce zero reservations and zero network calls."""
+    monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test_key")
+    initial_count = storage.get_api_request_count("api_football", "2026-10-18")
+
+    with patch("requests.get", side_effect=RuntimeError("Network call requested!")):
+        for invalid_type in (None, "", "invalid_type", "historical_v2", 123):
+            with pytest.raises(ValueError):
+                api_football._get("fixtures", {"id": 100}, request_type=invalid_type)
+
+    final_count = storage.get_api_request_count("api_football", "2026-10-18")
+    assert final_count == initial_count

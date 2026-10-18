@@ -610,9 +610,39 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
                 "expected_fixture_count": expected_fixture_count,
             }
 
-        # Validate status: must meet completed-match policy
-        st_obj = fix_obj.get("status") if isinstance(fix_obj.get("status"), dict) else {}
-        st_short = st_obj.get("short") if st_obj.get("short") else "FT"
+        # Validate status: must be an explicitly present, valid completed-match status ("FT", "AET", or "PEN")
+        if not isinstance(fix_obj.get("status"), dict):
+            return {
+                "verified": False,
+                "reason": "missing_or_invalid_status_object",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+
+        st_short = fix_obj["status"].get("short")
+        if not isinstance(st_short, str) or not st_short.strip():
+            return {
+                "verified": False,
+                "reason": "missing_or_empty_status_short",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
+
+        st_short = st_short.strip().upper()
         if st_short not in ("FT", "AET", "PEN"):
             return {
                 "verified": False,

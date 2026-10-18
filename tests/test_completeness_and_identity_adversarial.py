@@ -253,3 +253,42 @@ def test_uncompleted_match_status_rejected():
     )
     assert res["verified"] is False
     assert res["reason"] in ("uncompleted_fixture_status", "completed_fixture_missing_goals")
+
+def test_missing_or_malformed_status_object_rejected():
+    """Missing or empty status short must fail closed with explicit reason."""
+    meta = {"expected_team_ids": ["football_team_39_team_1", "football_team_39_team_2"]}
+    fixture_missing_status = {
+        "fixture": {"id": 1, "date": "2024-09-01T15:00:00Z"},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 1, "name": "Team 1"}, "away": {"id": 2, "name": "Team 2"}},
+        "goals": {"home": 1, "away": 0},
+        "canonical_home_id": "football_team_39_team_1",
+        "canonical_away_id": "football_team_39_team_2",
+    }
+    res_missing = _validate_historical_structural_coverage([fixture_missing_status], season=2024, league_id=39, provider_metadata=meta)
+    assert res_missing["verified"] is False
+    assert res_missing["reason"] == "missing_or_invalid_status_object"
+
+    fixture_empty_short = {
+        "fixture": {"id": 1, "date": "2024-09-01T15:00:00Z", "status": {"short": ""}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 1, "name": "Team 1"}, "away": {"id": 2, "name": "Team 2"}},
+        "goals": {"home": 1, "away": 0},
+        "canonical_home_id": "football_team_39_team_1",
+        "canonical_away_id": "football_team_39_team_2",
+    }
+    res_empty = _validate_historical_structural_coverage([fixture_empty_short], season=2024, league_id=39, provider_metadata=meta)
+    assert res_empty["verified"] is False
+    assert res_empty["reason"] == "missing_or_empty_status_short"
+
+    fixture_null_short = {
+        "fixture": {"id": 1, "date": "2024-09-01T15:00:00Z", "status": {"short": None}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 1, "name": "Team 1"}, "away": {"id": 2, "name": "Team 2"}},
+        "goals": {"home": 1, "away": 0},
+        "canonical_home_id": "football_team_39_team_1",
+        "canonical_away_id": "football_team_39_team_2",
+    }
+    res_null = _validate_historical_structural_coverage([fixture_null_short], season=2024, league_id=39, provider_metadata=meta)
+    assert res_null["verified"] is False
+    assert res_null["reason"] == "missing_or_empty_status_short"

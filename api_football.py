@@ -217,11 +217,16 @@ def _check_and_consume_quota(endpoint, max_budget=None, request_type="historical
     Fails closed: if quota storage cannot be queried or updated, raises
     APIFootballQuotaExhaustedError to prevent unauthorized/untracked external API requests.
     """
+    if not request_type or not isinstance(request_type, str):
+        raise ValueError(f"Invalid or missing request_type: {request_type!r}. Must be 'historical' or 'live'.")
+
+    req_type = request_type.strip().lower()
+    if req_type not in ("historical", "live"):
+        raise ValueError(f"Unsupported request_type: {request_type!r}. Must be 'historical' or 'live'.")
+
     global_limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
     hist_cfg = getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50)
     historical_limit = min(50, hist_cfg if isinstance(hist_cfg, int) and hist_cfg >= 0 else 50)
-
-    req_type = str(request_type or "historical").lower()
 
     if req_type == "live":
         limit = global_limit
