@@ -196,7 +196,7 @@ def test_get_league_standings_passes_max_budget(
 
     budget_checks = []
 
-    def mock_check_quota(endpoint, max_budget=None):
+    def mock_check_quota(endpoint, max_budget=None, **kwargs):
         budget_checks.append((endpoint, max_budget))
 
     monkeypatch.setattr(api_football, "_check_and_consume_quota", mock_check_quota)
@@ -239,8 +239,12 @@ def test_historical_budget_limit_clamping(tmp_path, monkeypatch):
     api_football._check_and_consume_quota("fixtures", max_budget=20)
     assert reserved_limits[-1] == 20
 
-    # When max_budget is None, it uses live global limit (100)
+    # When request_type is historical (default) and max_budget is None, it clamps to historical_limit (50)
     api_football._check_and_consume_quota("fixtures", max_budget=None)
+    assert reserved_limits[-1] == 50
+
+    # When request_type is live and max_budget is None, it uses live global limit (100)
+    api_football._check_and_consume_quota("fixtures", max_budget=None, request_type="live")
     assert reserved_limits[-1] == 100
 
 

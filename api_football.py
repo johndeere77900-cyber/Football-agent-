@@ -210,7 +210,7 @@ def _cache_set(cache_key, endpoint, params, data):
 # ============================================================================
 
 
-def _check_and_consume_quota(endpoint, max_budget=None):
+def _check_and_consume_quota(endpoint, max_budget=None, request_type="historical"):
     """
     Atomically verify and reserve daily credit quota.
 
@@ -218,18 +218,20 @@ def _check_and_consume_quota(endpoint, max_budget=None):
     APIFootballQuotaExhaustedError to prevent unauthorized/untracked external API requests.
     """
     global_limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
-    historical_limit = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
+    historical_limit = min(50, int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50)))
 
-    limit = global_limit
-    if max_budget is not None:
-        try:
-            budget_val = int(max_budget)
-            if budget_val <= 0:
-                budget_val = historical_limit
-        except (TypeError, ValueError):
-            budget_val = historical_limit
-
-        limit = min(global_limit, historical_limit, budget_val)
+    if request_type == "live" and max_budget is None:
+        limit = global_limit
+    else:
+        # Historical context or explicit caller budget
+        limit = historical_limit
+        if max_budget is not None:
+            try:
+                budget_val = int(max_budget)
+                if budget_val > 0:
+                    limit = min(limit, budget_val)
+            except (TypeError, ValueError):
+                pass
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -251,7 +253,7 @@ def _check_and_consume_quota(endpoint, max_budget=None):
 # ============================================================================
 
 
-def _get(endpoint, params, max_budget=None):
+def _get(endpoint, params, max_budget=None, request_type="historical"):
     """
     Perform a GET request with persistent cache-first behavior and hard quota enforcement.
     """
@@ -271,7 +273,7 @@ def _get(endpoint, params, max_budget=None):
 
     for attempt in range(1, MAX_RETRIES + 1):
         # Quota check before every actual network attempt
-        _check_and_consume_quota(endpoint, max_budget=max_budget)
+        _check_and_consume_quota(endpoint, max_budget=max_budget, request_type=request_type)
 
         try:
             response = requests.get(
@@ -388,7 +390,7 @@ def _get(endpoint, params, max_budget=None):
 # ============================================================================
 
 
-def get_fixtures_by_date(date_str, league_id=None, max_budget=None):
+def get_fixtures_by_date(date_str, league_id=None, max_budget=None, request_type="historical"):
     """
     Return fixtures for a calendar date.
 
@@ -429,7 +431,7 @@ def get_fixtures_by_date(date_str, league_id=None, max_budget=None):
         return _filter_league(response)
 
     # Fetch full date from API (no league param) to cover all leagues in 1 call
-    data = _get("fixtures", {"date": date_str}, max_budget=max_budget)
+    data = _get("fixtures", {"date": date_str}, max_budget=max_budget, request_type=request_type)
     response = data.get("response", [])
     if not isinstance(response, list):
         return []
@@ -439,14 +441,14 @@ def get_fixtures_by_date(date_str, league_id=None, max_budget=None):
 
 def get_live_fixtures():
     """Return currently live football fixtures."""
-    data = _get("fixtures", {"live": "all"})
+    data = _get("fixtures", {"live": "all"}, request_type="live")
     response = data.get("response", [])
     if not isinstance(response, list):
         return []
     return response
 
 
-def get_team_statistics(team_id, league_id, season, max_budget=None):
+def get_team_statistics(team_id, league_id, season, max_budget=None, request_type="historical"):
     team_id = _validate_positive_int_like(team_id, "team_id")
     league_id = _validate_positive_int_like(league_id, "league_id")
     season = _validate_positive_int_like(season, "season")
@@ -457,14 +459,14 @@ def get_team_statistics(team_id, league_id, season, max_budget=None):
         "season": season,
     }
 
-    data = _get("teams/statistics", params, max_budget=max_budget)
+    data = _get("teams/statistics", params, max_budget=max_budget, request_type=request_type)
     response = data.get("response", {})
     if not isinstance(response, dict):
         return {}
     return response
 
 
-def get_head_to_head(team_a_id, team_b_id, last=10, max_budget=None):
+def get_head_to_head(team_a_id, team_b_id, last=10, max_budget=None, request_type="historical"):
     team_a_id = _validate_positive_int_like(team_a_id, "team_a_id")
     team_b_id = _validate_positive_int_like(team_b_id, "team_b_id")
 
@@ -476,14 +478,14 @@ def get_head_to_head(team_a_id, team_b_id, last=10, max_budget=None):
         "last": last,
     }
 
-    data = _get("fixtures/headtohead", params, max_budget=max_budget)
+    data = _get("fixtures/headtohead", params, max_budget=max_budget, request_type=request_type)
     response = data.get("response", [])
     if not isinstance(response, list):
         return []
     return response
 
 
-def get_recent_form(team_id, last=8, league_id=None, season=None, max_budget=None):
+def get_recent_form(team_id, last=8, league_id=None, season=None, max_budget=None, request_type="historical"):
     team_id = _validate_positive_int_like(team_id, "team_id")
 
     if isinstance(last, bool) or not isinstance(last, int) or last <= 0:
@@ -499,7 +501,7 @@ def get_recent_form(team_id, last=8, league_id=None, season=None, max_budget=Non
     if season is not None:
         params["season"] = _validate_positive_int_like(season, "season")
 
-    data = _get("fixtures", params, max_budget=max_budget)
+    data = _get("fixtures", params, max_budget=max_budget, request_type=request_type)
     response = data.get("response", [])
     if not isinstance(response, list):
         return []
@@ -515,7 +517,7 @@ def get_fixture_result(fixture_id):
     """Retrieve result for a single fixture using result TTL cache."""
     fixture_id = _validate_positive_int_like(fixture_id, "fixture_id")
 
-    data = _get("fixtures", {"id": fixture_id})
+    data = _get("fixtures", {"id": fixture_id}, request_type="live")
     response = data.get("response", [])
 
     if isinstance(response, list) and response and isinstance(response[0], dict):
@@ -524,7 +526,7 @@ def get_fixture_result(fixture_id):
     return None
 
 
-def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
+def get_league_fixtures_page(league_id, season, page=1, max_budget=None, request_type="historical"):
     """
     Retrieve one single page of fixtures for a league season according to API-Football contract.
 
@@ -543,7 +545,6 @@ def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
     if isinstance(page, bool) or not isinstance(page, int) or page < 1:
         raise ValueError("page must be a positive integer.")
 
-    kwargs = {"max_budget": max_budget} if max_budget is not None else {}
     params = {
         "league": league_id,
         "season": season,
@@ -552,7 +553,8 @@ def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
     page_data = _get(
         "fixtures",
         params,
-        **kwargs,
+        max_budget=max_budget,
+        request_type=request_type,
     )
 
     if not isinstance(page_data, dict):
@@ -606,7 +608,7 @@ def get_league_fixtures_page(league_id, season, page=1, max_budget=None):
     }
 
 
-def get_league_fixtures_with_metadata(league_id, season, start_page=1, max_budget=None):
+def get_league_fixtures_with_metadata(league_id, season, start_page=1, max_budget=None, request_type="historical"):
     """
     Retrieve fixtures for a league season starting from start_page with explicit completion metadata.
     """
@@ -615,7 +617,7 @@ def get_league_fixtures_with_metadata(league_id, season, start_page=1, max_budge
     if start_page < 1:
         start_page = 1
 
-    kwargs = {"max_budget": max_budget} if max_budget is not None else {}
+    kwargs = {"max_budget": max_budget, "request_type": request_type}
     page_1 = get_league_fixtures_page(league_id, season, page=start_page, **kwargs)
     total = page_1["expected_pages"]
 
@@ -657,15 +659,15 @@ def get_league_fixtures_with_metadata(league_id, season, start_page=1, max_budge
     }
 
 
-def get_league_fixtures(league_id, season, max_budget=None):
+def get_league_fixtures(league_id, season, max_budget=None, request_type="historical"):
     """
     Retrieve all fixtures for a league season with pagination support (compatibility wrapper).
     """
-    res = get_league_fixtures_with_metadata(league_id, season, max_budget=max_budget)
+    res = get_league_fixtures_with_metadata(league_id, season, max_budget=max_budget, request_type=request_type)
     return res.get("fixtures", [])
 
 
-def get_enriched_fixtures(fixture_ids, batch_size=FIXTURE_BATCH_SIZE, max_budget=None):
+def get_enriched_fixtures(fixture_ids, batch_size=FIXTURE_BATCH_SIZE, max_budget=None, request_type="historical"):
     """Retrieve enriched fixture records in batches."""
     if not isinstance(fixture_ids, (list, tuple, set)):
         raise ValueError("fixture_ids must be a list, tuple, or set.")
@@ -688,13 +690,12 @@ def get_enriched_fixtures(fixture_ids, batch_size=FIXTURE_BATCH_SIZE, max_budget
     if not clean_ids:
         return {}
 
-    kwargs = {"max_budget": max_budget} if max_budget is not None else {}
     enriched = {}
     for start in range(0, len(clean_ids), batch_size):
         batch = clean_ids[start : start + batch_size]
         ids = "-".join(str(value) for value in batch)
 
-        data = _get("fixtures", {"ids": ids}, **kwargs)
+        data = _get("fixtures", {"ids": ids}, max_budget=max_budget, request_type=request_type)
         response = data.get("response", [])
 
         if not isinstance(response, list):
@@ -721,12 +722,12 @@ def get_enriched_fixtures(fixture_ids, batch_size=FIXTURE_BATCH_SIZE, max_budget
 # ============================================================================
 
 
-def get_league_standings(league_id, season, max_budget=None):
+def get_league_standings(league_id, season, max_budget=None, request_type="historical"):
     """Return flattened league standings."""
     league_id = _validate_positive_int_like(league_id, "league_id")
     season = _validate_positive_int_like(season, "season")
 
-    data = _get("standings", {"league": league_id, "season": season}, max_budget=max_budget)
+    data = _get("standings", {"league": league_id, "season": season}, max_budget=max_budget, request_type=request_type)
     response = data.get("response", [])
 
     if not isinstance(response, list) or not response:
@@ -751,9 +752,9 @@ def get_league_standings(league_id, season, max_budget=None):
     return flattened
 
 
-def search_leagues(name, max_budget=None):
+def search_leagues(name, max_budget=None, request_type="historical"):
     name = _validate_nonempty_text(name, "name")
-    data = _get("leagues", {"search": name}, max_budget=max_budget)
+    data = _get("leagues", {"search": name}, max_budget=max_budget, request_type=request_type)
     response = data.get("response", [])
 
     if not isinstance(response, list):
@@ -762,9 +763,9 @@ def search_leagues(name, max_budget=None):
     return response
 
 
-def get_league_coverage(league_id, max_budget=None):
+def get_league_coverage(league_id, max_budget=None, request_type="historical"):
     league_id = _validate_positive_int_like(league_id, "league_id")
-    data = _get("leagues", {"id": league_id}, max_budget=max_budget)
+    data = _get("leagues", {"id": league_id}, max_budget=max_budget, request_type=request_type)
     response = data.get("response", [])
 
     if not isinstance(response, list) or not response:

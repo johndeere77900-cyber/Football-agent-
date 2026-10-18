@@ -61,7 +61,7 @@ def _is_historical_provider_complete(
     if prov not in supported_providers:
         return False
 
-    if quota_budget_stopped:
+    if quota_budget_stopped and prov in {"api_football", "football_data_org"}:
         return False
 
     prov_meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else {}
@@ -191,9 +191,11 @@ def sync_historical_fixtures(
     p_comp_stored = dataset_info.get("pages_completed", 0) if not refresh else 0
     init_stored_count = storage.get_historical_fixture_count(league_id, season)
     auth_teams = data_resolver._get_authoritative_historical_team_ids(league_id, season)
-    expected_count = len(auth_teams) * (len(auth_teams) - 1) if auth_teams else 380
+    expected_count = len(auth_teams) * (len(auth_teams) - 1) if auth_teams else None
     if not refresh and p_comp_stored > 0 and exp_p_stored > 1 and not dataset_info.get("acquisition_complete"):
-        if init_stored_count >= expected_count:
+        if expected_count is not None and init_stored_count >= expected_count:
+            start_p = 1
+        elif expected_count is None:
             start_p = 1
         else:
             start_p = p_comp_stored + 1

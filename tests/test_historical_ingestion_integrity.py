@@ -294,7 +294,8 @@ def test_req19_quota_tests_pass(temp_db, monkeypatch):
     monkeypatch.setattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 1)
     storage.record_api_request("api_football", "test_endpoint")
 
-    with patch("api_football.get_league_fixtures_with_metadata") as mock_get:
+    with patch("api_football.get_league_fixtures_with_metadata") as mock_get, \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         mock_get.assert_not_called()
 

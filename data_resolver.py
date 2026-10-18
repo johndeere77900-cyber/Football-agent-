@@ -2466,7 +2466,6 @@ class DataResolver:
                             "primary_quota_exhausted": False,
                         }
 
-        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget, allow_network=True)
         combined_fixtures = []
 
         # 2. Primary Route: Direct CSV -> SoccerData MatchHistory -> SoccerData Sofascore
@@ -2477,7 +2476,7 @@ class DataResolver:
         sd_ss_meta = {}
 
         if page == 1:
-            # 2a. Direct CSV
+            # 2a. Direct CSV - Attempt direct downloadable CSV BEFORE network-dependent team-universe discovery
             try:
                 csv_fixtures = _fetch_direct_csv_league_fixtures(league_id, season)
             except Exception as csv_exc:
@@ -2492,12 +2491,17 @@ class DataResolver:
 
             combined_fixtures = list(csv_fixtures)
 
+            # Validate direct CSV structural coverage using no-network team universe first
+            expected_team_ids_local = _get_authoritative_historical_team_ids(
+                league_id, season, max_budget=max_budget, allow_network=False
+            )
             csv_coverage = _validate_historical_structural_coverage(
                 combined_fixtures,
                 season=season,
                 provider_metadata={
                     "competition_format": competition_format,
-                    "expected_team_ids": expected_team_ids,
+                    "expected_team_ids": expected_team_ids_local,
+                    "allow_network": False,
                 },
                 league_id=league_id,
             )
@@ -2510,7 +2514,7 @@ class DataResolver:
                     "source": "football_data_csv",
                     "provider_metadata": {
                         "competition_format": competition_format,
-                        "expected_team_ids": expected_team_ids,
+                        "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
                         "structural_coverage": csv_coverage,
@@ -2520,6 +2524,10 @@ class DataResolver:
                     "primary_quota_exhausted": False,
                 }
 
+        # Resolve expected team universe if primary direct CSV alone was insufficient
+        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget, allow_network=True)
+
+        if page == 1:
             # 2b. SoccerData MatchHistory
             sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
             if sd_mh_code:

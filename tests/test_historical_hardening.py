@@ -83,7 +83,7 @@ def test_quota_ceiling_stops_paginated_fetch_at_budget(temp_db, monkeypatch):
 
     current_page_call = 0
 
-    def fake_get(endpoint, params, max_budget=None):
+    def fake_get(endpoint, params, max_budget=None, **kwargs):
         nonlocal current_page_call
         current_page_call += 1
         if current_page_call > 3:
