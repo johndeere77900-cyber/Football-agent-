@@ -47,7 +47,7 @@ def test_api_football_quota_read_failure_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ENVIRONMENT", "development")
     storage.init_db()
 
-    def bad_reserve(provider, date_pattern, request_date, endpoint, limit):
+    def bad_reserve(provider, date_pattern, request_date, endpoint, limit, request_type=None, global_limit=None, *args, **kwargs):
         raise RuntimeError("Database connection down during quota reservation")
 
     monkeypatch.setattr(storage, "reserve_api_request", bad_reserve)
@@ -71,7 +71,7 @@ def test_odds_api_quota_read_failure_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ENVIRONMENT", "development")
     storage.init_db()
 
-    def bad_reserve(provider, date_pattern, request_date, endpoint, limit):
+    def bad_reserve(provider, date_pattern, request_date, endpoint, limit, request_type=None, global_limit=None, *args, **kwargs):
         raise RuntimeError("Database connection down during odds quota reservation")
 
     monkeypatch.setattr(storage, "reserve_api_request", bad_reserve)
@@ -658,7 +658,7 @@ def test_postgres_advisory_lock_concurrency_in_reserve_api_request(tmp_path, mon
 
     monkeypatch.setattr(storage, "_connect", lambda: (DummyConn(), "postgres"))
 
-    reserved = storage.reserve_api_request("api_football", "2026-09-30", "2026-09-30", "fixtures", 100)
+    reserved = storage.reserve_api_request("api_football", "2026-09-30", "2026-09-30", "fixtures", 100, request_type="historical")
     assert reserved is True
 
     # Confirm pg_advisory_xact_lock was executed with provider:date_pattern

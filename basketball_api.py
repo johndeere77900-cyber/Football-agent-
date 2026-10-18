@@ -346,7 +346,7 @@ def _check_and_consume_quota(endpoint, max_budget=None):
     today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
     try:
-        reserved = storage.reserve_api_request("api_basketball", today_str, today_str, endpoint, limit)
+        reserved = storage.reserve_api_request("api_basketball", today_str, today_str, endpoint, limit, request_type="historical")
     except Exception as exc:
         raise APIBasketballQuotaExhaustedError(
             f"Basketball quota storage error; failing closed: {exc}"

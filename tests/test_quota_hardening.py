@@ -143,3 +143,103 @@ def test_unsupported_request_type_rejected_before_reservation_or_network(monkeyp
 
     final_count = storage.get_api_request_count("api_football", "2026-10-18")
     assert final_count == initial_count
+
+
+def test_storage_reserve_api_request_direct_boundary_validation():
+    """Test storage.reserve_api_request boundary validation directly."""
+    for invalid in (None, "", "   ", "invalid", "historical_v2", 100):
+        with pytest.raises(ValueError):
+            storage.reserve_api_request("api_football", "2026-10-18", "2026-10-18", "fixtures", 50, request_type=invalid)
+
+    for bad_limit in (-1, -100, "50", 1.5, True):
+        with pytest.raises(ValueError):
+            storage.reserve_api_request("api_football", "2026-10-18", "2026-10-18", "fixtures", bad_limit, request_type="historical")
+
+
+def test_concurrent_sqlite_historical_reservations_capped_at_50(tmp_path, monkeypatch):
+    """Adversarial concurrency test: 70 simultaneous threads competing for 50 historical reservations on SQLite."""
+    import concurrent.futures
+
+    db_path = str(tmp_path / "concurrent_hist.db")
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
+    storage.init_db()
+
+    results = []
+
+    def attempt_reservation(thread_id):
+        try:
+            return storage.reserve_api_request(
+                provider="api_football",
+                date_pattern="2026-10-18",
+                request_date="2026-10-18",
+                endpoint="fixtures",
+                limit=50,
+                request_type="historical",
+                global_limit=100,
+            )
+        except Exception as exc:
+            return exc
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        futures = [executor.submit(attempt_reservation, i) for i in range(70)]
+        for f in concurrent.futures.as_completed(futures):
+            results.append(f.result())
+
+    successes = [r for r in results if r is True]
+    failures = [r for r in results if r is False]
+    exceptions = [r for r in results if isinstance(r, Exception)]
+
+    assert len(exceptions) == 0, f"Encountered unexpected exceptions: {exceptions}"
+    assert len(successes) == 50, f"Expected exactly 50 historical reservations to succeed, got {len(successes)}"
+    assert len(failures) == 20, f"Expected 20 reservations to be denied, got {len(failures)}"
+
+    final_count = storage.get_api_request_count("api_football", "2026-10-18")
+    assert final_count == 50
+
+
+def test_concurrent_sqlite_mixed_live_and_historical_reservations_capped_at_100(tmp_path, monkeypatch):
+    """Adversarial concurrency test: simultaneous mixed live (70) and historical (70) threads competing against caps."""
+    import concurrent.futures
+
+    db_path = str(tmp_path / "concurrent_mixed.db")
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
+    storage.init_db()
+
+    results = []
+
+    def attempt_reservation(req_type):
+        try:
+            return (
+                req_type,
+                storage.reserve_api_request(
+                    provider="api_football",
+                    date_pattern="2026-10-18",
+                    request_date="2026-10-18",
+                    endpoint="fixtures",
+                    limit=50,
+                    request_type=req_type,
+                    global_limit=100,
+                ),
+            )
+        except Exception as exc:
+            return (req_type, exc)
+
+    tasks = ["historical"] * 70 + ["live"] * 70
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        futures = [executor.submit(attempt_reservation, t) for t in tasks]
+        for f in concurrent.futures.as_completed(futures):
+            results.append(f.result())
+
+    hist_successes = [r for t, r in results if t == "historical" and r is True]
+    live_successes = [r for t, r in results if t == "live" and r is True]
+    exceptions = [r for t, r in results if isinstance(r, Exception)]
+
+    assert len(exceptions) == 0, f"Encountered unexpected exceptions: {exceptions}"
+    assert len(hist_successes) <= 50, f"Historical reservations exceeded cap of 50: {len(hist_successes)}"
+    assert len(hist_successes) + len(live_successes) <= 100, f"Total reservations exceeded global cap of 100: {len(hist_successes) + len(live_successes)}"
+
+    final_count = storage.get_api_request_count("api_football", "2026-10-18")
+    assert final_count == len(hist_successes) + len(live_successes)

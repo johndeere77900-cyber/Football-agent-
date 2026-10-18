@@ -3649,7 +3649,7 @@ def get_api_request_count(provider, date_pattern):
         conn.close()
 
 
-def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, request_type="historical", global_limit=None):
+def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, request_type, global_limit=None):
     """
     Atomically reserve one API request credit if current usage is below limit.
 
@@ -3657,82 +3657,144 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
     1. Overall daily credit limit for provider on request_date (global_limit).
     2. Specific limit for request_type (e.g., limit <= 50 for historical).
 
+    Accepts ONLY request_type in ('historical', 'live'). Rejects missing, empty, or unsupported values with ValueError.
     Returns True if reserved successfully, False if quota exhausted.
     Fails closed by raising RuntimeError on database connection/query failures.
     """
-    timestamp = _utc_now()
-    req_type = str(request_type or "historical").lower()
-    if global_limit is None:
-        global_limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
+    if not isinstance(request_type, str) or not request_type.strip():
+        raise ValueError(f"request_type must be a non-empty string ('historical' or 'live'). Received: {request_type!r}")
 
+    req_type = request_type.strip().lower()
+    if req_type not in ("historical", "live"):
+        raise ValueError(f"Unsupported request_type: {request_type!r}. Must be 'historical' or 'live'.")
+
+    limit = _validate_non_negative_int(limit, "limit")
+    if req_type == "historical":
+        limit = min(limit, 50)
+
+    if global_limit is None:
+        overall_cap = limit
+    else:
+        overall_cap = min(_validate_non_negative_int(global_limit, "global_limit"), limit) if req_type == "live" else _validate_non_negative_int(global_limit, "global_limit")
+
+    hist_cap = min(limit, 50) if req_type == "historical" else limit
+
+    timestamp = _utc_now()
     conn, db_type = _connect()
 
     try:
         if db_type == "postgres":
-            lock_key = f"{provider}:{date_pattern}"
+            lock_key = f"{provider}:{request_date}"
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
-                    cur.execute(
-                        """
-                        INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type)
-                        SELECT %s, %s, %s, %s, %s
-                        WHERE (
-                            SELECT COUNT(*) FROM api_request_counts
-                            WHERE provider = %s AND request_date = %s
-                        ) < %s
-                        AND (
-                            %s != 'historical' OR (
+                    if "%" in date_pattern:
+                        cur.execute(
+                            """
+                            INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type)
+                            SELECT %s, %s, %s, %s, %s
+                            WHERE (
                                 SELECT COUNT(*) FROM api_request_counts
-                                WHERE provider = %s AND request_date = %s AND (request_type = 'historical' OR request_type IS NULL)
+                                WHERE provider = %s AND request_date LIKE %s
                             ) < %s
+                            AND (
+                                %s != 'historical' OR (
+                                    SELECT COUNT(*) FROM api_request_counts
+                                    WHERE provider = %s AND request_date LIKE %s AND (request_type = 'historical' OR request_type IS NULL)
+                                ) < %s
+                            )
+                            RETURNING id
+                            """,
+                            (
+                                provider, timestamp, request_date, endpoint, req_type,
+                                provider, date_pattern, overall_cap,
+                                req_type, provider, date_pattern, hist_cap
+                            ),
                         )
-                        RETURNING id
-                        """,
-                        (
-                            provider, timestamp, request_date, endpoint, req_type,
-                            provider, request_date, global_limit,
-                            req_type, provider, request_date, limit
-                        ),
-                    )
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type)
+                            SELECT %s, %s, %s, %s, %s
+                            WHERE (
+                                SELECT COUNT(*) FROM api_request_counts
+                                WHERE provider = %s AND request_date = %s
+                            ) < %s
+                            AND (
+                                %s != 'historical' OR (
+                                    SELECT COUNT(*) FROM api_request_counts
+                                    WHERE provider = %s AND request_date = %s AND (request_type = 'historical' OR request_type IS NULL)
+                                ) < %s
+                            )
+                            RETURNING id
+                            """,
+                            (
+                                provider, timestamp, request_date, endpoint, req_type,
+                                provider, request_date, overall_cap,
+                                req_type, provider, request_date, hist_cap
+                            ),
+                        )
                     row = cur.fetchone()
                     return row is not None
 
         else:
+            conn.isolation_level = None  # Autocommit mode for explicit BEGIN IMMEDIATE transaction control
             try:
-                with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if "%" in date_pattern:
+                    row_total = conn.execute(
+                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
+                        (provider, date_pattern),
+                    ).fetchone()
+                else:
                     row_total = conn.execute(
                         "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
                         (provider, request_date),
                     ).fetchone()
-                    total_count = row_total[0] if row_total else 0
+                total_count = row_total[0] if row_total else 0
 
-                    if total_count >= global_limit:
-                        return False
+                if total_count >= overall_cap:
+                    conn.execute("ROLLBACK")
+                    return False
 
-                    if req_type == "historical":
+                if req_type == "historical":
+                    if "%" in date_pattern:
+                        row_hist = conn.execute(
+                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ? AND (request_type = 'historical' OR request_type IS NULL)",
+                            (provider, date_pattern),
+                        ).fetchone()
+                    else:
                         row_hist = conn.execute(
                             "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ? AND (request_type = 'historical' OR request_type IS NULL)",
                             (provider, request_date),
                         ).fetchone()
-                        hist_count = row_hist[0] if row_hist else 0
-                        if hist_count >= limit:
-                            return False
+                    hist_count = row_hist[0] if row_hist else 0
+                    if hist_count >= hist_cap:
+                        conn.execute("ROLLBACK")
+                        return False
 
-                    conn.execute(
-                        """
-                        INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (provider, timestamp, request_date, endpoint, req_type),
-                    )
-                    return True
-            except sqlite3.OperationalError:
+                conn.execute(
+                    """
+                    INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (provider, timestamp, request_date, endpoint, req_type),
+                )
+                conn.execute("COMMIT")
+                return True
+
+            except sqlite3.OperationalError as op_err:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
                 # Table missing -> initialize schema and retry
-                conn.close()
-                init_db()
-                conn, _ = _connect()
-                with conn:
+                if "no such table" in str(op_err).lower():
+                    conn.close()
+                    init_db()
+                    conn, _ = _connect()
+                    conn.isolation_level = None
+                    conn.execute("BEGIN IMMEDIATE")
                     row_total = conn.execute(
                         "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
                         (provider, request_date),
@@ -3740,6 +3802,7 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
                     total_count = row_total[0] if row_total else 0
 
                     if total_count >= global_limit:
+                        conn.execute("ROLLBACK")
                         return False
 
                     if req_type == "historical":
@@ -3749,6 +3812,7 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
                         ).fetchone()
                         hist_count = row_hist[0] if row_hist else 0
                         if hist_count >= limit:
+                            conn.execute("ROLLBACK")
                             return False
 
                     conn.execute(
@@ -3758,12 +3822,25 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
                         """,
                         (provider, timestamp, request_date, endpoint, req_type),
                     )
+                    conn.execute("COMMIT")
                     return True
+
+                raise
+
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
 
     except Exception as exc:
         raise RuntimeError(f"Database quota reservation error; failing closed: {exc}") from exc
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # ----------------------------------------------------------------------

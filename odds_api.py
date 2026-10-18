@@ -239,7 +239,7 @@ def _check_and_consume_odds_quota():
     current_month_str = datetime.now(timezone.utc).strftime("%Y-%m")
 
     try:
-        reserved = storage.reserve_api_request("odds_api", current_month_pattern, current_month_str, "sports/odds", limit)
+        reserved = storage.reserve_api_request("odds_api", current_month_pattern, current_month_str, "sports/odds", limit, request_type="live")
     except Exception as exc:
         print(f"Odds API quota storage error ({exc}); failing closed.")
         return False

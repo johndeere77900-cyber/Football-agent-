@@ -109,7 +109,7 @@ def _check_and_consume_quota(endpoint, max_budget=None):
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
-        reserved = storage.reserve_api_request("football_data_org", today_str, today_str, endpoint, limit)
+        reserved = storage.reserve_api_request("football_data_org", today_str, today_str, endpoint, limit, request_type="historical")
     except Exception as exc:
         raise FootballDataQuotaExhaustedError(f"Storage error during quota check: {exc}") from exc
 
