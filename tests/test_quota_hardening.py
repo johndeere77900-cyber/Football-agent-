@@ -14,8 +14,10 @@ def setup_db(tmp_path, monkeypatch):
     db_file = str(tmp_path / "test_quota.db")
     monkeypatch.setattr(config, "DB_PATH", db_file)
     monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
+    storage.restore_quota_ledger_trust("Test fixture setup")
     storage.init_db()
     yield
+    storage.restore_quota_ledger_trust("Test fixture teardown")
 
 def test_config_historical_budget_parsing(monkeypatch):
     """Test defensive parsing of API_FOOTBALL_HISTORICAL_DAILY_BUDGET in config.py."""
@@ -265,7 +267,7 @@ def test_max_budget_zero_blocks_all_requests(tmp_path, monkeypatch):
 
 
 def test_missing_table_recovery_fails_closed_persistently(tmp_path, monkeypatch):
-    """Test missing-table SQLite recovery branch in storage.reserve_api_request() fails closed persistently."""
+    """Test missing-table SQLite recovery branch in storage.reserve_api_request() fails closed persistently across init_db calls."""
     import sqlite3
 
     db_file = str(tmp_path / "test_missing_table.db")
@@ -307,16 +309,33 @@ def test_missing_table_recovery_fails_closed_persistently(tmp_path, monkeypatch)
         )
     assert "failing closed" in str(exc_info2.value).lower()
 
-    # 5. Only after explicit init_db() or reset_quota_ledger_corruption_flag() can requests resume
+    # 5. Calling ordinary init_db() MUST NOT clear corruption or permit requests!
     storage.init_db()
-    res_next = storage.reserve_api_request(
-        provider="api_football",
-        date_pattern="2026-10-18",
-        request_date="2026-10-18",
-        endpoint="fixtures",
-        limit=50,
-        request_type="historical",
-        global_limit=100,
-    )
-    assert res_next is True
-    assert storage.get_api_request_count("api_football", "2026-10-18") == 1
+    with pytest.raises(RuntimeError) as exc_info3:
+        storage.reserve_api_request(
+            provider="api_football",
+            date_pattern="2026-10-18",
+            request_date="2026-10-18",
+            endpoint="fixtures",
+            limit=50,
+            request_type="historical",
+            global_limit=100,
+        )
+    assert "failing closed" in str(exc_info3.value).lower()
+
+    try:
+        # 6. Only explicit, auditable operator recovery via restore_quota_ledger_trust clears corruption
+        storage.restore_quota_ledger_trust("Operator audited missing table and verified ledger integrity")
+        res_next = storage.reserve_api_request(
+            provider="api_football",
+            date_pattern="2026-10-18",
+            request_date="2026-10-18",
+            endpoint="fixtures",
+            limit=50,
+            request_type="historical",
+            global_limit=100,
+        )
+        assert res_next is True
+        assert storage.get_api_request_count("api_football", "2026-10-18") == 1
+    finally:
+        storage.restore_quota_ledger_trust("Clean up after persistent test")

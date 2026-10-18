@@ -642,6 +642,8 @@ def test_postgres_advisory_lock_concurrency_in_reserve_api_request(tmp_path, mon
         def execute(self, query, params=None):
             recorded_queries.append((query.strip(), params))
         def fetchone(self):
+            if recorded_queries and "quota_ledger_status" in recorded_queries[-1][0]:
+                return (0,)
             return (1,)
 
     class DummyTransaction:

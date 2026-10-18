@@ -206,7 +206,6 @@ def init_db():
 
     Safe to call repeatedly.
     """
-    reset_quota_ledger_corruption_flag()
     conn, db_type = _connect()
 
     # Resolve canonical team identities before persisting
@@ -365,6 +364,23 @@ def init_db():
                         fetched_at TEXT,
                         expires_at TEXT
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS quota_ledger_status (
+                        id INTEGER PRIMARY KEY,
+                        is_corrupted INTEGER NOT NULL DEFAULT 0,
+                        corrupted_at TEXT,
+                        reason TEXT
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO quota_ledger_status (id, is_corrupted)
+                    VALUES (1, 0)
+                    ON CONFLICT (id) DO NOTHING
                     """
                 )
                 cur.execute(
@@ -798,6 +814,23 @@ def init_db():
                     fetched_at TEXT,
                     expires_at TEXT
                 )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS quota_ledger_status (
+                    id INTEGER PRIMARY KEY,
+                    is_corrupted INTEGER NOT NULL DEFAULT 0,
+                    corrupted_at TEXT,
+                    reason TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO quota_ledger_status (id, is_corrupted)
+                VALUES (1, 0)
+                ON CONFLICT (id) DO NOTHING
                 """
             )
             conn.execute(
@@ -3653,10 +3686,126 @@ def get_api_request_count(provider, date_pattern):
 _QUOTA_LEDGER_CORRUPTED = False
 
 
-def reset_quota_ledger_corruption_flag():
-    """Reset the persistent quota ledger corruption flag (for testing or explicit operator ledger recovery)."""
+def is_quota_ledger_corrupted():
+    """
+    Check if the quota ledger health is corrupted or untrusted.
+    Returns True if either the in-memory flag is True or the persistent DB ledger status is corrupted.
+    """
+    global _QUOTA_LEDGER_CORRUPTED
+    if _QUOTA_LEDGER_CORRUPTED:
+        return True
+
+    try:
+        conn, db_type = _connect()
+        try:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute("SELECT is_corrupted FROM quota_ledger_status WHERE id = 1")
+                    row = cur.fetchone()
+                    if row and row[0] == 1:
+                        _QUOTA_LEDGER_CORRUPTED = True
+                        return True
+            else:
+                row = conn.execute("SELECT is_corrupted FROM quota_ledger_status WHERE id = 1").fetchone()
+                if row and row[0] == 1:
+                    _QUOTA_LEDGER_CORRUPTED = True
+                    return True
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+    return _QUOTA_LEDGER_CORRUPTED
+
+
+def _mark_quota_ledger_corrupted(reason):
+    """Mark quota ledger corrupted persistently across process restarts and DB initializations."""
+    global _QUOTA_LEDGER_CORRUPTED
+    _QUOTA_LEDGER_CORRUPTED = True
+    now_str = _utc_now()
+    try:
+        conn, db_type = _connect()
+        try:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO quota_ledger_status (id, is_corrupted, corrupted_at, reason)
+                        VALUES (1, 1, %s, %s)
+                        ON CONFLICT (id) DO UPDATE SET
+                            is_corrupted = 1,
+                            corrupted_at = EXCLUDED.corrupted_at,
+                            reason = EXCLUDED.reason
+                        """,
+                        (now_str, str(reason)),
+                    )
+                conn.commit()
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO quota_ledger_status (id, is_corrupted, corrupted_at, reason)
+                    VALUES (1, 1, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        is_corrupted = 1,
+                        corrupted_at = excluded.corrupted_at,
+                        reason = excluded.reason
+                    """,
+                    (now_str, str(reason)),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+def restore_quota_ledger_trust(operator_reason):
+    """
+    Explicit, auditable recovery operation to restore quota ledger trust after verifying ledger state.
+    """
+    _validate_text(operator_reason, "operator_reason")
     global _QUOTA_LEDGER_CORRUPTED
     _QUOTA_LEDGER_CORRUPTED = False
+    now_str = _utc_now()
+    try:
+        conn, db_type = _connect()
+        try:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO quota_ledger_status (id, is_corrupted, corrupted_at, reason)
+                        VALUES (1, 0, NULL, %s)
+                        ON CONFLICT (id) DO UPDATE SET
+                            is_corrupted = 0,
+                            corrupted_at = NULL,
+                            reason = EXCLUDED.reason
+                        """,
+                        (f"RECOVERED: {operator_reason} at {now_str}",),
+                    )
+                conn.commit()
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO quota_ledger_status (id, is_corrupted, corrupted_at, reason)
+                    VALUES (1, 0, NULL, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        is_corrupted = 0,
+                        corrupted_at = NULL,
+                        reason = excluded.reason
+                    """,
+                    (f"RECOVERED: {operator_reason} at {now_str}",),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+def reset_quota_ledger_corruption_flag():
+    """Reset the persistent quota ledger corruption flag (wrapper around restore_quota_ledger_trust for testing)."""
+    restore_quota_ledger_trust("Explicit reset via reset_quota_ledger_corruption_flag")
 
 
 def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, request_type, global_limit=None):
@@ -3689,8 +3838,7 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
 
     hist_cap = min(limit, 50) if req_type == "historical" else limit
 
-    global _QUOTA_LEDGER_CORRUPTED
-    if _QUOTA_LEDGER_CORRUPTED:
+    if is_quota_ledger_corrupted():
         raise RuntimeError("Quota ledger state unestablished or corrupted; failing closed persistently until manual operator recovery.")
 
     timestamp = _utc_now()
@@ -3805,7 +3953,7 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
                 # Table missing -> fail closed persistently
                 # (must not authorize requests when prior quota state is unestablished)
                 if "no such table" in str(op_err).lower():
-                    _QUOTA_LEDGER_CORRUPTED = True
+                    _mark_quota_ledger_corrupted("api_request_counts table missing")
                     try:
                         conn.close()
                     except Exception:
