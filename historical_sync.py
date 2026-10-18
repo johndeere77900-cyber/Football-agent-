@@ -172,7 +172,7 @@ def sync_historical_fixtures(
             current_status = "INCOMPLETE"
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    initial_request_count = storage.get_api_request_count("api_football", today_str)
+    initial_request_count = storage.get_api_request_count("api_football", today_str, request_type="historical")
 
     quota_budget_stopped = False
     acquisition_failed = False
@@ -349,7 +349,7 @@ def sync_historical_fixtures(
 
     # Optional statistical enrichment acquisition
     if with_enrichment and not quota_budget_stopped and not acquisition_failed:
-        current_reqs = storage.get_api_request_count("api_football", today_str)
+        current_reqs = storage.get_api_request_count("api_football", today_str, request_type="historical")
         if current_reqs >= historical_budget:
             quota_budget_stopped = True
             last_error_reason = "quota_budget_exhausted_during_enrichment"
@@ -387,7 +387,7 @@ def sync_historical_fixtures(
                     last_error_reason = "api_error_during_enrichment"
                     print(f"API acquisition error during enrichment fetch: {exc}", flush=True)
 
-    final_reqs = storage.get_api_request_count("api_football", today_str)
+    final_reqs = storage.get_api_request_count("api_football", today_str, request_type="historical")
     total_consumed = final_reqs - initial_request_count
 
     final_stored_count = storage.get_historical_fixture_count(league_id, season)
@@ -677,7 +677,7 @@ def sync_historical_basketball_games(
             current_status = "INCOMPLETE"
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    initial_request_count = storage.get_api_request_count("api_basketball", today_str)
+    initial_request_count = storage.get_api_request_count("api_basketball", today_str, request_type="historical")
 
     quota_budget_stopped = False
     acquisition_failed = False
@@ -808,7 +808,7 @@ def sync_historical_basketball_games(
             print(f"API acquisition error during basketball games fetch on page {current_page}: {exc}", flush=True)
             break
 
-    requests_after = storage.get_api_request_count("api_basketball", today_str)
+    requests_after = storage.get_api_request_count("api_basketball", today_str, request_type="historical")
     total_consumed = requests_after - initial_request_count
 
     valid_count = total_valid_games
@@ -922,9 +922,9 @@ def run_safe_preflight(seasons: list, queue_items: list) -> None:
 
     # 5. Confirm current API request counters
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    fb_reqs = storage.get_api_request_count("api_football", today_str)
+    fb_reqs = storage.get_api_request_count("api_football", today_str, request_type="historical")
     fb_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
-    bb_reqs = storage.get_api_request_count("api_basketball", today_str)
+    bb_reqs = storage.get_api_request_count("api_basketball", today_str, request_type="historical")
     bb_budget = int(getattr(config, "API_BASKETBALL_HISTORICAL_DAILY_BUDGET", 50))
 
     print(f"API Request Counters Today ({today_str}):", flush=True)

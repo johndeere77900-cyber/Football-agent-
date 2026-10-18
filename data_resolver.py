@@ -313,7 +313,7 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
         return []
 
 
-def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, allow_network=True, provider_metadata=None, *args, **kwargs):
+def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, allow_network=False, provider_metadata=None, *args, **kwargs):
     """
     Return the authoritative canonical competition team IDs for structural validation.
 
@@ -482,7 +482,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             league_id,
             season,
             max_budget=provider_metadata.get("max_budget"),
-            allow_network=provider_metadata.get("allow_network", True),
+            allow_network=provider_metadata.get("allow_network", False),
             provider_metadata=provider_metadata,
         )
 
@@ -1006,7 +1006,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     return res
 
 
-def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_only=True):
+def _validate_and_filter_primary_soccerdata_matches(matches, league_id, season, completed_only=True):
     """
     Validate and filter tertiary SoccerData matches.
     Strictly enforces:
@@ -1116,6 +1116,9 @@ def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_
         valid_matches.append(m)
 
     return valid_matches
+
+
+_validate_and_filter_tertiary_matches = _validate_and_filter_primary_soccerdata_matches
 
 
 def generate_synthetic_fixture_id(provider, home_name, away_name, date_str, league_id=None, season=None, home_id=None, away_id=None):
@@ -2502,7 +2505,7 @@ class DataResolver:
                 try:
                     sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                        sd_mh_fixtures = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
+                        sd_mh_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
                         sd_mh_meta = sd_meta_res or {}
                 except Exception as sd_exc:
                     logger.warning(f"DataResolver MatchHistory primary route failed for league {league_id}: {sd_exc}")
@@ -2560,7 +2563,7 @@ class DataResolver:
                     sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
                     sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                        sd_ss_fixtures = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
+                        sd_ss_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
                     else:
                         if "status" not in sd_ss_meta:
                             sd_ss_meta["status"] = sd_status
@@ -2619,25 +2622,25 @@ class DataResolver:
         expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget, allow_network=True)
 
         # 3. Secondary Route: API-Football -> football-data.org API
-        primary_failed = False
-        primary_quota_exhausted = False
+        secondary_failed = False
+        secondary_quota_exhausted = False
         primary_page = None
 
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        req_cnt = storage.get_api_request_count("api_football", today_str)
+        req_cnt = storage.get_api_request_count("api_football", today_str, request_type="historical")
         if max_budget is not None and req_cnt >= max_budget:
-            primary_failed = True
-            primary_quota_exhausted = True
+            secondary_failed = True
+            secondary_quota_exhausted = True
             logger.info(f"API-Football daily request budget ceiling reached ({req_cnt}/{max_budget}). Skipping API-Football request.")
         else:
             try:
                 primary_page = api_football.get_league_fixtures_page(league_id, season, page=page, max_budget=max_budget)
             except api_football.APIFootballQuotaExhaustedError as exc:
-                primary_failed = True
-                primary_quota_exhausted = True
+                secondary_failed = True
+                secondary_quota_exhausted = True
                 logger.warning(f"DataResolver secondary route get_league_fixtures_page quota exhausted for league {league_id}: {exc}")
             except Exception as exc:
-                primary_failed = True
+                secondary_failed = True
                 logger.warning(f"DataResolver secondary route get_league_fixtures_page failed for league {league_id}: {exc}")
 
         af_fixtures = []
@@ -2709,8 +2712,10 @@ class DataResolver:
                     "structural_coverage": af_coverage,
                     "providers_contributed": contribs,
                 },
-                "primary_failed": primary_failed,
-                "primary_quota_exhausted": primary_quota_exhausted,
+                "secondary_failed": secondary_failed,
+                "secondary_quota_exhausted": secondary_quota_exhausted,
+                "primary_failed": secondary_failed,
+                "primary_quota_exhausted": secondary_quota_exhausted,
             }
 
         # Secondary 3b: football-data.org API
@@ -2807,8 +2812,10 @@ class DataResolver:
             "current_page": page,
             "source": final_source,
             "provider_metadata": final_provider_metadata,
-            "primary_failed": primary_failed,
-            "primary_quota_exhausted": primary_quota_exhausted,
+            "secondary_failed": secondary_failed,
+            "secondary_quota_exhausted": secondary_quota_exhausted,
+            "primary_failed": secondary_failed,
+            "primary_quota_exhausted": secondary_quota_exhausted,
         }
 
     def check_competition_coverage(self, league_id, season, max_budget=None):

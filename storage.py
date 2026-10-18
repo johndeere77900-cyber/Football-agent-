@@ -3625,62 +3625,57 @@ def record_api_request(provider, endpoint, request_date=None):
         conn.close()
 
 
-def get_api_request_count(provider, date_pattern):
+def get_api_request_count(provider, date_pattern, request_type=None):
     """
     Get request count for a provider over a date pattern.
 
     e.g., date_pattern="2026-09-30" (daily) or date_pattern="2026-09%" (monthly).
+    If request_type="historical", counts historical calls + legacy NULL/empty rows.
+    If request_type="live", counts live calls.
+    If request_type=None, counts total calls regardless of request_type.
     """
     conn, db_type = _connect()
 
     try:
+        placeholder = "%s" if db_type == "postgres" else "?"
+        date_op = "LIKE" if "%" in date_pattern else "="
+
+        query_params = [provider, date_pattern]
+        type_clause = ""
+
+        if request_type == "historical":
+            type_clause = " AND (request_type = 'historical' OR request_type IS NULL OR request_type = '')"
+        elif request_type == "live":
+            type_clause = f" AND request_type = {placeholder}"
+            query_params.append("live")
+        elif request_type is not None:
+            type_clause = f" AND request_type = {placeholder}"
+            query_params.append(str(request_type))
+
+        query = f"SELECT COUNT(*) FROM api_request_counts WHERE provider = {placeholder} AND request_date {date_op} {placeholder}{type_clause}"
+
         if db_type == "postgres":
             with conn.cursor() as cur:
-                if "%" in date_pattern:
-                    cur.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = %s AND request_date LIKE %s",
-                        (provider, date_pattern),
-                    )
-                else:
-                    cur.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = %s AND request_date = %s",
-                        (provider, date_pattern),
-                    )
+                cur.execute(query, query_params)
                 row = cur.fetchone()
                 return row[0] if row else 0
         else:
             try:
-                if "%" in date_pattern:
-                    row = conn.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
-                        (provider, date_pattern),
-                    ).fetchone()
-                else:
-                    row = conn.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
-                        (provider, date_pattern),
-                    ).fetchone()
+                row = conn.execute(query, query_params).fetchone()
                 return row[0] if row else 0
             except sqlite3.OperationalError:
-                # Table missing -> init db and retry
                 conn.close()
                 init_db()
                 conn, _ = _connect()
-                if "%" in date_pattern:
-                    row = conn.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
-                        (provider, date_pattern),
-                    ).fetchone()
-                else:
-                    row = conn.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
-                        (provider, date_pattern),
-                    ).fetchone()
+                row = conn.execute(query, query_params).fetchone()
                 return row[0] if row else 0
     except Exception:
         return 0
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 _QUOTA_LEDGER_CORRUPTED = False
@@ -3689,7 +3684,8 @@ _QUOTA_LEDGER_CORRUPTED = False
 def is_quota_ledger_corrupted():
     """
     Check if the quota ledger health is corrupted or untrusted.
-    Returns True if either the in-memory flag is True or the persistent DB ledger status is corrupted.
+    Fails closed (returns True) if in-memory flag is True, persistent state indicates corruption,
+    or if persistent health state is missing, unreadable, or database query fails.
     """
     global _QUOTA_LEDGER_CORRUPTED
     if _QUOTA_LEDGER_CORRUPTED:
@@ -3702,20 +3698,24 @@ def is_quota_ledger_corrupted():
                 with conn.cursor() as cur:
                     cur.execute("SELECT is_corrupted FROM quota_ledger_status WHERE id = 1")
                     row = cur.fetchone()
-                    if row and row[0] == 1:
+                    if row is None or row[0] == 1:
                         _QUOTA_LEDGER_CORRUPTED = True
                         return True
+                    return False
             else:
                 row = conn.execute("SELECT is_corrupted FROM quota_ledger_status WHERE id = 1").fetchone()
-                if row and row[0] == 1:
+                if row is None or row[0] == 1:
                     _QUOTA_LEDGER_CORRUPTED = True
                     return True
+                return False
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass
     except Exception:
-        pass
-
-    return _QUOTA_LEDGER_CORRUPTED
+        _QUOTA_LEDGER_CORRUPTED = True
+        return True
 
 
 def _mark_quota_ledger_corrupted(reason):
@@ -3762,10 +3762,11 @@ def _mark_quota_ledger_corrupted(reason):
 def restore_quota_ledger_trust(operator_reason):
     """
     Explicit, auditable recovery operation to restore quota ledger trust after verifying ledger state.
+    Must durably persist recovery in quota_ledger_status before clearing in-memory corruption flag.
+    Raises RuntimeError if persistent DB update fails.
     """
     _validate_text(operator_reason, "operator_reason")
     global _QUOTA_LEDGER_CORRUPTED
-    _QUOTA_LEDGER_CORRUPTED = False
     now_str = _utc_now()
     try:
         conn, db_type = _connect()
@@ -3797,10 +3798,15 @@ def restore_quota_ledger_trust(operator_reason):
                     (f"RECOVERED: {operator_reason} at {now_str}",),
                 )
                 conn.commit()
+            _QUOTA_LEDGER_CORRUPTED = False
         finally:
-            conn.close()
-    except Exception:
-        pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        _QUOTA_LEDGER_CORRUPTED = True
+        raise RuntimeError(f"Failed to durably persist quota ledger trust recovery: {exc}") from exc
 
 
 def reset_quota_ledger_corruption_flag():

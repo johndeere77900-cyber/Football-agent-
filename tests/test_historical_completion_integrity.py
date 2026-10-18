@@ -186,7 +186,7 @@ def test_6_quota_exhaustion_cannot_promote_invalid_dataset_to_complete(mock_page
     storage.mark_historical_dataset_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
 
     # Force request count to historical budget limit
-    monkeypatch.setattr("storage.get_api_request_count", lambda *args: 100)
+    monkeypatch.setattr("storage.get_api_request_count", lambda *args, **kwargs: 100)
 
     report = historical_sync.sync_historical_fixtures(league_id=39, season=2024, historical_budget=50)
 

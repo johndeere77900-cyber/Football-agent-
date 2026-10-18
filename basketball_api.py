@@ -326,14 +326,23 @@ def _cache_set(endpoint, params, data):
 # ---------------------------------------------------------------------------
 
 
-def _check_and_consume_quota(endpoint, max_budget=None, request_type="historical"):
+def _check_and_consume_quota(endpoint, max_budget=None, request_type="historical", global_limit=None):
     """
     Atomically verify and reserve daily basketball credit quota.
 
     Fails closed: if quota storage cannot be queried or updated, raises
     APIBasketballQuotaExhaustedError to prevent unauthorized external requests.
     """
-    global_limit = int(getattr(config, "API_BASKETBALL_DAILY_CREDIT_LIMIT", 100))
+    if not isinstance(request_type, str) or not request_type.strip():
+        raise ValueError(f"request_type must be a non-empty string ('historical' or 'live'). Received: {request_type!r}")
+
+    req_type = request_type.strip().lower()
+    if req_type not in ("historical", "live"):
+        raise ValueError(f"Unsupported request_type: {request_type!r}. Must be 'historical' or 'live'.")
+
+    if global_limit is None:
+        global_limit = int(getattr(config, "API_BASKETBALL_DAILY_CREDIT_LIMIT", 100))
+
     hist_budget = int(getattr(config, "API_BASKETBALL_HISTORICAL_DAILY_BUDGET", 50))
 
     if max_budget is not None:
@@ -345,7 +354,7 @@ def _check_and_consume_quota(endpoint, max_budget=None, request_type="historical
     else:
         budget_limit = global_limit
 
-    if request_type == "historical":
+    if req_type == "historical":
         limit = min(budget_limit, hist_budget)
     else:
         limit = budget_limit
@@ -356,7 +365,15 @@ def _check_and_consume_quota(endpoint, max_budget=None, request_type="historical
     today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
     try:
-        reserved = storage.reserve_api_request("api_basketball", today_str, today_str, endpoint, limit, request_type=request_type)
+        reserved = storage.reserve_api_request(
+            "api_basketball",
+            today_str,
+            today_str,
+            endpoint,
+            limit,
+            request_type=req_type,
+            global_limit=global_limit,
+        )
     except Exception as exc:
         raise APIBasketballQuotaExhaustedError(
             f"Basketball quota storage error; failing closed: {exc}"
@@ -474,7 +491,7 @@ def _sleep_before_retry(seconds):
 # ---------------------------------------------------------------------------
 
 
-def _get(endpoint, params, max_budget=None, request_type="historical"):
+def _get(endpoint, params, max_budget=None, request_type="historical", global_limit=None):
     """
     Perform a GET request with persistent cache-first behavior and hard quota enforcement.
     """
@@ -495,7 +512,7 @@ def _get(endpoint, params, max_budget=None, request_type="historical"):
         del http_params["page"]
 
     for attempt in range(1, MAX_RETRIES + 1):
-        _check_and_consume_quota(endpoint, max_budget=max_budget, request_type=request_type)
+        _check_and_consume_quota(endpoint, max_budget=max_budget, request_type=request_type, global_limit=global_limit)
 
         try:
             response = requests.get(

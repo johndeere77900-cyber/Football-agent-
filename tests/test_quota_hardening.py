@@ -14,10 +14,13 @@ def setup_db(tmp_path, monkeypatch):
     db_file = str(tmp_path / "test_quota.db")
     monkeypatch.setattr(config, "DB_PATH", db_file)
     monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
-    storage.restore_quota_ledger_trust("Test fixture setup")
     storage.init_db()
+    storage.restore_quota_ledger_trust("Test fixture setup")
     yield
-    storage.restore_quota_ledger_trust("Test fixture teardown")
+    try:
+        storage.restore_quota_ledger_trust("Test fixture teardown")
+    except Exception:
+        pass
 
 def test_config_historical_budget_parsing(monkeypatch):
     """Test defensive parsing of API_FOOTBALL_HISTORICAL_DAILY_BUDGET in config.py."""
@@ -339,3 +342,45 @@ def test_missing_table_recovery_fails_closed_persistently(tmp_path, monkeypatch)
         assert storage.get_api_request_count("api_football", "2026-10-18") == 1
     finally:
         storage.restore_quota_ledger_trust("Clean up after persistent test")
+
+
+def test_missing_quota_health_status_table_fails_closed(tmp_path, monkeypatch):
+    """Test that missing quota_ledger_status table causes is_quota_ledger_corrupted to return True and reserve_api_request to fail closed."""
+    import sqlite3
+
+    db_file = str(tmp_path / "test_missing_status.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
+
+    storage.init_db()
+
+    # Drop quota_ledger_status
+    conn = sqlite3.connect(db_file)
+    conn.execute("DROP TABLE quota_ledger_status")
+    conn.commit()
+    conn.close()
+
+    assert storage.is_quota_ledger_corrupted() is True
+
+    with pytest.raises(RuntimeError) as exc_info:
+        storage.reserve_api_request(
+            provider="api_football",
+            date_pattern="2026-10-18",
+            request_date="2026-10-18",
+            endpoint="fixtures",
+            limit=50,
+            request_type="historical",
+        )
+    assert "corrupted" in str(exc_info.value).lower()
+
+
+def test_failed_explicit_recovery_leaves_ledger_corrupted(tmp_path, monkeypatch):
+    """Test that failed explicit recovery (DB error during restore) raises RuntimeError and leaves in-memory state corrupted."""
+    monkeypatch.setattr(storage, "_QUOTA_LEDGER_CORRUPTED", True)
+
+    with patch("storage._connect", side_effect=RuntimeError("DB write connection failed")):
+        with pytest.raises(RuntimeError) as exc_info:
+            storage.restore_quota_ledger_trust("Test failed recovery")
+        assert "failed to durably persist" in str(exc_info.value).lower()
+
+    assert storage._QUOTA_LEDGER_CORRUPTED is True
