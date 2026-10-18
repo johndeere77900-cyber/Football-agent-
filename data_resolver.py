@@ -2409,7 +2409,7 @@ class DataResolver:
         import storage
 
         # 1. Read-first persistence: Reuse stored DB fixtures when dataset status is COMPLETE and verified
-        if page == 1 and league_id and season and not self.force_fallback:
+        if league_id and season and not self.force_fallback:
             ds_status = storage.get_historical_dataset_status(league_id, season)
             if ds_status.get("status") == "COMPLETE":
                 db_stored = storage.get_historical_fixtures(league_id, season)
@@ -2429,9 +2429,9 @@ class DataResolver:
                     )
                     if db_coverage["verified"] is True:
                         return {
-                            "fixtures": db_stored,
+                            "fixtures": db_stored if page == 1 else [],
                             "expected_pages": 1,
-                            "current_page": 1,
+                            "current_page": page,
                             "source": "internal_db",
                             "provider_metadata": {
                                 "competition_format": competition_format,
@@ -2503,10 +2503,6 @@ class DataResolver:
                     "primary_quota_exhausted": False,
                 }
 
-        # Resolve expected team universe if primary direct CSV alone was insufficient
-        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget, allow_network=True)
-
-        if page == 1:
             # 2b. SoccerData MatchHistory
             sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
             if sd_mh_code:
@@ -2534,7 +2530,8 @@ class DataResolver:
                 season=season,
                 provider_metadata={
                     "competition_format": competition_format,
-                    "expected_team_ids": expected_team_ids,
+                    "expected_team_ids": expected_team_ids_local,
+                    "allow_network": False,
                 },
                 league_id=league_id,
             )
@@ -2553,7 +2550,7 @@ class DataResolver:
                     "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
                     "provider_metadata": {
                         "competition_format": competition_format,
-                        "expected_team_ids": expected_team_ids,
+                        "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
                         "structural_coverage": mh_coverage,
@@ -2594,7 +2591,8 @@ class DataResolver:
                 season=season,
                 provider_metadata={
                     "competition_format": competition_format,
-                    "expected_team_ids": expected_team_ids,
+                    "expected_team_ids": expected_team_ids_local,
+                    "allow_network": False,
                 },
                 league_id=league_id,
             )
@@ -2614,7 +2612,7 @@ class DataResolver:
                     "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
                     "provider_metadata": {
                         "competition_format": competition_format,
-                        "expected_team_ids": expected_team_ids,
+                        "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
                         "structural_coverage": primary_route_coverage,
@@ -2623,6 +2621,9 @@ class DataResolver:
                     "primary_failed": False,
                     "primary_quota_exhausted": False,
                 }
+
+        # Resolve expected team universe via secondary network discovery ONLY when primary route was insufficient
+        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget, allow_network=True)
 
         # 3. Secondary Route: API-Football -> football-data.org API
         primary_failed = False

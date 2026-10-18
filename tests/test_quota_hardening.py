@@ -245,8 +245,27 @@ def test_concurrent_sqlite_mixed_live_and_historical_reservations_capped_at_100(
     assert final_count == len(hist_successes) + len(live_successes)
 
 
-def test_missing_table_recovery_historical_and_live_quota_enforced(tmp_path, monkeypatch):
-    """Test missing-table SQLite recovery branch in storage.reserve_api_request()."""
+def test_max_budget_zero_blocks_all_requests(tmp_path, monkeypatch):
+    """Test max_budget=0 results in 0 network requests for api_football, basketball_api, and football_data_api."""
+    import basketball_api
+    import football_data_api
+
+    monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test_key")
+    monkeypatch.setenv("FOOTBALL_DATA_API_KEY", "test_key")
+
+    with patch("requests.get", side_effect=RuntimeError("Network attempt triggered with max_budget=0!")):
+        with pytest.raises(APIFootballQuotaExhaustedError):
+            api_football._get("fixtures", {"id": 100}, max_budget=0, request_type="historical")
+
+        with pytest.raises(basketball_api.APIBasketballQuotaExhaustedError):
+            basketball_api._get("games", {"league": 12, "season": 2024}, max_budget=0, request_type="historical")
+
+        with pytest.raises(football_data_api.FootballDataQuotaExhaustedError):
+            football_data_api._get("competitions/PL/matches", max_budget=0)
+
+
+def test_missing_table_recovery_fails_closed_and_reinitializes(tmp_path, monkeypatch):
+    """Test missing-table SQLite recovery branch in storage.reserve_api_request() fails closed."""
     import sqlite3
 
     db_file = str(tmp_path / "test_missing_table.db")
@@ -262,7 +281,7 @@ def test_missing_table_recovery_historical_and_live_quota_enforced(tmp_path, mon
     conn.commit()
     conn.close()
 
-    # 3. Test missing-table recovery for historical request (should re-init table and reserve)
+    # 3. Missing table must fail closed (return False) and re-initialize schema without authorizing request
     res_hist = storage.reserve_api_request(
         provider="api_football",
         date_pattern="2026-10-18",
@@ -272,54 +291,19 @@ def test_missing_table_recovery_historical_and_live_quota_enforced(tmp_path, mon
         request_type="historical",
         global_limit=100,
     )
-    assert res_hist is True
+    assert res_hist is False
+    # Count should be 0 because request failed closed
+    assert storage.get_api_request_count("api_football", "2026-10-18") == 0
+
+    # 4. Now that schema is initialized, subsequent reservation succeeds normally
+    res_next = storage.reserve_api_request(
+        provider="api_football",
+        date_pattern="2026-10-18",
+        request_date="2026-10-18",
+        endpoint="fixtures",
+        limit=50,
+        request_type="historical",
+        global_limit=100,
+    )
+    assert res_next is True
     assert storage.get_api_request_count("api_football", "2026-10-18") == 1
-
-    # 4. Drop table again
-    conn = sqlite3.connect(db_file)
-    conn.execute("DROP TABLE api_request_counts")
-    conn.commit()
-    conn.close()
-
-    # 5. Test missing-table recovery for live request with global_limit=None (capped at limit)
-    res_live = storage.reserve_api_request(
-        provider="odds_api",
-        date_pattern="2026-10%",
-        request_date="2026-10-18",
-        endpoint="sports/odds",
-        limit=10,
-        request_type="live",
-        global_limit=None,
-    )
-    assert res_live is True
-    assert storage.get_api_request_count("odds_api", "2026-10%") == 1
-
-    # 6. Drop table again, fill to limit (10) via recovery and assert 11th is denied
-    conn = sqlite3.connect(db_file)
-    conn.execute("DROP TABLE api_request_counts")
-    conn.commit()
-    conn.close()
-
-    for i in range(10):
-        ok = storage.reserve_api_request(
-            provider="odds_api",
-            date_pattern="2026-10%",
-            request_date="2026-10-18",
-            endpoint="sports/odds",
-            limit=10,
-            request_type="live",
-            global_limit=None,
-        )
-        assert ok is True
-
-    denied = storage.reserve_api_request(
-        provider="odds_api",
-        date_pattern="2026-10%",
-        request_date="2026-10-18",
-        endpoint="sports/odds",
-        limit=10,
-        request_type="live",
-        global_limit=None,
-    )
-    assert denied is False
-    assert storage.get_api_request_count("odds_api", "2026-10%") == 10

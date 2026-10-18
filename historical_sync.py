@@ -1250,7 +1250,12 @@ def verify_persisted_historical_datasets(
                 issues.append(f"count_mismatch(manifest={manifest_count},actual={actual_count})")
 
             if manifest_status == "COMPLETE":
-                cov = data_resolver._validate_historical_structural_coverage(records, season=ssn, league_id=lid)
+                cov = data_resolver._validate_historical_structural_coverage(
+                    records,
+                    season=ssn,
+                    league_id=lid,
+                    provider_metadata={"allow_network": False},
+                )
                 if not cov.get("verified"):
                     issues.append(f"failed_football_structural_coverage({cov.get('reason')})")
 
