@@ -83,7 +83,7 @@ def test_quota_ceiling_stops_paginated_fetch_at_budget(temp_db, monkeypatch):
 
     current_page_call = 0
 
-    def fake_get(endpoint, params, max_budget=None):
+    def fake_get(endpoint, params, max_budget=None, **kwargs):
         nonlocal current_page_call
         current_page_call += 1
         if current_page_call > 3:
@@ -94,7 +94,10 @@ def test_quota_ceiling_stops_paginated_fetch_at_budget(temp_db, monkeypatch):
             "response": [sample_fixture(9010 + current_page_call)],
         }
 
-    with patch("api_football._get", side_effect=fake_get):
+    with patch("api_football._get", side_effect=fake_get), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024, historical_budget=3)
 
     assert report["status"] == "INCOMPLETE"

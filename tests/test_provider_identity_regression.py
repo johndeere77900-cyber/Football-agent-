@@ -223,6 +223,9 @@ def test_4_football_data_org_data_can_become_complete():
     }
 
     with patch("main.check_competition_coverage", return_value=("season_not_available", "Season 2024 unavailable")), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
          patch("football_data_api.get_competition_matches", return_value=fd_response):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 

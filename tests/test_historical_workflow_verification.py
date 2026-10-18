@@ -289,6 +289,68 @@ def test_workflow_bash_args_construction_non_queue_multiple_seasons():
     assert parsed == "--historical-sync --sport football --league 39 --seasons 2022 2023 2024"
 
 
+def test_workflow_bash_args_construction_verify_step_queue():
+    bash_cmd = """
+    INPUT_RUN_QUEUE="true"
+    INPUT_SPORT="football"
+    INPUT_LEAGUE_ID="39"
+    INPUT_SEASONS_ARG="2020 2021 2022"
+
+    if [ "$INPUT_RUN_QUEUE" = "true" ]; then
+      ARGS=("--verify-historical-datasets" "--historical-queue" "--seasons")
+      for YR in $INPUT_SEASONS_ARG; do
+        ARGS+=("$YR")
+      done
+    else
+      ARGS=("--verify-historical-datasets" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--seasons")
+      for YR in $INPUT_SEASONS_ARG; do
+        ARGS+=("$YR")
+      done
+    fi
+
+    echo "${ARGS[@]}"
+    """
+    proc = subprocess.run(["bash", "-c", bash_cmd], capture_output=True, text=True, check=True)
+    parsed = proc.stdout.strip()
+    assert parsed == "--verify-historical-datasets --historical-queue --seasons 2020 2021 2022"
+
+
+def test_cli_verify_historical_datasets_queue_mode():
+    import sys
+    import main
+
+    test_args = ["main.py", "--verify-historical-datasets", "--historical-queue", "--seasons", "2020", "2021"]
+    with patch.object(sys, "argv", test_args), \
+         patch("historical_sync.verify_persisted_historical_datasets", return_value={"success": True}) as mock_verify:
+        exit_code = main.main()
+        assert exit_code == 0
+        mock_verify.assert_called_once_with(
+            sport="football",
+            league_id=None,
+            seasons=[2020, 2021],
+            season=None,
+            is_queue=True,
+        )
+
+
+def test_cli_verify_historical_datasets_single_mode():
+    import sys
+    import main
+
+    test_args = ["main.py", "--verify-historical-datasets", "--sport", "football", "--league", "39", "--seasons", "2024"]
+    with patch.object(sys, "argv", test_args), \
+         patch("historical_sync.verify_persisted_historical_datasets", return_value={"success": True}) as mock_verify:
+        exit_code = main.main()
+        assert exit_code == 0
+        mock_verify.assert_called_once_with(
+            sport="football",
+            league_id=39,
+            seasons=[2024],
+            season=None,
+            is_queue=False,
+        )
+
+
 def test_workflow_sync_failure_preserves_exit_code():
     # Test bash error handling and exit code preservation logic in historical.yml
     bash_cmd = """

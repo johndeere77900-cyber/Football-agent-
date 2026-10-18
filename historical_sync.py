@@ -61,7 +61,7 @@ def _is_historical_provider_complete(
     if prov not in supported_providers:
         return False
 
-    if quota_budget_stopped:
+    if quota_budget_stopped and prov in {"api_football", "football_data_org"}:
         return False
 
     prov_meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else {}
@@ -122,13 +122,16 @@ def sync_historical_fixtures(
     # Revalidate persisted fixture integrity and coverage before early return
     if current_status == "COMPLETE" and not refresh:
         stored_fixtures = storage.get_historical_fixtures(league_id, season)
-        exp_team_ids = data_resolver._get_authoritative_historical_team_ids(league_id, season, max_budget=historical_budget)
+        exp_team_ids = data_resolver._get_authoritative_historical_team_ids(
+            league_id, season, max_budget=historical_budget, allow_network=False
+        )
         comp_fmt = "double_round_robin" if league_id in data_resolver.DOUBLE_ROUND_ROBIN_LEAGUE_IDS else "unknown"
 
         # A COMPLETE manifest is accepted only after structural revalidation.
         reval_meta = {
             "competition_format": comp_fmt,
             "max_budget": historical_budget,
+            "allow_network": False,
         }
         if exp_team_ids:
             reval_meta["expected_team_ids"] = exp_team_ids
@@ -188,9 +191,11 @@ def sync_historical_fixtures(
     p_comp_stored = dataset_info.get("pages_completed", 0) if not refresh else 0
     init_stored_count = storage.get_historical_fixture_count(league_id, season)
     auth_teams = data_resolver._get_authoritative_historical_team_ids(league_id, season)
-    expected_count = len(auth_teams) * (len(auth_teams) - 1) if auth_teams else 380
+    expected_count = len(auth_teams) * (len(auth_teams) - 1) if auth_teams else None
     if not refresh and p_comp_stored > 0 and exp_p_stored > 1 and not dataset_info.get("acquisition_complete"):
-        if init_stored_count >= expected_count:
+        if expected_count is not None and init_stored_count >= expected_count:
+            start_p = 1
+        elif expected_count is None:
             start_p = 1
         else:
             start_p = p_comp_stored + 1
@@ -210,7 +215,7 @@ def sync_historical_fixtures(
 
     # Preflight coverage check via DataResolver
     resolver = DataResolver()
-    cov_status, cov_reason = resolver.check_competition_coverage(league_id, season)
+    cov_status, cov_reason = resolver.check_competition_coverage(league_id, season, max_budget=historical_budget)
     primary_available = (cov_status != "season_not_available")
 
     current_page = start_p

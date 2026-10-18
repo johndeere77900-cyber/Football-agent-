@@ -1,11 +1,23 @@
 """
 Provider-neutral Data Resolver for Football data.
 
-Implements strict 3-tier provider hierarchy with field-level merging and reconciliation:
-1. Primary: API-Football (api_football.py)
-2. Secondary Fallback: football-data.org (football_data_api.py)
-3. Tertiary Fallback: SoccerData MatchHistory & Sofascore (soccerdata_provider.py)
-4. Permanent Memory: Neon PostgreSQL / SQLite (storage.py)
+Implements Two-Route Architecture for Historical Acquisition:
+1. Read-first persistence: Reuse stored DB dataset when COMPLETE and verified without external calls.
+2. Primary Route: Direct Football-Data CSV -> SoccerData MatchHistory -> SoccerData Sofascore.
+3. Secondary Route: API-Football -> football-data.org API.
+
+Historical API-Football requests enforce a strict 50 requests/day budget ceiling (API_FOOTBALL_HISTORICAL_DAILY_BUDGET = 50).
+
+Result Status Codes:
+- PRIMARY_SUCCESS: Primary provider returned valid, sufficient data (including valid empty fixture lists).
+- PRIMARY_INSUFFICIENT: Primary provider response was missing or malformed.
+- PRIMARY_UNAVAILABLE: Primary provider failed (exception / rate limit).
+- SECONDARY_SUCCESS: Secondary provider returned valid fallback data.
+- SECONDARY_INSUFFICIENT: Secondary provider response was missing or malformed.
+- TERTIARY_SUCCESS: Tertiary provider returned valid fallback data.
+- TERTIARY_INSUFFICIENT: Tertiary provider response was missing or malformed.
+- NO_DATA: No provider supplied usable data.
+- ERROR: Operational error occurred.
 
 Result Status Codes:
 - PRIMARY_SUCCESS: Primary provider returned valid, sufficient data (including valid empty fixture lists).
@@ -308,7 +320,7 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
         return []
 
 
-def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *args, **kwargs):
+def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, allow_network=True, *args, **kwargs):
     """
     Return the authoritative canonical competition team IDs for structural validation.
 
@@ -317,13 +329,32 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
     If ANY expected team fails resolution, or if partial results are produced, returns [].
 
     Priority:
-    1. API-Football standings
-    2. football-data.org competition teams
+    1. Stored DB team identities (read-first persistence without external API calls)
+    2. API-Football standings (if allow_network=True)
+    3. football-data.org competition teams (if allow_network=True)
 
     Returns:
         list[str|int] of verified canonical team IDs, or [] when unavailable/incomplete.
     """
     import team_identity
+
+    # 1. Read-first persistence: stored canonical team identities for double round-robin league
+    if league_id and league_id in DOUBLE_ROUND_ROBIN_LEAGUE_IDS:
+        try:
+            import storage
+            stored_c_ids = storage.get_team_identities_by_league("football", league_id)
+            min_expected = 18 if league_id in {78, 61, 88, 94} else 20
+            if len(stored_c_ids) >= min_expected:
+                return stored_c_ids
+        except Exception as exc:
+            logger.warning(
+                "Unable to obtain authoritative DB team universe for league %s: %s",
+                league_id,
+                exc,
+            )
+
+    if not allow_network:
+        return []
 
     # Primary authoritative source: API-Football standings
     try:
@@ -420,20 +451,6 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, *
                 exc,
             )
 
-    # Tertiary fallback: stored canonical team identities for double round-robin league
-    if league_id and league_id in DOUBLE_ROUND_ROBIN_LEAGUE_IDS:
-        try:
-            import storage
-            stored_c_ids = storage.get_team_identities_by_league("football", league_id)
-            min_expected = 18 if league_id in {78, 61, 88, 94} else 20
-            if len(stored_c_ids) >= min_expected:
-                return stored_c_ids
-        except Exception as exc:
-            logger.warning(
-                "Unable to obtain authoritative DB team universe for league %s: %s",
-                league_id,
-                exc,
-            )
 
     return []
 
@@ -487,6 +504,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             league_id,
             season,
             max_budget=provider_metadata.get("max_budget"),
+            allow_network=provider_metadata.get("allow_network", True),
         )
 
     if not expected_team_ids and is_double_round_robin and not fixtures:
@@ -2330,13 +2348,14 @@ class DataResolver:
         # Tier 1: API-Football for missing history
         if len(records) < last and team_id and not self.force_fallback:
             try:
+                historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
                 try:
-                    af_matches = api_football.get_recent_form(team_id, last=last * 2, league_id=league_id, season=season)
+                    af_matches = api_football.get_recent_form(team_id, last=last * 2, league_id=league_id, season=season, max_budget=historical_budget)
                 except TypeError:
                     try:
-                        af_matches = api_football.get_recent_form(team_id, last=last * 2, league_id=league_id)
+                        af_matches = api_football.get_recent_form(team_id, last=last * 2, league_id=league_id, max_budget=historical_budget)
                     except TypeError:
-                        af_matches = api_football.get_recent_form(team_id, last=last * 2)
+                        af_matches = api_football.get_recent_form(team_id, last=last * 2, max_budget=historical_budget)
 
                 if af_matches:
                     normalized = [_normalize_api_football_fixture(m) for m in af_matches if isinstance(m, dict)]
@@ -2397,372 +2416,366 @@ class DataResolver:
 
     def get_league_fixtures_page(self, league_id, season, page=1, max_budget=None, completed_only=True):
         """
-        DataResolver wrapper for league fixtures page acquisition with multi-provider gap filling and fallback.
-        Attempts API-Football first. If API-Football fails, returns incomplete or quota exhausted, continues to
-        football-data.org -> SoccerData (MatchHistory -> Sofascore).
-        Calculates missing fields for finished matches and fills gaps across secondary and tertiary providers.
-        When completed_only=True, returned fixtures are strictly filtered to FT, AET, PEN status.
+        DataResolver wrapper for league fixtures page acquisition with two-route fallback architecture.
+        1. Read-first persistence: Reuse stored historical fixtures when valid and structurally complete for requested season.
+        2. Primary Route: Try direct CSV/downloadable historical sources first, then SoccerData MatchHistory and Sofascore as appropriate.
+        3. Secondary Route: Use API-Football and football-data.org API only when validated primary coverage remains insufficient.
         """
-        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget)
         competition_format = (
             "double_round_robin"
             if league_id in DOUBLE_ROUND_ROBIN_LEAGUE_IDS
             else "unknown"
         )
 
-        primary_page = None
+        import storage
+
+        # 1. Read-first persistence: Reuse stored DB fixtures when dataset status is COMPLETE and verified
+        if page == 1 and league_id and season and not self.force_fallback:
+            ds_status = storage.get_historical_dataset_status(league_id, season)
+            if ds_status.get("status") == "COMPLETE":
+                db_stored = storage.get_historical_fixtures(league_id, season)
+                if db_stored:
+                    expected_team_ids_db = _get_authoritative_historical_team_ids(
+                        league_id, season, max_budget=max_budget, allow_network=False
+                    )
+                    db_coverage = _validate_historical_structural_coverage(
+                        db_stored,
+                        season=season,
+                        provider_metadata={
+                            "competition_format": competition_format,
+                            "expected_team_ids": expected_team_ids_db,
+                            "allow_network": False,
+                        },
+                        league_id=league_id,
+                    )
+                    if db_coverage["verified"] is True:
+                        return {
+                            "fixtures": db_stored,
+                            "expected_pages": 1,
+                            "current_page": 1,
+                            "source": "internal_db",
+                            "provider_metadata": {
+                                "competition_format": competition_format,
+                                "expected_team_ids": expected_team_ids_db,
+                                "is_complete": True,
+                                "is_partial": False,
+                                "structural_coverage": db_coverage,
+                                "providers_contributed": ["internal_db"],
+                            },
+                            "primary_failed": False,
+                            "primary_quota_exhausted": False,
+                        }
+
+        combined_fixtures = []
+
+        # 2. Primary Route: Direct CSV -> SoccerData MatchHistory -> SoccerData Sofascore
+        csv_fixtures = []
+        sd_mh_fixtures = []
+        sd_mh_meta = {}
+        sd_ss_fixtures = []
+        sd_ss_meta = {}
+
+        if page == 1:
+            # 2a. Direct CSV - Attempt direct downloadable CSV BEFORE network-dependent team-universe discovery
+            try:
+                csv_fixtures = _fetch_direct_csv_league_fixtures(league_id, season)
+            except Exception as csv_exc:
+                logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
+
+            if completed_only and csv_fixtures:
+                csv_fixtures = [
+                    f for f in csv_fixtures
+                    if isinstance(f, dict)
+                    and f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN")
+                ]
+
+            combined_fixtures = list(csv_fixtures)
+
+            # Validate direct CSV structural coverage using no-network team universe first
+            expected_team_ids_local = _get_authoritative_historical_team_ids(
+                league_id, season, max_budget=max_budget, allow_network=False
+            )
+            csv_coverage = _validate_historical_structural_coverage(
+                combined_fixtures,
+                season=season,
+                provider_metadata={
+                    "competition_format": competition_format,
+                    "expected_team_ids": expected_team_ids_local,
+                    "allow_network": False,
+                },
+                league_id=league_id,
+            )
+
+            if csv_coverage["verified"] is True:
+                return {
+                    "fixtures": combined_fixtures,
+                    "expected_pages": 1,
+                    "current_page": 1,
+                    "source": "football_data_csv",
+                    "provider_metadata": {
+                        "competition_format": competition_format,
+                        "expected_team_ids": expected_team_ids_local,
+                        "is_complete": True,
+                        "is_partial": False,
+                        "structural_coverage": csv_coverage,
+                        "providers_contributed": ["football_data_csv"],
+                    },
+                    "primary_failed": False,
+                    "primary_quota_exhausted": False,
+                }
+
+        # Resolve expected team universe if primary direct CSV alone was insufficient
+        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget, allow_network=True)
+
+        if page == 1:
+            # 2b. SoccerData MatchHistory
+            sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
+            if sd_mh_code:
+                try:
+                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
+                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                        sd_mh_fixtures = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
+                        sd_mh_meta = sd_meta_res or {}
+                except Exception as sd_exc:
+                    logger.warning(f"DataResolver MatchHistory primary route failed for league {league_id}: {sd_exc}")
+
+            if sd_mh_fixtures:
+                for sm in sd_mh_fixtures:
+                    matching = [cm for cm in combined_fixtures if _strict_fixture_match(cm, sm)]
+                    if matching:
+                        idx = combined_fixtures.index(matching[0])
+                        reconciled_rec = reconcile_fixture_records([matching[0], sm])
+                        if reconciled_rec:
+                            combined_fixtures[idx] = reconciled_rec
+                    else:
+                        combined_fixtures.append(sm)
+
+            mh_coverage = _validate_historical_structural_coverage(
+                combined_fixtures,
+                season=season,
+                provider_metadata={
+                    "competition_format": competition_format,
+                    "expected_team_ids": expected_team_ids,
+                },
+                league_id=league_id,
+            )
+
+            if mh_coverage["verified"] is True:
+                contribs = [
+                    p for p, count in [
+                        ("football_data_csv", len(csv_fixtures)),
+                        ("soccerdata_match_history", len(sd_mh_fixtures)),
+                    ] if count > 0
+                ]
+                return {
+                    "fixtures": combined_fixtures,
+                    "expected_pages": 1,
+                    "current_page": 1,
+                    "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                    "provider_metadata": {
+                        "competition_format": competition_format,
+                        "expected_team_ids": expected_team_ids,
+                        "is_complete": True,
+                        "is_partial": False,
+                        "structural_coverage": mh_coverage,
+                        "providers_contributed": contribs,
+                    },
+                    "primary_failed": False,
+                    "primary_quota_exhausted": False,
+                }
+
+            # 2c. SoccerData Sofascore
+            sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
+            if sd_ss_code:
+                try:
+                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
+                    sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
+                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                        sd_ss_fixtures = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
+                    else:
+                        if "status" not in sd_ss_meta:
+                            sd_ss_meta["status"] = sd_status
+                except Exception as sd_exc:
+                    sd_ss_meta = {"status": "SOURCE_FAILED", "error": str(sd_exc)}
+                    logger.warning(f"DataResolver Sofascore primary route failed for league {league_id}: {sd_exc}")
+
+            if sd_ss_fixtures:
+                for sm in sd_ss_fixtures:
+                    matching = [cm for cm in combined_fixtures if _strict_fixture_match(cm, sm)]
+                    if matching:
+                        idx = combined_fixtures.index(matching[0])
+                        reconciled_rec = reconcile_fixture_records([matching[0], sm])
+                        if reconciled_rec:
+                            combined_fixtures[idx] = reconciled_rec
+                    else:
+                        combined_fixtures.append(sm)
+
+            primary_route_coverage = _validate_historical_structural_coverage(
+                combined_fixtures,
+                season=season,
+                provider_metadata={
+                    "competition_format": competition_format,
+                    "expected_team_ids": expected_team_ids,
+                },
+                league_id=league_id,
+            )
+
+            if primary_route_coverage["verified"] is True:
+                contribs = [
+                    p for p, count in [
+                        ("football_data_csv", len(csv_fixtures)),
+                        ("soccerdata_match_history", len(sd_mh_fixtures)),
+                        ("soccerdata_sofascore", len(sd_ss_fixtures)),
+                    ] if count > 0
+                ]
+                return {
+                    "fixtures": combined_fixtures,
+                    "expected_pages": 1,
+                    "current_page": 1,
+                    "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                    "provider_metadata": {
+                        "competition_format": competition_format,
+                        "expected_team_ids": expected_team_ids,
+                        "is_complete": True,
+                        "is_partial": False,
+                        "structural_coverage": primary_route_coverage,
+                        "providers_contributed": contribs,
+                    },
+                    "primary_failed": False,
+                    "primary_quota_exhausted": False,
+                }
+
+        # 3. Secondary Route: API-Football -> football-data.org API
         primary_failed = False
         primary_quota_exhausted = False
-        primary_fixtures_for_fallback = []
+        primary_page = None
 
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        import storage
         req_cnt = storage.get_api_request_count("api_football", today_str)
         if max_budget is not None and req_cnt >= max_budget:
             primary_failed = True
             primary_quota_exhausted = True
-            logger.info(f"API-Football daily request budget ceiling reached ({req_cnt}/{max_budget}). Skipping primary API request.")
+            logger.info(f"API-Football daily request budget ceiling reached ({req_cnt}/{max_budget}). Skipping API-Football request.")
         else:
             try:
                 primary_page = api_football.get_league_fixtures_page(league_id, season, page=page, max_budget=max_budget)
             except api_football.APIFootballQuotaExhaustedError as exc:
                 primary_failed = True
                 primary_quota_exhausted = True
-                logger.warning(f"DataResolver primary get_league_fixtures_page quota exhausted for league {league_id}: {exc}")
+                logger.warning(f"DataResolver secondary route get_league_fixtures_page quota exhausted for league {league_id}: {exc}")
             except Exception as exc:
                 primary_failed = True
-                logger.warning(f"DataResolver primary get_league_fixtures_page failed for league {league_id}: {exc}")
+                logger.warning(f"DataResolver secondary route get_league_fixtures_page failed for league {league_id}: {exc}")
 
-        # If primary provider succeeded without exception:
+        af_fixtures = []
         if primary_page is not None and isinstance(primary_page, dict):
             raw_fixtures = primary_page.get("fixtures", [])
-            if not isinstance(raw_fixtures, list):
-                raw_fixtures = []
+            if isinstance(raw_fixtures, list):
+                af_fixtures = [_normalize_api_football_fixture(f, league_id, season) for f in raw_fixtures if isinstance(f, dict)]
 
-            primary_fixtures = [_normalize_api_football_fixture(f, league_id, season) for f in raw_fixtures if isinstance(f, dict)]
+            if completed_only and af_fixtures:
+                af_fixtures = [
+                    f for f in af_fixtures
+                    if isinstance(f, dict)
+                    and f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN")
+                ]
 
-            fd_matches = []
-            sd_matches = []
+        if af_fixtures:
+            for af in af_fixtures:
+                matching = [cm for cm in combined_fixtures if _strict_fixture_match(cm, af)]
+                if matching:
+                    idx = combined_fixtures.index(matching[0])
+                    reconciled_rec = reconcile_fixture_records([matching[0], af])
+                    if reconciled_rec:
+                        combined_fixtures[idx] = reconciled_rec
+                else:
+                    combined_fixtures.append(af)
 
-            if primary_fixtures:
-                needs_gap_filling = any(
-                    f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN") and
-                    len(get_missing_fixture_fields(f, require_stats=True)) > 0
-                    for f in primary_fixtures
-                )
+        stored_db_fixtures = storage.get_historical_fixtures(league_id, season) if (league_id and season) else []
+        all_accumulated_fixtures = list(combined_fixtures)
+        if stored_db_fixtures:
+            seen_fids = {f.get("fixture", {}).get("id") for f in combined_fixtures if isinstance(f, dict) and f.get("fixture", {}).get("id")}
+            for db_f in stored_db_fixtures:
+                if isinstance(db_f, dict):
+                    fid = db_f.get("fixture", {}).get("id")
+                    if fid and fid not in seen_fids:
+                        seen_fids.add(fid)
+                        all_accumulated_fixtures.append(db_f)
 
-                if needs_gap_filling:
-                    comp_code = LEAGUE_TO_FD_CODE.get(league_id)
-                    if comp_code and page == 1:
-                        try:
-                            fd_res = football_data_api.get_competition_matches(comp_code, season=season)
-                            matches = fd_res.get("matches", []) if isinstance(fd_res, dict) else (fd_res if isinstance(fd_res, list) else [])
-                            fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
-                        except Exception as fd_exc:
-                            logger.warning(f"DataResolver secondary get_league_fixtures_page failed for league {league_id}: {fd_exc}")
+        af_coverage = _validate_historical_structural_coverage(
+            all_accumulated_fixtures,
+            season=season,
+            provider_metadata={
+                "competition_format": competition_format,
+                "expected_team_ids": expected_team_ids,
+            },
+            league_id=league_id,
+        )
 
-                    still_has_gaps = any(
-                        f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN") and
-                        len(get_missing_fixture_fields(f, require_stats=True)) > 0
-                        for f in primary_fixtures
-                    )
+        exp_pages = primary_page.get("expected_pages", 1) if primary_page else 1
 
-                    if page == 1 and still_has_gaps:
-                        sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
-                        if sd_mh_code:
-                            try:
-                                sd_status, sd_games, _ = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
-                                if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                                    sd_matches = sd_games
-                            except Exception as sd_exc:
-                                logger.warning(f"DataResolver tertiary MatchHistory get_league_fixtures_page failed for league {league_id}: {sd_exc}")
-
-                        if not sd_matches:
-                            sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
-                            if sd_ss_code:
-                                try:
-                                    sd_status, sd_games, _ = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
-                                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                                        sd_matches = sd_games
-                                except Exception as sd_exc:
-                                    logger.warning(f"DataResolver tertiary Sofascore get_league_fixtures_page failed for league {league_id}: {sd_exc}")
-
-                reconciled = []
-                for pf in primary_fixtures:
-                    matching_fd = [m for m in fd_matches if _strict_fixture_match(pf, m)]
-                    matching_sd = [m for m in sd_matches if _strict_fixture_match(pf, m)]
-                    candidates = [pf] + matching_fd + matching_sd
-                    merged = reconcile_fixture_records(candidates)
-                    reconciled.append(merged or pf)
-
-                if completed_only:
-                    reconciled = [
-                        f
-                        for f in reconciled
-                        if isinstance(f, dict)
-                        and f.get("fixture", {}).get("status", {}).get("short")
-                        in ("FT", "AET", "PEN")
-                    ]
-
-                import storage
-                stored_db_fixtures = storage.get_historical_fixtures(league_id, season) if (league_id and season) else []
-                all_primary_fixtures = list(reconciled)
-                if stored_db_fixtures:
-                    seen_ids = {f.get("fixture", {}).get("id") for f in reconciled if isinstance(f, dict) and f.get("fixture", {}).get("id")}
-                    for db_f in stored_db_fixtures:
-                        if isinstance(db_f, dict):
-                            fid = db_f.get("fixture", {}).get("id")
-                            if fid and fid not in seen_ids:
-                                seen_ids.add(fid)
-                                all_primary_fixtures.append(db_f)
-
-                final_coverage = _validate_historical_structural_coverage(
-                    all_primary_fixtures,
-                    season=season,
-                    provider_metadata={
-                        "competition_format": competition_format,
-                        "expected_team_ids": expected_team_ids,
-                    },
-                    league_id=league_id,
-                )
-
-                provider_metadata = {
+        if af_coverage["verified"] is True or (primary_page and page < exp_pages):
+            contribs = [
+                p for p, count in [
+                    ("football_data_csv", len(csv_fixtures)),
+                    ("soccerdata_match_history", len(sd_mh_fixtures)),
+                    ("soccerdata_sofascore", len(sd_ss_fixtures)),
+                    ("api_football", len(af_fixtures)),
+                ] if count > 0
+            ]
+            return {
+                "fixtures": combined_fixtures,
+                "expected_pages": exp_pages,
+                "current_page": page,
+                "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "api_football"),
+                "provider_metadata": {
                     "competition_format": competition_format,
                     "expected_team_ids": expected_team_ids,
-                    "is_complete": final_coverage["verified"],
-                    "is_partial": not final_coverage["verified"],
-                    "structural_coverage": final_coverage,
-                    "providers_contributed": ["api_football"],
-                    "api_football": {
-                        "count": len(all_primary_fixtures),
-                        "is_complete": final_coverage["verified"],
-                        "is_partial": not final_coverage["verified"],
-                    },
-                }
+                    "is_complete": af_coverage["verified"],
+                    "is_partial": not af_coverage["verified"],
+                    "structural_coverage": af_coverage,
+                    "providers_contributed": contribs,
+                },
+                "primary_failed": primary_failed,
+                "primary_quota_exhausted": primary_quota_exhausted,
+            }
 
-                if final_coverage["verified"] is True or page < primary_page.get("expected_pages", 1):
-                    return {
-                        "fixtures": reconciled,
-                        "expected_pages": primary_page.get("expected_pages", 1),
-                        "current_page": primary_page.get("current_page", page),
-                        "source": "api_football",
-                        "provider_metadata": provider_metadata,
-                    }
-
-                primary_fixtures_for_fallback = list(reconciled)
-
-        # Fallback Hierarchy: football-data.org (API or direct CSV) -> SoccerData MatchHistory -> SoccerData Sofascore
-        # Merges candidate matches into combined_matches (retaining primary fixtures if available)
-        combined_matches = list(primary_fixtures_for_fallback)
-        exp_pages_fallback = primary_page.get("expected_pages", 1) if primary_page else 1
-
-        # Secondary Fallback: football-data.org (API if comp_code exists, otherwise direct CSV)
+        # Secondary 3b: football-data.org API
         fd_matches = []
         fd_meta = {}
-        fd_key_missing = False
         comp_code = LEAGUE_TO_FD_CODE.get(league_id)
-
-        if page == 1:
-            if comp_code:
-                try:
-                    fd_res = football_data_api.get_competition_matches(comp_code, season=season)
-                    if isinstance(fd_res, dict):
-                        matches = fd_res.get("matches", [])
-                        fd_meta = fd_res.get("metadata", {}) or {}
-                    else:
-                        matches = fd_res if isinstance(fd_res, list) else []
-                    fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
-                except Exception as fd_exc:
-                    if "FOOTBALL_DATA_API_KEY" in str(fd_exc):
-                        fd_key_missing = True
-                    else:
-                        logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
-
-            if not fd_matches and (fd_key_missing or not comp_code) and (primary_failed or not primary_fixtures_for_fallback or self.force_fallback):
-                try:
-                    direct_csv_matches = _fetch_direct_csv_league_fixtures(league_id, season)
-                    if direct_csv_matches:
-                        fd_matches = direct_csv_matches
-                except Exception as csv_exc:
-                    logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
+        if page == 1 and comp_code:
+            try:
+                fd_res = football_data_api.get_competition_matches(comp_code, season=season)
+                if isinstance(fd_res, dict):
+                    matches = fd_res.get("matches", [])
+                    fd_meta = fd_res.get("metadata", {}) or {}
+                else:
+                    matches = fd_res if isinstance(fd_res, list) else []
+                fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
+            except Exception as fd_exc:
+                logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
 
         if completed_only and fd_matches:
             fd_matches = [
-                f
-                for f in fd_matches
+                f for f in fd_matches
                 if isinstance(f, dict)
-                and f.get("fixture", {}).get("status", {}).get("short")
-                in ("FT", "AET", "PEN")
+                and f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN")
             ]
 
         if fd_matches:
             for fm in fd_matches:
-                matching = [cm for cm in combined_matches if _strict_fixture_match(cm, fm)]
+                matching = [cm for cm in combined_fixtures if _strict_fixture_match(cm, fm)]
                 if matching:
-                    idx = combined_matches.index(matching[0])
+                    idx = combined_fixtures.index(matching[0])
                     reconciled_rec = reconcile_fixture_records([matching[0], fm])
                     if reconciled_rec:
-                        combined_matches[idx] = reconciled_rec
+                        combined_fixtures[idx] = reconciled_rec
                 else:
-                    combined_matches.append(fm)
-
-        fd_coverage = _validate_historical_structural_coverage(
-            combined_matches,
-            season=season,
-            provider_metadata={
-                "competition_format": competition_format,
-                "expected_team_ids": expected_team_ids,
-            },
-            league_id=league_id,
-        )
-
-        if fd_coverage["verified"] is True:
-            contribs = [
-                p for p, count in [
-                    ("api_football", len(primary_fixtures_for_fallback)),
-                    ("football_data_org", len(fd_matches)),
-                ] if count > 0
-            ]
-            source_val = "mixed" if len(contribs) > 1 else ("soccerdata" if (contribs and "soccerdata" in contribs[0]) else (contribs[0] if contribs else "football_data_org"))
-            fd_provider_meta = {
-                "competition_format": competition_format,
-                "expected_team_ids": expected_team_ids,
-                "is_complete": True,
-                "is_partial": False,
-                "structural_coverage": fd_coverage,
-                "providers_contributed": contribs,
-                "api_football": {
-                    "count": len(primary_fixtures_for_fallback),
-                    "is_complete": False,
-                    "is_partial": True,
-                },
-                "football_data_org": {
-                    "count": len(fd_matches),
-                    "is_complete": True,
-                    "is_partial": False,
-                    "raw_metadata": fd_meta,
-                },
-            }
-            return {
-                "fixtures": combined_matches,
-                "expected_pages": exp_pages_fallback,
-                "current_page": page,
-                "source": source_val,
-                "provider_metadata": fd_provider_meta,
-                "primary_failed": primary_failed,
-                "primary_quota_exhausted": primary_quota_exhausted,
-            }
-
-        # Tertiary Tier 1: SoccerData MatchHistory
-        sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
-        sd_mh_matches = []
-        sd_mh_meta = {}
-
-        if page == 1 and sd_mh_code:
-            try:
-                sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
-                if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                    sd_mh_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
-                    sd_mh_meta = sd_meta_res or {}
-            except Exception as sd_exc:
-                logger.warning(f"DataResolver tertiary MatchHistory fallback failed for league {league_id}: {sd_exc}")
-
-        if sd_mh_matches:
-            for sm in sd_mh_matches:
-                matching = [cm for cm in combined_matches if _strict_fixture_match(cm, sm)]
-                if matching:
-                    idx = combined_matches.index(matching[0])
-                    reconciled_rec = reconcile_fixture_records([matching[0], sm])
-                    if reconciled_rec:
-                        combined_matches[idx] = reconciled_rec
-                else:
-                    combined_matches.append(sm)
-
-        mh_coverage = _validate_historical_structural_coverage(
-            combined_matches,
-            season=season,
-            provider_metadata={
-                "competition_format": competition_format,
-                "expected_team_ids": expected_team_ids,
-            },
-            league_id=league_id,
-        )
-
-        if mh_coverage["verified"] is True:
-            contribs = [
-                p for p, count in [
-                    ("api_football", len(primary_fixtures_for_fallback)),
-                    ("football_data_org", len(fd_matches)),
-                    ("soccerdata_match_history", len(sd_mh_matches)),
-                ] if count > 0
-            ]
-            source_val = "mixed" if len(contribs) > 1 else ("soccerdata" if (contribs and "soccerdata" in contribs[0]) else (contribs[0] if contribs else "soccerdata"))
-            mh_provider_meta = {
-                "competition_format": competition_format,
-                "expected_team_ids": expected_team_ids,
-                "is_complete": True,
-                "is_partial": False,
-                "structural_coverage": mh_coverage,
-                "providers_contributed": contribs,
-                "api_football": {
-                    "count": len(primary_fixtures_for_fallback),
-                    "is_complete": False,
-                    "is_partial": True,
-                },
-                "football_data_org": {
-                    "count": len(fd_matches),
-                    "is_complete": False,
-                    "is_partial": True,
-                    "raw_metadata": fd_meta,
-                },
-                "soccerdata_match_history": {
-                    "count": len(sd_mh_matches),
-                    "is_complete": True,
-                    "is_partial": False,
-                    "raw_metadata": sd_mh_meta,
-                },
-            }
-            return {
-                "fixtures": combined_matches,
-                "expected_pages": exp_pages_fallback,
-                "current_page": page,
-                "source": source_val,
-                "provider_metadata": mh_provider_meta,
-                "primary_failed": primary_failed,
-                "primary_quota_exhausted": primary_quota_exhausted,
-            }
-
-        # Tertiary Tier 2: SoccerData Sofascore (covers all 12 configured football leagues)
-        sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
-        sd_ss_matches = []
-        sd_ss_meta = {}
-
-        if page == 1 and sd_ss_code:
-            try:
-                sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
-                sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
-                if sd_status == "SOURCE_AVAILABLE" and sd_games:
-                    sd_ss_matches = _validate_and_filter_tertiary_matches(sd_games, league_id, season, completed_only=completed_only)
-                else:
-                    if "status" not in sd_ss_meta:
-                        sd_ss_meta["status"] = sd_status
-            except Exception as sd_exc:
-                sd_ss_meta = {"status": "SOURCE_FAILED", "error": str(sd_exc)}
-                logger.warning(f"DataResolver tertiary Sofascore fallback failed for league {league_id}: {sd_exc}")
-
-        if sd_ss_matches:
-            for sm in sd_ss_matches:
-                matching = [cm for cm in combined_matches if _strict_fixture_match(cm, sm)]
-                if matching:
-                    idx = combined_matches.index(matching[0])
-                    reconciled_rec = reconcile_fixture_records([matching[0], sm])
-                    if reconciled_rec:
-                        combined_matches[idx] = reconciled_rec
-                else:
-                    combined_matches.append(sm)
+                    combined_fixtures.append(fm)
 
         final_coverage = _validate_historical_structural_coverage(
-            combined_matches,
+            combined_fixtures,
             season=season,
             provider_metadata={
                 "competition_format": competition_format,
@@ -2773,14 +2786,15 @@ class DataResolver:
 
         contribs = [
             p for p, count in [
-                ("api_football", len(primary_fixtures_for_fallback)),
+                ("football_data_csv", len(csv_fixtures)),
+                ("soccerdata_match_history", len(sd_mh_fixtures)),
+                ("soccerdata_sofascore", len(sd_ss_fixtures)),
+                ("api_football", len(af_fixtures)),
                 ("football_data_org", len(fd_matches)),
-                ("soccerdata_match_history", len(sd_mh_matches)),
-                ("soccerdata_sofascore", len(sd_ss_matches)),
             ] if count > 0
         ]
 
-        final_source = "mixed" if len(contribs) > 1 else ("soccerdata" if (contribs and "soccerdata" in contribs[0]) else (contribs[0] if contribs else "none"))
+        final_source = "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "none")
 
         final_provider_metadata = {
             "competition_format": competition_format,
@@ -2790,24 +2804,24 @@ class DataResolver:
             "structural_coverage": final_coverage,
             "providers_contributed": contribs,
             "api_football": {
-                "count": len(primary_fixtures_for_fallback),
+                "count": len(af_fixtures),
                 "is_complete": False,
                 "is_partial": True,
             },
             "football_data_org": {
                 "count": len(fd_matches),
-                "is_complete": False,
-                "is_partial": True,
+                "is_complete": final_coverage["verified"],
+                "is_partial": not final_coverage["verified"],
                 "raw_metadata": fd_meta,
             },
             "soccerdata_match_history": {
-                "count": len(sd_mh_matches),
+                "count": len(sd_mh_fixtures),
                 "is_complete": False,
                 "is_partial": True,
                 "raw_metadata": sd_mh_meta,
             },
             "soccerdata_sofascore": {
-                "count": len(sd_ss_matches),
+                "count": len(sd_ss_fixtures),
                 "is_complete": False,
                 "is_partial": True,
                 "raw_metadata": sd_ss_meta,
@@ -2815,8 +2829,8 @@ class DataResolver:
         }
 
         return {
-            "fixtures": combined_matches,
-            "expected_pages": exp_pages_fallback,
+            "fixtures": combined_fixtures,
+            "expected_pages": exp_pages,
             "current_page": page,
             "source": final_source,
             "provider_metadata": final_provider_metadata,
@@ -2824,18 +2838,18 @@ class DataResolver:
             "primary_quota_exhausted": primary_quota_exhausted,
         }
 
-    def check_competition_coverage(self, league_id, season):
+    def check_competition_coverage(self, league_id, season, max_budget=None):
         """DataResolver owner for checking provider coverage for league + season."""
         import main as main_mod
-        return main_mod.check_competition_coverage(league_id, season)
+        return main_mod.check_competition_coverage(league_id, season, max_budget=max_budget)
 
-    def search_leagues(self, name):
+    def search_leagues(self, name, max_budget=None):
         """DataResolver owner for searching leagues by name."""
-        return api_football.search_leagues(name)
+        return api_football.search_leagues(name, max_budget=max_budget)
 
-    def get_league_coverage(self, league_id):
+    def get_league_coverage(self, league_id, max_budget=None):
         """DataResolver owner for getting league coverage metadata."""
-        return api_football.get_league_coverage(league_id)
+        return api_football.get_league_coverage(league_id, max_budget=max_budget)
 
     def raw_debug_call(self, endpoint, params):
         """DataResolver owner for raw debug calls."""
@@ -2997,7 +3011,8 @@ class DataResolver:
         # Tier 1: API-Football
         if team_id and not self.force_fallback:
             try:
-                af_stats = api_football.get_team_statistics(team_id, league_id, season)
+                historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
+                af_stats = api_football.get_team_statistics(team_id, league_id, season, max_budget=historical_budget)
                 if validate_team_stats_sufficiency(af_stats):
                     return af_stats
             except Exception as exc:
@@ -3186,7 +3201,8 @@ class DataResolver:
         # Tier 1: API-Football
         if home_id and away_id and not self.force_fallback:
             try:
-                af_raw = api_football.get_head_to_head(home_id, away_id, last=last * 2)
+                historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
+                af_raw = api_football.get_head_to_head(home_id, away_id, last=last * 2, max_budget=historical_budget)
                 if af_raw:
                     for m in af_raw:
                         norm = _normalize_api_football_fixture(m) if isinstance(m, dict) else None
@@ -3268,10 +3284,11 @@ class DataResolver:
         if not self.force_fallback:
             primary_attempted = True
             try:
+                historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
                 try:
-                    standings = api_football.get_league_standings(league_id, season)
+                    standings = api_football.get_league_standings(league_id, season, max_budget=historical_budget)
                 except TypeError:
-                    standings = api_football.get_league_standings(league_id)
+                    standings = api_football.get_league_standings(league_id, season)
 
                 suff_code, clean_standings = validate_standings_sufficiency(standings)
                 if suff_code in ("VALID_DATA", "VALID_EMPTY"):
