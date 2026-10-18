@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 import storage
 import config
+import data_resolver
 from data_resolver import DataResolver
 import historical_sync
 
@@ -53,19 +54,51 @@ def test_complete_dataset_zero_network_calls():
     with patch("requests.get", side_effect=RuntimeError("Network call requested!")), \
          patch("urllib.request.urlopen", side_effect=RuntimeError("Network call requested!")), \
          patch("api_football._get", side_effect=RuntimeError("Network call requested!")), \
+         patch("api_football.get_league_standings", side_effect=RuntimeError("Network call requested!")), \
          patch("football_data_api.get_competition_matches", side_effect=RuntimeError("Network call requested!")), \
-         patch("soccerdata_provider.get_match_history_games", side_effect=RuntimeError("Network call requested!")):
+         patch("football_data_api.get_competition_teams", side_effect=RuntimeError("Network call requested!")), \
+         patch("soccerdata_provider.get_match_history_games", side_effect=RuntimeError("Network call requested!")), \
+         patch("soccerdata_provider.get_sofascore_historical_games", side_effect=RuntimeError("Network call requested!")):
 
         # 1. Test sync_historical_fixtures
         res = historical_sync.sync_historical_fixtures(league_id, season)
         assert res["status"] == "COMPLETE"
         assert res["api_requests_consumed"] == 0
 
-        # 2. Test DataResolver.get_league_fixtures_page
+        # 2. Test DataResolver.get_league_fixtures_page page 1 and page 2
         resolver = DataResolver()
         page_res = resolver.get_league_fixtures_page(league_id, season, page=1)
         assert page_res["source"] == "internal_db"
         assert len(page_res["fixtures"]) == 380
+
+        page_res_p2 = resolver.get_league_fixtures_page(league_id, season, page=2)
+        assert page_res_p2["source"] == "internal_db"
+        assert len(page_res_p2["fixtures"]) == 0
+
+        # 3. Test verify_persisted_historical_datasets offline audit
+        audit_res = historical_sync.verify_persisted_historical_datasets(league_id=league_id, season=season)
+        assert audit_res["success"] is True
+
+
+def test_verification_audit_future_season_zero_records_fails():
+    """Verify that a future season dataset with zero records fails verification."""
+    future_season = 2028
+    audit_res = historical_sync.verify_persisted_historical_datasets(league_id=39, season=future_season)
+    assert audit_res["success"] is False
+    assert audit_res["failed_count"] == 1
+
+
+def test_api_football_normalization_provenance_is_secondary():
+    """Verify that API-Football fixture normalization classifies provider_type as 'secondary'."""
+    raw_fixture = {
+        "fixture": {"id": 101, "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
+        "league": {"id": 39, "season": 2024},
+        "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 2, "name": "Chelsea"}},
+        "goals": {"home": 2, "away": 1},
+    }
+    norm = data_resolver._normalize_api_football_fixture(raw_fixture, league_id=39, season=2024)
+    assert norm["provider_provenance"]["provider"] == "api_football"
+    assert norm["provider_provenance"]["provider_type"] == "secondary"
 
 def test_strict_provider_execution_ordering(monkeypatch):
     """

@@ -227,11 +227,11 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
                 continue
 
             # Generate positive integer provider team IDs deterministically from canonical identity
-            c_home = team_identity.bootstrap_historical_team_identity(
-                raw_name=raw_home, provider="football_data_csv", provider_team_id=None, league_id=league_id, sport="football"
+            c_home = team_identity.resolve_canonical_team_id(
+                raw_name=raw_home, provider="football_data_csv", provider_team_id=None, league_id=league_id, sport="football", auto_register=False
             )
-            c_away = team_identity.bootstrap_historical_team_identity(
-                raw_name=raw_away, provider="football_data_csv", provider_team_id=None, league_id=league_id, sport="football"
+            c_away = team_identity.resolve_canonical_team_id(
+                raw_name=raw_away, provider="football_data_csv", provider_team_id=None, league_id=league_id, sport="football", auto_register=False
             )
 
             if not c_home or not c_away:
@@ -240,13 +240,6 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
 
             csv_h_id = int(hashlib.sha256(f"fd_csv_team_{c_home}".encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
             csv_a_id = int(hashlib.sha256(f"fd_csv_team_{c_away}".encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
-
-            team_identity.bootstrap_historical_team_identity(
-                raw_name=raw_home, provider="football_data_csv", provider_team_id=csv_h_id, league_id=league_id, sport="football"
-            )
-            team_identity.bootstrap_historical_team_identity(
-                raw_name=raw_away, provider="football_data_csv", provider_team_id=csv_a_id, league_id=league_id, sport="football"
-            )
 
             # Process-stable deterministic synthetic fixture ID
             syn_id = f"fd_csv_{league_id}_{season}_{iso_date}_{c_home}_{c_away}"
@@ -1106,8 +1099,8 @@ def _validate_and_filter_tertiary_matches(matches, league_id, season, completed_
         h_obj["id"] = int(h_prov_id) if isinstance(h_prov_id, str) else h_prov_id
         a_obj["id"] = int(a_prov_id) if isinstance(a_prov_id, str) else a_prov_id
 
-        c_home = team_identity.bootstrap_historical_team_identity(h_name, prov_source, h_prov_id, league_id=league_id)
-        c_away = team_identity.bootstrap_historical_team_identity(a_name, prov_source, a_prov_id, league_id=league_id)
+        c_home = team_identity.resolve_canonical_team_id(h_name, prov_source, h_prov_id, league_id=league_id, sport="football", auto_register=False)
+        c_away = team_identity.resolve_canonical_team_id(a_name, prov_source, a_prov_id, league_id=league_id, sport="football", auto_register=False)
 
         if not c_home or not c_away:
             continue
@@ -1213,7 +1206,7 @@ def _normalize_api_football_fixture(fixture, league_id=None, season=None):
 
     res["provider_provenance"] = {
         "provider": "api_football",
-        "provider_type": "primary",
+        "provider_type": "secondary",
         "provider_fixture_id": fid,
         "provider_competition_id": league_data.get("id"),
         "provider_team_ids": {"home": home_id, "away": away_id},
@@ -1221,11 +1214,11 @@ def _normalize_api_football_fixture(fixture, league_id=None, season=None):
     }
 
     import team_identity
-    c_home = team_identity.bootstrap_historical_team_identity(
-        raw_name=home_name, provider="api_football", provider_team_id=home_id, league_id=league_id, sport="football"
+    c_home = team_identity.resolve_canonical_team_id(
+        raw_name=home_name, provider="api_football", provider_team_id=home_id, league_id=league_id, sport="football", auto_register=False
     )
-    c_away = team_identity.bootstrap_historical_team_identity(
-        raw_name=away_name, provider="api_football", provider_team_id=away_id, league_id=league_id, sport="football"
+    c_away = team_identity.resolve_canonical_team_id(
+        raw_name=away_name, provider="api_football", provider_team_id=away_id, league_id=league_id, sport="football", auto_register=False
     )
     if c_home:
         res["canonical_home_id"] = c_home
@@ -1305,11 +1298,11 @@ def _normalize_football_data_match(match, league_id, season):
     import team_identity
     h_name = home_team.get("shortName") or home_team.get("name")
     a_name = away_team.get("shortName") or away_team.get("name")
-    c_home = team_identity.bootstrap_historical_team_identity(
-        raw_name=h_name, provider="football_data_org", provider_team_id=fd_home_id, league_id=league_id, sport="football"
+    c_home = team_identity.resolve_canonical_team_id(
+        raw_name=h_name, provider="football_data_org", provider_team_id=fd_home_id, league_id=league_id, sport="football", auto_register=False
     )
-    c_away = team_identity.bootstrap_historical_team_identity(
-        raw_name=a_name, provider="football_data_org", provider_team_id=fd_away_id, league_id=league_id, sport="football"
+    c_away = team_identity.resolve_canonical_team_id(
+        raw_name=a_name, provider="football_data_org", provider_team_id=fd_away_id, league_id=league_id, sport="football", auto_register=False
     )
     if c_home:
         res["canonical_home_id"] = c_home
@@ -2074,11 +2067,11 @@ class DataResolver:
             lid = cand.get("league", {}).get("id") or league_id
             prov = cand.get("provider_provenance", {}).get("provider", "soccerdata")
 
-            c_home = cand.get("canonical_home_id") or team_identity.bootstrap_historical_team_identity(
-                h_name, prov, cand.get("teams", {}).get("home", {}).get("id"), league_id=lid
+            c_home = cand.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
+                raw_name=h_name, provider=prov, provider_team_id=cand.get("teams", {}).get("home", {}).get("id"), league_id=lid, sport="football", auto_register=False
             )
-            c_away = cand.get("canonical_away_id") or team_identity.bootstrap_historical_team_identity(
-                a_name, prov, cand.get("teams", {}).get("away", {}).get("id"), league_id=lid
+            c_away = cand.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
+                raw_name=a_name, provider=prov, provider_team_id=cand.get("teams", {}).get("away", {}).get("id"), league_id=lid, sport="football", auto_register=False
             )
             cand["canonical_home_id"] = c_home
             cand["canonical_away_id"] = c_away

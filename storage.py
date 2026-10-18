@@ -206,6 +206,7 @@ def init_db():
 
     Safe to call repeatedly.
     """
+    reset_quota_ledger_corruption_flag()
     conn, db_type = _connect()
 
     # Resolve canonical team identities before persisting
@@ -3649,6 +3650,15 @@ def get_api_request_count(provider, date_pattern):
         conn.close()
 
 
+_QUOTA_LEDGER_CORRUPTED = False
+
+
+def reset_quota_ledger_corruption_flag():
+    """Reset the persistent quota ledger corruption flag (for testing or explicit operator ledger recovery)."""
+    global _QUOTA_LEDGER_CORRUPTED
+    _QUOTA_LEDGER_CORRUPTED = False
+
+
 def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, request_type, global_limit=None):
     """
     Atomically reserve one API request credit if current usage is below limit.
@@ -3678,6 +3688,10 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
         overall_cap = min(_validate_non_negative_int(global_limit, "global_limit"), limit) if req_type == "live" else _validate_non_negative_int(global_limit, "global_limit")
 
     hist_cap = min(limit, 50) if req_type == "historical" else limit
+
+    global _QUOTA_LEDGER_CORRUPTED
+    if _QUOTA_LEDGER_CORRUPTED:
+        raise RuntimeError("Quota ledger state unestablished or corrupted; failing closed persistently until manual operator recovery.")
 
     timestamp = _utc_now()
     conn, db_type = _connect()
@@ -3788,15 +3802,15 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
                     conn.execute("ROLLBACK")
                 except Exception:
                     pass
-                # Table missing -> initialize schema and fail closed
+                # Table missing -> fail closed persistently
                 # (must not authorize requests when prior quota state is unestablished)
                 if "no such table" in str(op_err).lower():
+                    _QUOTA_LEDGER_CORRUPTED = True
                     try:
                         conn.close()
                     except Exception:
                         pass
-                    init_db()
-                    return False
+                    raise RuntimeError("api_request_counts table missing; failing closed persistently because prior daily usage is unestablished.")
 
                 raise
 

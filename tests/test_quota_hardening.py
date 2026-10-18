@@ -264,8 +264,8 @@ def test_max_budget_zero_blocks_all_requests(tmp_path, monkeypatch):
             football_data_api._get("competitions/PL/matches", max_budget=0)
 
 
-def test_missing_table_recovery_fails_closed_and_reinitializes(tmp_path, monkeypatch):
-    """Test missing-table SQLite recovery branch in storage.reserve_api_request() fails closed."""
+def test_missing_table_recovery_fails_closed_persistently(tmp_path, monkeypatch):
+    """Test missing-table SQLite recovery branch in storage.reserve_api_request() fails closed persistently."""
     import sqlite3
 
     db_file = str(tmp_path / "test_missing_table.db")
@@ -281,21 +281,34 @@ def test_missing_table_recovery_fails_closed_and_reinitializes(tmp_path, monkeyp
     conn.commit()
     conn.close()
 
-    # 3. Missing table must fail closed (return False) and re-initialize schema without authorizing request
-    res_hist = storage.reserve_api_request(
-        provider="api_football",
-        date_pattern="2026-10-18",
-        request_date="2026-10-18",
-        endpoint="fixtures",
-        limit=50,
-        request_type="historical",
-        global_limit=100,
-    )
-    assert res_hist is False
-    # Count should be 0 because request failed closed
-    assert storage.get_api_request_count("api_football", "2026-10-18") == 0
+    # 3. Missing table must fail closed (raise RuntimeError) and set corruption flag
+    with pytest.raises(RuntimeError) as exc_info:
+        storage.reserve_api_request(
+            provider="api_football",
+            date_pattern="2026-10-18",
+            request_date="2026-10-18",
+            endpoint="fixtures",
+            limit=50,
+            request_type="historical",
+            global_limit=100,
+        )
+    assert "failing closed" in str(exc_info.value).lower()
 
-    # 4. Now that schema is initialized, subsequent reservation succeeds normally
+    # 4. Subsequent reservation attempts MUST continue to fail closed persistently
+    with pytest.raises(RuntimeError) as exc_info2:
+        storage.reserve_api_request(
+            provider="api_football",
+            date_pattern="2026-10-18",
+            request_date="2026-10-18",
+            endpoint="fixtures",
+            limit=50,
+            request_type="historical",
+            global_limit=100,
+        )
+    assert "failing closed" in str(exc_info2.value).lower()
+
+    # 5. Only after explicit init_db() or reset_quota_ledger_corruption_flag() can requests resume
+    storage.init_db()
     res_next = storage.reserve_api_request(
         provider="api_football",
         date_pattern="2026-10-18",

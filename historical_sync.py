@@ -190,7 +190,7 @@ def sync_historical_fixtures(
     exp_p_stored = dataset_info.get("expected_pages", 0) if not refresh else 0
     p_comp_stored = dataset_info.get("pages_completed", 0) if not refresh else 0
     init_stored_count = storage.get_historical_fixture_count(league_id, season)
-    auth_teams = data_resolver._get_authoritative_historical_team_ids(league_id, season)
+    auth_teams = data_resolver._get_authoritative_historical_team_ids(league_id, season, allow_network=False)
     expected_count = len(auth_teams) * (len(auth_teams) - 1) if auth_teams else None
     if not refresh and p_comp_stored > 0 and exp_p_stored > 1 and not dataset_info.get("acquisition_complete"):
         if expected_count is not None and init_stored_count >= expected_count:
