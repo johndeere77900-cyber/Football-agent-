@@ -243,3 +243,83 @@ def test_concurrent_sqlite_mixed_live_and_historical_reservations_capped_at_100(
 
     final_count = storage.get_api_request_count("api_football", "2026-10-18")
     assert final_count == len(hist_successes) + len(live_successes)
+
+
+def test_missing_table_recovery_historical_and_live_quota_enforced(tmp_path, monkeypatch):
+    """Test missing-table SQLite recovery branch in storage.reserve_api_request()."""
+    import sqlite3
+
+    db_file = str(tmp_path / "test_missing_table.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
+
+    # 1. Initialize schema first
+    storage.init_db()
+
+    # 2. Intentionally drop api_request_counts table to simulate missing table
+    conn = sqlite3.connect(db_file)
+    conn.execute("DROP TABLE api_request_counts")
+    conn.commit()
+    conn.close()
+
+    # 3. Test missing-table recovery for historical request (should re-init table and reserve)
+    res_hist = storage.reserve_api_request(
+        provider="api_football",
+        date_pattern="2026-10-18",
+        request_date="2026-10-18",
+        endpoint="fixtures",
+        limit=50,
+        request_type="historical",
+        global_limit=100,
+    )
+    assert res_hist is True
+    assert storage.get_api_request_count("api_football", "2026-10-18") == 1
+
+    # 4. Drop table again
+    conn = sqlite3.connect(db_file)
+    conn.execute("DROP TABLE api_request_counts")
+    conn.commit()
+    conn.close()
+
+    # 5. Test missing-table recovery for live request with global_limit=None (capped at limit)
+    res_live = storage.reserve_api_request(
+        provider="odds_api",
+        date_pattern="2026-10%",
+        request_date="2026-10-18",
+        endpoint="sports/odds",
+        limit=10,
+        request_type="live",
+        global_limit=None,
+    )
+    assert res_live is True
+    assert storage.get_api_request_count("odds_api", "2026-10%") == 1
+
+    # 6. Drop table again, fill to limit (10) via recovery and assert 11th is denied
+    conn = sqlite3.connect(db_file)
+    conn.execute("DROP TABLE api_request_counts")
+    conn.commit()
+    conn.close()
+
+    for i in range(10):
+        ok = storage.reserve_api_request(
+            provider="odds_api",
+            date_pattern="2026-10%",
+            request_date="2026-10-18",
+            endpoint="sports/odds",
+            limit=10,
+            request_type="live",
+            global_limit=None,
+        )
+        assert ok is True
+
+    denied = storage.reserve_api_request(
+        provider="odds_api",
+        date_pattern="2026-10%",
+        request_date="2026-10-18",
+        endpoint="sports/odds",
+        limit=10,
+        request_type="live",
+        global_limit=None,
+    )
+    assert denied is False
+    assert storage.get_api_request_count("odds_api", "2026-10%") == 10

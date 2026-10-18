@@ -3790,40 +3790,62 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
                     pass
                 # Table missing -> initialize schema and retry
                 if "no such table" in str(op_err).lower():
-                    conn.close()
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
                     init_db()
                     conn, _ = _connect()
                     conn.isolation_level = None
-                    conn.execute("BEGIN IMMEDIATE")
-                    row_total = conn.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
-                        (provider, request_date),
-                    ).fetchone()
-                    total_count = row_total[0] if row_total else 0
+                    try:
+                        conn.execute("BEGIN IMMEDIATE")
+                        if "%" in date_pattern:
+                            row_total = conn.execute(
+                                "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
+                                (provider, date_pattern),
+                            ).fetchone()
+                        else:
+                            row_total = conn.execute(
+                                "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
+                                (provider, request_date),
+                            ).fetchone()
+                        total_count = row_total[0] if row_total else 0
 
-                    if total_count >= global_limit:
-                        conn.execute("ROLLBACK")
-                        return False
-
-                    if req_type == "historical":
-                        row_hist = conn.execute(
-                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ? AND (request_type = 'historical' OR request_type IS NULL)",
-                            (provider, request_date),
-                        ).fetchone()
-                        hist_count = row_hist[0] if row_hist else 0
-                        if hist_count >= limit:
+                        if total_count >= overall_cap:
                             conn.execute("ROLLBACK")
                             return False
 
-                    conn.execute(
-                        """
-                        INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (provider, timestamp, request_date, endpoint, req_type),
-                    )
-                    conn.execute("COMMIT")
-                    return True
+                        if req_type == "historical":
+                            if "%" in date_pattern:
+                                row_hist = conn.execute(
+                                    "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ? AND (request_type = 'historical' OR request_type IS NULL)",
+                                    (provider, date_pattern),
+                                ).fetchone()
+                            else:
+                                row_hist = conn.execute(
+                                    "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ? AND (request_type = 'historical' OR request_type IS NULL)",
+                                    (provider, request_date),
+                                ).fetchone()
+                            hist_count = row_hist[0] if row_hist else 0
+                            if hist_count >= hist_cap:
+                                conn.execute("ROLLBACK")
+                                return False
+
+                        conn.execute(
+                            """
+                            INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (provider, timestamp, request_date, endpoint, req_type),
+                        )
+                        conn.execute("COMMIT")
+                        return True
+                    except Exception:
+                        try:
+                            conn.execute("ROLLBACK")
+                        except Exception:
+                            pass
+                        raise
 
                 raise
 
