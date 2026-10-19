@@ -105,11 +105,22 @@ def _cache_set(cache_key, endpoint, params, data):
 
 def _check_and_consume_quota(endpoint, max_budget=None):
     global_limit = int(getattr(config, "FOOTBALL_DATA_DAILY_LIMIT", 100))
-    limit = min(global_limit, max_budget) if max_budget else global_limit
+    if max_budget is not None:
+        try:
+            budget_val = max(0, int(max_budget))
+        except (ValueError, TypeError):
+            budget_val = global_limit
+        limit = min(global_limit, budget_val)
+    else:
+        limit = global_limit
+
+    if limit <= 0:
+        raise FootballDataQuotaExhaustedError("football-data.org budget is 0.")
+
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
-        reserved = storage.reserve_api_request("football_data_org", today_str, today_str, endpoint, limit)
+        reserved = storage.reserve_api_request("football_data_org", today_str, today_str, endpoint, limit, request_type="historical")
     except Exception as exc:
         raise FootballDataQuotaExhaustedError(f"Storage error during quota check: {exc}") from exc
 

@@ -17,16 +17,32 @@ ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 
 # --- API Quotas & Limits -----------------------------------------------------
 API_FOOTBALL_DAILY_CREDIT_LIMIT = 100
-API_FOOTBALL_HISTORICAL_DAILY_BUDGET = min(
-    50,
-    int(os.environ.get("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
-)
+
+def _parse_historical_daily_budget(env_var_name, default=50, max_cap=50):
+    val_str = os.environ.get(env_var_name)
+    if val_str is None:
+        return default
+    val_str = str(val_str).strip()
+    if val_str.lower() in ("false", "0"):
+        return 0
+    if val_str.lower() in ("true", "none", "null"):
+        return default
+    if "." in val_str:
+        return default
+    try:
+        val = int(val_str)
+        if val < 0:
+            return 0
+        return min(max_cap, val)
+    except (ValueError, TypeError):
+        return default
+
+API_FOOTBALL_HISTORICAL_DAILY_BUDGET = _parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", default=50, max_cap=50)
+
 API_BASKETBALL_DAILY_CREDIT_LIMIT = int(
     os.environ.get("API_BASKETBALL_DAILY_CREDIT_LIMIT", 100)
 )
-API_BASKETBALL_HISTORICAL_DAILY_BUDGET = int(
-    os.environ.get("API_BASKETBALL_HISTORICAL_DAILY_BUDGET", 50)
-)
+API_BASKETBALL_HISTORICAL_DAILY_BUDGET = _parse_historical_daily_budget("API_BASKETBALL_HISTORICAL_DAILY_BUDGET", default=50, max_cap=50)
 ODDS_API_MONTHLY_REQUEST_LIMIT = 500
 
 # --- Cache TTL Settings -----------------------------------------------------

@@ -368,13 +368,32 @@ def init_db():
                 )
                 cur.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS quota_ledger_status (
+                        id INTEGER PRIMARY KEY,
+                        is_corrupted INTEGER NOT NULL DEFAULT 0,
+                        corrupted_at TEXT,
+                        reason TEXT
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO quota_ledger_status (id, is_corrupted)
+                    VALUES (1, 0)
+                    ON CONFLICT (id) DO NOTHING
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS api_request_counts (
                         id SERIAL PRIMARY KEY,
                         provider TEXT,
                         request_timestamp TEXT,
                         request_date TEXT,
-                        endpoint TEXT
+                        endpoint TEXT,
+                        request_type TEXT DEFAULT 'historical'
                     )
+                    ALTER TABLE api_request_counts ADD COLUMN IF NOT EXISTS request_type TEXT DEFAULT 'historical';
                     """
                 )
                 cur.execute(
@@ -506,6 +525,7 @@ def init_db():
                 cur.execute("ALTER TABLE historical_datasets ADD COLUMN IF NOT EXISTS rejected_count INTEGER NOT NULL DEFAULT 0")
                 cur.execute("ALTER TABLE historical_datasets ADD COLUMN IF NOT EXISTS empty_pages_count INTEGER NOT NULL DEFAULT 0")
                 cur.execute("ALTER TABLE historical_datasets ADD COLUMN IF NOT EXISTS error_reason TEXT")
+                cur.execute("ALTER TABLE historical_datasets ADD COLUMN IF NOT EXISTS expected_team_ids_json JSONB")
                 cur.execute(
                     """
                     DO $$
@@ -798,15 +818,34 @@ def init_db():
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS quota_ledger_status (
+                    id INTEGER PRIMARY KEY,
+                    is_corrupted INTEGER NOT NULL DEFAULT 0,
+                    corrupted_at TEXT,
+                    reason TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO quota_ledger_status (id, is_corrupted)
+                VALUES (1, 0)
+                ON CONFLICT (id) DO NOTHING
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS api_request_counts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     provider TEXT,
                     request_timestamp TEXT,
                     request_date TEXT,
-                    endpoint TEXT
+                    endpoint TEXT,
+                    request_type TEXT DEFAULT 'historical'
                 )
                 """
             )
+            _ensure_column_sqlite(conn, "api_request_counts", "request_type", "TEXT DEFAULT 'historical'")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS historical_fixtures (
@@ -988,6 +1027,7 @@ def init_db():
             _ensure_column_sqlite(conn, "historical_datasets", "rejected_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column_sqlite(conn, "historical_datasets", "empty_pages_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column_sqlite(conn, "historical_datasets", "error_reason", "TEXT")
+            _ensure_column_sqlite(conn, "historical_datasets", "expected_team_ids_json", "TEXT")
 
             tbl_info = conn.execute("PRAGMA table_info(historical_datasets)").fetchall()
             col_names = [row[1] for row in tbl_info]
@@ -2177,7 +2217,8 @@ def get_historical_dataset_status(league_id, season, sport="football"):
                 cur.execute(
                     """
                     SELECT status, fixture_count, expected_pages, pages_completed,
-                           acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, error_reason
+                           acquisition_complete, enrichment_status, rejected_count, empty_pages_count,
+                           completed_at, updated_at, error_reason, expected_team_ids_json
                     FROM historical_datasets
                     WHERE sport = %s AND league_id = %s AND season = %s
                     """,
@@ -2189,7 +2230,8 @@ def get_historical_dataset_status(league_id, season, sport="football"):
                 row = conn.execute(
                     """
                     SELECT status, fixture_count, expected_pages, pages_completed,
-                           acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, error_reason
+                           acquisition_complete, enrichment_status, rejected_count, empty_pages_count,
+                           completed_at, updated_at, error_reason, expected_team_ids_json
                     FROM historical_datasets
                     WHERE sport = ? AND league_id = ? AND season = ?
                     """,
@@ -2202,7 +2244,8 @@ def get_historical_dataset_status(league_id, season, sport="football"):
                 row = conn.execute(
                     """
                     SELECT status, fixture_count, expected_pages, pages_completed,
-                           acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, error_reason
+                           acquisition_complete, enrichment_status, rejected_count, empty_pages_count,
+                           completed_at, updated_at, error_reason, expected_team_ids_json
                     FROM historical_datasets
                     WHERE sport = ? AND league_id = ? AND season = ?
                     """,
@@ -2225,6 +2268,7 @@ def get_historical_dataset_status(league_id, season, sport="football"):
                 "completed_at": row[8],
                 "updated_at": row[9],
                 "error_reason": row[10],
+                "expected_team_ids": _json_loads(row[11]) if len(row) > 11 else None,
             }
 
         return {
@@ -2260,6 +2304,7 @@ def mark_historical_dataset_complete(
     enrichment_status="NONE",
     rejected_count=0,
     empty_pages_count=0,
+    expected_team_ids=None,
 ):
     """
     Mark a historical dataset as COMPLETE.
@@ -2297,6 +2342,7 @@ def mark_historical_dataset_complete(
 
     acq_int = 1 if acquisition_complete else 0
     now_str = _utc_now()
+    exp_team_ids_json = _json_dumps(expected_team_ids, "expected_team_ids") if expected_team_ids is not None else None
     conn, db_type = _connect()
 
     try:
@@ -2306,9 +2352,9 @@ def mark_historical_dataset_complete(
                     """
                     INSERT INTO historical_datasets (
                         sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
-                        acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, source, error_reason
+                        acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, source, error_reason, expected_team_ids_json
                     )
-                    VALUES (%s, %s, %s, 'COMPLETE', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL)
+                    VALUES (%s, %s, %s, 'COMPLETE', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)
                     ON CONFLICT (sport, league_id, season) DO UPDATE SET
                         status = 'COMPLETE',
                         fixture_count = EXCLUDED.fixture_count,
@@ -2321,11 +2367,12 @@ def mark_historical_dataset_complete(
                         completed_at = EXCLUDED.completed_at,
                         updated_at = EXCLUDED.updated_at,
                         source = EXCLUDED.source,
-                        error_reason = NULL
+                        error_reason = NULL,
+                        expected_team_ids_json = COALESCE(EXCLUDED.expected_team_ids_json, historical_datasets.expected_team_ids_json)
                     """,
                     (
                         sport, league_id, season, fixture_count, expected_pages, pages_completed,
-                        acq_int, enrichment_status, rejected_count, empty_pages_count, now_str, now_str, source,
+                        acq_int, enrichment_status, rejected_count, empty_pages_count, now_str, now_str, source, exp_team_ids_json,
                     ),
                 )
             conn.commit()
@@ -2334,9 +2381,9 @@ def mark_historical_dataset_complete(
                 """
                 INSERT INTO historical_datasets (
                     sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
-                    acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, source, error_reason
+                    acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, source, error_reason, expected_team_ids_json
                 )
-                VALUES (?, ?, ?, 'COMPLETE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, 'COMPLETE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
                 ON CONFLICT (sport, league_id, season) DO UPDATE SET
                     status = 'COMPLETE',
                     fixture_count = excluded.fixture_count,
@@ -2349,11 +2396,12 @@ def mark_historical_dataset_complete(
                     completed_at = excluded.completed_at,
                     updated_at = excluded.updated_at,
                     source = excluded.source,
-                    error_reason = NULL
+                    error_reason = NULL,
+                    expected_team_ids_json = COALESCE(excluded.expected_team_ids_json, historical_datasets.expected_team_ids_json)
                 """,
                 (
                     sport, league_id, season, fixture_count, expected_pages, pages_completed,
-                    acq_int, enrichment_status, rejected_count, empty_pages_count, now_str, now_str, source,
+                    acq_int, enrichment_status, rejected_count, empty_pages_count, now_str, now_str, source, exp_team_ids_json,
                 ),
             )
             conn.commit()
@@ -2377,6 +2425,7 @@ def mark_historical_dataset_incomplete(
     rejected_count=0,
     empty_pages_count=0,
     error_reason=None,
+    expected_team_ids=None,
 ):
     """
     Mark or keep a historical dataset status as INCOMPLETE.
@@ -2399,6 +2448,7 @@ def mark_historical_dataset_incomplete(
 
     acq_int = 1 if acquisition_complete else 0
     now_str = _utc_now()
+    exp_team_ids_json = _json_dumps(expected_team_ids, "expected_team_ids") if expected_team_ids is not None else None
     conn, db_type = _connect()
 
     try:
@@ -2408,9 +2458,9 @@ def mark_historical_dataset_incomplete(
                     """
                     INSERT INTO historical_datasets (
                         sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
-                        acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, source, error_reason
+                        acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, source, error_reason, expected_team_ids_json
                     )
-                    VALUES (%s, %s, %s, 'INCOMPLETE', %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s)
+                    VALUES (%s, %s, %s, 'INCOMPLETE', %s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s)
                     ON CONFLICT (sport, league_id, season) DO UPDATE SET
                         status = 'INCOMPLETE',
                         fixture_count = EXCLUDED.fixture_count,
@@ -2422,11 +2472,12 @@ def mark_historical_dataset_incomplete(
                         empty_pages_count = EXCLUDED.empty_pages_count,
                         updated_at = EXCLUDED.updated_at,
                         source = EXCLUDED.source,
-                        error_reason = EXCLUDED.error_reason
+                        error_reason = EXCLUDED.error_reason,
+                        expected_team_ids_json = COALESCE(EXCLUDED.expected_team_ids_json, historical_datasets.expected_team_ids_json)
                     """,
                     (
                         sport, league_id, season, fixture_count, expected_pages, pages_completed,
-                        acq_int, enrichment_status, rejected_count, empty_pages_count, now_str, source, error_reason,
+                        acq_int, enrichment_status, rejected_count, empty_pages_count, now_str, source, error_reason, exp_team_ids_json,
                     ),
                 )
             conn.commit()
@@ -2435,9 +2486,9 @@ def mark_historical_dataset_incomplete(
                 """
                 INSERT INTO historical_datasets (
                     sport, league_id, season, status, fixture_count, expected_pages, pages_completed,
-                    acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, source, error_reason
+                    acquisition_complete, enrichment_status, rejected_count, empty_pages_count, completed_at, updated_at, source, error_reason, expected_team_ids_json
                 )
-                VALUES (?, ?, ?, 'INCOMPLETE', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+                VALUES (?, ?, ?, 'INCOMPLETE', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
                 ON CONFLICT (sport, league_id, season) DO UPDATE SET
                     status = 'INCOMPLETE',
                     fixture_count = excluded.fixture_count,
@@ -2449,11 +2500,12 @@ def mark_historical_dataset_incomplete(
                     empty_pages_count = excluded.empty_pages_count,
                     updated_at = excluded.updated_at,
                     source = excluded.source,
-                    error_reason = excluded.error_reason
+                    error_reason = excluded.error_reason,
+                    expected_team_ids_json = COALESCE(excluded.expected_team_ids_json, historical_datasets.expected_team_ids_json)
                 """,
                 (
                     sport, league_id, season, fixture_count, expected_pages, pages_completed,
-                    acq_int, enrichment_status, rejected_count, empty_pages_count, now_str, source, error_reason,
+                    acq_int, enrichment_status, rejected_count, empty_pages_count, now_str, source, error_reason, exp_team_ids_json,
                 ),
             )
             conn.commit()
@@ -3573,169 +3625,367 @@ def record_api_request(provider, endpoint, request_date=None):
         conn.close()
 
 
-def get_api_request_count(provider, date_pattern):
+def get_api_request_count(provider, date_pattern, request_type=None):
     """
     Get request count for a provider over a date pattern.
 
     e.g., date_pattern="2026-09-30" (daily) or date_pattern="2026-09%" (monthly).
+    If request_type="historical", counts historical calls + legacy NULL/empty rows.
+    If request_type="live", counts live calls.
+    If request_type=None, counts total calls regardless of request_type.
     """
     conn, db_type = _connect()
 
     try:
+        placeholder = "%s" if db_type == "postgres" else "?"
+        date_op = "LIKE" if "%" in date_pattern else "="
+
+        query_params = [provider, date_pattern]
+        type_clause = ""
+
+        if request_type == "historical":
+            type_clause = " AND (request_type = 'historical' OR request_type IS NULL OR request_type = '')"
+        elif request_type == "live":
+            type_clause = f" AND request_type = {placeholder}"
+            query_params.append("live")
+        elif request_type is not None:
+            type_clause = f" AND request_type = {placeholder}"
+            query_params.append(str(request_type))
+
+        query = f"SELECT COUNT(*) FROM api_request_counts WHERE provider = {placeholder} AND request_date {date_op} {placeholder}{type_clause}"
+
         if db_type == "postgres":
             with conn.cursor() as cur:
-                if "%" in date_pattern:
-                    cur.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = %s AND request_date LIKE %s",
-                        (provider, date_pattern),
-                    )
-                else:
-                    cur.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = %s AND request_date = %s",
-                        (provider, date_pattern),
-                    )
+                cur.execute(query, query_params)
                 row = cur.fetchone()
                 return row[0] if row else 0
         else:
             try:
-                if "%" in date_pattern:
-                    row = conn.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
-                        (provider, date_pattern),
-                    ).fetchone()
-                else:
-                    row = conn.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
-                        (provider, date_pattern),
-                    ).fetchone()
+                row = conn.execute(query, query_params).fetchone()
                 return row[0] if row else 0
             except sqlite3.OperationalError:
-                # Table missing -> init db and retry
                 conn.close()
                 init_db()
                 conn, _ = _connect()
-                if "%" in date_pattern:
-                    row = conn.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
-                        (provider, date_pattern),
-                    ).fetchone()
-                else:
-                    row = conn.execute(
-                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
-                        (provider, date_pattern),
-                    ).fetchone()
+                row = conn.execute(query, query_params).fetchone()
                 return row[0] if row else 0
     except Exception:
         return 0
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
-def reserve_api_request(provider, date_pattern, request_date, endpoint, limit):
+_QUOTA_LEDGER_CORRUPTED = False
+
+
+def is_quota_ledger_corrupted():
+    """
+    Check if the quota ledger health is corrupted or untrusted.
+    Fails closed (returns True) if in-memory flag is True, persistent state indicates corruption,
+    or if persistent health state is missing, unreadable, or database query fails.
+    """
+    global _QUOTA_LEDGER_CORRUPTED
+    if _QUOTA_LEDGER_CORRUPTED:
+        return True
+
+    try:
+        conn, db_type = _connect()
+        try:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute("SELECT is_corrupted FROM quota_ledger_status WHERE id = 1")
+                    row = cur.fetchone()
+                    if row is None or row[0] == 1:
+                        _QUOTA_LEDGER_CORRUPTED = True
+                        return True
+                    return False
+            else:
+                row = conn.execute("SELECT is_corrupted FROM quota_ledger_status WHERE id = 1").fetchone()
+                if row is None or row[0] == 1:
+                    _QUOTA_LEDGER_CORRUPTED = True
+                    return True
+                return False
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception:
+        _QUOTA_LEDGER_CORRUPTED = True
+        return True
+
+
+def _mark_quota_ledger_corrupted(reason):
+    """Mark quota ledger corrupted persistently across process restarts and DB initializations."""
+    global _QUOTA_LEDGER_CORRUPTED
+    _QUOTA_LEDGER_CORRUPTED = True
+    now_str = _utc_now()
+    try:
+        conn, db_type = _connect()
+        try:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO quota_ledger_status (id, is_corrupted, corrupted_at, reason)
+                        VALUES (1, 1, %s, %s)
+                        ON CONFLICT (id) DO UPDATE SET
+                            is_corrupted = 1,
+                            corrupted_at = EXCLUDED.corrupted_at,
+                            reason = EXCLUDED.reason
+                        """,
+                        (now_str, str(reason)),
+                    )
+                conn.commit()
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO quota_ledger_status (id, is_corrupted, corrupted_at, reason)
+                    VALUES (1, 1, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        is_corrupted = 1,
+                        corrupted_at = excluded.corrupted_at,
+                        reason = excluded.reason
+                    """,
+                    (now_str, str(reason)),
+                )
+                conn.commit()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        _QUOTA_LEDGER_CORRUPTED = True
+        raise RuntimeError(f"Failed to persist quota ledger corruption state: {exc}") from exc
+
+
+def restore_quota_ledger_trust(operator_reason):
+    """
+    Explicit, auditable recovery operation to restore quota ledger trust after verifying ledger state.
+    Must durably persist recovery in quota_ledger_status before clearing in-memory corruption flag.
+    Raises RuntimeError if persistent DB update fails.
+    """
+    _validate_text(operator_reason, "operator_reason")
+    global _QUOTA_LEDGER_CORRUPTED
+    now_str = _utc_now()
+    try:
+        conn, db_type = _connect()
+        try:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO quota_ledger_status (id, is_corrupted, corrupted_at, reason)
+                        VALUES (1, 0, NULL, %s)
+                        ON CONFLICT (id) DO UPDATE SET
+                            is_corrupted = 0,
+                            corrupted_at = NULL,
+                            reason = EXCLUDED.reason
+                        """,
+                        (f"RECOVERED: {operator_reason} at {now_str}",),
+                    )
+                conn.commit()
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO quota_ledger_status (id, is_corrupted, corrupted_at, reason)
+                    VALUES (1, 0, NULL, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        is_corrupted = 0,
+                        corrupted_at = NULL,
+                        reason = excluded.reason
+                    """,
+                    (f"RECOVERED: {operator_reason} at {now_str}",),
+                )
+                conn.commit()
+            _QUOTA_LEDGER_CORRUPTED = False
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        _QUOTA_LEDGER_CORRUPTED = True
+        raise RuntimeError(f"Failed to durably persist quota ledger trust recovery: {exc}") from exc
+
+
+def reset_quota_ledger_corruption_flag():
+    """Reset the persistent quota ledger corruption flag (wrapper around restore_quota_ledger_trust for testing)."""
+    restore_quota_ledger_trust("Explicit reset via reset_quota_ledger_corruption_flag")
+
+
+def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, request_type, global_limit=None):
     """
     Atomically reserve one API request credit if current usage is below limit.
 
+    Enforces both:
+    1. Overall daily credit limit for provider on request_date (global_limit).
+    2. Specific limit for request_type (e.g., limit <= 50 for historical).
+
+    Accepts ONLY request_type in ('historical', 'live'). Rejects missing, empty, or unsupported values with ValueError.
     Returns True if reserved successfully, False if quota exhausted.
     Fails closed by raising RuntimeError on database connection/query failures.
     """
+    if not isinstance(request_type, str) or not request_type.strip():
+        raise ValueError(f"request_type must be a non-empty string ('historical' or 'live'). Received: {request_type!r}")
+
+    req_type = request_type.strip().lower()
+    if req_type not in ("historical", "live"):
+        raise ValueError(f"Unsupported request_type: {request_type!r}. Must be 'historical' or 'live'.")
+
+    limit = _validate_non_negative_int(limit, "limit")
+    if req_type == "historical":
+        limit = min(limit, 50)
+
+    if global_limit is None:
+        overall_cap = limit
+    else:
+        overall_cap = min(_validate_non_negative_int(global_limit, "global_limit"), limit) if req_type == "live" else _validate_non_negative_int(global_limit, "global_limit")
+
+    hist_cap = min(limit, 50) if req_type == "historical" else limit
+
+    if is_quota_ledger_corrupted():
+        raise RuntimeError("Quota ledger state unestablished or corrupted; failing closed persistently until manual operator recovery.")
+
     timestamp = _utc_now()
     conn, db_type = _connect()
 
     try:
         if db_type == "postgres":
-            lock_key = f"{provider}:{date_pattern}"
+            lock_key = f"{provider}:{request_date}"
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
                     if "%" in date_pattern:
                         cur.execute(
                             """
-                            INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint)
-                            SELECT %s, %s, %s, %s
+                            INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type)
+                            SELECT %s, %s, %s, %s, %s
                             WHERE (
                                 SELECT COUNT(*) FROM api_request_counts
                                 WHERE provider = %s AND request_date LIKE %s
                             ) < %s
+                            AND (
+                                %s != 'historical' OR (
+                                    SELECT COUNT(*) FROM api_request_counts
+                                    WHERE provider = %s AND request_date LIKE %s AND (request_type = 'historical' OR request_type IS NULL OR request_type = '')
+                                ) < %s
+                            )
                             RETURNING id
                             """,
-                            (provider, timestamp, request_date, endpoint, provider, date_pattern, limit),
+                            (
+                                provider, timestamp, request_date, endpoint, req_type,
+                                provider, date_pattern, overall_cap,
+                                req_type, provider, date_pattern, hist_cap
+                            ),
                         )
                     else:
                         cur.execute(
                             """
-                            INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint)
-                            SELECT %s, %s, %s, %s
+                            INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type)
+                            SELECT %s, %s, %s, %s, %s
                             WHERE (
                                 SELECT COUNT(*) FROM api_request_counts
                                 WHERE provider = %s AND request_date = %s
                             ) < %s
+                            AND (
+                                %s != 'historical' OR (
+                                    SELECT COUNT(*) FROM api_request_counts
+                                    WHERE provider = %s AND request_date = %s AND (request_type = 'historical' OR request_type IS NULL OR request_type = '')
+                                ) < %s
+                            )
                             RETURNING id
                             """,
-                            (provider, timestamp, request_date, endpoint, provider, date_pattern, limit),
+                            (
+                                provider, timestamp, request_date, endpoint, req_type,
+                                provider, request_date, overall_cap,
+                                req_type, provider, request_date, hist_cap
+                            ),
                         )
                     row = cur.fetchone()
                     return row is not None
 
         else:
+            conn.isolation_level = None  # Autocommit mode for explicit BEGIN IMMEDIATE transaction control
             try:
-                with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if "%" in date_pattern:
+                    row_total = conn.execute(
+                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
+                        (provider, date_pattern),
+                    ).fetchone()
+                else:
+                    row_total = conn.execute(
+                        "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
+                        (provider, request_date),
+                    ).fetchone()
+                total_count = row_total[0] if row_total else 0
+
+                if total_count >= overall_cap:
+                    conn.execute("ROLLBACK")
+                    return False
+
+                if req_type == "historical":
                     if "%" in date_pattern:
-                        row = conn.execute(
-                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
+                        row_hist = conn.execute(
+                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ? AND (request_type = 'historical' OR request_type IS NULL OR request_type = '')",
                             (provider, date_pattern),
                         ).fetchone()
                     else:
-                        row = conn.execute(
-                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
-                            (provider, date_pattern),
+                        row_hist = conn.execute(
+                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ? AND (request_type = 'historical' OR request_type IS NULL OR request_type = '')",
+                            (provider, request_date),
                         ).fetchone()
-
-                    count = row[0] if row else 0
-                    if count >= limit:
+                    hist_count = row_hist[0] if row_hist else 0
+                    if hist_count >= hist_cap:
+                        conn.execute("ROLLBACK")
                         return False
 
-                    conn.execute(
-                        """
-                        INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (provider, timestamp, request_date, endpoint),
-                    )
-                    return True
-            except sqlite3.OperationalError:
-                # Table missing -> initialize schema and retry
-                conn.close()
-                init_db()
-                conn, _ = _connect()
-                with conn:
-                    if "%" in date_pattern:
-                        row = conn.execute(
-                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date LIKE ?",
-                            (provider, date_pattern),
-                        ).fetchone()
-                    else:
-                        row = conn.execute(
-                            "SELECT COUNT(*) FROM api_request_counts WHERE provider = ? AND request_date = ?",
-                            (provider, date_pattern),
-                        ).fetchone()
+                conn.execute(
+                    """
+                    INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (provider, timestamp, request_date, endpoint, req_type),
+                )
+                conn.execute("COMMIT")
+                return True
 
-                    count = row[0] if row else 0
-                    if count >= limit:
-                        return False
+            except sqlite3.OperationalError as op_err:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                # Table missing -> fail closed persistently
+                # (must not authorize requests when prior quota state is unestablished)
+                if "no such table" in str(op_err).lower():
+                    _mark_quota_ledger_corrupted("api_request_counts table missing")
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    raise RuntimeError("api_request_counts table missing; failing closed persistently because prior daily usage is unestablished.")
 
-                    conn.execute(
-                        """
-                        INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (provider, timestamp, request_date, endpoint),
-                    )
-                    return True
+                raise
+
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
 
     except Exception as exc:
         raise RuntimeError(f"Database quota reservation error; failing closed: {exc}") from exc
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # ----------------------------------------------------------------------

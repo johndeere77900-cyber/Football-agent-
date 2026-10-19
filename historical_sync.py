@@ -172,7 +172,7 @@ def sync_historical_fixtures(
             current_status = "INCOMPLETE"
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    initial_request_count = storage.get_api_request_count("api_football", today_str)
+    initial_request_count = storage.get_api_request_count("api_football", today_str, request_type="historical")
 
     quota_budget_stopped = False
     acquisition_failed = False
@@ -190,7 +190,7 @@ def sync_historical_fixtures(
     exp_p_stored = dataset_info.get("expected_pages", 0) if not refresh else 0
     p_comp_stored = dataset_info.get("pages_completed", 0) if not refresh else 0
     init_stored_count = storage.get_historical_fixture_count(league_id, season)
-    auth_teams = data_resolver._get_authoritative_historical_team_ids(league_id, season)
+    auth_teams = data_resolver._get_authoritative_historical_team_ids(league_id, season, allow_network=False)
     expected_count = len(auth_teams) * (len(auth_teams) - 1) if auth_teams else None
     if not refresh and p_comp_stored > 0 and exp_p_stored > 1 and not dataset_info.get("acquisition_complete"):
         if expected_count is not None and init_stored_count >= expected_count:
@@ -213,10 +213,8 @@ def sync_historical_fixtures(
     total_empty_pages_count = dataset_info.get("empty_pages_count", 0) if not refresh else 0
     all_rejection_reasons = {}
 
-    # Preflight coverage check via DataResolver
+    # DataResolver instance initialized without preflight network calls
     resolver = DataResolver()
-    cov_status, cov_reason = resolver.check_competition_coverage(league_id, season, max_budget=historical_budget)
-    primary_available = (cov_status != "season_not_available")
 
     current_page = start_p
     while True:
@@ -228,13 +226,13 @@ def sync_historical_fixtures(
             page_expected = page_meta.get("expected_pages", 1)
             page_source = str(page_meta.get("source") or "api_football")
 
-            if page_meta.get("primary_quota_exhausted"):
+            if page_meta.get("secondary_quota_exhausted"):
                 quota_budget_stopped = True
                 if not last_error_reason:
                     last_error_reason = "quota_budget_exhausted_during_acquisition"
 
-            if page_meta.get("primary_failed") and not page_fixtures:
-                if page_meta.get("primary_quota_exhausted"):
+            if page_meta.get("secondary_failed") and not page_fixtures:
+                if page_meta.get("secondary_quota_exhausted"):
                     print(f"API Quota exhausted during fixture fetch on page {current_page}", flush=True)
                     break
                 else:
@@ -351,7 +349,7 @@ def sync_historical_fixtures(
 
     # Optional statistical enrichment acquisition
     if with_enrichment and not quota_budget_stopped and not acquisition_failed:
-        current_reqs = storage.get_api_request_count("api_football", today_str)
+        current_reqs = storage.get_api_request_count("api_football", today_str, request_type="historical")
         if current_reqs >= historical_budget:
             quota_budget_stopped = True
             last_error_reason = "quota_budget_exhausted_during_enrichment"
@@ -389,7 +387,7 @@ def sync_historical_fixtures(
                     last_error_reason = "api_error_during_enrichment"
                     print(f"API acquisition error during enrichment fetch: {exc}", flush=True)
 
-    final_reqs = storage.get_api_request_count("api_football", today_str)
+    final_reqs = storage.get_api_request_count("api_football", today_str, request_type="historical")
     total_consumed = final_reqs - initial_request_count
 
     final_stored_count = storage.get_historical_fixture_count(league_id, season)
@@ -467,6 +465,8 @@ def sync_historical_fixtures(
     else:
         manifest_source = page_source_val
 
+    exp_team_ids_to_save = db_coverage.get("expected_team_ids") if isinstance(db_coverage, dict) else None
+
     if is_fully_complete:
         storage.mark_historical_dataset_complete(
             league_id,
@@ -480,6 +480,7 @@ def sync_historical_fixtures(
             enrichment_status=enrichment_status,
             rejected_count=rejected_count,
             empty_pages_count=total_empty_pages_count,
+            expected_team_ids=exp_team_ids_to_save,
         )
         final_status = "COMPLETE"
     else:
@@ -504,6 +505,7 @@ def sync_historical_fixtures(
             rejected_count=rejected_count,
             empty_pages_count=total_empty_pages_count,
             error_reason=last_error_reason,
+            expected_team_ids=exp_team_ids_to_save,
         )
         final_status = "INCOMPLETE"
 
@@ -675,7 +677,7 @@ def sync_historical_basketball_games(
             current_status = "INCOMPLETE"
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    initial_request_count = storage.get_api_request_count("api_basketball", today_str)
+    initial_request_count = storage.get_api_request_count("api_basketball", today_str, request_type="historical")
 
     quota_budget_stopped = False
     acquisition_failed = False
@@ -806,7 +808,7 @@ def sync_historical_basketball_games(
             print(f"API acquisition error during basketball games fetch on page {current_page}: {exc}", flush=True)
             break
 
-    requests_after = storage.get_api_request_count("api_basketball", today_str)
+    requests_after = storage.get_api_request_count("api_basketball", today_str, request_type="historical")
     total_consumed = requests_after - initial_request_count
 
     valid_count = total_valid_games
@@ -920,9 +922,9 @@ def run_safe_preflight(seasons: list, queue_items: list) -> None:
 
     # 5. Confirm current API request counters
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    fb_reqs = storage.get_api_request_count("api_football", today_str)
+    fb_reqs = storage.get_api_request_count("api_football", today_str, request_type="historical")
     fb_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
-    bb_reqs = storage.get_api_request_count("api_basketball", today_str)
+    bb_reqs = storage.get_api_request_count("api_basketball", today_str, request_type="historical")
     bb_budget = int(getattr(config, "API_BASKETBALL_HISTORICAL_DAILY_BUDGET", 50))
 
     print(f"API Request Counters Today ({today_str}):", flush=True)
@@ -1248,7 +1250,12 @@ def verify_persisted_historical_datasets(
                 issues.append(f"count_mismatch(manifest={manifest_count},actual={actual_count})")
 
             if manifest_status == "COMPLETE":
-                cov = data_resolver._validate_historical_structural_coverage(records, season=ssn, league_id=lid)
+                cov = data_resolver._validate_historical_structural_coverage(
+                    records,
+                    season=ssn,
+                    league_id=lid,
+                    provider_metadata={"allow_network": False},
+                )
                 if not cov.get("verified"):
                     issues.append(f"failed_football_structural_coverage({cov.get('reason')})")
 

@@ -217,25 +217,33 @@ def _check_and_consume_quota(endpoint, max_budget=None, request_type="historical
     Fails closed: if quota storage cannot be queried or updated, raises
     APIFootballQuotaExhaustedError to prevent unauthorized/untracked external API requests.
     """
-    global_limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
-    historical_limit = min(50, int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50)))
+    if not request_type or not isinstance(request_type, str):
+        raise ValueError(f"Invalid or missing request_type: {request_type!r}. Must be 'historical' or 'live'.")
 
-    if request_type == "live":
+    req_type = request_type.strip().lower()
+    if req_type not in ("historical", "live"):
+        raise ValueError(f"Unsupported request_type: {request_type!r}. Must be 'historical' or 'live'.")
+
+    global_limit = int(getattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100))
+    hist_cfg = getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50)
+    historical_limit = min(50, hist_cfg if isinstance(hist_cfg, int) and hist_cfg >= 0 else 50)
+
+    if req_type == "live":
         limit = global_limit
         if max_budget is not None:
             try:
                 budget_val = int(max_budget)
-                if budget_val > 0:
+                if budget_val >= 0:
                     limit = min(limit, budget_val)
             except (TypeError, ValueError):
                 pass
     else:
         # Historical context
-        limit = min(global_limit, historical_limit)
+        limit = historical_limit
         if max_budget is not None:
             try:
                 budget_val = int(max_budget)
-                if budget_val > 0:
+                if budget_val >= 0:
                     limit = min(limit, budget_val)
             except (TypeError, ValueError):
                 pass
@@ -243,7 +251,15 @@ def _check_and_consume_quota(endpoint, max_budget=None, request_type="historical
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
-        reserved = storage.reserve_api_request("api_football", today_str, today_str, endpoint, limit)
+        reserved = storage.reserve_api_request(
+            "api_football",
+            today_str,
+            today_str,
+            endpoint,
+            limit=limit,
+            request_type=req_type,
+            global_limit=global_limit,
+        )
     except Exception as exc:
         raise APIFootballQuotaExhaustedError(
             f"Quota storage error; failing closed: {exc}"

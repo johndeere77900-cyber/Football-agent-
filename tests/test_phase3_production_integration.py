@@ -55,16 +55,21 @@ def test_production_football_pre_match_route_e2e(tmp_path, monkeypatch):
         },
     }
 
+    import team_identity
+    team_identity.bootstrap_historical_team_identity("Arsenal", "api_football", 10, league_id=39)
+    team_identity.bootstrap_historical_team_identity("Chelsea", "api_football", 20, league_id=39)
+    team_identity.bootstrap_historical_team_identity("Opponent 99", "api_football", 99, league_id=39)
+
     import data_resolver
     recent_mock = [
         {
             "fixture": {"id": 8001, "date": "2025-01-05T15:00:00+00:00", "status": {"short": "FT"}},
-            "teams": {"home": {"id": 10}, "away": {"id": 99}},
+            "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 99, "name": "Opponent 99"}},
             "goals": {"home": 2, "away": 0},
         },
         {
             "fixture": {"id": 8002, "date": "2025-01-05T15:00:00+00:00", "status": {"short": "FT"}},
-            "teams": {"home": {"id": 20}, "away": {"id": 99}},
+            "teams": {"home": {"id": 20, "name": "Chelsea"}, "away": {"id": 99, "name": "Opponent 99"}},
             "goals": {"home": 2, "away": 0},
         },
     ]
@@ -131,16 +136,21 @@ def test_production_football_live_route_e2e(tmp_path, monkeypatch):
         "current_score": {"home": 1, "away": 0},
     }
 
+    import team_identity
+    team_identity.bootstrap_historical_team_identity("Arsenal", "api_football", 10, league_id=39)
+    team_identity.bootstrap_historical_team_identity("Chelsea", "api_football", 20, league_id=39)
+    team_identity.bootstrap_historical_team_identity("Opponent 99", "api_football", 99, league_id=39)
+
     import data_resolver
     live_recent_mock = [
         {
             "fixture": {"id": 8003, "date": "2025-01-05T15:00:00+00:00", "status": {"short": "FT"}},
-            "teams": {"home": {"id": 10}, "away": {"id": 99}},
+            "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 99, "name": "Opponent 99"}},
             "goals": {"home": 2, "away": 0},
         },
         {
             "fixture": {"id": 8004, "date": "2025-01-05T15:00:00+00:00", "status": {"short": "FT"}},
-            "teams": {"home": {"id": 20}, "away": {"id": 99}},
+            "teams": {"home": {"id": 20, "name": "Chelsea"}, "away": {"id": 99, "name": "Opponent 99"}},
             "goals": {"home": 2, "away": 0},
         },
     ]

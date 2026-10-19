@@ -83,15 +83,19 @@ def test_quota_ceiling_stops_paginated_fetch_at_budget(temp_db, monkeypatch):
 
     current_page_call = 0
 
+    fixture_call_count = 0
+
     def fake_get(endpoint, params, max_budget=None, **kwargs):
-        nonlocal current_page_call
+        nonlocal current_page_call, fixture_call_count
         current_page_call += 1
         if current_page_call > 3:
             raise api_football.APIFootballQuotaExhaustedError("Historical quota budget reached (3).")
-        page = params.get("page", 1) if isinstance(params, dict) else 1
+        if endpoint == "standings":
+            return {"response": [{"league": {"standings": [[{"team": {"id": 1, "name": "Team 1"}}, {"team": {"id": 2, "name": "Team 2"}}]]}}]}
+        fixture_call_count += 1
         return {
-            "paging": {"current": page, "total": 5},
-            "response": [sample_fixture(9010 + current_page_call)],
+            "paging": {"current": fixture_call_count, "total": 5},
+            "response": [sample_fixture(9010 + fixture_call_count)],
         }
 
     with patch("api_football._get", side_effect=fake_get), \
