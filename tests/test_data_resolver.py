@@ -20,7 +20,14 @@ def init_test_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def mock_team_universe(monkeypatch):
+def mock_team_universe(init_test_db, monkeypatch):
+    for lid in (39, 140, 135, 78, 2, 61, 88, 94):
+        num_teams = 20 if lid in (39, 140, 135, 78, 2) else 18
+        for tid in range(1, num_teams + 1):
+            p_id = lid * 1000 + tid
+            cid = f"football_team_{lid}_team_{tid}"
+            team_identity.register_canonical_team_identity(cid, f"Team {tid}", "api_football", p_id, league_id=lid)
+
     def _mock_get_team_ids(league_id, season, *args, **kwargs):
         if league_id in (39, 140, 135, 78, 2):
             raw_ids = list(range(1, 21))
@@ -28,14 +35,7 @@ def mock_team_universe(monkeypatch):
             raw_ids = list(range(1, 19))
         else:
             return []
-        canonical_ids = []
-        for tid in raw_ids:
-            cid = team_identity.bootstrap_historical_team_identity(
-                f"Team {tid}", "api_football", tid, league_id=league_id
-            )
-            if cid:
-                canonical_ids.append(cid)
-        return canonical_ids
+        return [f"football_team_{league_id}_team_{tid}" for tid in raw_ids]
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
 
 

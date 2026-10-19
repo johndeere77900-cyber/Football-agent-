@@ -21,10 +21,11 @@ def mock_team_universe(monkeypatch):
     import team_identity
     canonical_team_ids = []
     for tid in range(1, 21):
-        cid = team_identity.bootstrap_historical_team_identity(f"Team {tid}", "soccerdata_match_history", tid, league_id=39)
-        team_identity.bootstrap_historical_team_identity(f"Team {tid}", "api_football", tid, league_id=39)
-        team_identity.bootstrap_historical_team_identity(f"Team {tid}", "football_data_org", tid, league_id=39)
-        team_identity.bootstrap_historical_team_identity(f"Team {tid}", "soccerdata_sofascore", tid, league_id=39)
+        cid = f"football_team_39_team_{tid}"
+        team_identity.register_canonical_team_identity(cid, f"Team {tid}", "soccerdata_match_history", tid, league_id=39)
+        team_identity.register_canonical_team_identity(cid, f"Team {tid}", "api_football", tid, league_id=39)
+        team_identity.register_canonical_team_identity(cid, f"Team {tid}", "football_data_org", tid, league_id=39)
+        team_identity.register_canonical_team_identity(cid, f"Team {tid}", "soccerdata_sofascore", tid, league_id=39)
         canonical_team_ids.append(cid)
 
     def _mock_get_team_ids(league_id, season, *args, **kwargs):
@@ -293,7 +294,7 @@ def test_sofascore_status_partial_data_when_team_ids_missing(mock_subproc):
         "team_id_map_size": 0,
         "enrichment_error": None,
     }
-    mock_proc.stdout = json.dumps(payload)
+    mock_proc.stdout = "SOCCERDATA_JSON_START\n" + json.dumps(payload) + "\nSOCCERDATA_JSON_END"
     mock_subproc.return_value = mock_proc
 
     status, matches, meta = soccerdata_provider.get_sofascore_historical_games("ENG-Premier League", 2024, league_id=39)
@@ -326,7 +327,7 @@ def test_sofascore_status_available_when_team_ids_present(mock_subproc):
         "team_id_map_size": 1,
         "enrichment_error": None,
     }
-    mock_proc.stdout = json.dumps(payload)
+    mock_proc.stdout = "SOCCERDATA_JSON_START\n" + json.dumps(payload) + "\nSOCCERDATA_JSON_END"
     mock_subproc.return_value = mock_proc
 
     status, matches, meta = soccerdata_provider.get_sofascore_historical_games("ENG-Premier League", 2024, league_id=39)
@@ -416,3 +417,88 @@ def test_soccerdata_reached_when_fd_returns_structurally_incomplete_dataset(mock
     assert mock_sd_ss.call_count == 1
     assert res["provider_metadata"]["is_complete"] is False
     assert res["provider_metadata"]["structural_coverage"]["verified"] is False
+
+
+# Regression tests for Subprocess stdout marker isolation & failure modes
+@patch("subprocess.run")
+def test_match_history_stdout_marker_isolation_with_prefix_logs(mock_subproc):
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    records = [
+        {
+            "game_id": 500101,
+            "date": "2024-09-01T15:00:00Z",
+            "home_team": "Arsenal",
+            "away_team": "Chelsea",
+            "home_score": 2,
+            "away_score": 1,
+            "league": "Premier League",
+            "season": 2024,
+        }
+    ]
+    # Simulate dependency stdout noise before boundary markers
+    stdout_noise = "INFO: Initializing soccerdata scraper...\nINFO: Reading games...\n"
+    mock_proc.stdout = f"{stdout_noise}SOCCERDATA_JSON_START\n" + json.dumps(records) + "\nSOCCERDATA_JSON_END\n"
+    mock_subproc.return_value = mock_proc
+
+    status, matches, meta = soccerdata_provider.get_match_history_games("ENG-Premier League", 2024, league_id=39)
+
+    assert status == "SOURCE_AVAILABLE"
+    assert len(matches) == 1
+    assert matches[0]["fixture"]["id"] == 500101
+
+
+@patch("subprocess.run")
+def test_match_history_stdout_missing_markers_fails_closed(mock_subproc):
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    # Missing boundary markers
+    mock_proc.stdout = "INFO: Output without markers: [{'game_id': 1}]"
+    mock_subproc.return_value = mock_proc
+
+    status, matches, meta = soccerdata_provider.get_match_history_games("ENG-Premier League", 2024, league_id=39)
+
+    assert status == "SOURCE_FAILED"
+    assert len(matches) == 0
+    assert "Missing boundary markers" in meta.get("error", "")
+
+
+@patch("subprocess.run")
+def test_match_history_stdout_malformed_json_fails_closed(mock_subproc):
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = "SOCCERDATA_JSON_START\n{invalid_json: true}\nSOCCERDATA_JSON_END"
+    mock_subproc.return_value = mock_proc
+
+    status, matches, meta = soccerdata_provider.get_match_history_games("ENG-Premier League", 2024, league_id=39)
+
+    assert status == "SOURCE_FAILED"
+    assert len(matches) == 0
+    assert "JSON parse error" in meta.get("error", "")
+
+
+@patch("subprocess.run")
+def test_match_history_subprocess_nonzero_exit_fails_closed(mock_subproc):
+    mock_proc = MagicMock()
+    mock_proc.returncode = 1
+    mock_proc.stderr = "C-level library crash in subprocess"
+    mock_proc.stdout = ""
+    mock_subproc.return_value = mock_proc
+
+    status, matches, meta = soccerdata_provider.get_match_history_games("ENG-Premier League", 2024, league_id=39)
+
+    assert status == "SOURCE_FAILED"
+    assert len(matches) == 0
+    assert "C-level library crash" in meta.get("error", "")
+
+
+@patch("subprocess.run")
+def test_match_history_subprocess_timeout_fails_closed(mock_subproc):
+    import subprocess
+    mock_subproc.side_effect = subprocess.TimeoutExpired(cmd="python", timeout=60)
+
+    status, matches, meta = soccerdata_provider.get_match_history_games("ENG-Premier League", 2024, league_id=39)
+
+    assert status == "SOURCE_FAILED"
+    assert len(matches) == 0
+    assert "timed out" in meta.get("error", "")

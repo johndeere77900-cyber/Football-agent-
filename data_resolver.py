@@ -160,14 +160,47 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
                 return str(row_dict[actual_key]).strip()
             return ""
 
+        import time
+
+        t_start_dl = time.perf_counter()
         rows = list(reader)
+        t_end_dl = time.perf_counter()
+        dl_parse_duration = t_end_dl - t_start_dl
+
         if not rows:
             return []
 
         fetched_count = len(rows)
         rejected_count = 0
         unresolved_count = 0
+        distinct_unresolved_team_names = set()
         fixtures = []
+
+        batch_identity_cache = {}
+        cache_hits = 0
+        cache_misses = 0
+
+        def resolve_cached(raw_name):
+            nonlocal cache_hits, cache_misses
+            norm_name = team_identity.normalize_team_name(raw_name)
+            cache_key = ("football", league_id, "football_data_csv", norm_name)
+            if cache_key in batch_identity_cache:
+                cache_hits += 1
+                return batch_identity_cache[cache_key]
+
+            cache_misses += 1
+            cid = team_identity.resolve_canonical_team_id(
+                raw_name=raw_name,
+                provider="football_data_csv",
+                provider_team_id=None,
+                league_id=league_id,
+                sport="football",
+                auto_register=False,
+            )
+            batch_identity_cache[cache_key] = cid
+            return cid
+
+        t_start_id = time.perf_counter()
 
         for idx, row in enumerate(rows, start=1):
             if not isinstance(row, dict):
@@ -213,16 +246,15 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
                 rejected_count += 1
                 continue
 
-            # Generate positive integer provider team IDs deterministically from canonical identity
-            c_home = team_identity.resolve_canonical_team_id(
-                raw_name=raw_home, provider="football_data_csv", provider_team_id=None, league_id=league_id, sport="football", auto_register=False
-            )
-            c_away = team_identity.resolve_canonical_team_id(
-                raw_name=raw_away, provider="football_data_csv", provider_team_id=None, league_id=league_id, sport="football", auto_register=False
-            )
+            c_home = resolve_cached(raw_home)
+            c_away = resolve_cached(raw_away)
 
             if not c_home or not c_away:
                 unresolved_count += 1
+                if not c_home:
+                    distinct_unresolved_team_names.add(raw_home)
+                if not c_away:
+                    distinct_unresolved_team_names.add(raw_away)
                 continue
 
             csv_h_id = int(hashlib.sha256(f"fd_csv_team_{c_home}".encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
@@ -292,6 +324,25 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
                 },
             }
             fixtures.append(fixture_dict)
+
+        t_end_id = time.perf_counter()
+        id_resolution_duration = t_end_id - t_start_id
+
+        if unresolved_count > 0:
+            logger.warning(
+                f"Direct CSV acquisition for league {league_id} season {season} completed with unresolved team identities: "
+                f"rows_read={fetched_count}, invalid_rows={rejected_count}, accepted={len(fixtures)}, unresolved_rows={unresolved_count}, "
+                f"distinct_unresolved_names={sorted(list(distinct_unresolved_team_names))}, "
+                f"dl_duration={dl_parse_duration:.4f}s, id_duration={id_resolution_duration:.4f}s, "
+                f"cache_hits={cache_hits}, cache_misses={cache_misses}"
+            )
+        else:
+            logger.info(
+                f"Direct CSV acquisition for league {league_id} season {season} succeeded: "
+                f"rows_read={fetched_count}, invalid_rows={rejected_count}, accepted={len(fixtures)}, "
+                f"dl_duration={dl_parse_duration:.4f}s, id_duration={id_resolution_duration:.4f}s, "
+                f"cache_hits={cache_hits}, cache_misses={cache_misses}"
+            )
 
         return fixtures
 
@@ -1970,8 +2021,8 @@ def reconcile_fixture_records(records):
 
 class DataResolver:
     """
-    DataResolver encapsulates API-Football -> football-data.org -> SoccerData 3-tier fallback hierarchy.
-    Judges data sufficiency at each tier and performs field-level data reconciliation.
+    DataResolver encapsulates Two-Route Provider Fallback Architecture.
+    Judges data sufficiency at each route/tier and performs field-level data reconciliation.
     """
 
     def __init__(self, force_fallback=False):
@@ -1982,7 +2033,7 @@ class DataResolver:
         Retrieves fixtures for a given date ('YYYY-MM-DD').
         NEON FIRST: Queries local database storage first. If stored records are complete
         (0 missing fields), returns stored records immediately without calling external APIs.
-        Otherwise executes 3-tier gap filling (API-Football -> football-data.org -> SoccerData)
+        Otherwise executes provider gap filling (API-Football -> football-data.org -> SoccerData)
         strictly for missing fields.
         Returns tuple: (reconciled_fixtures_list, metadata)
         """
@@ -2291,7 +2342,7 @@ class DataResolver:
 
     def get_team_recent_matches(self, team_id, last=10, league_id=None, season=None, team_name=None, canonical_team_id=None, cutoff_date=None):
         """
-        Retrieve team historical matches using NEON-FIRST 3-tier fallback hierarchy:
+        Retrieve team historical matches using NEON-FIRST provider fallback architecture:
         1. Neon PostgreSQL DB (via storage.get_team_historical_fixtures)
         2. API-Football (if DB history < last)
         3. football-data.org (if history < last)
@@ -3044,7 +3095,7 @@ class DataResolver:
 
     def get_team_statistics(self, team_id, league_id, season, team_name=None):
         """
-        DataResolver method for fetching team statistics using 3-tier provider hierarchy.
+        DataResolver method for fetching team statistics using two-route provider fallback architecture.
         1. Check persistent historical/derived data first if sufficient.
         2. API-Football.
         3. football-data.org.
@@ -3142,7 +3193,7 @@ class DataResolver:
 
     def get_head_to_head(self, home_id, away_id, last=6, home_team_name=None, away_team_name=None, fixture_date=None, league_id=None):
         """
-        Retrieves head-to-head match history using 3-tier provider hierarchy with strict canonical identity matching
+        Retrieves head-to-head match history using two-route provider fallback architecture with strict canonical identity matching
         and strict cutoff filtering (match_date < fixture_date).
 
         Requires BOTH home and away canonical identities to match expected identities.

@@ -32,22 +32,23 @@ def mock_team_universe(monkeypatch):
             return []
         canonical_ids = []
         for tid in raw_ids:
-            cid = team_identity.bootstrap_historical_team_identity(
-                f"Team {tid}", "api_football", tid, league_id=league_id
-            )
-            if cid:
-                canonical_ids.append(cid)
+            cid = f"football_team_{league_id}_team_{tid}"
+            team_identity.register_canonical_team_identity(cid, f"Team {tid}", "api_football", tid, league_id=league_id)
+            canonical_ids.append(cid)
         return canonical_ids
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
 
 
 def make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20):
     teams = list(range(1, num_teams + 1))
+    for tid in teams:
+        cid = f"football_team_{league_id}_team_{tid}"
+        team_identity.register_canonical_team_identity(cid, f"Team {tid}", "api_football", tid, league_id=league_id)
     pairings = [(h, a) for h in teams for a in teams if h != a]
     fixtures = []
     for i, (h_id, a_id) in enumerate(pairings):
-        c_home = team_identity.bootstrap_historical_team_identity(f"Team {h_id}", "api_football", h_id, league_id=league_id)
-        c_away = team_identity.bootstrap_historical_team_identity(f"Team {a_id}", "api_football", a_id, league_id=league_id)
+        c_home = f"football_team_{league_id}_team_{h_id}"
+        c_away = f"football_team_{league_id}_team_{a_id}"
         fixtures.append({
             "fixture": {
                 "id": 1000 + i,

@@ -178,6 +178,11 @@ def patch_prediction_dependencies(monkeypatch):
         h2h_matches(),
     )
 
+    monkeypatch.setattr("football_data_api.get_competition_matches", lambda *a, **kw: [])
+    monkeypatch.setattr("football_data_api.get_competition_standings", lambda *a, **kw: [])
+    monkeypatch.setattr("soccerdata_provider.get_match_history_games", lambda *a, **kw: ("SOURCE_NOT_AVAILABLE", [], {}))
+    monkeypatch.setattr("soccerdata_provider.get_sofascore_historical_games", lambda *a, **kw: ("SOURCE_NOT_AVAILABLE", [], {}))
+
 
 
 # ----------------------------------------------------------------------
@@ -366,6 +371,7 @@ def test_missing_one_season_team_is_insufficient(
     monkeypatch,
     football_fixture,
 ):
+    patch_prediction_dependencies(monkeypatch)
     monkeypatch.setattr(
         data_resolver.api_football,
         "get_team_statistics",
@@ -392,13 +398,7 @@ def test_missing_recent_history_is_insufficient(
     monkeypatch,
     football_fixture,
 ):
-    monkeypatch.setattr(
-        data_resolver.api_football,
-        "get_team_statistics",
-        lambda team_id, league_id, season:
-        team_stats(),
-    )
-
+    patch_prediction_dependencies(monkeypatch)
     monkeypatch.setattr(
         data_resolver.api_football,
         "get_recent_form",

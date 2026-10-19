@@ -5,7 +5,7 @@ Enforces:
 1. Architectural Boundary Enforcement: Prohibits direct provider invocations
    (api_football.*, football_data_api.*, soccerdata_provider.*) in production modules
    outside approved adapter and resolver boundary files.
-2. Target Architecture Verification: Tests A-X requirements for 3-tier fallback,
+2. Target Architecture Verification: Tests A-X requirements for two-route fallback acquisition model,
    canonical identity isolation, cutoff rules, conflict preservation, and deterministic synthetic IDs.
 """
 
@@ -173,7 +173,7 @@ def test_E_F_G_H_provider_fallback_chain_and_exception_handling():
 
 
 def test_I_get_team_statistics_fallback():
-    """Scenario I: get_team_statistics 3-tier fallback."""
+    """Scenario I: get_team_statistics provider fallback."""
     resolver = DataResolver()
 
     raw_fd_table = [
@@ -202,7 +202,7 @@ def test_I_get_team_statistics_fallback():
 
 
 def test_J_get_head_to_head_fallback_and_cutoff():
-    """Scenario J & O: H2H 3-tier fallback with strict cutoff timestamp filtering."""
+    """Scenario J & O: H2H provider fallback with strict cutoff timestamp filtering."""
     resolver = DataResolver()
     cutoff_date = "2024-09-10T15:00:00+00:00"
 

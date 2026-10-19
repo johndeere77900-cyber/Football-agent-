@@ -96,6 +96,9 @@ def sync_historical_fixtures(
     Acquire historical fixtures (and optional enrichment) for a league/season
     and save them into persistent storage.
     """
+    import time
+    t_sync_start = time.perf_counter()
+    total_db_write_duration = 0.0
     allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
 
     if season not in allowed_seasons:
@@ -282,6 +285,7 @@ def sync_historical_fixtures(
             total_newly_stored += save_result.get("inserted", 0)
             total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
             total_rejected_count += save_result.get("rejected_count", 0)
+            total_db_write_duration += save_result.get("db_write_duration", 0.0)
 
             for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
                 all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
@@ -509,6 +513,7 @@ def sync_historical_fixtures(
         )
         final_status = "INCOMPLETE"
 
+    total_sync_elapsed = time.perf_counter() - t_sync_start
     report = {
         "league_id": league_id,
         "season": season,
@@ -529,6 +534,8 @@ def sync_historical_fixtures(
         "quota_budget_stopped": quota_budget_stopped,
         "final_stored_count": final_stored_count,
         "enrichment_stored": enrichment_stored,
+        "total_sync_duration": round(total_sync_elapsed, 3),
+        "db_write_duration": round(total_db_write_duration, 3),
     }
 
     _print_sync_report(report)
@@ -554,6 +561,8 @@ def _print_sync_report(report: dict) -> None:
     print(f"Quota budget stopped job: {report['quota_budget_stopped']}")
     print(f"Enriched records stored: {report.get('enrichment_stored', 0)}")
     print(f"Final stored fixture count: {report['final_stored_count']}")
+    if "total_sync_duration" in report:
+        print(f"Total sync duration: {report['total_sync_duration']:.3f}s (DB write duration: {report.get('db_write_duration', 0):.3f}s)")
     if report.get("status") == "COMPLETE" and report.get("api_requests_consumed") == 0:
         print("Dataset already COMPLETE; API acquisition skipped.")
     print("=== END HISTORICAL SYNC REPORT ===\n")

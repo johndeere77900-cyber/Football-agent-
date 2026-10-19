@@ -25,17 +25,30 @@ def isolated_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def mock_team_universe(monkeypatch):
+def mock_team_universe(isolated_db, monkeypatch):
+    import team_identity
+    for lid in (39, 61, 78, 88, 90, 140):
+        for tid in range(1, 21):
+            p_id = lid * 100 + tid
+            cid = f"football_team_{lid}_team_{tid}"
+            team_identity.register_canonical_team_identity(cid, f"Team {tid}", "api_football", p_id, league_id=lid)
+
     def _mock_get_team_ids(league_id, season, *args, **kwargs):
-        return [1, 2]
+        return [f"football_team_{league_id}_team_1", f"football_team_{league_id}_team_2"]
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
 
 
 def sample_football_fixture(fid, date="2025-01-10T15:00:00+00:00", status="FT", home_goals=2, away_goals=1, league_id=39, home_id=1, away_id=2):
+    c_home = f"football_team_{league_id}_team_{home_id}"
+    c_away = f"football_team_{league_id}_team_{away_id}"
+    h_pid = league_id * 100 + home_id
+    a_pid = league_id * 100 + away_id
     return {
         "fixture": {"id": fid, "date": date, "status": {"short": status}},
         "league": {"id": league_id, "season": 2024},
-        "teams": {"home": {"id": home_id, "name": f"Team {home_id}"}, "away": {"id": away_id, "name": f"Team {away_id}"}},
+        "teams": {"home": {"id": h_pid, "name": f"Team {home_id}"}, "away": {"id": a_pid, "name": f"Team {away_id}"}},
+        "canonical_home_id": c_home,
+        "canonical_away_id": c_away,
         "goals": {"home": home_goals, "away": away_goals},
         "score": {
             "fulltime": {"home": 1, "away": 1},
@@ -505,7 +518,10 @@ def test_rejected_count_survives_resumed_sync_football_and_basketball(isolated_d
             return {"fixtures": [fix_ok, fix_bad], "page": 1, "expected_pages": 2}
         raise api_football.APIFootballQuotaExhaustedError("Quota exhausted")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     assert rep1["rejected_count"] == 1
@@ -519,7 +535,10 @@ def test_rejected_count_survives_resumed_sync_football_and_basketball(isolated_d
             return {"fixtures": [fix_ok2], "page": 2, "expected_pages": 2}
         raise RuntimeError("Unexpected page")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p2):
+    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p2), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
     # rejected_count MUST survive resumption and prevent dataset from becoming COMPLETE!
