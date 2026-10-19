@@ -441,6 +441,110 @@ def test_failed_corruption_state_write_preserves_fail_closed_behavior(tmp_path, 
     assert storage.is_quota_ledger_corrupted() is True
 
 
+def test_restart_with_failed_corruption_persistence_fails_closed(tmp_path, monkeypatch):
+    """
+    Regression test:
+    When a healthy DB status row exists (is_corrupted = 0), api_request_counts table is dropped,
+    and writing the corrupted status to DB fails, reinitializing the module in-memory state
+    MUST NOT cause a subsequent reservation to succeed or trust the stale healthy row.
+    """
+    import sqlite3
+
+    db_file = str(tmp_path / "test_stale_healthy.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
+
+    # 1. Initialize schema -> quota_ledger_status has is_corrupted = 0
+    storage.init_db()
+    assert storage.is_quota_ledger_corrupted() is False
+
+    # 2. Intentionally drop api_request_counts table
+    conn = sqlite3.connect(db_file)
+    conn.execute("DROP TABLE api_request_counts")
+    conn.commit()
+    conn.close()
+
+    # 3. Patch _mark_quota_ledger_corrupted so DB write fails (stale is_corrupted = 0 remains in DB)
+    with patch("storage._mark_quota_ledger_corrupted", side_effect=RuntimeError("DB write failed")):
+        with pytest.raises(RuntimeError):
+            storage.reserve_api_request(
+                provider="api_football",
+                date_pattern="2026-10-18",
+                request_date="2026-10-18",
+                endpoint="fixtures",
+                limit=50,
+                request_type="historical",
+            )
+
+    # 4. Simulate process restart: reset in-memory corruption flag to False
+    monkeypatch.setattr(storage, "_QUOTA_LEDGER_CORRUPTED", False)
+
+    # 5. Subsequent reservation call MUST fail closed and NOT trust stale healthy row
+    with pytest.raises(RuntimeError) as exc_info:
+        storage.reserve_api_request(
+            provider="api_football",
+            date_pattern="2026-10-18",
+            request_date="2026-10-18",
+            endpoint="fixtures",
+            limit=50,
+            request_type="historical",
+        )
+    assert "failing closed" in str(exc_info.value).lower() or "missing" in str(exc_info.value).lower()
+
+
+def test_postgres_historical_reservation_sql_query_includes_legacy_types(monkeypatch):
+    """
+    Verify that in PostgreSQL mode, reserve_api_request generates the SQL query enforcing
+    (request_type = 'historical' OR request_type IS NULL OR request_type = '').
+    """
+    recorded_queries = []
+
+    class DummyCursor:
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc_val, exc_tb): pass
+        def execute(self, query, params=None):
+            recorded_queries.append((query.strip(), params))
+        def fetchone(self):
+            if recorded_queries and "quota_ledger_status" in recorded_queries[-1][0]:
+                return (0,)
+            return (1,)
+
+    class DummyTransaction:
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc_val, exc_tb): pass
+
+    class DummyConn:
+        def transaction(self):
+            return DummyTransaction()
+        def cursor(self):
+            return DummyCursor()
+        def close(self):
+            pass
+
+    monkeypatch.setattr(storage, "_connect", lambda: (DummyConn(), "postgres"))
+
+    reserved = storage.reserve_api_request(
+        provider="api_football",
+        date_pattern="2026-10-18",
+        request_date="2026-10-18",
+        endpoint="fixtures",
+        limit=50,
+        request_type="historical",
+        global_limit=100,
+    )
+    assert reserved is True
+
+    # Find the INSERT INTO api_request_counts query
+    insert_query = None
+    for q, p in recorded_queries:
+        if "INSERT INTO api_request_counts" in q:
+            insert_query = q
+            break
+
+    assert insert_query is not None
+    assert "request_type = 'historical' OR request_type IS NULL OR request_type = ''" in insert_query
+
+
 def test_legacy_empty_string_request_type_counts_against_historical_cap(tmp_path, monkeypatch):
     """Verify legacy DB rows with empty string request_type='' or NULL count against the historical cap."""
     import sqlite3

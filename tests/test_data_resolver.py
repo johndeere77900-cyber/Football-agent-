@@ -612,7 +612,7 @@ def test_G_api_quota_exhaustion_no_retry(mock_api_fb, mock_fd, mock_sd):
     res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
 
     assert mock_api_fb.call_count == 1  # Called exactly once, no retry!
-    assert res["primary_quota_exhausted"] is True
+    assert res["secondary_quota_exhausted"] is True
 
 
 # Test H — Successful empty API-Football historical response falls through to fallback

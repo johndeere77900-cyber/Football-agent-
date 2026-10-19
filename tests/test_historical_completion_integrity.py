@@ -101,7 +101,7 @@ def test_2_complete_manifest_with_missing_fixtures_not_trusted(mock_page):
         "fixtures": [],
         "expected_pages": 2,
         "current_page": 1,
-        "primary_failed": True,
+        "secondary_failed": True,
     }
 
     report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
@@ -127,7 +127,7 @@ def test_3_complete_manifest_with_wrong_season_or_league_rejected(mock_page):
         "fixtures": [],
         "expected_pages": 2,
         "current_page": 1,
-        "primary_failed": True,
+        "secondary_failed": True,
     }
 
     report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
@@ -151,7 +151,7 @@ def test_4_complete_manifest_with_duplicate_identities_rejected(mock_page):
         "fixtures": [],
         "expected_pages": 2,
         "current_page": 1,
-        "primary_failed": True,
+        "secondary_failed": True,
     }
 
     report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
@@ -224,7 +224,7 @@ def test_8_failed_validation_does_not_erase_existing_records(mock_page):
         "fixtures": [],
         "expected_pages": 2,
         "current_page": 2,
-        "primary_failed": True,
+        "secondary_failed": True,
     }
 
     report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
@@ -269,7 +269,7 @@ def test_failed_revalidation_never_returns_complete(mock_page):
         "fixtures": [],
         "expected_pages": 2,
         "current_page": 1,
-        "primary_failed": True,
+        "secondary_failed": True,
     }
 
     report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)

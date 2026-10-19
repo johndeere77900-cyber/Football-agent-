@@ -300,7 +300,9 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
         return []
 
 
-def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, allow_network=False, provider_metadata=None, *args, **kwargs):
+def _get_authoritative_historical_team_ids(
+    league_id, season, max_budget=None, allow_network=False, provider_metadata=None, provider=None, *args, **kwargs
+):
     """
     Return the authoritative canonical competition team IDs for structural validation.
 
@@ -311,8 +313,8 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, a
     Priority:
     1. Provider metadata if supplied (read-first without external calls)
     2. Stored DB manifest metadata (`historical_datasets.expected_team_ids_json`)
-    3. API-Football standings (if allow_network=True)
-    4. football-data.org competition teams (if allow_network=True)
+    3. API-Football standings (if allow_network=True and provider in (None, 'api_football'))
+    4. football-data.org competition teams (if allow_network=True and provider in (None, 'football_data_org'))
 
     Returns:
         list[str|int] of verified canonical team IDs, or [] when unavailable/incomplete.
@@ -337,100 +339,104 @@ def _get_authoritative_historical_team_ids(league_id, season, max_budget=None, a
     if not allow_network:
         return []
 
-    # Primary authoritative source: API-Football standings
-    try:
-        standings = api_football.get_league_standings(league_id, season, max_budget=max_budget)
+    provider_name = str(provider).strip().lower() if provider else None
 
-        if isinstance(standings, dict):
-            rows = standings.get("response", standings.get("standings", []))
-        else:
-            rows = standings
-
-        if isinstance(rows, list) and rows:
-            expanded = []
-            for row in rows:
-                if isinstance(row, list):
-                    expanded.extend(row)
-                elif isinstance(row, dict):
-                    expanded.append(row)
-
-            if expanded:
-                canonical_ids = set()
-                all_resolved = True
-                for row in expanded:
-                    team = row.get("team", {}) if isinstance(row, dict) else {}
-                    team_id = team.get("id") if isinstance(team, dict) else None
-                    team_name = team.get("name", "") if isinstance(team, dict) else ""
-
-                    c_id = team_identity.resolve_canonical_team_id(
-                        raw_name=team_name or (str(team_id) if team_id is not None else ""),
-                        provider="api_football",
-                        provider_team_id=team_id,
-                        league_id=league_id,
-                        sport="football",
-                        auto_register=False,
-                    )
-                    if not c_id:
-                        all_resolved = False
-                        break
-                    canonical_ids.add(c_id)
-
-                if all_resolved and len(canonical_ids) == len(expanded):
-                    return sorted(canonical_ids, key=lambda x: str(x))
-
-    except Exception as exc:
-        logger.warning(
-            "Unable to obtain authoritative API-Football team universe for league %s season %s: %s",
-            league_id,
-            season,
-            exc,
-        )
-
-    # Secondary authoritative source: football-data.org
-    comp_code = LEAGUE_TO_FD_CODE.get(league_id)
-
-    if comp_code:
+    # Secondary 3a source: API-Football standings
+    if provider_name in (None, "api_football"):
         try:
-            result = football_data_api.get_competition_teams(
-                comp_code,
-                season=season,
-            )
+            standings = api_football.get_league_standings(league_id, season, max_budget=max_budget)
 
-            if isinstance(result, dict):
-                rows = result.get("teams", result.get("response", []))
+            if isinstance(standings, dict):
+                rows = standings.get("response", standings.get("standings", []))
             else:
-                rows = result
+                rows = standings
 
             if isinstance(rows, list) and rows:
-                canonical_ids = set()
-                all_resolved = True
+                expanded = []
                 for row in rows:
-                    team_id = row.get("id") if isinstance(row, dict) else None
-                    team_name = (row.get("shortName") or row.get("name", "")) if isinstance(row, dict) else ""
+                    if isinstance(row, list):
+                        expanded.extend(row)
+                    elif isinstance(row, dict):
+                        expanded.append(row)
 
-                    c_id = team_identity.resolve_canonical_team_id(
-                        raw_name=team_name or (str(team_id) if team_id is not None else ""),
-                        provider="football_data_org",
-                        provider_team_id=team_id,
-                        league_id=league_id,
-                        sport="football",
-                        auto_register=False,
-                    )
-                    if not c_id:
-                        all_resolved = False
-                        break
-                    canonical_ids.add(c_id)
+                if expanded:
+                    canonical_ids = set()
+                    all_resolved = True
+                    for row in expanded:
+                        team = row.get("team", {}) if isinstance(row, dict) else {}
+                        team_id = team.get("id") if isinstance(team, dict) else None
+                        team_name = team.get("name", "") if isinstance(row, dict) else ""
 
-                if all_resolved and len(canonical_ids) == len(rows):
-                    return sorted(canonical_ids, key=lambda x: str(x))
+                        c_id = team_identity.resolve_canonical_team_id(
+                            raw_name=team_name or (str(team_id) if team_id is not None else ""),
+                            provider="api_football",
+                            provider_team_id=team_id,
+                            league_id=league_id,
+                            sport="football",
+                            auto_register=False,
+                        )
+                        if not c_id:
+                            all_resolved = False
+                            break
+                        canonical_ids.add(c_id)
+
+                    if all_resolved and len(canonical_ids) == len(expanded):
+                        return sorted(canonical_ids, key=lambda x: str(x))
 
         except Exception as exc:
             logger.warning(
-                "Unable to obtain authoritative football-data.org team universe for league %s season %s: %s",
+                "Unable to obtain authoritative API-Football team universe for league %s season %s: %s",
                 league_id,
                 season,
                 exc,
             )
+
+    # Secondary 3b source: football-data.org competition teams
+    if provider_name in (None, "football_data_org"):
+        comp_code = LEAGUE_TO_FD_CODE.get(league_id)
+
+        if comp_code:
+            try:
+                result = football_data_api.get_competition_teams(
+                    comp_code,
+                    season=season,
+                )
+
+                if isinstance(result, dict):
+                    rows = result.get("teams", result.get("response", []))
+                else:
+                    rows = result
+
+                if isinstance(rows, list) and rows:
+                    canonical_ids = set()
+                    all_resolved = True
+                    for row in rows:
+                        team_id = row.get("id") if isinstance(row, dict) else None
+                        team_name = (row.get("shortName") or row.get("name", "")) if isinstance(row, dict) else ""
+
+                        c_id = team_identity.resolve_canonical_team_id(
+                            raw_name=team_name or (str(team_id) if team_id is not None else ""),
+                            provider="football_data_org",
+                            provider_team_id=team_id,
+                            league_id=league_id,
+                            sport="football",
+                            auto_register=False,
+                        )
+                        if not c_id:
+                            all_resolved = False
+                            break
+                        canonical_ids.add(c_id)
+
+                    if all_resolved and len(canonical_ids) == len(rows):
+                        return sorted(canonical_ids, key=lambda x: str(x))
+
+            except Exception as exc:
+                logger.warning(
+                    "Unable to obtain authoritative football-data.org team universe for league %s season %s: %s",
+                    league_id,
+                    season,
+                    exc,
+                )
 
     return []
 
@@ -2424,8 +2430,8 @@ class DataResolver:
                                 "structural_coverage": db_coverage,
                                 "providers_contributed": ["internal_db"],
                             },
-                            "primary_failed": False,
-                            "primary_quota_exhausted": False,
+                            "secondary_failed": False,
+                            "secondary_quota_exhausted": False,
                         }
 
         combined_fixtures = []
@@ -2482,8 +2488,8 @@ class DataResolver:
                         "structural_coverage": csv_coverage,
                         "providers_contributed": ["football_data_csv"],
                     },
-                    "primary_failed": False,
-                    "primary_quota_exhausted": False,
+                    "secondary_failed": False,
+                    "secondary_quota_exhausted": False,
                 }
 
             # 2b. SoccerData MatchHistory
@@ -2539,8 +2545,8 @@ class DataResolver:
                         "structural_coverage": mh_coverage,
                         "providers_contributed": contribs,
                     },
-                    "primary_failed": False,
-                    "primary_quota_exhausted": False,
+                    "secondary_failed": False,
+                    "secondary_quota_exhausted": False,
                 }
 
             # 2c. SoccerData Sofascore
@@ -2601,12 +2607,14 @@ class DataResolver:
                         "structural_coverage": primary_route_coverage,
                         "providers_contributed": contribs,
                     },
-                    "primary_failed": False,
-                    "primary_quota_exhausted": False,
+                    "secondary_failed": False,
+                    "secondary_quota_exhausted": False,
                 }
 
         # Resolve expected team universe via secondary network discovery ONLY when primary route was insufficient
-        expected_team_ids = _get_authoritative_historical_team_ids(league_id, season, max_budget=max_budget, allow_network=True)
+        expected_team_ids = _get_authoritative_historical_team_ids(
+            league_id, season, max_budget=max_budget, allow_network=False
+        )
 
         # 3. Secondary Route: API-Football -> football-data.org API
         secondary_failed = False
@@ -2665,6 +2673,11 @@ class DataResolver:
                         seen_fids.add(fid)
                         all_accumulated_fixtures.append(db_f)
 
+        if not expected_team_ids:
+            expected_team_ids = _get_authoritative_historical_team_ids(
+                league_id, season, max_budget=max_budget, allow_network=True, provider="api_football"
+            )
+
         af_coverage = _validate_historical_structural_coverage(
             all_accumulated_fixtures,
             season=season,
@@ -2701,8 +2714,6 @@ class DataResolver:
                 },
                 "secondary_failed": secondary_failed,
                 "secondary_quota_exhausted": secondary_quota_exhausted,
-                "primary_failed": secondary_failed,
-                "primary_quota_exhausted": secondary_quota_exhausted,
             }
 
         # Secondary 3b: football-data.org API
@@ -2738,6 +2749,11 @@ class DataResolver:
                         combined_fixtures[idx] = reconciled_rec
                 else:
                     combined_fixtures.append(fm)
+
+        if not expected_team_ids:
+            expected_team_ids = _get_authoritative_historical_team_ids(
+                league_id, season, max_budget=max_budget, allow_network=True, provider="football_data_org"
+            )
 
         final_coverage = _validate_historical_structural_coverage(
             combined_fixtures,
@@ -2801,8 +2817,6 @@ class DataResolver:
             "provider_metadata": final_provider_metadata,
             "secondary_failed": secondary_failed,
             "secondary_quota_exhausted": secondary_quota_exhausted,
-            "primary_failed": secondary_failed,
-            "primary_quota_exhausted": secondary_quota_exhausted,
         }
 
     def check_competition_coverage(self, league_id, season, max_budget=None):

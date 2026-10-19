@@ -101,8 +101,8 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
         resolver = data_resolver.DataResolver()
         res = resolver.get_league_fixtures_page(39, 2024, page=1)
 
-        self.assertTrue(res["primary_quota_exhausted"])
-        self.assertTrue(res["primary_failed"])
+        self.assertTrue(res["secondary_quota_exhausted"])
+        self.assertTrue(res["secondary_failed"])
         self.assertEqual(len(res["fixtures"]), 1)
 
     def test_multi_season_cli_and_incomplete_status(self):

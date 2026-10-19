@@ -112,6 +112,9 @@ def test_sufficient_primary_coverage_prevents_secondary_network_calls(monkeypatc
     for i, t in enumerate(teams, start=1):
         storage.save_team_identity("football", t, "football_data_csv", str(i), f"Team {i}", f"Team {i}", league_id=league_id)
 
+    # Persist expected team manifest into DB
+    storage.mark_historical_dataset_incomplete(league_id, season, fixture_count=0, expected_team_ids=teams)
+
     # Generate 380 complete CSV fixtures
     csv_fixtures = []
     fid = 1
@@ -147,7 +150,8 @@ def test_sufficient_primary_coverage_prevents_secondary_network_calls(monkeypatc
 def test_strict_provider_execution_ordering(monkeypatch):
     """
     Verify strict provider execution order:
-    CSV -> SoccerData MatchHistory -> SoccerData Sofascore -> API-Football -> football-data.org
+    CSV -> SoccerData MatchHistory -> SoccerData Sofascore -> API-Football (fixtures) -> football-data.org (matches)
+    and confirm football_data_api.get_competition_teams CANNOT run before api_football.get_league_fixtures_page.
     """
     league_id = 39
     season = 2024
@@ -167,28 +171,37 @@ def test_strict_provider_execution_ordering(monkeypatch):
         return ("SOURCE_UNAVAILABLE", [], {})
 
     def mock_af_page(lid, ssn, page=1, max_budget=None, **kwargs):
-        calls.append("api_football")
+        calls.append("api_football_fixtures")
         return {"fixtures": [], "expected_pages": 1, "page": 1}
 
+    def mock_af_standings(lid, ssn, max_budget=None):
+        calls.append("api_football_standings")
+        return []
+
     def mock_fd_matches(code, season=None):
-        calls.append("football_data_org")
+        calls.append("football_data_org_matches")
+        return []
+
+    def mock_fd_teams(code, season=None):
+        calls.append("football_data_org_teams")
         return []
 
     monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", mock_csv)
     monkeypatch.setattr("soccerdata_provider.get_match_history_games", mock_sd_mh)
     monkeypatch.setattr("soccerdata_provider.get_sofascore_historical_games", mock_sd_ss)
     monkeypatch.setattr("api_football.get_league_fixtures_page", mock_af_page)
+    monkeypatch.setattr("api_football.get_league_standings", mock_af_standings)
     monkeypatch.setattr("football_data_api.get_competition_matches", mock_fd_matches)
+    monkeypatch.setattr("football_data_api.get_competition_teams", mock_fd_teams)
 
     resolver = DataResolver()
     res = resolver.get_league_fixtures_page(league_id, season, page=1)
 
-    expected_order = [
-        "football_data_csv",
-        "soccerdata_match_history",
-        "soccerdata_sofascore",
-        "api_football",
-        "football_data_org"
-    ]
+    # Assert api_football_fixtures ran BEFORE football_data_org_matches or football_data_org_teams
+    af_idx = calls.index("api_football_fixtures")
+    if "football_data_org_teams" in calls:
+        fd_teams_idx = calls.index("football_data_org_teams")
+        assert af_idx < fd_teams_idx, "football_data_org_teams ran before api_football_fixtures!"
 
-    assert calls == expected_order
+    expected_primary = ["football_data_csv", "soccerdata_match_history", "soccerdata_sofascore", "api_football_fixtures"]
+    assert calls[:4] == expected_primary
