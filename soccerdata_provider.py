@@ -409,11 +409,11 @@ try:
     mh = sd.MatchHistory(leagues={repr(league_code)}, seasons={repr(season)})
     df = mh.read_games()
     if df is None or getattr(df, 'empty', True):
-        print(json.dumps([]))
+        print("SOCCERDATA_JSON_START\\n[]\\nSOCCERDATA_JSON_END")
     else:
         df_reset = df.reset_index() if hasattr(df, 'reset_index') else df
         records = df_reset.to_dict(orient='records')
-        print(json.dumps(records, default=str))
+        print("SOCCERDATA_JSON_START\\n" + json.dumps(records, default=str) + "\\nSOCCERDATA_JSON_END")
 except Exception as exc:
     sys.stderr.write(f"MatchHistory Subprocess Error: {{exc}}\\n")
     sys.exit(1)
@@ -430,18 +430,24 @@ except Exception as exc:
                 text=True,
                 timeout=timeout_seconds,
             )
-            if proc.returncode == 0 and proc.stdout.strip():
+            stdout_text = proc.stdout if proc and proc.stdout else ""
+            start_marker = "SOCCERDATA_JSON_START"
+            end_marker = "SOCCERDATA_JSON_END"
+            if proc.returncode == 0 and start_marker in stdout_text and end_marker in stdout_text:
                 try:
-                    raw_records = json.loads(proc.stdout)
+                    s_idx = stdout_text.find(start_marker) + len(start_marker)
+                    e_idx = stdout_text.find(end_marker, s_idx)
+                    json_str = stdout_text[s_idx:e_idx].strip()
+                    raw_records = json.loads(json_str)
                     break
                 except json.JSONDecodeError as exc:
-                    err_msg = f"JSON parse error on stdout: {exc}. Raw stdout: {proc.stdout[:200]!r}"
+                    err_msg = f"JSON parse error on stdout between boundary markers: {exc}"
                     logger.warning(f"Attempt {attempt}/{max_retries} - {err_msg}")
                     return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": err_msg, "stderr": proc.stderr, "source": "soccerdata_match_history"}
             else:
                 stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
-                last_error = stderr_msg
-                logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory subprocess failed: {stderr_msg}")
+                last_error = f"Missing boundary markers or non-zero exit code: {stderr_msg}"
+                logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory subprocess failed: {last_error}")
         except subprocess.TimeoutExpired as exc:
             last_error = f"Subprocess timed out after {timeout_seconds}s"
             logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory timeout: {last_error}")
@@ -635,7 +641,7 @@ try:
             "team_id_map_size": len(team_id_map),
             "enrichment_error": enrichment_error,
         }}
-        print(json.dumps(output_payload, default=str))
+        print("SOCCERDATA_JSON_START\\n" + json.dumps(output_payload, default=str) + "\\nSOCCERDATA_JSON_END")
 except Exception as exc:
     sys.stderr.write(f"Sofascore Subprocess Error: {{exc}}\\n")
     sys.exit(1)
@@ -653,9 +659,15 @@ except Exception as exc:
                 text=True,
                 timeout=timeout_seconds,
             )
-            if proc.returncode == 0 and proc.stdout.strip():
+            stdout_text = proc.stdout if proc and proc.stdout else ""
+            start_marker = "SOCCERDATA_JSON_START"
+            end_marker = "SOCCERDATA_JSON_END"
+            if proc.returncode == 0 and start_marker in stdout_text and end_marker in stdout_text:
                 try:
-                    payload = json.loads(proc.stdout)
+                    s_idx = stdout_text.find(start_marker) + len(start_marker)
+                    e_idx = stdout_text.find(end_marker, s_idx)
+                    json_str = stdout_text[s_idx:e_idx].strip()
+                    payload = json.loads(json_str)
                     if isinstance(payload, dict) and "records" in payload:
                         raw_records = payload.get("records", [])
                         enrichment_error = payload.get("enrichment_error")
@@ -667,13 +679,13 @@ except Exception as exc:
                         enrichment_error = None
                     break
                 except json.JSONDecodeError as exc:
-                    err_msg = f"JSON parse error on stdout: {exc}. Raw stdout: {proc.stdout[:200]!r}"
+                    err_msg = f"JSON parse error on stdout between boundary markers: {exc}"
                     logger.warning(f"Attempt {attempt}/{max_retries} - {err_msg}")
                     return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": err_msg, "stderr": proc.stderr, "source": "soccerdata_sofascore"}
             else:
                 stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
-                last_error = stderr_msg
-                logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore subprocess failed: {stderr_msg}")
+                last_error = f"Missing boundary markers or non-zero exit code: {stderr_msg}"
+                logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore subprocess failed: {last_error}")
         except subprocess.TimeoutExpired as exc:
             last_error = f"Subprocess timed out after {timeout_seconds}s"
             logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore timeout: {last_error}")

@@ -333,20 +333,13 @@ def bootstrap_historical_team_identity(
         auto_register=False,
     )
 
-    if resolved:
-        canonical_id = resolved
-    else:
-        clean_base = strip_national_team_words(raw_name) or raw_name
-        slug = sanitize_canonical_slug(clean_base)
-        if league_id:
-            canonical_id = f"{sport}_team_{league_id}_{slug}"
-        else:
-            canonical_id = f"{sport}_team_{slug}"
+    if not resolved:
+        return None
 
     if p_team_id_str:
         storage.save_team_identity(
             sport=sport,
-            canonical_id=canonical_id,
+            canonical_id=resolved,
             provider=provider,
             provider_team_id=p_team_id_str,
             normalized_name=norm_name,
@@ -354,4 +347,4 @@ def bootstrap_historical_team_identity(
             league_id=league_id,
         )
 
-    return canonical_id
+    return resolved

@@ -4492,6 +4492,9 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             "rejection_reasons": rejection_reasons,
         }
 
+    import time
+    t_db_start = time.perf_counter()
+
     resolved_fixtures = []
     for fid, item in valid_fixtures:
         h_id = item.get("teams", {}).get("home", {}).get("id")
@@ -4500,6 +4503,13 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
         a_name = item.get("teams", {}).get("away", {}).get("name", "")
         c_home = team_identity.bootstrap_historical_team_identity(h_name, source, h_id, league_id=league_id)
         c_away = team_identity.bootstrap_historical_team_identity(a_name, source, a_id, league_id=league_id)
+
+        if not c_home or not c_away:
+            rejected_count += 1
+            reason = "unresolved_canonical_team_identity"
+            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+            continue
+
         resolved_fixtures.append((fid, item, c_home, c_away))
 
     conn, db_type = _connect()
@@ -4573,6 +4583,7 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
                     inserted_count += 1
             conn.commit()
 
+        t_db_elapsed = time.perf_counter() - t_db_start
         return {
             "total": len(fixtures),
             "valid": len(valid_fixtures),
@@ -4580,6 +4591,7 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
+            "db_write_duration": round(t_db_elapsed, 4),
         }
 
     except Exception:
