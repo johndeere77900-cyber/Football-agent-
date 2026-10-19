@@ -308,17 +308,25 @@ def _validate_and_canonicalize_team_manifest(raw_team_ids, league_id, sport="foo
     - Must be a non-empty list/tuple/set.
     - Rejects malformed types, empty strings, None, or boolean values.
     - Resolves every team ID using team_identity.resolve_canonical_team_id(..., auto_register=False).
-    - If ANY team ID fails resolution or is unresolvable, rejects the entire manifest (returns []).
+    - If ANY team ID fails resolution, is unregistered, or has sport mismatch, rejects the entire manifest (returns []).
     - Detects and rejects duplicates after canonical resolution (len(canonical_set) == len(raw_team_ids)).
     - Returns sorted list of verified canonical team IDs.
     """
     import team_identity
+    import storage
 
     if not isinstance(raw_team_ids, (list, tuple, set)) or not raw_team_ids:
         return []
 
     canonical_set = set()
     raw_list = list(raw_team_ids)
+    sport_str = str(sport).strip().lower() if sport else "football"
+    expected_prefix = f"{sport_str}_team_"
+
+    try:
+        registered_ids = set(storage.get_team_identities_by_league(sport_str, league_id))
+    except Exception:
+        registered_ids = set()
 
     for item in raw_list:
         if item is None or isinstance(item, bool):
@@ -329,25 +337,31 @@ def _validate_and_canonicalize_team_manifest(raw_team_ids, league_id, sport="foo
             return []
 
         if item_str.startswith("football_team_") or item_str.startswith("basketball_team_"):
-            cid = team_identity.resolve_canonical_team_id(
-                raw_name=item_str,
-                provider="api_football" if sport == "football" else "api_basketball",
-                provider_team_id=None,
-                league_id=league_id,
-                sport=sport,
-                auto_register=False,
-            )
-            if cid:
-                canonical_set.add(cid)
-            else:
+            if not item_str.startswith(expected_prefix):
+                return []
+
+            if item_str in registered_ids:
                 canonical_set.add(item_str)
+            else:
+                cid = team_identity.resolve_canonical_team_id(
+                    raw_name=item_str,
+                    provider="api_football" if sport_str == "football" else "api_basketball",
+                    provider_team_id=None,
+                    league_id=league_id,
+                    sport=sport_str,
+                    auto_register=False,
+                )
+                if cid and cid in registered_ids:
+                    canonical_set.add(cid)
+                else:
+                    return []
         else:
             cid = team_identity.resolve_canonical_team_id(
                 raw_name=item_str,
-                provider="api_football" if sport == "football" else "api_basketball",
+                provider="api_football" if sport_str == "football" else "api_basketball",
                 provider_team_id=item if isinstance(item, int) else None,
                 league_id=league_id,
-                sport=sport,
+                sport=sport_str,
                 auto_register=False,
             )
             if not cid:

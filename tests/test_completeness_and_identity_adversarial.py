@@ -17,7 +17,12 @@ def setup_db(tmp_path, monkeypatch):
 
 def test_round_robin_subset_of_teams_fails_closed():
     """A perfectly complete round robin among only 18 teams (out of 20 real teams) must fail closed."""
+    from team_identity import register_canonical_team_identity
     real_20_teams = [f"football_team_39_team_{i}" for i in range(1, 21)]
+    for i, t in enumerate(real_20_teams):
+        register_canonical_team_identity(
+            canonical_id=t, display_name=f"Team {i+1}", provider="api_football", provider_team_id=str(i+1), league_id=39, sport="football"
+        )
     subset_18_teams = real_20_teams[:18]
 
     fixtures = []
@@ -76,10 +81,18 @@ def test_missing_authoritative_team_universe_fails_closed():
 
 def test_stale_team_identities_from_different_season_fails():
     """Team universe containing a relegated team from a different season must fail closed."""
+    from team_identity import register_canonical_team_identity
     real_2024_teams = [f"football_team_39_team_{i}" for i in range(1, 21)]
+    for i, t in enumerate(real_2024_teams):
+        register_canonical_team_identity(
+            canonical_id=t, display_name=f"Team {i+1}", provider="api_football", provider_team_id=str(i+1), league_id=39, sport="football"
+        )
     # Replace one team with a stale team from 2020
     stale_teams = list(real_2024_teams)
     stale_teams[0] = "football_team_39_relegated_2020"
+    register_canonical_team_identity(
+        canonical_id=stale_teams[0], display_name="Relegated 2020", provider="api_football", provider_team_id="999", league_id=39, sport="football"
+    )
 
     fixtures = []
     fid = 1
@@ -108,7 +121,12 @@ def test_stale_team_identities_from_different_season_fails():
 
 def test_duplicate_matches_different_provider_ids():
     """Same match from Provider A (id 101) and Provider B (id 999) with same score is deduplicated."""
+    from team_identity import register_canonical_team_identity
     teams = [f"football_team_39_team_{i}" for i in range(1, 21)]
+    for i, t in enumerate(teams):
+        register_canonical_team_identity(
+            canonical_id=t, display_name=f"Team {i+1}", provider="api_football", provider_team_id=str(i+1), league_id=39, sport="football"
+        )
     fixtures = []
     fid = 1
     for i, h in enumerate(teams):
@@ -145,7 +163,12 @@ def test_duplicate_matches_different_provider_ids():
 
 def test_conflicting_cross_provider_scores_fails():
     """Same match from Provider A (goals 2-1) and Provider B (goals 0-0) fails with conflicting_cross_provider_match."""
+    from team_identity import register_canonical_team_identity
     teams = [f"football_team_39_team_{i}" for i in range(1, 21)]
+    for i, t in enumerate(teams):
+        register_canonical_team_identity(
+            canonical_id=t, display_name=f"Team {i+1}", provider="api_football", provider_team_id=str(i+1), league_id=39, sport="football"
+        )
     fixtures = []
     fid = 1
     for i, h in enumerate(teams):
@@ -182,6 +205,9 @@ def test_conflicting_cross_provider_scores_fails():
 
 def test_duplicate_fixture_id_same_provider_conflicting_fails():
     """Duplicate fixture ID within same provider with conflicting scores fails closed."""
+    from team_identity import register_canonical_team_identity
+    register_canonical_team_identity(canonical_id="football_team_39_team_1", display_name="Team 1", provider="api_football", provider_team_id="1", league_id=39, sport="football")
+    register_canonical_team_identity(canonical_id="football_team_39_team_2", display_name="Team 2", provider="api_football", provider_team_id="2", league_id=39, sport="football")
     fixtures = [
         {
             "fixture": {"id": 100, "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
@@ -229,7 +255,12 @@ def test_unknown_competition_format_unverifiable():
 
 def test_uncompleted_match_status_rejected():
     """Fixtures with uncompleted statuses (e.g. NS, PST, HT) cannot contribute to historical completion."""
+    from team_identity import register_canonical_team_identity
     teams = [f"football_team_39_team_{i}" for i in range(1, 21)]
+    for i, t in enumerate(teams):
+        register_canonical_team_identity(
+            canonical_id=t, display_name=f"Team {i+1}", provider="api_football", provider_team_id=str(i+1), league_id=39, sport="football"
+        )
     fixtures = []
     fid = 1
     for i, h in enumerate(teams):
@@ -256,6 +287,9 @@ def test_uncompleted_match_status_rejected():
 
 def test_missing_or_malformed_status_object_rejected():
     """Missing or empty status short must fail closed with explicit reason."""
+    from team_identity import register_canonical_team_identity
+    register_canonical_team_identity(canonical_id="football_team_39_team_1", display_name="Team 1", provider="api_football", provider_team_id="1", league_id=39, sport="football")
+    register_canonical_team_identity(canonical_id="football_team_39_team_2", display_name="Team 2", provider="api_football", provider_team_id="2", league_id=39, sport="football")
     meta = {"expected_team_ids": ["football_team_39_team_1", "football_team_39_team_2"]}
     fixture_missing_status = {
         "fixture": {"id": 1, "date": "2024-09-01T15:00:00Z"},
