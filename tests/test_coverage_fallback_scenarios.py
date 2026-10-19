@@ -40,11 +40,20 @@ def mock_team_universe(monkeypatch):
         import team_identity
         canonical_ids = []
         for tid in raw_ids:
-            cid = team_identity.bootstrap_historical_team_identity(
-                f"Team {tid}", "api_football", tid, league_id=league_id
+            cid = f"football_team_{league_id}_team_{tid}"
+            team_identity.register_canonical_team_identity(
+                cid, f"Team {tid}", "api_football", tid, league_id=league_id
             )
-            if cid:
-                canonical_ids.append(cid)
+            team_identity.register_canonical_team_identity(
+                cid, f"Team {tid}", "soccerdata_match_history", tid, league_id=league_id
+            )
+            team_identity.register_canonical_team_identity(
+                cid, f"Team {tid}", "soccerdata_sofascore", tid, league_id=league_id
+            )
+            team_identity.register_canonical_team_identity(
+                cid, f"Team {tid}", "football_data_org", tid, league_id=league_id
+            )
+            canonical_ids.append(cid)
         return canonical_ids
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
 
@@ -116,10 +125,10 @@ def test_1_primary_api_football_structural_gap_triggers_fallback(mock_api_fb, mo
 # TEST 2 — Entire team missing
 def test_2_entire_team_missing():
     import team_identity
-    expected = [
-        team_identity.bootstrap_historical_team_identity(f"Team {tid}", "api_football", tid, league_id=61)
-        for tid in range(1, 19)
-    ]
+    for tid in range(1, 19):
+        cid = f"football_team_61_team_{tid}"
+        team_identity.register_canonical_team_identity(cid, f"Team {tid}", "api_football", tid, league_id=61)
+    expected = [f"football_team_61_team_{tid}" for tid in range(1, 19)]
     provider_metadata = {
         "competition_format": "double_round_robin",
         "expected_team_ids": expected,
@@ -146,10 +155,10 @@ def test_2_entire_team_missing():
 # TEST 3 — Complete 18-team double round robin
 def test_3_complete_18_team_double_round_robin():
     import team_identity
-    expected = [
-        team_identity.bootstrap_historical_team_identity(f"Team {tid}", "api_football", tid, league_id=61)
-        for tid in range(1, 19)
-    ]
+    for tid in range(1, 19):
+        cid = f"football_team_61_team_{tid}"
+        team_identity.register_canonical_team_identity(cid, f"Team {tid}", "api_football", tid, league_id=61)
+    expected = [f"football_team_61_team_{tid}" for tid in range(1, 19)]
     provider_metadata = {
         "competition_format": "double_round_robin",
         "expected_team_ids": expected,
@@ -198,8 +207,8 @@ def test_4_primary_api_football_380_complete_dataset(mock_api_fb, mock_sd_mh, mo
 # TEST 5 — Unknown competition format
 def test_5_unknown_competition_format():
     import team_identity
-    c1 = team_identity.bootstrap_historical_team_identity("Real Madrid", "api_football", 1, league_id=2)
-    c2 = team_identity.bootstrap_historical_team_identity("Stuttgart", "api_football", 2, league_id=2)
+    c1 = team_identity.register_canonical_team_identity("football_team_2_real_madrid", "Real Madrid", "api_football", 1, league_id=2)
+    c2 = team_identity.register_canonical_team_identity("football_team_2_stuttgart", "Stuttgart", "api_football", 2, league_id=2)
 
     cl_fixtures = [
         make_test_fixture(2001, h_name="Real Madrid", a_name="Stuttgart", h_id=1, a_id=2, league_id=2, season=2025)
