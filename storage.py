@@ -393,8 +393,10 @@ def init_db():
                         endpoint TEXT,
                         request_type TEXT DEFAULT 'historical'
                     )
-                    ALTER TABLE api_request_counts ADD COLUMN IF NOT EXISTS request_type TEXT DEFAULT 'historical';
                     """
+                )
+                cur.execute(
+                    "ALTER TABLE api_request_counts ADD COLUMN IF NOT EXISTS request_type TEXT DEFAULT 'historical'"
                 )
                 cur.execute(
                     """

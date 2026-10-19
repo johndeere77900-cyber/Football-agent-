@@ -632,6 +632,94 @@ def test_migration_utility_dry_run_covers_6_datasets(tmp_path, monkeypatch):
     assert os.path.exists(str(db_file))
 
 
+def test_postgres_init_db_fresh_and_migration_api_request_counts(tmp_path, monkeypatch):
+    """
+    PostgreSQL-specific regression test verifying:
+    1. Fresh PostgreSQL schema initialization splits CREATE TABLE and ALTER TABLE for api_request_counts into separate cur.execute calls.
+    2. No cur.execute call in the PostgreSQL init_db path contains multiple SQL statements.
+    3. Existing PostgreSQL schema missing request_type migrates cleanly and idempotently via ALTER TABLE.
+    """
+    dest_db = tmp_path / "postgres_mock.db"
+
+    # 1. Create existing schema missing request_type column
+    conn_pre = sqlite3.connect(str(dest_db))
+    conn_pre.execute(
+        """
+        CREATE TABLE api_request_counts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider TEXT,
+            request_timestamp TEXT,
+            request_date TEXT,
+            endpoint TEXT
+        )
+        """
+    )
+    conn_pre.commit()
+    conn_pre.close()
+
+    # Confirm request_type column is missing initially
+    conn_check = sqlite3.connect(str(dest_db))
+    cols_before = {r[1] for r in conn_check.execute("PRAGMA table_info(api_request_counts)").fetchall()}
+    conn_check.close()
+    assert "request_type" not in cols_before
+
+    executed_queries = []
+
+    class PgMockConn(MockPostgresConn):
+        def cursor(self):
+            parent_cur = super().cursor()
+            class TrackedCur:
+                def __enter__(s): return s
+                def __exit__(s, exc_type, exc_val, exc_tb): pass
+                def execute(s, query, params=()):
+                    q_clean = query.strip()
+                    executed_queries.append(q_clean)
+                    if not q_clean.startswith("DO $$"):
+                        statements = [stmt.strip() for stmt in q_clean.split(";") if stmt.strip()]
+                        assert len(statements) <= 1, f"Found multiple SQL statements in single cur.execute call: {q_clean!r}"
+                    parent_cur.execute(query, params)
+                def fetchall(s): return parent_cur.fetchall()
+                def fetchone(s): return parent_cur.fetchone()
+            return TrackedCur()
+
+    monkeypatch.setattr(storage, "is_neon", lambda: True)
+    monkeypatch.setattr(storage, "_check_production_env", lambda: None)
+    monkeypatch.setattr(storage.psycopg, "connect", lambda url: PgMockConn(str(dest_db)))
+
+    # Execute init_db() on existing schema missing request_type
+    storage.init_db()
+
+    # Verify migration behavior on existing schema
+    conn_after = sqlite3.connect(str(dest_db))
+    cols_after = {r[1] for r in conn_after.execute("PRAGMA table_info(api_request_counts)").fetchall()}
+    conn_after.close()
+    assert "request_type" in cols_after
+
+    # Verify separate cur.execute calls were recorded
+    create_table_calls = [q for q in executed_queries if "CREATE TABLE IF NOT EXISTS api_request_counts" in q]
+    alter_table_calls = [q for q in executed_queries if "ALTER TABLE api_request_counts ADD COLUMN IF NOT EXISTS request_type" in q]
+
+    assert len(create_table_calls) == 1
+    assert len(alter_table_calls) == 1
+    assert "ALTER TABLE" not in create_table_calls[0]
+
+    # 2. Test re-run on already migrated schema (idempotency)
+    executed_queries.clear()
+    storage.init_db()
+
+    # 3. Test fresh schema from scratch
+    fresh_db = tmp_path / "fresh_postgres_mock.db"
+    executed_queries.clear()
+    monkeypatch.setattr(storage.psycopg, "connect", lambda url: PgMockConn(str(fresh_db)))
+
+    storage.init_db()
+
+    conn_fresh = sqlite3.connect(str(fresh_db))
+    cols_fresh = {r[1] for r in conn_fresh.execute("PRAGMA table_info(api_request_counts)").fetchall()}
+    conn_fresh.close()
+    assert "request_type" in cols_fresh
+
+
 def test_postgres_advisory_lock_concurrency_in_reserve_api_request(tmp_path, monkeypatch):
     """Test that storage.reserve_api_request issues pg_advisory_xact_lock in PostgreSQL mode."""
     recorded_queries = []
@@ -740,6 +828,12 @@ class MockPostgresConn:
         self.conn = sqlite3.connect(sqlite_path)
         self.conn.execute("PRAGMA foreign_keys = ON")
 
+    def rollback(self):
+        self.conn.rollback()
+
+    def commit(self):
+        self.conn.commit()
+
     def transaction(self):
         class Trans:
             def __enter__(s): return s
@@ -763,15 +857,29 @@ class MockPostgresConn:
 
             def execute(s, query, params=()):
                 q = query.replace("%s", "?")
+                if q.strip().startswith("DO $$"):
+                    return
                 q = q.replace("DOUBLE PRECISION", "REAL")
                 q = q.replace("JSONB", "TEXT")
+                q = q.replace("BIGSERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
                 q = q.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
+                q = q.replace("BIGINT PRIMARY KEY", "INTEGER PRIMARY KEY")
                 q = q.replace("EXCLUDED.", "excluded.")
                 q = q.replace("ON CONFLICT (fixture_id) DO UPDATE SET", "ON CONFLICT(fixture_id) DO UPDATE SET")
                 q = q.replace("ON CONFLICT (game_id) DO UPDATE SET", "ON CONFLICT(game_id) DO UPDATE SET")
                 q = q.replace("ON CONFLICT (team_id) DO UPDATE SET", "ON CONFLICT(team_id) DO UPDATE SET")
                 q = q.replace("ON CONFLICT (cache_key) DO UPDATE SET", "ON CONFLICT(cache_key) DO UPDATE SET")
-                s.cursor.execute(q, params)
+                if "ADD COLUMN IF NOT EXISTS" in q:
+                    q_sqlite = q.replace("ADD COLUMN IF NOT EXISTS", "ADD COLUMN")
+                    try:
+                        s.cursor.execute(q_sqlite, params)
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column name" in str(exc).lower():
+                            pass
+                        else:
+                            raise
+                else:
+                    s.cursor.execute(q, params)
                 s.rowcount = s.cursor.rowcount
 
             def fetchall(s):
