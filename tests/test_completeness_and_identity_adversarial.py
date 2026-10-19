@@ -292,3 +292,26 @@ def test_missing_or_malformed_status_object_rejected():
     res_null = _validate_historical_structural_coverage([fixture_null_short], season=2024, league_id=39, provider_metadata=meta)
     assert res_null["verified"] is False
     assert res_null["reason"] == "missing_or_empty_status_short"
+
+
+def test_malformed_or_duplicate_expected_team_ids_manifest_rejected():
+    """Manifests with duplicate team IDs, empty strings, None, or unresolvable teams are rejected."""
+    from data_resolver import _validate_and_canonicalize_team_manifest
+
+    # Duplicate team IDs
+    assert _validate_and_canonicalize_team_manifest(["football_team_39_team_1", "football_team_39_team_1"], league_id=39) == []
+
+    # Empty string or None in manifest
+    assert _validate_and_canonicalize_team_manifest(["football_team_39_team_1", ""], league_id=39) == []
+    assert _validate_and_canonicalize_team_manifest(["football_team_39_team_1", None], league_id=39) == []
+
+    # Unresolvable team name
+    assert _validate_and_canonicalize_team_manifest(["completely_unknown_unmapped_team_name_xyz"], league_id=39) == []
+
+
+def test_untrusted_provider_metadata_cannot_bypass_manifest_validation():
+    """Untrusted provider_metadata with duplicate or unresolvable team IDs fails closed."""
+    meta = {"expected_team_ids": ["football_team_39_team_1", "football_team_39_team_1"]}
+    res = _validate_historical_structural_coverage([], season=2024, league_id=39, provider_metadata=meta)
+    assert res["verified"] is False
+    assert res["reason"] == "authoritative_team_universe_unavailable"

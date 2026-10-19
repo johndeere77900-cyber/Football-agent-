@@ -300,6 +300,66 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
         return []
 
 
+def _validate_and_canonicalize_team_manifest(raw_team_ids, league_id, sport="football"):
+    """
+    Validate and resolve a candidate team universe manifest.
+
+    Rules:
+    - Must be a non-empty list/tuple/set.
+    - Rejects malformed types, empty strings, None, or boolean values.
+    - Resolves every team ID using team_identity.resolve_canonical_team_id(..., auto_register=False).
+    - If ANY team ID fails resolution or is unresolvable, rejects the entire manifest (returns []).
+    - Detects and rejects duplicates after canonical resolution (len(canonical_set) == len(raw_team_ids)).
+    - Returns sorted list of verified canonical team IDs.
+    """
+    import team_identity
+
+    if not isinstance(raw_team_ids, (list, tuple, set)) or not raw_team_ids:
+        return []
+
+    canonical_set = set()
+    raw_list = list(raw_team_ids)
+
+    for item in raw_list:
+        if item is None or isinstance(item, bool):
+            return []
+
+        item_str = str(item).strip()
+        if not item_str:
+            return []
+
+        if item_str.startswith("football_team_") or item_str.startswith("basketball_team_"):
+            cid = team_identity.resolve_canonical_team_id(
+                raw_name=item_str,
+                provider="api_football" if sport == "football" else "api_basketball",
+                provider_team_id=None,
+                league_id=league_id,
+                sport=sport,
+                auto_register=False,
+            )
+            if cid:
+                canonical_set.add(cid)
+            else:
+                canonical_set.add(item_str)
+        else:
+            cid = team_identity.resolve_canonical_team_id(
+                raw_name=item_str,
+                provider="api_football" if sport == "football" else "api_basketball",
+                provider_team_id=item if isinstance(item, int) else None,
+                league_id=league_id,
+                sport=sport,
+                auto_register=False,
+            )
+            if not cid:
+                return []
+            canonical_set.add(cid)
+
+    if len(canonical_set) != len(raw_list):
+        return []
+
+    return sorted(canonical_set, key=lambda x: str(x))
+
+
 def _get_authoritative_historical_team_ids(
     league_id, season, max_budget=None, allow_network=False, provider_metadata=None, provider=None, *args, **kwargs
 ):
@@ -322,17 +382,29 @@ def _get_authoritative_historical_team_ids(
     import team_identity
     import storage
 
+    sport = "football"
+    if isinstance(provider_metadata, dict):
+        sport = provider_metadata.get("sport") or "football"
+
     if isinstance(provider_metadata, dict) and provider_metadata.get("expected_team_ids"):
         exp_ids = provider_metadata["expected_team_ids"]
-        if isinstance(exp_ids, (list, tuple, set)) and len(exp_ids) > 0:
-            return sorted(list(exp_ids), key=lambda x: str(x))
+        validated = _validate_and_canonicalize_team_manifest(exp_ids, league_id, sport=sport)
+        if validated:
+            return validated
 
     if league_id and season:
         try:
-            ds_status = storage.get_historical_dataset_status(league_id, season)
-            exp_ids = ds_status.get("expected_team_ids")
-            if isinstance(exp_ids, (list, tuple, set)) and len(exp_ids) > 0:
-                return sorted(list(exp_ids), key=lambda x: str(x))
+            ds_status = storage.get_historical_dataset_status(league_id, season, sport=sport)
+            if (
+                ds_status.get("league_id") == league_id
+                and ds_status.get("season") == season
+                and ds_status.get("sport") == sport
+            ):
+                exp_ids = ds_status.get("expected_team_ids")
+                if exp_ids:
+                    validated = _validate_and_canonicalize_team_manifest(exp_ids, league_id, sport=sport)
+                    if validated:
+                        return validated
         except Exception as exc:
             logger.warning("Unable to obtain DB dataset team universe for league %s season %s: %s", league_id, season, exc)
 
@@ -470,6 +542,9 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     )
 
     expected_team_ids = provider_metadata.get("expected_team_ids", [])
+    if expected_team_ids:
+        expected_team_ids = _validate_and_canonicalize_team_manifest(expected_team_ids, league_id, sport=sport)
+
     if not expected_team_ids and is_double_round_robin:
         expected_team_ids = _get_authoritative_historical_team_ids(
             league_id,
