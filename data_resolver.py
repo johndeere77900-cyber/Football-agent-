@@ -9,24 +9,11 @@ Implements Two-Route Architecture for Historical Acquisition:
 Historical API-Football requests enforce a strict 50 requests/day budget ceiling (API_FOOTBALL_HISTORICAL_DAILY_BUDGET = 50).
 
 Result Status Codes:
-- PRIMARY_SUCCESS: Primary provider returned valid, sufficient data (including valid empty fixture lists).
+- PRIMARY_SUCCESS: Primary provider (Direct CSV / SoccerData) returned valid, sufficient data.
 - PRIMARY_INSUFFICIENT: Primary provider response was missing or malformed.
-- PRIMARY_UNAVAILABLE: Primary provider failed (exception / rate limit).
-- SECONDARY_SUCCESS: Secondary provider returned valid fallback data.
+- PRIMARY_UNAVAILABLE: Primary provider failed (exception / source unavailable).
+- SECONDARY_SUCCESS: Secondary provider (API-Football / football-data.org) returned valid fallback data.
 - SECONDARY_INSUFFICIENT: Secondary provider response was missing or malformed.
-- TERTIARY_SUCCESS: Tertiary provider returned valid fallback data.
-- TERTIARY_INSUFFICIENT: Tertiary provider response was missing or malformed.
-- NO_DATA: No provider supplied usable data.
-- ERROR: Operational error occurred.
-
-Result Status Codes:
-- PRIMARY_SUCCESS: Primary provider returned valid, sufficient data (including valid empty fixture lists).
-- PRIMARY_INSUFFICIENT: Primary provider response was missing or malformed.
-- PRIMARY_UNAVAILABLE: Primary provider failed (exception / rate limit).
-- SECONDARY_SUCCESS: Secondary provider returned valid fallback data.
-- SECONDARY_INSUFFICIENT: Secondary provider response was missing or malformed.
-- TERTIARY_SUCCESS: Tertiary provider returned valid fallback data.
-- TERTIARY_INSUFFICIENT: Tertiary provider response was missing or malformed.
 - NO_DATA: No provider supplied usable data.
 - ERROR: Operational error occurred.
 

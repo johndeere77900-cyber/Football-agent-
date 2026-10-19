@@ -100,6 +100,50 @@ def test_api_football_normalization_provenance_is_secondary():
     assert norm["provider_provenance"]["provider"] == "api_football"
     assert norm["provider_provenance"]["provider_type"] == "secondary"
 
+def test_sufficient_primary_coverage_prevents_secondary_network_calls(monkeypatch):
+    """
+    Verify that when primary sources (CSV / SoccerData) return sufficient, structurally complete coverage,
+    ZERO secondary network endpoints are called.
+    """
+    league_id = 39
+    season = 2024
+
+    teams = [f"football_team_39_team_{i}" for i in range(1, 21)]
+    for i, t in enumerate(teams, start=1):
+        storage.save_team_identity("football", t, "football_data_csv", str(i), f"Team {i}", f"Team {i}", league_id=league_id)
+
+    # Generate 380 complete CSV fixtures
+    csv_fixtures = []
+    fid = 1
+    for i, h in enumerate(teams, start=1):
+        for j, a in enumerate(teams, start=1):
+            if i == j:
+                continue
+            csv_fixtures.append({
+                "fixture": {"id": fid, "date": "2024-09-01T15:00:00Z", "status": {"short": "FT"}},
+                "league": {"id": league_id, "season": season},
+                "teams": {"home": {"id": i, "name": f"Team {i}"}, "away": {"id": j, "name": f"Team {j}"}},
+                "goals": {"home": 1, "away": 0},
+                "canonical_home_id": h,
+                "canonical_away_id": a,
+                "provider_provenance": {"provider": "football_data_csv"}
+            })
+            fid += 1
+
+    monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", lambda lid, ssn: csv_fixtures)
+
+    # Instrument all secondary network entry points to fail if called
+    with patch("api_football.get_league_fixtures_page", side_effect=RuntimeError("Secondary API-Football fixtures called!")), \
+         patch("api_football.get_league_standings", side_effect=RuntimeError("Secondary API-Football standings called!")), \
+         patch("football_data_api.get_competition_matches", side_effect=RuntimeError("Secondary football-data.org matches called!")), \
+         patch("football_data_api.get_competition_teams", side_effect=RuntimeError("Secondary football-data.org teams called!")):
+
+        resolver = DataResolver()
+        res = resolver.get_league_fixtures_page(league_id, season, page=1)
+        assert res["source"] == "football_data_csv"
+        assert len(res["fixtures"]) == 380
+
+
 def test_strict_provider_execution_ordering(monkeypatch):
     """
     Verify strict provider execution order:

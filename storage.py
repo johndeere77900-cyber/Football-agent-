@@ -3754,9 +3754,13 @@ def _mark_quota_ledger_corrupted(reason):
                 )
                 conn.commit()
         finally:
-            conn.close()
-    except Exception:
-        pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        _QUOTA_LEDGER_CORRUPTED = True
+        raise RuntimeError(f"Failed to persist quota ledger corruption state: {exc}") from exc
 
 
 def restore_quota_ledger_trust(operator_reason):
@@ -3868,7 +3872,7 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
                             AND (
                                 %s != 'historical' OR (
                                     SELECT COUNT(*) FROM api_request_counts
-                                    WHERE provider = %s AND request_date LIKE %s AND (request_type = 'historical' OR request_type IS NULL)
+                                    WHERE provider = %s AND request_date LIKE %s AND (request_type = 'historical' OR request_type IS NULL OR request_type = '')
                                 ) < %s
                             )
                             RETURNING id
@@ -3891,7 +3895,7 @@ def reserve_api_request(provider, date_pattern, request_date, endpoint, limit, r
                             AND (
                                 %s != 'historical' OR (
                                     SELECT COUNT(*) FROM api_request_counts
-                                    WHERE provider = %s AND request_date = %s AND (request_type = 'historical' OR request_type IS NULL)
+                                    WHERE provider = %s AND request_date = %s AND (request_type = 'historical' OR request_type IS NULL OR request_type = '')
                                 ) < %s
                             )
                             RETURNING id

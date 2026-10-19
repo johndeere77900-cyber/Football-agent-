@@ -60,15 +60,19 @@ def test_config_historical_budget_parsing(monkeypatch):
     monkeypatch.setenv("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", " 30 ")
     assert config._parse_historical_daily_budget("API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50, 50) == 30
 
+from datetime import datetime, timezone
+
 def test_exactly_50_historical_attempts_allowed_51st_denied(monkeypatch):
     """Verify exactly 50 historical attempts reserve quota, and the 51st attempt raises APIFootballQuotaExhaustedError."""
     monkeypatch.setattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50)
     monkeypatch.setattr(config, "API_FOOTBALL_DAILY_CREDIT_LIMIT", 100)
 
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
     for i in range(50):
         api_football._check_and_consume_quota("fixtures", request_type="historical")
 
-    assert storage.get_api_request_count("api_football", "2026-10-18") == 50
+    assert storage.get_api_request_count("api_football", today_str) == 50
 
     with pytest.raises(APIFootballQuotaExhaustedError):
         api_football._check_and_consume_quota("fixtures", request_type="historical")
@@ -76,34 +80,36 @@ def test_exactly_50_historical_attempts_allowed_51st_denied(monkeypatch):
 def test_cache_hit_consumes_zero_quota(monkeypatch):
     """Verify a persistent cache hit consumes zero request quota."""
     monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test_key")
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # Store payload in cache
     cache_key = api_football._cache_key("fixtures", {"id": 12345})
     storage.set_api_cache(cache_key, "fixtures", {"id": 12345}, {"response": [{"fixture": {"id": 12345}}]}, 3600)
 
-    initial_count = storage.get_api_request_count("api_football", "2026-10-18")
+    initial_count = storage.get_api_request_count("api_football", today_str)
 
     res = api_football.get_fixture_result(12345)
     assert res == {"fixture": {"id": 12345}}
 
-    final_count = storage.get_api_request_count("api_football", "2026-10-18")
+    final_count = storage.get_api_request_count("api_football", today_str)
     assert final_count == initial_count
 
 def test_retry_attempts_counted_individually(monkeypatch):
     """Verify each retry after network error or 500 error consumes an individual quota reservation attempt."""
     monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test_key")
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     mock_resp_500 = MagicMock()
     mock_resp_500.status_code = 500
     mock_resp_500.ok = False
 
-    initial_count = storage.get_api_request_count("api_football", "2026-10-18")
+    initial_count = storage.get_api_request_count("api_football", today_str)
 
     with patch("requests.get", return_value=mock_resp_500):
         with pytest.raises(APIFootballError):
             api_football._get("fixtures", {"id": 999}, request_type="historical")
 
-    final_count = storage.get_api_request_count("api_football", "2026-10-18")
+    final_count = storage.get_api_request_count("api_football", today_str)
     assert final_count == initial_count + api_football.MAX_RETRIES
 
 def test_mixed_live_and_historical_calls_obey_both_limits(monkeypatch):
@@ -384,3 +390,89 @@ def test_failed_explicit_recovery_leaves_ledger_corrupted(tmp_path, monkeypatch)
         assert "failed to durably persist" in str(exc_info.value).lower()
 
     assert storage._QUOTA_LEDGER_CORRUPTED is True
+
+
+def test_failed_corruption_state_write_preserves_fail_closed_behavior(tmp_path, monkeypatch):
+    """
+    Test that when _mark_quota_ledger_corrupted encounters a DB error while attempting to record corruption
+    (e.g., when a healthy row previously existed in quota_ledger_status),
+    the operation raises RuntimeError and the in-memory state remains fail-closed (_QUOTA_LEDGER_CORRUPTED = True).
+    """
+    import sqlite3
+
+    db_file = str(tmp_path / "test_failed_corruption_write.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
+
+    storage.init_db()
+
+    # Pre-condition: ledger was healthy
+    assert storage.is_quota_ledger_corrupted() is False
+
+    # Simulate missing table trigger inside reserve_api_request, but mock _connect during _mark_quota_ledger_corrupted to fail
+    orig_connect = storage._connect
+
+    def failing_connect():
+        # First connect for reserve_api_request works, but second connect inside _mark_quota_ledger_corrupted fails
+        conn, db_type = orig_connect()
+        conn.close()
+        raise sqlite3.OperationalError("Disk I/O error writing quota_ledger_status")
+
+    # Intentionally drop api_request_counts table to force missing-table corruption path
+    conn = sqlite3.connect(db_file)
+    conn.execute("DROP TABLE api_request_counts")
+    conn.commit()
+    conn.close()
+
+    with patch("storage._connect", side_effect=failing_connect):
+        with pytest.raises(RuntimeError) as exc_info:
+            storage.reserve_api_request(
+                provider="api_football",
+                date_pattern="2026-10-18",
+                request_date="2026-10-18",
+                endpoint="fixtures",
+                limit=50,
+                request_type="historical",
+            )
+        assert "failing closed" in str(exc_info.value).lower()
+
+    # Crucial assertion: in-memory corruption state MUST remain True
+    assert storage._QUOTA_LEDGER_CORRUPTED is True
+    assert storage.is_quota_ledger_corrupted() is True
+
+
+def test_legacy_empty_string_request_type_counts_against_historical_cap(tmp_path, monkeypatch):
+    """Verify legacy DB rows with empty string request_type='' or NULL count against the historical cap."""
+    import sqlite3
+
+    db_file = str(tmp_path / "test_legacy_quota.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(config, "NEON_DATABASE_URL", None)
+
+    storage.init_db()
+
+    conn = sqlite3.connect(db_file)
+    # Insert 50 legacy rows with empty string request_type = ''
+    for i in range(50):
+        conn.execute(
+            "INSERT INTO api_request_counts (provider, request_timestamp, request_date, endpoint, request_type) VALUES (?, ?, ?, ?, ?)",
+            ("api_football", "2026-10-18T10:00:00Z", "2026-10-18", "fixtures", ""),
+        )
+    conn.commit()
+    conn.close()
+
+    # get_api_request_count for historical must count legacy empty-string rows (50)
+    hist_count = storage.get_api_request_count("api_football", "2026-10-18", request_type="historical")
+    assert hist_count == 50
+
+    # Next historical reservation attempt MUST be denied because historical quota is exhausted (50/50)
+    res = storage.reserve_api_request(
+        provider="api_football",
+        date_pattern="2026-10-18",
+        request_date="2026-10-18",
+        endpoint="fixtures",
+        limit=50,
+        request_type="historical",
+        global_limit=100,
+    )
+    assert res is False
