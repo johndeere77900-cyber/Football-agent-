@@ -106,10 +106,8 @@ def test_A_to_G_football_pagination_failure_persistence_and_resumption(isolated_
     assert len(stored) == 1
     assert stored[0]["fixture"]["id"] == 7001
 
-    # D, E, F: next run resumes from page 1 and completes dataset without duplicates
+    # D, E, F: next run resumes from page 2 and completes dataset without duplicates
     def mock_p2_resume(league_id, season, page, max_budget=None):
-        if page == 1:
-            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
         if page == 2:
             return {"fixtures": [fix1, fix2], "page": 2, "expected_pages": 2} # fix1 duplicate
         raise RuntimeError("Unexpected page")
@@ -339,10 +337,7 @@ def test_pre_acquisition_quota_exhaustion_preserves_manifest_fields_football_and
         storage.record_api_request("api_basketball", "games")
 
     # Run syncs
-    with patch("api_football.get_league_fixtures_page") as mock_fb_http, \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
+    with patch("api_football.get_league_fixtures_page") as mock_fb_http:
         rep_fb = historical_sync.sync_historical_fixtures(league_id=88, season=2024, historical_budget=50)
         mock_fb_http.assert_not_called()
 
@@ -395,10 +390,8 @@ def test_later_page_quota_interruption_and_resume_football_and_basketball(isolat
     assert st["expected_pages"] == 2
     assert st["error_reason"] == "quota_budget_exhausted_during_acquisition"
 
-    # Resume from page 1
+    # Resume from page 2
     def mock_fb_p2_resume(league_id, season, page, max_budget=None):
-        if page == 1:
-            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
         if page == 2:
             return {"fixtures": [fix2], "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
@@ -431,10 +424,8 @@ def test_api_exception_checkpoint_and_resume_football_and_basketball(isolated_db
     assert st["pages_completed"] == 1
     assert st["error_reason"] == "api_error_during_acquisition"
 
-    # Resume from page 1
+    # Resume from page 2
     def mock_bb_p2_resume(league_id, season, page, max_budget=None):
-        if page == 1:
-            return {"games": [bg1], "page": 1, "expected_pages": 2}
         if page == 2:
             return {"games": [bg2], "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
@@ -470,10 +461,7 @@ def test_early_quota_exhaustion_preserves_persisted_manifest_state_football_and_
     for _ in range(50):
         storage.record_api_request("api_football", "fixtures")
 
-    with patch("api_football.get_league_fixtures_page") as mock_http, \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
+    with patch("api_football.get_league_fixtures_page") as mock_http:
         rep_quota = historical_sync.sync_historical_fixtures(league_id=39, season=2024, historical_budget=50)
         mock_http.assert_not_called()
 

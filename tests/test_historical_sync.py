@@ -207,11 +207,9 @@ def test_historical_sync_page_by_page_resumability(temp_db):
     assert len(stored_after_p1) == 1
     assert stored_after_p1[0]["fixture"]["id"] == 6001
 
-    # Run 2: Resume sync starting from page 1
+    # Run 2: Resume sync starting from page 2
     def mock_page_fetch_resume(league_id, season, page, max_budget=None):
-        if page == 1:
-            return {"fixtures": page1_fixtures, "page": 1, "expected_pages": 2}
-        elif page == 2:
+        if page == 2:
             return {"fixtures": page2_fixtures, "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
 
@@ -310,15 +308,6 @@ def test_resume_incomplete_dataset_single_page_retries_page_1(temp_db):
     pages_completed=1, and acquisition_complete=false must retry from page 1, NOT page 2.
     """
     teams = list(range(1, 21))
-    for t_id in teams:
-        team_identity.register_canonical_team_identity(
-            canonical_id=f"football_team_{t_id}",
-            display_name=f"Team {t_id}",
-            provider="api_football",
-            provider_team_id=t_id,
-            league_id=39,
-        )
-
     pairings = [(h, a) for h in teams for a in teams if h != a]
     fixtures = []
     for i, (h_id, a_id) in enumerate(pairings):
@@ -379,15 +368,6 @@ def test_resume_incomplete_dataset_stale_expected_pages_retries_page_1(temp_db):
     must restart acquisition from page 1 to obtain fresh provider metadata rather than skipping page 1.
     """
     teams = list(range(1, 21))
-    for t_id in teams:
-        team_identity.register_canonical_team_identity(
-            canonical_id=f"football_team_{t_id}",
-            display_name=f"Team {t_id}",
-            provider="api_football",
-            provider_team_id=t_id,
-            league_id=39,
-        )
-
     pairings = [(h, a) for h in teams for a in teams if h != a]
     fixtures = []
     for i, (h_id, a_id) in enumerate(pairings):
