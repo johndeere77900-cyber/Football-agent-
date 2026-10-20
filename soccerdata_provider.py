@@ -535,7 +535,7 @@ try:
     ss = sd.Sofascore(leagues={repr(league_code)}, seasons={repr(season)})
     df = ss.read_schedule()
     if df is None or getattr(df, 'empty', True):
-        print(json.dumps([]))
+        print("SOCCERDATA_JSON_START\\n" + json.dumps({{"records": [], "team_id_map_size": 0, "enrichment_error": None}}) + "\\nSOCCERDATA_JSON_END")
     else:
         df_reset = df.reset_index() if hasattr(df, 'reset_index') else df
         records = df_reset.to_dict(orient='records')
@@ -550,6 +550,18 @@ try:
                 raise RuntimeError("Sofascore season metadata unavailable")
 
             for (lkey, skey), s_row in df_seasons.iterrows():
+                # Historical acquisition requests one season. Do not crawl
+                # every season in the league to resolve team IDs for that request.
+                if season is not None:
+                    try:
+                        requested_season = int(str(season)[:4])
+                        season_key = int(str(skey)[:4])
+                    except (TypeError, ValueError):
+                        continue
+
+                    if season_key != requested_season:
+                        continue
+
                 u_league_id = s_row.get("league_id")
                 u_season_id = s_row.get("season_id")
 
