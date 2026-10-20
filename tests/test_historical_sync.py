@@ -207,9 +207,11 @@ def test_historical_sync_page_by_page_resumability(temp_db):
     assert len(stored_after_p1) == 1
     assert stored_after_p1[0]["fixture"]["id"] == 6001
 
-    # Run 2: Resume sync starting from page 2
+    # Run 2: Resume sync starting from page 1
     def mock_page_fetch_resume(league_id, season, page, max_budget=None):
-        if page == 2:
+        if page == 1:
+            return {"fixtures": page1_fixtures, "page": 1, "expected_pages": 2}
+        elif page == 2:
             return {"fixtures": page2_fixtures, "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
 

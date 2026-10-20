@@ -106,8 +106,10 @@ def test_A_to_G_football_pagination_failure_persistence_and_resumption(isolated_
     assert len(stored) == 1
     assert stored[0]["fixture"]["id"] == 7001
 
-    # D, E, F: next run resumes from page 2 and completes dataset without duplicates
+    # D, E, F: next run resumes from page 1 and completes dataset without duplicates
     def mock_p2_resume(league_id, season, page, max_budget=None):
+        if page == 1:
+            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
         if page == 2:
             return {"fixtures": [fix1, fix2], "page": 2, "expected_pages": 2} # fix1 duplicate
         raise RuntimeError("Unexpected page")
@@ -390,8 +392,10 @@ def test_later_page_quota_interruption_and_resume_football_and_basketball(isolat
     assert st["expected_pages"] == 2
     assert st["error_reason"] == "quota_budget_exhausted_during_acquisition"
 
-    # Resume from page 2
+    # Resume from page 1
     def mock_fb_p2_resume(league_id, season, page, max_budget=None):
+        if page == 1:
+            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
         if page == 2:
             return {"fixtures": [fix2], "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
@@ -424,8 +428,10 @@ def test_api_exception_checkpoint_and_resume_football_and_basketball(isolated_db
     assert st["pages_completed"] == 1
     assert st["error_reason"] == "api_error_during_acquisition"
 
-    # Resume from page 2
+    # Resume from page 1
     def mock_bb_p2_resume(league_id, season, page, max_budget=None):
+        if page == 1:
+            return {"games": [bg1], "page": 1, "expected_pages": 2}
         if page == 2:
             return {"games": [bg2], "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
