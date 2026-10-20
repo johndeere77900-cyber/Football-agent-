@@ -26,4 +26,4 @@ jobs:
           pip install pytest pytest-xdist
 
       - name: Run full test suite
-        run: python -m pytest tests -v
+        run: python -m pytest tests -n 2 --dist=loadfile -q

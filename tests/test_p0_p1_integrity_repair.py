@@ -339,7 +339,10 @@ def test_pre_acquisition_quota_exhaustion_preserves_manifest_fields_football_and
         storage.record_api_request("api_basketball", "games")
 
     # Run syncs
-    with patch("api_football.get_league_fixtures_page") as mock_fb_http:
+    with patch("api_football.get_league_fixtures_page") as mock_fb_http, \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep_fb = historical_sync.sync_historical_fixtures(league_id=88, season=2024, historical_budget=50)
         mock_fb_http.assert_not_called()
 
@@ -467,7 +470,10 @@ def test_early_quota_exhaustion_preserves_persisted_manifest_state_football_and_
     for _ in range(50):
         storage.record_api_request("api_football", "fixtures")
 
-    with patch("api_football.get_league_fixtures_page") as mock_http:
+    with patch("api_football.get_league_fixtures_page") as mock_http, \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         rep_quota = historical_sync.sync_historical_fixtures(league_id=39, season=2024, historical_budget=50)
         mock_http.assert_not_called()
 
