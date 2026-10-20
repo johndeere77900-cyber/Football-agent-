@@ -107,9 +107,13 @@ def test_scenario_1_international_fixture_nigeria_vs_ghana():
 
     league_id = 39
 
-    # Step 1: Bootstrap team identity for international team
-    c_home = team_identity.bootstrap_historical_team_identity(home_name, "api_football", 1001, league_id=league_id)
-    c_away = team_identity.bootstrap_historical_team_identity(away_name, "api_football", 1002, league_id=league_id)
+    # Step 1: Register team identity for international team
+    c_home = team_identity.register_canonical_team_identity("football_team_nigeria", home_name, "api_football", 1001, league_id=league_id)
+    c_away = team_identity.register_canonical_team_identity("football_team_ghana", away_name, "api_football", 1002, league_id=league_id)
+
+    for i in range(1, 8):
+        team_identity.register_canonical_team_identity(f"football_team_opp_{i}", f"Opponent_{i}", "api_football", 3000 + i, league_id=league_id)
+        team_identity.register_canonical_team_identity(f"football_team_opp_g_{i}", f"Opponent_{i}", "api_football", 4000 + i, league_id=league_id)
 
     assert c_home is not None
     assert c_away is not None
@@ -241,9 +245,12 @@ def test_scenario_3_incomplete_db_history_with_provider_gap_fill():
     league_id = 39
     season = 2024
 
-    # Bootstrap identity for Team_A and Team_B
-    team_identity.bootstrap_historical_team_identity("Team_A", "api_football", 101, league_id=league_id)
-    team_identity.bootstrap_historical_team_identity("Team_B", "api_football", 102, league_id=league_id)
+    # Register identity for Team_A, Team_B, and Opponents
+    team_identity.register_canonical_team_identity("football_team_team_a", "Team_A", "api_football", 101, league_id=league_id)
+    team_identity.register_canonical_team_identity("football_team_team_b", "Team_B", "api_football", 102, league_id=league_id)
+    for i in range(1, 6):
+        team_identity.register_canonical_team_identity(f"football_team_opp_a_{i}", "Opponent", "api_football", 200 + i, league_id=league_id)
+        team_identity.register_canonical_team_identity(f"football_team_opp_b_{i}", "Opponent", "api_football", 300 + i, league_id=league_id)
 
     # Empty DB
     target_fixture = make_mock_fixture(

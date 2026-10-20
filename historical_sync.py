@@ -190,23 +190,9 @@ def sync_historical_fixtures(
         )
 
     fixtures_received = []
-    exp_p_stored = dataset_info.get("expected_pages", 0) if not refresh else 0
-    p_comp_stored = dataset_info.get("pages_completed", 0) if not refresh else 0
-    init_stored_count = storage.get_historical_fixture_count(league_id, season)
-    auth_teams = data_resolver._get_authoritative_historical_team_ids(league_id, season, allow_network=False)
-    expected_count = len(auth_teams) * (len(auth_teams) - 1) if auth_teams else None
-    if not refresh and p_comp_stored > 0 and exp_p_stored > 1 and not dataset_info.get("acquisition_complete"):
-        if expected_count is not None and init_stored_count >= expected_count:
-            start_p = 1
-        elif expected_count is None:
-            start_p = 1
-        else:
-            start_p = p_comp_stored + 1
-    else:
-        start_p = 1
-    expected_pages = exp_p_stored
-    new_pages_completed = 0
-    pages_completed = p_comp_stored if (not refresh and start_p > 1) else 0
+    start_p = 1
+    expected_pages = 0
+    pages_completed = 0
     acquisition_complete = False
 
     total_valid_fixtures = 0
@@ -290,7 +276,7 @@ def sync_historical_fixtures(
             for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
                 all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
 
-            pages_completed = current_page if start_p == 1 else max(p_comp_stored, current_page)
+            pages_completed = current_page
             current_stored_count = storage.get_historical_fixture_count(league_id, season)
 
             # Update progress in manifest immediately
@@ -323,7 +309,17 @@ def sync_historical_fixtures(
             print(f"Primary acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
             break
 
-    safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
+    if pages_completed > 0:
+        safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
+        safe_pages_comp = pages_completed
+        safe_rejected_cnt = total_rejected_count
+        safe_empty_cnt = total_empty_pages_count
+    else:
+        safe_exp_pages = dataset_info.get("expected_pages", 0)
+        safe_pages_comp = dataset_info.get("pages_completed", 0)
+        safe_rejected_cnt = dataset_info.get("rejected_count", 0)
+        safe_empty_cnt = dataset_info.get("empty_pages_count", 0)
+
     if acquisition_failed or total_valid_fixtures == 0 or storage.get_historical_fixture_count(league_id, season) == 0:
         acquisition_failed = True
         if not last_error_reason:
@@ -334,10 +330,10 @@ def sync_historical_fixtures(
             fixture_count=storage.get_historical_fixture_count(league_id, season),
             sport="football",
             expected_pages=safe_exp_pages,
-            pages_completed=pages_completed,
+            pages_completed=safe_pages_comp,
             acquisition_complete=False,
-            rejected_count=total_rejected_count,
-            empty_pages_count=total_empty_pages_count,
+            rejected_count=safe_rejected_cnt,
+            empty_pages_count=safe_empty_cnt,
             error_reason=last_error_reason,
             source=page_source if total_valid_fixtures > 0 else "mixed",
         )
@@ -503,11 +499,11 @@ def sync_historical_fixtures(
             source=manifest_source,
             sport="football",
             expected_pages=safe_exp_pages,
-            pages_completed=pages_completed,
+            pages_completed=safe_pages_comp,
             acquisition_complete=False,
-            enrichment_status=enrichment_status,
-            rejected_count=rejected_count,
-            empty_pages_count=total_empty_pages_count,
+            enrichment_status=enrichment_status if pages_completed > 0 else dataset_info.get("enrichment_status", "NONE"),
+            rejected_count=safe_rejected_cnt,
+            empty_pages_count=safe_empty_cnt,
             error_reason=last_error_reason,
             expected_team_ids=exp_team_ids_to_save,
         )
@@ -733,14 +729,9 @@ def sync_historical_basketball_games(
         }
 
     games_received = []
-    exp_p_stored_b = dataset_info.get("expected_pages", 0) if not refresh else 0
-    p_comp_stored_b = dataset_info.get("pages_completed", 0) if not refresh else 0
-    if not refresh and p_comp_stored_b > 0 and exp_p_stored_b > 1 and not dataset_info.get("acquisition_complete"):
-        start_p = p_comp_stored_b + 1
-    else:
-        start_p = 1
-    expected_pages = exp_p_stored_b
-    pages_completed = p_comp_stored_b if (not refresh and start_p > 1) else 0
+    start_p = 1
+    expected_pages = 0
+    pages_completed = 0
     acquisition_complete = False
 
     total_valid_games = 0
@@ -829,14 +820,25 @@ def sync_historical_basketball_games(
 
     final_stored_count = storage.get_historical_basketball_game_count(league_id, season)
 
+    if pages_completed > 0:
+        safe_exp_pages_b = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
+        safe_pages_comp_b = pages_completed
+        safe_rejected_cnt_b = total_rejected_count
+        safe_empty_cnt_b = total_empty_pages_count
+    else:
+        safe_exp_pages_b = dataset_info.get("expected_pages", 0)
+        safe_pages_comp_b = dataset_info.get("pages_completed", 0)
+        safe_rejected_cnt_b = dataset_info.get("rejected_count", 0)
+        safe_empty_cnt_b = dataset_info.get("empty_pages_count", 0)
+
     is_fully_complete = (
         not quota_budget_stopped
         and not acquisition_failed
         and acquisition_complete
-        and expected_pages > 0
-        and pages_completed == expected_pages
-        and rejected_count == 0
-        and total_empty_pages_count == 0
+        and safe_exp_pages_b > 0
+        and safe_pages_comp_b == safe_exp_pages_b
+        and safe_rejected_cnt_b == 0
+        and safe_empty_cnt_b == 0
         and valid_count > 0
         and final_stored_count > 0
     )
@@ -847,11 +849,11 @@ def sync_historical_basketball_games(
             season,
             fixture_count=final_stored_count,
             sport="basketball",
-            expected_pages=expected_pages,
-            pages_completed=pages_completed,
+            expected_pages=safe_exp_pages_b,
+            pages_completed=safe_pages_comp_b,
             acquisition_complete=acquisition_complete,
-            rejected_count=rejected_count,
-            empty_pages_count=total_empty_pages_count,
+            rejected_count=safe_rejected_cnt_b,
+            empty_pages_count=safe_empty_cnt_b,
         )
         final_status = "COMPLETE"
     else:
@@ -860,11 +862,11 @@ def sync_historical_basketball_games(
             season,
             fixture_count=final_stored_count,
             sport="basketball",
-            expected_pages=expected_pages,
-            pages_completed=pages_completed,
+            expected_pages=safe_exp_pages_b,
+            pages_completed=safe_pages_comp_b,
             acquisition_complete=acquisition_complete,
-            rejected_count=rejected_count,
-            empty_pages_count=total_empty_pages_count,
+            rejected_count=safe_rejected_cnt_b,
+            empty_pages_count=safe_empty_cnt_b,
             error_reason=last_error_reason,
         )
         final_status = "INCOMPLETE"
