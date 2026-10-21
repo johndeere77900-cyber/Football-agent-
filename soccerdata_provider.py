@@ -535,7 +535,16 @@ try:
     ss = sd.Sofascore(leagues={repr(league_code)}, seasons={repr(season)})
     df = ss.read_schedule()
     if df is None or getattr(df, 'empty', True):
-        print("SOCCERDATA_JSON_START\\n" + json.dumps({{"records": [], "team_id_map_size": 0, "enrichment_error": None}}) + "\\nSOCCERDATA_JSON_END")
+        output_payload = {{
+            "records": [],
+            "team_id_map_size": 0,
+            "enrichment_error": None,
+        }}
+        print(
+            "SOCCERDATA_JSON_START\\n"
+            + json.dumps(output_payload)
+            + "\\nSOCCERDATA_JSON_END"
+        )
     else:
         df_reset = df.reset_index() if hasattr(df, 'reset_index') else df
         records = df_reset.to_dict(orient='records')
@@ -653,7 +662,11 @@ try:
             "team_id_map_size": len(team_id_map),
             "enrichment_error": enrichment_error,
         }}
-        print("SOCCERDATA_JSON_START\\n" + json.dumps(output_payload, default=str) + "\\nSOCCERDATA_JSON_END")
+        print(
+            "SOCCERDATA_JSON_START\\n"
+            + json.dumps(output_payload, default=str)
+            + "\\nSOCCERDATA_JSON_END"
+        )
 except Exception as exc:
     sys.stderr.write(f"Sofascore Subprocess Error: {{exc}}\\n")
     sys.exit(1)
