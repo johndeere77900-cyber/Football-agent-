@@ -499,17 +499,77 @@ except Exception as exc:
 
 
 def _format_sofascore_season(val):
+    """
+    Normalize a requested season to SoccerData's YYYY-YY format.
+
+    Examples:
+        2020       -> 2020-21
+        2021       -> 2021-22
+        2024       -> 2024-25
+        "2020-21"  -> 2020-21
+        "2020-2021" -> 2020-21
+        "2021/22"  -> 2021-22
+        "2122"     -> 2021-22
+        "2425"     -> 2024-25
+
+    Four-digit calendar years between 1900 and 2100 are treated as
+    requested season start years. Four-digit compact season keys outside
+    that range are interpreted as YYZZ only when the years are consecutive.
+    """
     if val is None:
         return None
+
     raw = str(val).strip()
-    if len(raw) == 4 and raw.isdigit():
-        yr = int(raw)
-        next_two = str(yr + 1)[-2:]
-        return f"{yr}-{next_two}"
-    if len(raw) == 2 and raw.isdigit():
-        yr = 2000 + int(raw)
-        next_two = str(yr + 1)[-2:]
-        return f"{yr}-{next_two}"
+
+    if not raw or raw.lower() in {"none", "nan"}:
+        return None
+
+    # Explicit ranges: YYYY-YY, YYYY-YYYY, or YYYY/YY.
+    separator = "-" if "-" in raw else "/" if "/" in raw else None
+
+    if separator:
+        parts = [part.strip() for part in raw.split(separator)]
+
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            start_year = int(parts[0])
+
+            if len(parts[0]) == 4 and 1900 <= start_year <= 2100:
+                end_part = parts[1]
+
+                if len(end_part) == 4:
+                    end_year = int(end_part)
+                    if end_year == start_year + 1:
+                        return f"{start_year}-{str(end_year)[-2:]}"
+                elif len(end_part) == 2:
+                    expected_end = str(start_year + 1)[-2:]
+                    if end_part == expected_end:
+                        return f"{start_year}-{expected_end}"
+
+        # Preserve unsupported formats rather than silently inventing a year.
+        return raw
+
+    if not raw.isdigit():
+        return raw
+
+    if len(raw) == 2:
+        start_year = 2000 + int(raw)
+        return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+    if len(raw) == 4:
+        number = int(raw)
+
+        # Normal requested season start year, e.g. 2021 -> 2021-22.
+        if 1900 <= number <= 2100:
+            return f"{number}-{str(number + 1)[-2:]}"
+
+        # Compact consecutive season key, e.g. 2122 -> 2021-22.
+        first_two = int(raw[:2])
+        last_two = int(raw[2:])
+
+        if last_two == (first_two + 1) % 100:
+            start_year = 2000 + first_two
+            return f"{start_year}-{str(start_year + 1)[-2:]}"
+
     return raw
 
 
@@ -577,53 +637,102 @@ try:
 
             def _requested_start_year(value):
                 raw = str(value).strip()
-                if len(raw) >= 4 and raw[:4].isdigit():
-                    return int(raw[:4])
-                return None
 
-            def _provider_season_start_year(value):
-                raw = str(value).strip()
-
-                if not raw:
+                if not raw or raw.lower() in {"none", "nan"}:
                     return None
 
-                # SoccerData compact multi-year season keys:
-                # "2021" -> 2020-21
-                # "2122" -> 2021-22
-                # "2425" -> 2024-25
-                if len(raw) == 4 and raw.isdigit():
+                # Requested seasons are normalized before being passed
+                # to SoccerData, e.g. "2021-22".
+                if "-" in raw or "/" in raw:
+                    separator = "-" if "-" in raw else "/"
+                    parts = [part.strip() for part in raw.split(separator)]
+
+                    if len(parts) == 2 and len(parts[0]) == 4 and parts[0].isdigit():
+                        start_year = int(parts[0])
+                        if 1900 <= start_year <= 2100:
+                            return start_year
+
+                    return None
+
+                if not raw.isdigit():
+                    return None
+
+                if len(raw) == 4:
+                    number = int(raw)
+
+                    # A four-digit requested calendar/start year is literal.
+                    if 1900 <= number <= 2100:
+                        return number
+
+                    # Compact consecutive season, e.g. 2122 -> 2021-22.
                     first_two = int(raw[:2])
                     last_two = int(raw[2:])
 
                     if last_two == (first_two + 1) % 100:
                         return 2000 + first_two
 
-                    year = int(raw)
-                    if 1900 <= year <= 2100:
-                        return year
+                    return None
 
-                    return 2000 + first_two
-
-                # Explicit season ranges, such as "2024-25".
-                if len(raw) >= 4 and raw[:4].isdigit():
-                    return int(raw[:4])
+                if len(raw) == 2:
+                    return 2000 + int(raw)
 
                 return None
 
-            req_season_val = {repr(season)}
+            def _provider_season_start_year(value):
+                raw = str(value).strip()
+
+                if not raw or raw.lower() in {"none", "nan"}:
+                    return None
+
+                # Provider metadata can contain an explicit season range.
+                if "-" in raw or "/" in raw:
+                    separator = "-" if "-" in raw else "/"
+                    parts = [part.strip() for part in raw.split(separator)]
+
+                    if len(parts) == 2 and len(parts[0]) == 4 and parts[0].isdigit():
+                        start_year = int(parts[0])
+                        if 1900 <= start_year <= 2100:
+                            return start_year
+
+                    return None
+
+                if not raw.isdigit():
+                    return None
+
+                if len(raw) == 4:
+                    first_two = int(raw[:2])
+                    last_two = int(raw[2:])
+
+                    # Provider compact season key, e.g. 2122 -> 2021-22.
+                    if last_two == (first_two + 1) % 100:
+                        return 2000 + first_two
+
+                    number = int(raw)
+
+                    if 1900 <= number <= 2100:
+                        return number
+
+                    return None
+
+                if len(raw) == 2:
+                    return 2000 + int(raw)
+
+                return None
+
+            # Compare against the same normalized season sent to SoccerData.
+            req_season_val = {repr(sofascore_season)}
+
+            requested_season = _requested_start_year(req_season_val)
 
             for (lkey, skey), s_row in df_seasons.iterrows():
-                # Historical acquisition requests one season. Do not crawl
-                # every season in the league to resolve team IDs for that request.
-                if req_season_val is not None:
-                    requested_season = _requested_start_year(req_season_val)
-                    season_key = _provider_season_start_year(skey)
+                # Only enrich teams for the requested historical season.
+                season_key = _provider_season_start_year(skey)
 
-                    if requested_season is None or season_key is None:
-                        continue
+                if requested_season is None or season_key is None:
+                    continue
 
-                    if season_key != requested_season:
-                        continue
+                if season_key != requested_season:
+                    continue
 
                 u_league_id = s_row.get("league_id")
                 u_season_id = s_row.get("season_id")
