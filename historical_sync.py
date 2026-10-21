@@ -99,7 +99,7 @@ def sync_historical_fixtures(
     import time
     t_sync_start = time.perf_counter()
     total_db_write_duration = 0.0
-    allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+    allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
 
     if season not in allowed_seasons:
         raise ValueError(
@@ -1025,7 +1025,7 @@ def run_historical_queue(
     elif season is not None:
         target_seasons = [season]
     else:
-        target_seasons = list(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+        target_seasons = list(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
 
     seasons = target_seasons
 
@@ -1165,7 +1165,7 @@ def verify_persisted_historical_datasets(
     storage.init_db()
 
     if is_queue or (league_id is None and season is None and not seasons):
-        target_seasons = seasons if seasons else list(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+        target_seasons = seasons if seasons else list(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
         football_targets = [
             {"sport": "football", "league_id": lid, "season": ssn}
             for ssn in target_seasons
@@ -1347,7 +1347,7 @@ if __name__ == "__main__":
         "--seasons",
         nargs="+",
         type=int,
-        help="Explicit list of seasons for historical queue (e.g. --seasons 2020 2021 2022 2023 2024 2025 2026)",
+        help="Explicit list of seasons for historical queue (e.g. --seasons 2019 2020 2021 2022 2023 2024 2025 2026)",
     )
 
     args = parser.parse_args()

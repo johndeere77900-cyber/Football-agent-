@@ -279,8 +279,25 @@ def test_sync_historical_fixtures_season_guards(temp_db):
     """
     Verify strict football historical-season guard in sync_historical_fixtures.
     """
-    with pytest.raises(ValueError, match="Football historical acquisition only supports seasons"):
-        historical_sync.sync_historical_fixtures(league_id=39, season=2019)
+    fixtures_2019 = [
+        {
+            "fixture": {"id": 201901, "date": "2019-09-01T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2019},
+            "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+            "goals": {"home": 2, "away": 1},
+        }
+    ]
+    meta_return = {"fixtures": fixtures_2019, "page": 1, "expected_pages": 1}
+
+    with patch("api_football.get_league_fixtures_page", return_value=meta_return), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
+        report = historical_sync.sync_historical_fixtures(league_id=39, season=2019)
+
+    assert report["season"] == 2019
+    assert report["newly_stored"] == 1
+    assert report["final_stored_count"] == 1
 
     with pytest.raises(ValueError, match="Football historical acquisition only supports seasons"):
         historical_sync.sync_historical_fixtures(league_id=39, season=2027)

@@ -102,9 +102,9 @@ def test_rolling_window_rejects_invalid_seasons():
     with pytest.raises(ValueError) as exc_info:
         backtest.run_rolling_backtest_window(
             league_id=39,
-            seasons=(2019, 2024, 2025),
+            seasons=(2018, 2024, 2025),
         )
-    assert "Invalid season 2019" in str(exc_info.value)
+    assert "Invalid season 2018" in str(exc_info.value)
 
 
 def test_rolling_window_candidate_result_excluded_from_features(temp_db):
