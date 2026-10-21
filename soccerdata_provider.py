@@ -498,6 +498,21 @@ except Exception as exc:
         return "SOURCE_FAILED", [], meta
 
 
+def _format_sofascore_season(val):
+    if val is None:
+        return None
+    raw = str(val).strip()
+    if len(raw) == 4 and raw.isdigit():
+        yr = int(raw)
+        next_two = str(yr + 1)[-2:]
+        return f"{yr}-{next_two}"
+    if len(raw) == 2 and raw.isdigit():
+        yr = 2000 + int(raw)
+        next_two = str(yr + 1)[-2:]
+        return f"{yr}-{next_two}"
+    return raw
+
+
 def get_sofascore_historical_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None, max_retries=2):
     """
     Retrieve matches for league_code (e.g., 'ENG-Premier League', 'INT-European Championship') and season via SoccerData Sofascore.
@@ -507,6 +522,8 @@ def get_sofascore_historical_games(league_code, season, timeout_seconds=DEFAULT_
     """
     if not league_code:
         return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata_sofascore"}
+
+    sofascore_season = _format_sofascore_season(season) if season is not None else season
 
     code_str = f"""
 import json, sys
@@ -532,7 +549,7 @@ try:
     if hasattr(sd.Sofascore, '_all_leagues_dict'):
         delattr(sd.Sofascore, '_all_leagues_dict')
 
-    ss = sd.Sofascore(leagues={repr(league_code)}, seasons={repr(season)})
+    ss = sd.Sofascore(leagues={repr(league_code)}, seasons={repr(sofascore_season)})
     df = ss.read_schedule()
     if df is None or getattr(df, 'empty', True):
         output_payload = {{
@@ -558,33 +575,49 @@ try:
             if df_seasons is None or getattr(df_seasons, "empty", True):
                 raise RuntimeError("Sofascore season metadata unavailable")
 
+            def _requested_start_year(value):
+                raw = str(value).strip()
+                if len(raw) >= 4 and raw[:4].isdigit():
+                    return int(raw[:4])
+                return None
+
+            def _provider_season_start_year(value):
+                raw = str(value).strip()
+
+                if not raw:
+                    return None
+
+                # SoccerData compact multi-year season keys:
+                # "2021" -> 2020-21
+                # "2122" -> 2021-22
+                # "2425" -> 2024-25
+                if len(raw) == 4 and raw.isdigit():
+                    first_two = int(raw[:2])
+                    last_two = int(raw[2:])
+
+                    if last_two == (first_two + 1) % 100:
+                        return 2000 + first_two
+
+                    year = int(raw)
+                    if 1900 <= year <= 2100:
+                        return year
+
+                    return 2000 + first_two
+
+                # Explicit season ranges, such as "2024-25".
+                if len(raw) >= 4 and raw[:4].isdigit():
+                    return int(raw[:4])
+
+                return None
+
+            req_season_val = {repr(season)}
+
             for (lkey, skey), s_row in df_seasons.iterrows():
                 # Historical acquisition requests one season. Do not crawl
                 # every season in the league to resolve team IDs for that request.
-                # SoccerData may represent seasons as either "2024" or "2425".
-                def _season_start_year(value):
-                    raw = str(value).strip()
-
-                    if not raw:
-                        return None
-
-                    # Full year (e.g. 2024)
-                    if len(raw) == 4 and raw.isdigit():
-                        val = int(raw)
-                        if 1900 <= val <= 2100:
-                            return val
-                        return 2000 + int(raw[:2])
-
-                    # Full year or season notation, e.g. "2024" or "2024-25".
-                    if len(raw) >= 4 and raw[:4].isdigit():
-                        return int(raw[:4])
-
-                    return None
-
-
-                if season is not None:
-                    requested_season = _season_start_year(season)
-                    season_key = _season_start_year(skey)
+                if req_season_val is not None:
+                    requested_season = _requested_start_year(req_season_val)
+                    season_key = _provider_season_start_year(skey)
 
                     if requested_season is None or season_key is None:
                         continue
