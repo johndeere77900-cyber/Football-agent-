@@ -31,11 +31,25 @@ def _parse_row_season(raw_s, default_s=None):
         return default_s
     s_str = str(raw_s).strip()
     if s_str.isdigit():
-        val = int(s_str)
-        if val >= 2000:
-            return val
-        if len(s_str) == 4 and val < 2000:  # e.g. 2425 -> 2024
-            return 2000 + int(s_str[:2])
+        if len(s_str) == 4:
+            val = int(s_str)
+
+            # Preserve literal calendar/start years before compact season keys.
+            if 1900 <= val <= 2100:
+                return val
+
+            # Compact consecutive season key, e.g. 2122 -> 2021-22.
+            first_two = int(s_str[:2])
+            last_two = int(s_str[2:])
+
+            if last_two == (first_two + 1) % 100:
+                return 2000 + first_two
+
+            return default_s
+
+        if len(s_str) == 2:
+            return 2000 + int(s_str)
+
     if len(s_str) >= 4 and s_str[:4].isdigit():
         return int(s_str[:4])
     return default_s
@@ -387,6 +401,12 @@ def get_match_history_games(league_code, season, timeout_seconds=DEFAULT_SOCCERD
     if not league_code:
         return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata_match_history"}
 
+    match_history_season = season
+    if season is not None and str(season).isdigit() and len(str(season)) == 4:
+        start_year = int(season)
+        if 1900 <= start_year <= 2100:
+            match_history_season = f"{start_year}-{(start_year + 1) % 100:02d}"
+
     code_str = f"""
 import json, sys
 try:
@@ -406,7 +426,7 @@ try:
     if hasattr(sd.MatchHistory, '_all_leagues_dict'):
         delattr(sd.MatchHistory, '_all_leagues_dict')
 
-    mh = sd.MatchHistory(leagues={repr(league_code)}, seasons={repr(season)})
+    mh = sd.MatchHistory(leagues={repr(league_code)}, seasons={repr(match_history_season)})
     df = mh.read_games()
     if df is None or getattr(df, 'empty', True):
         print("SOCCERDATA_JSON_START\\n[]\\nSOCCERDATA_JSON_END")
@@ -498,6 +518,81 @@ except Exception as exc:
         return "SOURCE_FAILED", [], meta
 
 
+def _format_sofascore_season(val):
+    """
+    Normalize a requested season to SoccerData's YYYY-YY format.
+
+    Examples:
+        2020       -> 2020-21
+        2021       -> 2021-22
+        2024       -> 2024-25
+        "2020-21"  -> 2020-21
+        "2020-2021" -> 2020-21
+        "2021/22"  -> 2021-22
+        "2122"     -> 2021-22
+        "2425"     -> 2024-25
+
+    Four-digit calendar years between 1900 and 2100 are treated as
+    requested season start years. Four-digit compact season keys outside
+    that range are interpreted as YYZZ only when the years are consecutive.
+    """
+    if val is None:
+        return None
+
+    raw = str(val).strip()
+
+    if not raw or raw.lower() in {"none", "nan"}:
+        return None
+
+    # Explicit ranges: YYYY-YY, YYYY-YYYY, or YYYY/YY.
+    separator = "-" if "-" in raw else "/" if "/" in raw else None
+
+    if separator:
+        parts = [part.strip() for part in raw.split(separator)]
+
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            start_year = int(parts[0])
+
+            if len(parts[0]) == 4 and 1900 <= start_year <= 2100:
+                end_part = parts[1]
+
+                if len(end_part) == 4:
+                    end_year = int(end_part)
+                    if end_year == start_year + 1:
+                        return f"{start_year}-{str(end_year)[-2:]}"
+                elif len(end_part) == 2:
+                    expected_end = str(start_year + 1)[-2:]
+                    if end_part == expected_end:
+                        return f"{start_year}-{expected_end}"
+
+        # Preserve unsupported formats rather than silently inventing a year.
+        return raw
+
+    if not raw.isdigit():
+        return raw
+
+    if len(raw) == 2:
+        start_year = 2000 + int(raw)
+        return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+    if len(raw) == 4:
+        number = int(raw)
+
+        # Normal requested season start year, e.g. 2021 -> 2021-22.
+        if 1900 <= number <= 2100:
+            return f"{number}-{str(number + 1)[-2:]}"
+
+        # Compact consecutive season key, e.g. 2122 -> 2021-22.
+        first_two = int(raw[:2])
+        last_two = int(raw[2:])
+
+        if last_two == (first_two + 1) % 100:
+            start_year = 2000 + first_two
+            return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+    return raw
+
+
 def get_sofascore_historical_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None, max_retries=2):
     """
     Retrieve matches for league_code (e.g., 'ENG-Premier League', 'INT-European Championship') and season via SoccerData Sofascore.
@@ -507,6 +602,8 @@ def get_sofascore_historical_games(league_code, season, timeout_seconds=DEFAULT_
     """
     if not league_code:
         return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata_sofascore"}
+
+    sofascore_season = _format_sofascore_season(season) if season is not None else season
 
     code_str = f"""
 import json, sys
@@ -532,10 +629,19 @@ try:
     if hasattr(sd.Sofascore, '_all_leagues_dict'):
         delattr(sd.Sofascore, '_all_leagues_dict')
 
-    ss = sd.Sofascore(leagues={repr(league_code)}, seasons={repr(season)})
+    ss = sd.Sofascore(leagues={repr(league_code)}, seasons={repr(sofascore_season)})
     df = ss.read_schedule()
     if df is None or getattr(df, 'empty', True):
-        print(json.dumps([]))
+        output_payload = {{
+            "records": [],
+            "team_id_map_size": 0,
+            "enrichment_error": None,
+        }}
+        print(
+            "SOCCERDATA_JSON_START\\n"
+            + json.dumps(output_payload)
+            + "\\nSOCCERDATA_JSON_END"
+        )
     else:
         df_reset = df.reset_index() if hasattr(df, 'reset_index') else df
         records = df_reset.to_dict(orient='records')
@@ -549,7 +655,106 @@ try:
             if df_seasons is None or getattr(df_seasons, "empty", True):
                 raise RuntimeError("Sofascore season metadata unavailable")
 
+            def _requested_start_year(value):
+                raw = str(value).strip()
+
+                if not raw or raw.lower() in {"none", "nan"}:
+                    return None
+
+                # Requested seasons are normalized before being passed
+                # to SoccerData, e.g. "2021-22".
+                if "-" in raw or "/" in raw:
+                    separator = "-" if "-" in raw else "/"
+                    parts = [part.strip() for part in raw.split(separator)]
+
+                    if len(parts) == 2 and len(parts[0]) == 4 and parts[0].isdigit():
+                        start_year = int(parts[0])
+                        if 1900 <= start_year <= 2100:
+                            return start_year
+
+                    return None
+
+                if not raw.isdigit():
+                    return None
+
+                if len(raw) == 4:
+                    number = int(raw)
+
+                    # A four-digit requested calendar/start year is literal.
+                    if 1900 <= number <= 2100:
+                        return number
+
+                    # Compact consecutive season, e.g. 2122 -> 2021-22.
+                    first_two = int(raw[:2])
+                    last_two = int(raw[2:])
+
+                    if last_two == (first_two + 1) % 100:
+                        return 2000 + first_two
+
+                    return None
+
+                if len(raw) == 2:
+                    return 2000 + int(raw)
+
+                return None
+
+            def _provider_season_start_year(value):
+                raw = str(value).strip()
+
+                if not raw or raw.lower() in {"none", "nan"}:
+                    return None
+
+                # Provider metadata can contain an explicit season range.
+                if "-" in raw or "/" in raw:
+                    separator = "-" if "-" in raw else "/"
+                    parts = [part.strip() for part in raw.split(separator)]
+
+                    if len(parts) == 2 and len(parts[0]) == 4 and parts[0].isdigit():
+                        start_year = int(parts[0])
+                        if 1900 <= start_year <= 2100:
+                            return start_year
+
+                    return None
+
+                if not raw.isdigit():
+                    return None
+
+                if len(raw) == 4:
+                    number = int(raw)
+
+                    # Preserve literal calendar/start years before compact season keys.
+                    if 1900 <= number <= 2100:
+                        return number
+
+                    # Provider compact season key, e.g. 2122 -> 2021-22.
+                    first_two = int(raw[:2])
+                    last_two = int(raw[2:])
+
+                    if last_two == (first_two + 1) % 100:
+                        return 2000 + first_two
+
+                    return None
+
+                if len(raw) == 2:
+                    return 2000 + int(raw)
+
+                return None
+
+            # Compare against the same normalized season sent to SoccerData.
+            req_season_val = {repr(sofascore_season)}
+
+            requested_season = _requested_start_year(req_season_val)
+
             for (lkey, skey), s_row in df_seasons.iterrows():
+                # Only enrich teams for the requested historical season.
+                season_key = _provider_season_start_year(skey)
+
+                if requested_season is None or season_key is None:
+                    continue
+
+                if season_key != requested_season:
+                    continue
+
                 u_league_id = s_row.get("league_id")
                 u_season_id = s_row.get("season_id")
 
@@ -641,7 +846,11 @@ try:
             "team_id_map_size": len(team_id_map),
             "enrichment_error": enrichment_error,
         }}
-        print("SOCCERDATA_JSON_START\\n" + json.dumps(output_payload, default=str) + "\\nSOCCERDATA_JSON_END")
+        print(
+            "SOCCERDATA_JSON_START\\n"
+            + json.dumps(output_payload, default=str)
+            + "\\nSOCCERDATA_JSON_END"
+        )
 except Exception as exc:
     sys.stderr.write(f"Sofascore Subprocess Error: {{exc}}\\n")
     sys.exit(1)

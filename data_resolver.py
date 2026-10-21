@@ -30,6 +30,7 @@ Provider Identity & Field-Level Reconciliation:
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 import config
 import api_football
@@ -2635,13 +2636,18 @@ class DataResolver:
             # 2b. SoccerData MatchHistory
             sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
             if sd_mh_code:
+                t_mh_start = time.perf_counter()
+                logger.info(f"[TIMING START] SoccerData MatchHistory fetch starting for league_id={league_id}, season={season}, sd_code={sd_mh_code}")
                 try:
                     sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
+                    t_mh_elapsed = time.perf_counter() - t_mh_start
+                    logger.info(f"[TIMING COMPLETE] SoccerData MatchHistory fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_mh_elapsed:.2f}s")
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_mh_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
                         sd_mh_meta = sd_meta_res or {}
                 except Exception as sd_exc:
-                    logger.warning(f"DataResolver MatchHistory primary route failed for league {league_id}: {sd_exc}")
+                    t_mh_elapsed = time.perf_counter() - t_mh_start
+                    logger.warning(f"[TIMING FAILED] DataResolver MatchHistory primary route failed for league_id={league_id}, season={season}, elapsed={t_mh_elapsed:.2f}s: {sd_exc}")
 
             if sd_mh_fixtures:
                 for sm in sd_mh_fixtures:
@@ -2692,8 +2698,12 @@ class DataResolver:
             # 2c. SoccerData Sofascore
             sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
             if sd_ss_code:
+                t_ss_start = time.perf_counter()
+                logger.info(f"[TIMING START] SoccerData Sofascore fetch starting for league_id={league_id}, season={season}, sd_code={sd_ss_code}")
                 try:
                     sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
+                    t_ss_elapsed = time.perf_counter() - t_ss_start
+                    logger.info(f"[TIMING COMPLETE] SoccerData Sofascore fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_ss_elapsed:.2f}s")
                     sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_ss_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
@@ -2701,8 +2711,9 @@ class DataResolver:
                         if "status" not in sd_ss_meta:
                             sd_ss_meta["status"] = sd_status
                 except Exception as sd_exc:
+                    t_ss_elapsed = time.perf_counter() - t_ss_start
                     sd_ss_meta = {"status": "SOURCE_FAILED", "error": str(sd_exc)}
-                    logger.warning(f"DataResolver Sofascore primary route failed for league {league_id}: {sd_exc}")
+                    logger.warning(f"[TIMING FAILED] DataResolver Sofascore primary route failed for league_id={league_id}, season={season}, elapsed={t_ss_elapsed:.2f}s: {sd_exc}")
 
             if sd_ss_fixtures:
                 for sm in sd_ss_fixtures:
