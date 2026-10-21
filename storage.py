@@ -4419,29 +4419,28 @@ def get_team_identities_by_normalized_name(sport, normalized_name, league_id=Non
         conn.close()
 
 
-def save_historical_fixtures(fixtures, league_id, season, source="api_football", cutoff=None, require_completed=False):
-    """
-    Save historical API-Football/football-data.org fixtures into persistent storage.
-
-    Idempotent: skips fixtures that already exist in the database (ON CONFLICT DO NOTHING).
-    Returns dict: {
-        "total": total_input,
-        "valid": valid_count,
-        "inserted": inserted_count,
-        "duplicates_skipped": dup_count,
-        "rejected_count": rejected_count,
-        "rejection_reasons": rejection_reasons_dict,
-    }
-    """
-    # Frozen football historical storage scope.
-    # Historical football persistence is intentionally limited to 2020-2026 and configured leagues.
+def save_historical_fixtures(
+    fixtures,
+    league_id,
+    season,
+    source="api_football",
+    cutoff=None,
+    require_completed=False,
+):
+    """Save validated historical fixtures efficiently and idempotently."""
+    import time
     import team_identity
 
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
 
-    allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
-
+    allowed_seasons = set(
+        getattr(
+            config,
+            "TARGET_SEASONS",
+            [2020, 2021, 2022, 2023, 2024, 2025, 2026],
+        )
+    )
     if season not in allowed_seasons:
         raise ValueError(
             f"Football historical storage only supports seasons "
@@ -4449,7 +4448,6 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
         )
 
     allowed_leagues = set(getattr(config, "ALLOWED_LEAGUE_IDS", []))
-
     if league_id not in allowed_leagues:
         raise ValueError(
             f"Football historical storage only supports configured leagues "
@@ -4461,137 +4459,244 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
 
     valid_fixtures = []
     seen_ids = set()
-    dup_count = 0
+    duplicate_input_count = 0
     rejected_count = 0
     rejection_reasons = {}
 
     for item in fixtures:
         is_valid, reason, norm_item = validate_historical_fixture(
-            item, target_league_id=league_id, target_season=season, cutoff=cutoff, require_completed=require_completed
+            item,
+            target_league_id=league_id,
+            target_season=season,
+            cutoff=cutoff,
+            require_completed=require_completed,
         )
         if not is_valid:
             rejected_count += 1
-            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+            rejection_reasons[reason] = (
+                rejection_reasons.get(reason, 0) + 1
+            )
             continue
 
-        fid = norm_item["fixture"]["id"]
-        if fid in seen_ids:
-            dup_count += 1
+        fixture_id = norm_item["fixture"]["id"]
+        if fixture_id in seen_ids:
+            duplicate_input_count += 1
             continue
 
-        seen_ids.add(fid)
-        valid_fixtures.append((fid, norm_item))
+        seen_ids.add(fixture_id)
+        valid_fixtures.append((fixture_id, norm_item))
+
+    valid_count = len(valid_fixtures)
 
     if not valid_fixtures:
         return {
             "total": len(fixtures),
             "valid": 0,
             "inserted": 0,
-            "duplicates_skipped": dup_count,
+            "duplicates_skipped": duplicate_input_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
+            "db_write_duration": 0.0,
         }
 
-    import time
     t_db_start = time.perf_counter()
-
-    resolved_fixtures = []
-    for fid, item in valid_fixtures:
-        h_id = item.get("teams", {}).get("home", {}).get("id")
-        a_id = item.get("teams", {}).get("away", {}).get("id")
-        h_name = item.get("teams", {}).get("home", {}).get("name", "")
-        a_name = item.get("teams", {}).get("away", {}).get("name", "")
-        c_home = team_identity.bootstrap_historical_team_identity(h_name, source, h_id, league_id=league_id)
-        c_away = team_identity.bootstrap_historical_team_identity(a_name, source, a_id, league_id=league_id)
-
-        if not c_home or not c_away:
-            rejected_count += 1
-            reason = "unresolved_canonical_team_identity"
-            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
-            continue
-
-        resolved_fixtures.append((fid, item, c_home, c_away))
-
     conn, db_type = _connect()
-    now_str = _utc_now()
     inserted_count = 0
+    existing_ids = set()
 
     try:
+        fixture_ids = [fixture_id for fixture_id, _ in valid_fixtures]
+
+        # Check existing records before performing team-identity work.
         if db_type == "postgres":
             with conn.cursor() as cur:
-                for fid, item, c_home, c_away in resolved_fixtures:
-                    kickoff = str(item.get("fixture", {}).get("date", ""))
-                    status = item.get("fixture", {}).get("status", {}).get("short", "")
-                    h_id = item.get("teams", {}).get("home", {}).get("id")
-                    a_id = item.get("teams", {}).get("away", {}).get("id")
-                    h_name = item.get("teams", {}).get("home", {}).get("name", "")
-                    a_name = item.get("teams", {}).get("away", {}).get("name", "")
-                    h_goals = item.get("goals", {}).get("home")
-                    a_goals = item.get("goals", {}).get("away")
+                cur.execute(
+                    """
+                    SELECT fixture_id
+                    FROM historical_fixtures
+                    WHERE source = %s AND fixture_id = ANY(%s)
+                    """,
+                    (source, fixture_ids),
+                )
+                existing_ids = {row[0] for row in cur.fetchall()}
+        else:
+            # Stay below SQLite's parameter limit.
+            for start in range(0, len(fixture_ids), 500):
+                chunk = fixture_ids[start:start + 500]
+                placeholders = ", ".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"""
+                    SELECT fixture_id
+                    FROM historical_fixtures
+                    WHERE source = ? AND fixture_id IN ({placeholders})
+                    """,
+                    [source, *chunk],
+                ).fetchall()
+                existing_ids.update(row[0] for row in rows)
 
-                    raw_json_str = _json_dumps(item, "raw_json")
+        duplicate_count = duplicate_input_count + len(existing_ids)
+        pending_fixtures = [
+            (fixture_id, item)
+            for fixture_id, item in valid_fixtures
+            if fixture_id not in existing_ids
+        ]
+
+        # Cache repeated team lookups across fixtures in this batch.
+        identity_cache = {}
+        resolved_fixtures = []
+
+        for fixture_id, item in pending_fixtures:
+            home = item.get("teams", {}).get("home", {})
+            away = item.get("teams", {}).get("away", {})
+
+            home_id = home.get("id")
+            away_id = away.get("id")
+            home_name = home.get("name", "")
+            away_name = away.get("name", "")
+
+            def resolve_identity(team_name, provider_team_id):
+                cache_key = (
+                    source,
+                    str(provider_team_id),
+                    str(team_name).strip().casefold(),
+                    league_id,
+                )
+                if cache_key not in identity_cache:
+                    identity_cache[cache_key] = (
+                        team_identity.bootstrap_historical_team_identity(
+                            team_name,
+                            source,
+                            provider_team_id,
+                            league_id=league_id,
+                        )
+                    )
+                return identity_cache[cache_key]
+
+            canonical_home_id = resolve_identity(home_name, home_id)
+            canonical_away_id = resolve_identity(away_name, away_id)
+
+            if not canonical_home_id or not canonical_away_id:
+                rejected_count += 1
+                reason = "unresolved_canonical_team_identity"
+                rejection_reasons[reason] = (
+                    rejection_reasons.get(reason, 0) + 1
+                )
+                continue
+
+            resolved_fixtures.append(
+                (
+                    fixture_id,
+                    item,
+                    canonical_home_id,
+                    canonical_away_id,
+                )
+            )
+
+        now_str = _utc_now()
+        rows_to_insert = []
+
+        for fixture_id, item, canonical_home_id, canonical_away_id in resolved_fixtures:
+            fixture = item.get("fixture", {})
+            teams = item.get("teams", {})
+            home = teams.get("home", {})
+            away = teams.get("away", {})
+            goals = item.get("goals", {})
+
+            rows_to_insert.append(
+                (
+                    fixture_id,
+                    source,
+                    league_id,
+                    season,
+                    str(fixture.get("date", "")),
+                    fixture.get("status", {}).get("short", ""),
+                    home.get("id"),
+                    away.get("id"),
+                    canonical_home_id,
+                    canonical_away_id,
+                    home.get("name", ""),
+                    away.get("name", ""),
+                    goals.get("home"),
+                    goals.get("away"),
+                    _json_dumps(item, "raw_json"),
+                    now_str,
+                )
+            )
+
+        # Insert bounded multi-row batches rather than executing one INSERT
+        # statement for every fixture.
+        batch_size = 50
+
+        if db_type == "postgres":
+            columns = """
+                fixture_id, source, league_id, season, kickoff_at, status_short,
+                home_team_id, away_team_id, canonical_home_id, canonical_away_id,
+                home_team, away_team, home_goals, away_goals, raw_json, fetched_at
+            """
+            row_placeholder = "(" + ", ".join(["%s"] * 16) + ")"
+
+            with conn.cursor() as cur:
+                for start in range(0, len(rows_to_insert), batch_size):
+                    batch = rows_to_insert[start:start + batch_size]
+                    placeholders = ", ".join(
+                        [row_placeholder] * len(batch)
+                    )
+                    parameters = [
+                        value
+                        for row in batch
+                        for value in row
+                    ]
 
                     cur.execute(
-                        """
-                        INSERT INTO historical_fixtures (
-                            fixture_id, source, league_id, season, kickoff_at, status_short,
-                            home_team_id, away_team_id, canonical_home_id, canonical_away_id,
-                            home_team, away_team, home_goals, away_goals, raw_json, fetched_at
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        f"""
+                        INSERT INTO historical_fixtures ({columns})
+                        VALUES {placeholders}
                         ON CONFLICT (source, fixture_id) DO NOTHING
                         """,
-                        (
-                            fid, source, league_id, season, kickoff, status,
-                            h_id, a_id, c_home, c_away, h_name, a_name,
-                            h_goals, a_goals, raw_json_str, now_str,
-                        ),
+                        parameters,
                     )
-                    if cur.rowcount == 1:
-                        inserted_count += 1
-            conn.commit()
+                    inserted_count += max(cur.rowcount, 0)
 
         else:
-            for fid, item, c_home, c_away in resolved_fixtures:
-                kickoff = str(item.get("fixture", {}).get("date", ""))
-                status = item.get("fixture", {}).get("status", {}).get("short", "")
-                h_id = item.get("teams", {}).get("home", {}).get("id")
-                a_id = item.get("teams", {}).get("away", {}).get("id")
-                h_name = item.get("teams", {}).get("home", {}).get("name", "")
-                a_name = item.get("teams", {}).get("away", {}).get("name", "")
-                h_goals = item.get("goals", {}).get("home")
-                a_goals = item.get("goals", {}).get("away")
+            row_placeholder = "(" + ", ".join(["?"] * 16) + ")"
 
-                raw_json_str = _json_dumps(item, "raw_json")
+            for start in range(0, len(rows_to_insert), batch_size):
+                batch = rows_to_insert[start:start + batch_size]
+                placeholders = ", ".join(
+                    [row_placeholder] * len(batch)
+                )
+                parameters = [
+                    value
+                    for row in batch
+                    for value in row
+                ]
 
                 cursor = conn.execute(
-                    """
+                    f"""
                     INSERT OR IGNORE INTO historical_fixtures (
-                        fixture_id, source, league_id, season, kickoff_at, status_short,
-                        home_team_id, away_team_id, canonical_home_id, canonical_away_id,
-                        home_team, away_team, home_goals, away_goals, raw_json, fetched_at
+                        fixture_id, source, league_id, season, kickoff_at,
+                        status_short, home_team_id, away_team_id,
+                        canonical_home_id, canonical_away_id, home_team,
+                        away_team, home_goals, away_goals, raw_json, fetched_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES {placeholders}
                     """,
-                    (
-                        fid, source, league_id, season, kickoff, status,
-                        h_id, a_id, c_home, c_away, h_name, a_name,
-                        h_goals, a_goals, raw_json_str, now_str,
-                    ),
+                    parameters,
                 )
-                if cursor.rowcount == 1:
-                    inserted_count += 1
-            conn.commit()
+                inserted_count += max(cursor.rowcount, 0)
 
-        t_db_elapsed = time.perf_counter() - t_db_start
+        conn.commit()
+
         return {
             "total": len(fixtures),
-            "valid": len(valid_fixtures),
+            "valid": valid_count,
             "inserted": inserted_count,
-            "duplicates_skipped": dup_count,
+            "duplicates_skipped": duplicate_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
-            "db_write_duration": round(t_db_elapsed, 4),
+            "db_write_duration": round(
+                time.perf_counter() - t_db_start, 4
+            ),
         }
 
     except Exception:
