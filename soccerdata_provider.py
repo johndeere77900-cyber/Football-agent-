@@ -561,11 +561,32 @@ try:
             for (lkey, skey), s_row in df_seasons.iterrows():
                 # Historical acquisition requests one season. Do not crawl
                 # every season in the league to resolve team IDs for that request.
+                # SoccerData may represent seasons as either "2024" or "2425".
+                def _season_start_year(value):
+                    raw = str(value).strip()
+
+                    if not raw:
+                        return None
+
+                    # Full year (e.g. 2024)
+                    if len(raw) == 4 and raw.isdigit():
+                        val = int(raw)
+                        if 1900 <= val <= 2100:
+                            return val
+                        return 2000 + int(raw[:2])
+
+                    # Full year or season notation, e.g. "2024" or "2024-25".
+                    if len(raw) >= 4 and raw[:4].isdigit():
+                        return int(raw[:4])
+
+                    return None
+
+
                 if season is not None:
-                    try:
-                        requested_season = int(str(season)[:4])
-                        season_key = int(str(skey)[:4])
-                    except (TypeError, ValueError):
+                    requested_season = _season_start_year(season)
+                    season_key = _season_start_year(skey)
+
+                    if requested_season is None or season_key is None:
                         continue
 
                     if season_key != requested_season:
