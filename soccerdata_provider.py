@@ -402,6 +402,12 @@ def get_match_history_games(league_code, season, timeout_seconds=DEFAULT_SOCCERD
     if not league_code:
         return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata_match_history"}
 
+    match_history_season = season
+    if season is not None and str(season).isdigit() and len(str(season)) == 4:
+        start_year = int(season)
+        if 1900 <= start_year <= 2100:
+            match_history_season = f"{start_year}-{(start_year + 1) % 100:02d}"
+
     code_str = f"""
 import json, sys
 try:
@@ -421,7 +427,7 @@ try:
     if hasattr(sd.MatchHistory, '_all_leagues_dict'):
         delattr(sd.MatchHistory, '_all_leagues_dict')
 
-    mh = sd.MatchHistory(leagues={repr(league_code)}, seasons={repr(season)})
+    mh = sd.MatchHistory(leagues={repr(league_code)}, seasons={repr(match_history_season)})
     df = mh.read_games()
     if df is None or getattr(df, 'empty', True):
         print("SOCCERDATA_JSON_START\\n[]\\nSOCCERDATA_JSON_END")

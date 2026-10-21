@@ -109,7 +109,7 @@ ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 REQUIRE_NEON = os.environ.get("REQUIRE_NEON", "false").lower() in ("true", "1", "yes")
 
 # --- Historical Seasons Target ----------------------------------------------
-TARGET_SEASONS = [2020, 2021, 2022, 2023, 2024, 2025, 2026]
+TARGET_SEASONS = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
 
 # --- Canonical Team Aliases (Competition-Aware) ---------------------------
 # Keyed by (normalized_alias, league_id) where competition context is required,
