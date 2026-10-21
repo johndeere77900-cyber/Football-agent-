@@ -31,11 +31,26 @@ def _parse_row_season(raw_s, default_s=None):
         return default_s
     s_str = str(raw_s).strip()
     if s_str.isdigit():
-        val = int(s_str)
-        if val >= 2000:
-            return val
-        if len(s_str) == 4 and val < 2000:  # e.g. 2425 -> 2024
-            return 2000 + int(s_str[:2])
+        if len(s_str) == 4:
+            val = int(s_str)
+
+            # Compact consecutive season key, e.g. 2021 -> 2020-21
+            # and 2425 -> 2024-25. Treat these as season start years.
+            first_two = int(s_str[:2])
+            last_two = int(s_str[2:])
+
+            if last_two == (first_two + 1) % 100:
+                return 2000 + first_two
+
+            # Otherwise, preserve a literal calendar/start year.
+            if 1900 <= val <= 2100:
+                return val
+
+            return default_s
+
+        if len(s_str) == 2:
+            return 2000 + int(s_str)
+
     if len(s_str) >= 4 and s_str[:4].isdigit():
         return int(s_str[:4])
     return default_s
