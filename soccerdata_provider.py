@@ -34,17 +34,16 @@ def _parse_row_season(raw_s, default_s=None):
         if len(s_str) == 4:
             val = int(s_str)
 
-            # Compact consecutive season key, e.g. 2021 -> 2020-21
-            # and 2425 -> 2024-25. Treat these as season start years.
+            # Preserve literal calendar/start years before compact season keys.
+            if 1900 <= val <= 2100:
+                return val
+
+            # Compact consecutive season key, e.g. 2122 -> 2021-22.
             first_two = int(s_str[:2])
             last_two = int(s_str[2:])
 
             if last_two == (first_two + 1) % 100:
                 return 2000 + first_two
-
-            # Otherwise, preserve a literal calendar/start year.
-            if 1900 <= val <= 2100:
-                return val
 
             return default_s
 
@@ -721,17 +720,18 @@ try:
                     return None
 
                 if len(raw) == 4:
+                    number = int(raw)
+
+                    # Preserve literal calendar/start years before compact season keys.
+                    if 1900 <= number <= 2100:
+                        return number
+
+                    # Provider compact season key, e.g. 2122 -> 2021-22.
                     first_two = int(raw[:2])
                     last_two = int(raw[2:])
 
-                    # Provider compact season key, e.g. 2122 -> 2021-22.
                     if last_two == (first_two + 1) % 100:
                         return 2000 + first_two
-
-                    number = int(raw)
-
-                    if 1900 <= number <= 2100:
-                        return number
 
                     return None
 

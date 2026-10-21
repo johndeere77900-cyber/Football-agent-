@@ -81,17 +81,6 @@ def safe_stripped_team_name(name: str) -> str:
 INVALID_IDENTITY_PROVIDERS = {"mixed", "reconciled", "unknown"}
 
 
-def _get_team_alias_registry(sport: str) -> dict:
-    normalized_sport = str(sport or "").strip().lower()
-
-    if normalized_sport == "football":
-        return getattr(config, "CANONICAL_TEAM_ALIASES", {})
-    if normalized_sport == "basketball":
-        return getattr(config, "CANONICAL_BASKETBALL_TEAM_ALIASES", {})
-
-    return {}
-
-
 def strip_national_team_words(name: str) -> str:
     """
     Strip national team suffix words (national team, football team, national, team)
@@ -157,7 +146,7 @@ def resolve_canonical_team_id(
                 )
 
                 if not is_name_match:
-                    alias_dict = _get_team_alias_registry(sport)
+                    alias_dict = getattr(config, "CANONICAL_TEAM_ALIASES", {})
                     for alias_key, target_val in alias_dict.items():
                         target_cid = f"{sport}_team_{sanitize_canonical_slug(target_val)}"
                         if target_cid == stored_canonical:
@@ -210,33 +199,23 @@ def resolve_canonical_team_id(
         if len(candidate_ids) == 1:
             target_canonical_id = list(candidate_ids)[0]
 
-    # Step 3: Competition-aware alias resolution.
+    # Step 3: Competition-aware alias check in config
     if not target_canonical_id:
-        alias_dict = _get_team_alias_registry(sport)
+        alias_dict = getattr(config, "CANONICAL_TEAM_ALIASES", {})
         canonical_alias = None
-
         for alias_key, target_val in alias_dict.items():
             if isinstance(alias_key, tuple) and len(alias_key) == 2:
                 key_name, key_league = alias_key
-                if (
-                    normalize_team_name(str(key_name)) == norm_name
-                    and (
-                        league_id is None
-                        or key_league == league_id
-                    )
-                ):
+                if normalize_team_name(str(key_name)) == norm_name and (league_id is None or key_league == league_id):
                     canonical_alias = target_val
                     break
-
             elif isinstance(alias_key, str):
                 if normalize_team_name(alias_key) == norm_name:
                     canonical_alias = target_val
                     break
 
         if canonical_alias:
-            target_canonical_id = (
-                f"{sport}_team_{sanitize_canonical_slug(canonical_alias)}"
-            )
+            target_canonical_id = f"{sport}_team_{sanitize_canonical_slug(canonical_alias)}"
 
     # Step 4: National team suffix stripping check (e.g. 'Nigeria National Team' -> 'Nigeria')
     if not target_canonical_id:
@@ -247,14 +226,9 @@ def resolve_canonical_team_id(
                 candidate_ids = {m["canonical_id"] for m in nat_matches}
                 if len(candidate_ids) == 1:
                     target_canonical_id = list(candidate_ids)[0]
-            else:
-                alias_dict = _get_team_alias_registry(sport)
-                alias = alias_dict.get(national_stripped)
-
-                if alias:
-                    target_canonical_id = (
-                        f"{sport}_team_{sanitize_canonical_slug(alias)}"
-                    )
+            elif national_stripped in getattr(config, "CANONICAL_TEAM_ALIASES", {}):
+                alias = config.CANONICAL_TEAM_ALIASES[national_stripped]
+                target_canonical_id = f"{sport}_team_{sanitize_canonical_slug(alias)}"
 
     # Step 5: Safe stripped name match within same league_id
     if not target_canonical_id and league_id:
