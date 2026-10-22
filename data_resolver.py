@@ -635,41 +635,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     expected_team_set = canonical_expected_set if canonical_expected_set else (set(expected_team_ids) if expected_team_ids else set())
 
-    # Infer team universe from fixtures if mathematically closed & balanced double-round-robin schedule and network is allowed
-    allow_net = provider_metadata.get("allow_network", False) if isinstance(provider_metadata, dict) else False
-    if not expected_team_set and is_double_round_robin and fixtures and allow_net:
-        obs_teams = set()
-        obs_match_counts = {}
-        for f in fixtures:
-            if not isinstance(f, dict):
-                continue
-            c_h = f.get("canonical_home_id")
-            c_a = f.get("canonical_away_id")
-            if c_h and c_a and c_h != c_a:
-                obs_teams.add(c_h)
-                obs_teams.add(c_a)
-                if c_h not in obs_match_counts:
-                    obs_match_counts[c_h] = {"home": 0, "away": 0, "total": 0}
-                if c_a not in obs_match_counts:
-                    obs_match_counts[c_a] = {"home": 0, "away": 0, "total": 0}
-                obs_match_counts[c_h]["home"] += 1
-                obs_match_counts[c_h]["total"] += 1
-                obs_match_counts[c_a]["away"] += 1
-                obs_match_counts[c_a]["total"] += 1
-
-        n_obs = len(obs_teams)
-        if n_obs > 1:
-            req_h_a = n_obs - 1
-            req_tot = 2 * (n_obs - 1)
-            is_closed = True
-            for t_id, cnts in obs_match_counts.items():
-                if cnts["home"] != req_h_a or cnts["away"] != req_h_a or cnts["total"] != req_tot:
-                    is_closed = False
-                    break
-            if is_closed and len(fixtures) == n_obs * (n_obs - 1):
-                expected_team_set = set(obs_teams)
-                expected_team_ids = sorted(obs_teams)
-
+    # FAIL CLOSED: No inference of team universe from observed fixtures for double round robin
     if not expected_team_set and is_double_round_robin:
         return {
             "verified": False,
