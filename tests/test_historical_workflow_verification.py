@@ -72,7 +72,8 @@ def test_verify_persisted_historical_datasets_active_ongoing_season_incomplete_p
 
     res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2026)
     assert res["success"] is True
-    assert res["verified_count"] == 1
+    assert res["active_in_progress_count"] == 1
+    assert res["verified_count"] == 0
     assert res["results"][0]["issues"] == []
 
     # Count mismatch for active season fails

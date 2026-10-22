@@ -1270,15 +1270,25 @@ def verify_persisted_historical_datasets(
                 if not cov.get("verified"):
                     issues.append(f"failed_football_structural_coverage({cov.get('reason')})")
 
+        is_active_in_progress = (
+            is_active_season
+            and manifest_status != "COMPLETE"
+            and len(issues) == 0
+            and manifest_count == actual_count
+            and distinct_count == actual_count
+        )
+
         is_passed = (
             len(issues) == 0
             and manifest_count == actual_count
             and distinct_count == actual_count
-            and (manifest_status == "COMPLETE" or is_active_season)
+            and manifest_status == "COMPLETE"
         )
 
         if is_passed:
             verified_count += 1
+        elif is_active_in_progress:
+            active_in_progress_count = locals().get("active_in_progress_count", 0) + 1
         else:
             failed_count += 1
 
@@ -1296,24 +1306,27 @@ def verify_persisted_historical_datasets(
             "duplicate_count": actual_count - distinct_count,
             "date_range": f"{min_date} to {max_date}",
             "verified": is_passed,
+            "active_in_progress": is_active_in_progress,
             "issues": issues,
         }
         results.append(res_item)
 
-        status_flag = "PASS" if is_passed else "FAIL"
+        status_flag = "PASS (COMPLETE)" if is_passed else ("ACTIVE (IN_PROGRESS)" if is_active_in_progress else "FAIL")
         print(
             f"[{status_flag}] [{sp.upper()}] League {lid} Season {ssn}: Status={manifest_status}, ManifestCount={manifest_count}, Actual={actual_count}, Distinct={distinct_count}, DateRange={min_date}..{max_date}"
             + (f", Issues={issues}" if issues else ""),
             flush=True,
         )
 
+    act_in_prog_cnt = sum(1 for r in results if r.get("active_in_progress"))
     print("\n==================================================", flush=True)
-    print(f"VERIFICATION AUDIT SUMMARY: Requested={total_requested}, Verified={verified_count}, Failed={failed_count}", flush=True)
+    print(f"VERIFICATION AUDIT SUMMARY: Requested={total_requested}, Verified Complete={verified_count}, Active In-Progress={act_in_prog_cnt}, Failed={failed_count}", flush=True)
     print("==================================================\n", flush=True)
 
     summary = {
         "total_requested": total_requested,
         "verified_count": verified_count,
+        "active_in_progress_count": act_in_prog_cnt,
         "failed_count": failed_count,
         "success": failed_count == 0,
         "results": results,
