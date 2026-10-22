@@ -2953,6 +2953,7 @@ class DataResolver:
                 "expected_team_ids": expected_team_ids,
                 "expected_fixture_count": expected_fix_cnt,
                 "has_authoritative_evidence": has_auth_evidence,
+                "allow_network": True,
             },
             league_id=league_id,
         )
