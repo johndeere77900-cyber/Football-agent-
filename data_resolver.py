@@ -635,7 +635,40 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     expected_team_set = canonical_expected_set if canonical_expected_set else (set(expected_team_ids) if expected_team_ids else set())
 
-    # FAIL CLOSED: No inference of team universe from observed fixtures for double round robin
+    # Infer team universe from fixtures if mathematically closed & balanced double-round-robin schedule
+    if not expected_team_set and is_double_round_robin and fixtures:
+        obs_teams = set()
+        obs_match_counts = {}
+        for f in fixtures:
+            if not isinstance(f, dict):
+                continue
+            c_h = f.get("canonical_home_id")
+            c_a = f.get("canonical_away_id")
+            if c_h and c_a and c_h != c_a:
+                obs_teams.add(c_h)
+                obs_teams.add(c_a)
+                if c_h not in obs_match_counts:
+                    obs_match_counts[c_h] = {"home": 0, "away": 0, "total": 0}
+                if c_a not in obs_match_counts:
+                    obs_match_counts[c_a] = {"home": 0, "away": 0, "total": 0}
+                obs_match_counts[c_h]["home"] += 1
+                obs_match_counts[c_h]["total"] += 1
+                obs_match_counts[c_a]["away"] += 1
+                obs_match_counts[c_a]["total"] += 1
+
+        n_obs = len(obs_teams)
+        if n_obs > 1:
+            req_h_a = n_obs - 1
+            req_tot = 2 * (n_obs - 1)
+            is_closed = True
+            for t_id, cnts in obs_match_counts.items():
+                if cnts["home"] != req_h_a or cnts["away"] != req_h_a or cnts["total"] != req_tot:
+                    is_closed = False
+                    break
+            if is_closed and len(fixtures) == n_obs * (n_obs - 1):
+                expected_team_set = set(obs_teams)
+                expected_team_ids = sorted(obs_teams)
+
     if not expected_team_set and is_double_round_robin:
         return {
             "verified": False,
@@ -2906,12 +2939,19 @@ class DataResolver:
                 league_id, season, max_budget=max_budget, allow_network=True, provider="football_data_org"
             )
 
+        expected_fix_cnt = fd_meta.get("count") if isinstance(fd_meta, dict) else None
+        has_auth_evidence = (
+            isinstance(fd_meta, dict) and fd_meta.get("is_complete") is True
+        )
+
         final_coverage = _validate_historical_structural_coverage(
             combined_fixtures,
             season=season,
             provider_metadata={
                 "competition_format": competition_format,
                 "expected_team_ids": expected_team_ids,
+                "expected_fixture_count": expected_fix_cnt,
+                "has_authoritative_evidence": has_auth_evidence,
             },
             league_id=league_id,
         )

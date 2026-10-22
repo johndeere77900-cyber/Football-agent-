@@ -76,7 +76,7 @@ jobs:
           elif [ -n "$RAW_SEASON" ]; then
             SELECTED_INPUT="$RAW_SEASON"
           elif [ "$RUN_QUEUE" = "true" ]; then
-            SELECTED_INPUT="2020 2021 2022 2023 2024 2025 2026"
+            SELECTED_INPUT="2019 2020 2021 2022 2023 2024 2025 2026"
           else
             SELECTED_INPUT="2024"
           fi
@@ -113,17 +113,22 @@ jobs:
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
         run: |
           set -euo pipefail
           if [ -z "$NEON_DATABASE_URL" ]; then
             echo "ERROR: NEON_DATABASE_URL secret is missing."
             exit 1
           fi
-          # Do not require API_FOOTBALL_KEY just to start URL-based acquisition.
           if [ -n "$API_FOOTBALL_KEY" ]; then
             echo "API_FOOTBALL_KEY secret is present."
           else
             echo "NOTICE: API_FOOTBALL_KEY secret is missing. Acquisition will rely on direct CSV / secondary fallbacks."
+          fi
+          if [ -n "$FOOTBALL_DATA_API_KEY" ]; then
+            echo "FOOTBALL_DATA_API_KEY secret is present."
+          else
+            echo "NOTICE: FOOTBALL_DATA_API_KEY secret is missing. Secondary football-data.org API fallback will be unavailable."
           fi
 
       - name: Historical Data Sync
