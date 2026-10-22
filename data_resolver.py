@@ -635,8 +635,9 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     expected_team_set = canonical_expected_set if canonical_expected_set else (set(expected_team_ids) if expected_team_ids else set())
 
-    # Infer team universe from fixtures if mathematically closed & balanced double-round-robin schedule
-    if not expected_team_set and is_double_round_robin and fixtures:
+    # Infer team universe from fixtures if mathematically closed & balanced double-round-robin schedule and network is allowed
+    allow_net = provider_metadata.get("allow_network", False) if isinstance(provider_metadata, dict) else False
+    if not expected_team_set and is_double_round_robin and fixtures and allow_net:
         obs_teams = set()
         obs_match_counts = {}
         for f in fixtures:
