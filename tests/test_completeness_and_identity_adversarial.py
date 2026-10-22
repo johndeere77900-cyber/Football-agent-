@@ -232,7 +232,7 @@ def test_duplicate_fixture_id_same_provider_conflicting_fails():
         fixtures, season=2024, league_id=39, provider_metadata={"expected_team_ids": ["football_team_39_team_1", "football_team_39_team_2"]}
     )
     assert res["verified"] is False
-    assert res["reason"] == "conflicting_fixture_id"
+    assert res["reason"] in ("duplicate_same_provider_fixture", "conflicting_fixture_id")
 
 def test_unknown_competition_format_unverifiable():
     """Unknown competition format without authoritative evidence fails closed."""
