@@ -183,6 +183,8 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
 
         # Attempt to obtain authoritative season roster or pre-registered identities first
         auth_roster = _get_authoritative_historical_team_ids(league_id, season, allow_network=False)
+        if not auth_roster:
+            auth_roster = _get_authoritative_historical_team_ids(league_id, season, allow_network=True)
 
         def resolve_cached(raw_name):
             nonlocal cache_hits, cache_misses
