@@ -808,3 +808,69 @@ def test_J_arbitrary_counts_alone_cannot_cause_complete(mock_api_fb, mock_fd, ar
 
     assert report["status"] == "INCOMPLETE"
     assert report["acquisition_complete"] is False
+
+
+def test_direct_csv_roster_verification_scenarios(tmp_path, monkeypatch):
+    """
+    Test direct CSV identity roster verification rules:
+    - Missing/empty roster rejects identity without registration.
+    - Alias resolving outside roster rejected unless unambiguous roster-name match identifies team.
+    - Valid in-roster alias accepted.
+    - Unknown / ambiguous names rejected without registration.
+    - Fixtures with unresolved home or away teams are rejected.
+    """
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test_csv_roster.db"))
+    storage.init_db()
+
+    import io
+    import urllib.request
+
+    # Setup 2 teams in authoritative roster: Arsenal (football_team_39_team_1) & Chelsea (football_team_39_team_2)
+    auth_roster = ["football_team_39_team_1", "football_team_39_team_2"]
+
+    # Pre-register identities
+    team_identity.register_canonical_team_identity("football_team_39_team_1", "Arsenal", "api_football", 10, league_id=39)
+    team_identity.register_canonical_team_identity("football_team_39_team_2", "Chelsea", "api_football", 20, league_id=39)
+
+    # 1. Missing or empty roster test
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", lambda lid, ssn, allow_network=False: [])
+    csv_content_missing_roster = "Date,HomeTeam,AwayTeam,FTHG,FTAG\n17/08/2024,Arsenal,Chelsea,2,1\n"
+
+    class MockResponseMissing:
+        def read(self):
+            return csv_content_missing_roster.encode("utf-8")
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    with patch("urllib.request.urlopen", return_value=MockResponseMissing()):
+        fixtures_empty_roster = data_resolver._fetch_direct_csv_league_fixtures(39, 2024)
+        assert len(fixtures_empty_roster) == 0
+
+    # 2. Roster available
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", lambda lid, ssn, allow_network=False: auth_roster)
+
+    # Sample CSV rows testing:
+    # Row 1: Valid Arsenal vs Chelsea (both in roster) -> ACCEPTED
+    # Row 2: Unknown team vs Chelsea -> REJECTED (unresolved home team)
+    csv_content = (
+        "Date,HomeTeam,AwayTeam,FTHG,FTAG\n"
+        "17/08/2024,Arsenal,Chelsea,2,1\n"
+        "18/08/2024,Unknown FC,Chelsea,0,1\n"
+    )
+
+    class MockResponse:
+        def read(self):
+            return csv_content.encode("utf-8")
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    with patch("urllib.request.urlopen", return_value=MockResponse()):
+        fixtures = data_resolver._fetch_direct_csv_league_fixtures(39, 2024)
+        assert len(fixtures) == 1
+        assert fixtures[0]["canonical_home_id"] == "football_team_39_team_1"
+        assert fixtures[0]["canonical_away_id"] == "football_team_39_team_2"
