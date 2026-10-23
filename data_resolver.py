@@ -114,7 +114,9 @@ def _format_fd_csv_season_code(season: int) -> str:
     return f"{y1:02d}{y2:02d}"
 
 
-def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -> list:
+def _fetch_direct_csv_league_fixtures(
+    league_id: int, season: int, timeout=15, max_budget=None
+) -> list:
     """
     Fetch and validate direct CSV match data from stable Football-Data.co.uk URLs.
     Validates CSV headers, date format, team names, and non-negative scores before returning normalized fixture dicts.
@@ -182,9 +184,13 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
         cache_misses = 0
 
         # Attempt to obtain authoritative season roster or pre-registered identities first
-        auth_roster = _get_authoritative_historical_team_ids(league_id, season, allow_network=False)
+        auth_roster = _get_authoritative_historical_team_ids(
+            league_id, season, max_budget=max_budget, allow_network=False
+        )
         if not auth_roster:
-            auth_roster = _get_authoritative_historical_team_ids(league_id, season, allow_network=True)
+            auth_roster = _get_authoritative_historical_team_ids(
+                league_id, season, max_budget=max_budget, allow_network=True
+            )
 
         def resolve_cached(raw_name):
             nonlocal cache_hits, cache_misses
@@ -2641,7 +2647,9 @@ class DataResolver:
         if page == 1:
             # 2a. Direct CSV - Attempt direct downloadable CSV BEFORE network-dependent team-universe discovery
             try:
-                csv_fixtures = _fetch_direct_csv_league_fixtures(league_id, season)
+                csv_fixtures = _fetch_direct_csv_league_fixtures(
+                    league_id, season, max_budget=max_budget
+                )
             except Exception as csv_exc:
                 logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
 

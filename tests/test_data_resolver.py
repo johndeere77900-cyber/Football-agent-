@@ -671,7 +671,7 @@ def test_provider_execution_order_primary_before_secondary():
     """
     call_order = []
 
-    def mock_csv(league_id, season):
+    def mock_csv(league_id, season, *args, **kwargs):
         call_order.append("direct_csv")
         teams = [{"id": i, "name": f"Team {i}"} for i in range(1, 21)]
         fixtures = []
@@ -834,7 +834,7 @@ def test_direct_csv_roster_verification_scenarios(tmp_path, monkeypatch):
     team_identity.register_canonical_team_identity("football_team_39_team_2", "Chelsea", "api_football", 20, league_id=39)
 
     # 1. Missing or empty roster test
-    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", lambda lid, ssn, allow_network=False: [])
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", lambda lid, ssn, *args, **kwargs: [])
     csv_content_missing_roster = "Date,HomeTeam,AwayTeam,FTHG,FTAG\n17/08/2024,Arsenal,Chelsea,2,1\n"
 
     class MockResponseMissing:
@@ -850,7 +850,7 @@ def test_direct_csv_roster_verification_scenarios(tmp_path, monkeypatch):
         assert len(fixtures_empty_roster) == 0
 
     # 2. Roster available
-    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", lambda lid, ssn, allow_network=False: auth_roster)
+    monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", lambda lid, ssn, *args, **kwargs: auth_roster)
 
     # Sample CSV rows testing:
     # Row 1: Valid Arsenal vs Chelsea (both in roster) -> ACCEPTED
