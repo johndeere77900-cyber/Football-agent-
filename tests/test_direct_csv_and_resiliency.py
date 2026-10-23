@@ -39,9 +39,10 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
         self.assertEqual(data_resolver._format_fd_csv_season_code(2020), "2021")
         self.assertEqual(data_resolver._format_fd_csv_season_code(1800), "")
 
+    @patch("data_resolver._get_authoritative_historical_team_ids", return_value=["football_team_Man United", "football_team_Fulham"])
     @patch("team_identity.bootstrap_historical_team_identity", side_effect=lambda raw_name, **kwargs: f"football_team_{raw_name}")
     @patch("urllib.request.urlopen")
-    def test_csv_header_normalization_and_stable_id(self, mock_urlopen, mock_bootstrap):
+    def test_csv_header_normalization_and_stable_id(self, mock_urlopen, mock_bootstrap, mock_auth_roster):
         # Header includes BOM, uppercase, extra spaces
         raw_csv = "\ufeffDATE , HOMETEAM , AWAYTEAM , FTHG , FTAG , HS , AS\n16/08/2024, Man United , Fulham , 1 , 0 , 14 , 10\n"
         mock_response = MagicMock()
@@ -70,9 +71,10 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
         self.assertIsInstance(f1["fixture"]["id"], int)
         self.assertGreater(f1["fixture"]["id"], 0)
 
+    @patch("data_resolver._get_authoritative_historical_team_ids", return_value=["football_team_Arsenal", "football_team_Chelsea"])
     @patch("team_identity.bootstrap_historical_team_identity", side_effect=lambda raw_name, **kwargs: f"football_team_{raw_name}")
     @patch("urllib.request.urlopen")
-    def test_csv_invalid_row_rejection(self, mock_urlopen, mock_bootstrap):
+    def test_csv_invalid_row_rejection(self, mock_urlopen, mock_bootstrap, mock_auth_roster):
         # Invalid date format and negative scores
         raw_csv = "Date,HomeTeam,AwayTeam,FTHG,FTAG\ninvalid_date,Arsenal,Chelsea,2,1\n17/08/2024,Arsenal,Chelsea,-1,1\n17/08/2024,Arsenal,Chelsea,2,0\n"
         mock_response = MagicMock()
