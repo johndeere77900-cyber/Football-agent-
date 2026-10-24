@@ -288,5 +288,174 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
         self.assertTrue(coverage["verified"])
         self.assertIsNone(coverage["reason"])
 
+    def test_complete_csv_dataset_without_authoritative_roster_skips_secondary_provider(self):
+        """
+        Regression test: Complete primary CSV dataset without authoritative roster passes structural coverage
+        and returns immediately without calling secondary providers.
+        """
+        import storage
+        import team_identity
+
+        storage.init_db()
+
+        # Seed 20 canonical teams for La Liga (140)
+        la_liga_teams = [
+            'alaves', 'athletic_bilbao', 'atletico_madrid', 'barcelona', 'celta_vigo',
+            'eibar', 'espanyol', 'getafe', 'granada', 'leganes',
+            'levante', 'mallorca', 'osasuna', 'real_betis', 'real_madrid',
+            'real_sociedad', 'sevilla', 'valencia', 'valladolid', 'villarreal'
+        ]
+        canonical_teams = [f"football_team_{t}" for t in la_liga_teams]
+        for idx, t in enumerate(la_liga_teams):
+            storage.save_team_identity("football", f"football_team_{t}", "test_csv", f"140_{t}", t, f"Team {t}", 140)
+
+        csv_fixtures = []
+        fid = 5000
+        for i in range(20):
+            for j in range(20):
+                if i == j:
+                    continue
+                fid += 1
+                csv_fixtures.append({
+                    "fixture": {"id": fid, "date": "2019-09-01T16:00:00Z", "status": {"short": "FT"}},
+                    "league": {"id": 140, "season": 2019},
+                    "teams": {
+                        "home": {"id": 200 + i, "name": la_liga_teams[i]},
+                        "away": {"id": 200 + j, "name": la_liga_teams[j]},
+                    },
+                    "goals": {"home": 2, "away": 1},
+                    "canonical_home_id": canonical_teams[i],
+                    "canonical_away_id": canonical_teams[j],
+                    "provider_provenance": {"provider": "football_data_csv"},
+                })
+
+        with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=csv_fixtures), \
+             patch("data_resolver._get_authoritative_historical_team_ids", return_value=[]), \
+             patch("api_football.get_league_fixtures_page") as mock_af_page:
+
+            resolver = data_resolver.DataResolver()
+            res = resolver.get_league_fixtures_page(140, 2019, page=1)
+
+            self.assertTrue(res["provider_metadata"]["is_complete"])
+            self.assertTrue(res["provider_metadata"]["structural_coverage"]["verified"])
+            self.assertEqual(res["source"], "football_data_csv")
+            mock_af_page.assert_not_called()
+
+    def test_incomplete_csv_dataset_triggers_secondary_fallback(self):
+        """
+        Regression test: Incomplete direct CSV dataset fails structural coverage and triggers fallback.
+        """
+        import storage
+
+        storage.init_db()
+
+        incomplete_csv = [{
+            "fixture": {"id": 9999, "date": "2019-09-01T16:00:00Z", "status": {"short": "FT"}},
+            "league": {"id": 140, "season": 2019},
+            "teams": {
+                "home": {"id": 1, "name": "Real Madrid"},
+                "away": {"id": 2, "name": "Barcelona"},
+            },
+            "goals": {"home": 2, "away": 1},
+            "canonical_home_id": "football_team_real_madrid",
+            "canonical_away_id": "football_team_barcelona",
+            "provider_provenance": {"provider": "football_data_csv"},
+        }]
+
+        with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=incomplete_csv), \
+             patch("data_resolver._get_authoritative_historical_team_ids", return_value=[]), \
+             patch("api_football.get_league_fixtures_page", side_effect=Exception("API Football Budget Exceeded")):
+
+            resolver = data_resolver.DataResolver()
+            res = resolver.get_league_fixtures_page(140, 2019, page=1)
+
+            self.assertFalse(res["provider_metadata"]["is_complete"])
+            self.assertFalse(res["provider_metadata"]["structural_coverage"]["verified"])
+
+    def test_persisted_complete_data_becomes_complete_with_zero_new_fixtures(self):
+        """
+        Regression test: Persisted structurally complete dataset becomes COMPLETE in manifest
+        even when 0 new fixtures are retrieved in the current sync run.
+        """
+        import storage
+        import historical_sync
+
+        storage.init_db()
+
+        # Seed 20 canonical teams and 380 fixtures in DB
+        la_liga_teams = [
+            'alaves', 'athletic_bilbao', 'atletico_madrid', 'barcelona', 'celta_vigo',
+            'eibar', 'espanyol', 'getafe', 'granada', 'leganes',
+            'levante', 'mallorca', 'osasuna', 'real_betis', 'real_madrid',
+            'real_sociedad', 'sevilla', 'valencia', 'valladolid', 'villarreal'
+        ]
+        canonical_teams = [f"football_team_{t}" for t in la_liga_teams]
+        for idx, t in enumerate(la_liga_teams):
+            storage.save_team_identity("football", f"football_team_{t}", "test_provider", f"140_{t}", t, f"Team {t}", 140)
+
+        fixtures = []
+        fid = 8000
+        for i in range(20):
+            for j in range(20):
+                if i == j:
+                    continue
+                fid += 1
+                fixtures.append({
+                    "fixture": {"id": fid, "date": "2019-09-01T16:00:00Z", "status": {"short": "FT"}},
+                    "league": {"id": 140, "season": 2019},
+                    "teams": {
+                        "home": {"id": 300 + i, "name": la_liga_teams[i]},
+                        "away": {"id": 300 + j, "name": la_liga_teams[j]},
+                    },
+                    "goals": {"home": 1, "away": 0},
+                    "canonical_home_id": canonical_teams[i],
+                    "canonical_away_id": canonical_teams[j],
+                    "provider_provenance": {"provider": "football_data_csv"},
+                })
+
+        storage.save_historical_fixtures(fixtures, 140, 2019, source="football_data_csv", require_completed=True)
+        storage.mark_historical_dataset_incomplete(140, 2019, fixture_count=380, rejected_count=0, empty_pages_count=0)
+
+        with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
+            res = historical_sync.sync_historical_fixtures(140, 2019, refresh=False)
+
+            self.assertEqual(res["status"], "COMPLETE")
+            status = storage.get_historical_dataset_status(140, 2019)
+            self.assertEqual(status["status"], "COMPLETE")
+            self.assertTrue(status["acquisition_complete"])
+
+    def test_invalid_persisted_fixtures_cannot_become_complete(self):
+        """
+        Regression test: Invalid/incomplete persisted dataset in DB remains INCOMPLETE.
+        """
+        import storage
+        import historical_sync
+
+        storage.init_db()
+
+        incomplete_fixture = [{
+            "fixture": {"id": 7777, "date": "2019-09-01T16:00:00Z", "status": {"short": "FT"}},
+            "league": {"id": 140, "season": 2019},
+            "teams": {
+                "home": {"id": 1, "name": "Real Madrid"},
+                "away": {"id": 2, "name": "Barcelona"},
+            },
+            "goals": {"home": 2, "away": 1},
+            "canonical_home_id": "football_team_real_madrid",
+            "canonical_away_id": "football_team_barcelona",
+            "provider_provenance": {"provider": "football_data_csv"},
+        }]
+
+        storage.save_historical_fixtures(incomplete_fixture, 140, 2019, source="football_data_csv", require_completed=True)
+        storage.mark_historical_dataset_incomplete(140, 2019, fixture_count=1, rejected_count=0, empty_pages_count=0)
+
+        with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
+            res = historical_sync.sync_historical_fixtures(140, 2019, refresh=False)
+
+            self.assertEqual(res["status"], "INCOMPLETE")
+            status = storage.get_historical_dataset_status(140, 2019)
+            self.assertEqual(status["status"], "INCOMPLETE")
+            self.assertFalse(status["acquisition_complete"])
+
 if __name__ == "__main__":
     unittest.main()

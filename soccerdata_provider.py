@@ -468,6 +468,15 @@ except Exception as exc:
                 stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
                 last_error = f"Missing boundary markers or non-zero exit code: {stderr_msg}"
                 logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory subprocess failed: {last_error}")
+                if any(err in stderr_msg.lower() for err in ["403", "401", "404", "forbidden", "unauthorized"]):
+                    logger.info(f"Unrecoverable provider HTTP error detected ({stderr_msg}). Skipping remaining retries.")
+                    meta = {
+                        "status": "SOURCE_FAILED",
+                        "error": last_error,
+                        "stderr": proc.stderr if proc else None,
+                        "source": "soccerdata_match_history",
+                    }
+                    return "SOURCE_FAILED", [], meta
         except subprocess.TimeoutExpired as exc:
             last_error = f"Subprocess timed out after {timeout_seconds}s"
             logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory timeout: {last_error}")
@@ -895,6 +904,16 @@ except Exception as exc:
                 stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
                 last_error = f"Missing boundary markers or non-zero exit code: {stderr_msg}"
                 logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore subprocess failed: {last_error}")
+                if any(err in stderr_msg.lower() for err in ["403", "401", "404", "forbidden", "unauthorized"]):
+                    logger.info(f"Unrecoverable provider HTTP error detected ({stderr_msg}). Skipping remaining retries.")
+                    meta = {
+                        "status": "SOURCE_FAILED",
+                        "error": last_error,
+                        "stderr": proc.stderr if proc else None,
+                        "target_url": "https://api.sofascore.com/api/v1/config/default-unique-tournaments/EN/football",
+                        "source": "soccerdata_sofascore",
+                    }
+                    return "SOURCE_FAILED", [], meta
         except subprocess.TimeoutExpired as exc:
             last_error = f"Subprocess timed out after {timeout_seconds}s"
             logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore timeout: {last_error}")
@@ -904,7 +923,14 @@ except Exception as exc:
 
     else:
         # All retries exhausted due to transient subprocess error or non-zero exit code
-        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_sofascore"}
+        meta = {
+            "status": "SOURCE_FAILED",
+            "error": last_error,
+            "stderr": proc.stderr if proc else None,
+            "target_url": "https://api.sofascore.com/api/v1/config/default-unique-tournaments/EN/football",
+            "source": "soccerdata_sofascore",
+        }
+        return "SOURCE_FAILED", [], meta
 
     if not raw_records:
         meta = {
