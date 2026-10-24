@@ -397,7 +397,7 @@ def bootstrap_historical_team_identity(
             ex_league = ex.get("league_id")
             ex_norm = ex.get("normalized_name", "")
             # Disambiguate if target_canonical is already registered for another league or different team name
-            if (league_id is not None and ex_league is not None and ex_league != league_id) or (
+            if (league_id is not None and ex_league != league_id) or (
                 ex_norm and ex_norm != norm_name and safe_stripped_team_name(ex_norm) != safe_stripped_team_name(norm_name)
             ):
                 if league_id:

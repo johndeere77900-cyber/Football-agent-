@@ -4415,7 +4415,7 @@ def get_team_identities_by_normalized_name(sport, normalized_name, league_id=Non
                         SELECT sport, canonical_id, provider, provider_team_id,
                                normalized_name, display_name, league_id
                         FROM team_identities
-                        WHERE sport = %s AND normalized_name = %s AND (league_id = %s OR league_id IS NULL)
+                        WHERE sport = %s AND normalized_name = %s AND league_id = %s
                         """,
                         (sport, normalized_name, league_id),
                     )
@@ -4437,7 +4437,7 @@ def get_team_identities_by_normalized_name(sport, normalized_name, league_id=Non
                     SELECT sport, canonical_id, provider, provider_team_id,
                            normalized_name, display_name, league_id
                     FROM team_identities
-                    WHERE sport = ? AND normalized_name = ? AND (league_id = ? OR league_id IS NULL)
+                    WHERE sport = ? AND normalized_name = ? AND league_id = ?
                     """,
                     (sport, normalized_name, league_id),
                 ).fetchall()

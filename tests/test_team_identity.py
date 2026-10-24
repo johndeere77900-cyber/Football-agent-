@@ -147,3 +147,34 @@ def test_cross_league_team_identity_isolation_and_verified_alias_reuse():
     cid_real_la_liga = team_identity.resolve_canonical_team_id("Real Madrid", "api_football", 541, league_id=140)
     cid_real_cl = team_identity.resolve_canonical_team_id("Real Madrid", "api_football", 541, league_id=2)
     assert cid_real_la_liga == cid_real_cl == "football_team_real_madrid"
+
+
+def test_league_less_identity_collision_and_verified_alias_reuse():
+    """
+    Regression test for same-name identity with league_id=None collision handling:
+    - Seeds a same-name identity with league_id=None (e.g. "Nacional").
+    - Attempts to bootstrap "Nacional" into target League 140.
+    - Confirms the unrelated canonical ID with league_id=None is NOT silently reused,
+      and instead a distinct league-qualified canonical ID is bootstrapped.
+    - Confirms that a verified alias/mapping resolution still works as expected.
+    """
+    # 1. Seed a same-name identity with league_id=None
+    storage.save_team_identity(
+        sport="football",
+        canonical_id="football_team_nacional",
+        provider="provider_generic",
+        provider_team_id="generic_nacional",
+        normalized_name="nacional",
+        display_name="Nacional",
+        league_id=None,
+    )
+
+    # 2. Bootstrap "Nacional" into League 140 without a verified cross-league mapping or alias
+    cid_spain = team_identity.bootstrap_historical_team_identity("Nacional", "football_data_csv", None, league_id=140)
+    assert cid_spain != "football_team_nacional"
+    assert cid_spain == "football_team_140_nacional"
+
+    # 3. Verified alias reuse still works for configured teams (e.g., Barcelona)
+    cid_barca_la_liga = team_identity.resolve_canonical_team_id("FC Barcelona", "api_football", 529, league_id=140)
+    cid_barca_cl = team_identity.resolve_canonical_team_id("FC Barcelona", "api_football", 529, league_id=2)
+    assert cid_barca_la_liga == cid_barca_cl == "football_team_barcelona"
