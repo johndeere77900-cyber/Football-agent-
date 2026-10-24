@@ -202,6 +202,10 @@ jobs:
           VERIFY_EXIT=$?
 
           SYNC_EXIT="${{ steps.sync.outputs.sync_exit }}"
+          if [ -z "$SYNC_EXIT" ]; then
+            echo "ERROR: Historical Data Sync did not publish sync_exit; outcome=${{ steps.sync.outcome }}"
+            exit 1
+          fi
           if [ "$SYNC_EXIT" != "0" ]; then
             echo "ERROR: Historical Data Sync step failed with exit code $SYNC_EXIT"
             exit "$SYNC_EXIT"

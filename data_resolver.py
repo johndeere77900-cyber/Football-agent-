@@ -88,6 +88,34 @@ LEAGUE_TO_SD_CODE = LEAGUE_TO_SD_MH_CODE
 # Configured domestic double-round-robin league competitions
 DOUBLE_ROUND_ROBIN_LEAGUE_IDS = {39, 140, 135, 78, 61, 88, 94}
 
+
+def get_expected_league_team_count(league_id, season=None) -> int | None:
+    """
+    Return the reliable expected team count for configured double-round-robin domestic leagues.
+    Handles league size changes across seasons (e.g. Ligue 1 61 changed from 20 to 18 in 2023).
+    Coerces string or integer league_id safely.
+    """
+    try:
+        lid = int(league_id) if league_id is not None else None
+    except (ValueError, TypeError):
+        return None
+
+    if lid in (39, 140, 135):
+        return 20
+    elif lid in (78, 88, 94):
+        return 18
+    elif lid == 61:
+        if season is not None:
+            try:
+                s_val = int(season)
+                if s_val >= 2023:
+                    return 18
+                return 20
+            except (ValueError, TypeError):
+                pass
+        return 18
+    return None
+
 # Exact Source URLs & Reference Constants
 FOOTBALL_DATA_CSV_URL_PATTERN = "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv"
 FOOTBALL_DATA_REFERENCE_URL = "https://www.football-data.co.uk/data.php"
@@ -646,23 +674,27 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     expected_team_set = canonical_expected_set if canonical_expected_set else (set(expected_team_ids) if expected_team_ids else set())
 
-    # FAIL CLOSED: No inference of team universe from observed fixtures for double round robin
-    if not expected_team_set and is_double_round_robin:
-        return {
-            "verified": False,
-            "reason": "authoritative_team_universe_unavailable",
-            "fixture_count": fixture_count,
-            "distinct_fixture_count": 0,
-            "team_count": 0,
-            "expected_team_count": 0,
-            "expected_team_ids": [],
-            "missing_team_ids": [],
-            "unexpected_team_ids": [],
-            "team_match_counts": {},
-            "expected_fixture_count": None,
-        }
+    rel_exp_team_count = get_expected_league_team_count(league_id, season) if is_double_round_robin else None
 
-    expected_team_count = len(expected_team_set)
+    if not expected_team_set and is_double_round_robin:
+        if rel_exp_team_count is not None and rel_exp_team_count > 0:
+            expected_team_count = rel_exp_team_count
+        else:
+            return {
+                "verified": False,
+                "reason": "authoritative_team_universe_unavailable",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": 0,
+                "team_count": 0,
+                "expected_team_count": 0,
+                "expected_team_ids": [],
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": {},
+                "expected_fixture_count": None,
+            }
+    else:
+        expected_team_count = len(expected_team_set)
 
     expected_fixture_count = (
         expected_team_count * (expected_team_count - 1)
@@ -1072,14 +1104,70 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "expected_fixture_count": expected_fixture_count,
         }
 
-    missing_team_ids = expected_team_set - participating_teams
-    unexpected_team_ids = participating_teams - expected_team_set
+    if not expected_team_set and is_double_round_robin:
+        if rel_exp_team_count is not None and len(participating_teams) == expected_team_count:
+            import storage
+            import team_identity
+
+            try:
+                raw_registered = storage.get_team_identities_by_league(sport, league_id)
+                registered_ids = {
+                    item["canonical_id"] if isinstance(item, dict) and "canonical_id" in item else item
+                    for item in raw_registered
+                    if item
+                }
+            except Exception:
+                registered_ids = set()
+
+            alias_map = config.FOOTBALL_CANONICAL_TEAM_ALIASES if sport == "football" else config.BASKETBALL_CANONICAL_TEAM_ALIASES
+            valid_alias_values = set(alias_map.values())
+
+            all_verified = True
+            for p_tid in participating_teams:
+                if not (isinstance(p_tid, str) and (p_tid.startswith("football_team_") or p_tid.startswith("basketball_team_"))):
+                    all_verified = False
+                    break
+
+                if registered_ids and p_tid in registered_ids:
+                    continue
+
+                res_cid = team_identity.resolve_canonical_team_id(
+                    raw_name=p_tid,
+                    provider="api_football" if sport == "football" else "api_basketball",
+                    provider_team_id=None,
+                    league_id=league_id,
+                    sport=sport,
+                    auto_register=False,
+                )
+                if res_cid:
+                    continue
+
+                by_cid = storage.get_team_identities_by_canonical_id(sport, p_tid) if hasattr(storage, "get_team_identities_by_canonical_id") else None
+                if by_cid:
+                    continue
+
+                clean_tid = p_tid.replace("football_team_", "").replace("basketball_team_", "")
+                if clean_tid in valid_alias_values or p_tid in valid_alias_values:
+                    continue
+
+                all_verified = False
+                break
+
+            if all_verified and participating_teams:
+                expected_team_set = set(participating_teams)
+
+    if expected_team_set:
+        missing_team_ids = expected_team_set - participating_teams
+        unexpected_team_ids = participating_teams - expected_team_set
+    else:
+        missing_team_ids = set()
+        unexpected_team_ids = set()
 
     res = None
-    if missing_team_ids or unexpected_team_ids or len(participating_teams) != expected_team_count:
+    if len(participating_teams) != expected_team_count or missing_team_ids or unexpected_team_ids or not expected_team_set:
         res = {
             "verified": False,
-            "reason": "team_universe_mismatch",
+            "reason": "team_universe_mismatch" if expected_team_set else "authoritative_team_universe_unavailable",
             "fixture_count": valid_fixture_count,
             "distinct_fixture_count": distinct_fixture_count,
             "team_count": len(participating_teams),
