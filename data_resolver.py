@@ -114,7 +114,9 @@ def _format_fd_csv_season_code(season: int) -> str:
     return f"{y1:02d}{y2:02d}"
 
 
-def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -> list:
+def _fetch_direct_csv_league_fixtures(
+    league_id: int, season: int, timeout=15, max_budget=None
+) -> list:
     """
     Fetch and validate direct CSV match data from stable Football-Data.co.uk URLs.
     Validates CSV headers, date format, team names, and non-negative scores before returning normalized fixture dicts.
@@ -181,6 +183,15 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
         cache_hits = 0
         cache_misses = 0
 
+        # Attempt to obtain authoritative season roster or pre-registered identities first
+        auth_roster = _get_authoritative_historical_team_ids(
+            league_id, season, max_budget=max_budget, allow_network=False
+        )
+        if not auth_roster:
+            auth_roster = _get_authoritative_historical_team_ids(
+                league_id, season, max_budget=max_budget, allow_network=True
+            )
+
         def resolve_cached(raw_name):
             nonlocal cache_hits, cache_misses
             norm_name = team_identity.normalize_team_name(raw_name)
@@ -190,6 +201,7 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
                 return batch_identity_cache[cache_key]
 
             cache_misses += 1
+            # 1. Try resolve_canonical_team_id with auto_register=False
             cid = team_identity.resolve_canonical_team_id(
                 raw_name=raw_name,
                 provider="football_data_csv",
@@ -198,6 +210,51 @@ def _fetch_direct_csv_league_fixtures(league_id: int, season: int, timeout=15) -
                 sport="football",
                 auto_register=False,
             )
+
+            # 2. Accept identities only when confirmed by the authoritative season roster.
+            roster_ids = {
+                str(auth_id): auth_id for auth_id in (auth_roster or [])
+            }
+
+            if not roster_ids:
+                cid = None
+            else:
+                if cid is not None and str(cid) not in roster_ids:
+                    cid = None
+
+                if cid is not None:
+                    cid = roster_ids[str(cid)]
+                else:
+                    matching_ids = []
+                    for auth_id in roster_ids.values():
+                        auth_slug = (
+                            str(auth_id)
+                            .replace("football_team_", "")
+                            .replace("_", " ")
+                        )
+                        if (
+                            norm_name
+                            == team_identity.normalize_team_name(auth_slug)
+                            or team_identity.safe_stripped_team_name(raw_name)
+                            == team_identity.safe_stripped_team_name(auth_slug)
+                        ):
+                            matching_ids.append(auth_id)
+
+                    if len(matching_ids) == 1:
+                        cid = matching_ids[0]
+
+            # 3. Register only an identity verified against the season roster.
+            if cid is not None and str(cid) in roster_ids:
+                team_identity.bootstrap_historical_team_identity(
+                    raw_name=raw_name,
+                    provider="football_data_csv",
+                    provider_team_id=None,
+                    league_id=league_id,
+                    sport="football",
+                )
+            else:
+                cid = None
+
             batch_identity_cache[cache_key] = cid
             return cid
 
@@ -856,35 +913,19 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         # Validate unique provider-qualified fixture identity (provider, fid)
         prov_fid_key = (p_prov, fid)
         if prov_fid_key in seen_provider_fids:
-            prev_f = seen_provider_fids[prov_fid_key]
-            prev_goals = prev_f.get("goals", {}) if isinstance(prev_f.get("goals"), dict) else {}
-            curr_goals = f.get("goals", {}) if isinstance(f.get("goals"), dict) else {}
-            prev_teams = prev_f.get("teams", {}) if isinstance(prev_f.get("teams"), dict) else {}
-            curr_teams = f.get("teams", {}) if isinstance(f.get("teams"), dict) else {}
-
-            is_conflict = (
-                prev_goals != curr_goals or
-                prev_teams.get("home", {}).get("id") != curr_teams.get("home", {}).get("id") or
-                prev_teams.get("away", {}).get("id") != curr_teams.get("away", {}).get("id")
-            )
-
-            if is_conflict:
-                return {
-                    "verified": False,
-                    "reason": "conflicting_fixture_id",
-                    "fixture_count": fixture_count,
-                    "distinct_fixture_count": len(distinct_pairings),
-                    "team_count": len(participating_teams),
-                    "expected_team_count": expected_team_count,
-                    "expected_team_ids": sorted(expected_team_set),
-                    "missing_team_ids": [],
-                    "unexpected_team_ids": [],
-                    "team_match_counts": team_match_counts,
-                    "expected_fixture_count": expected_fixture_count,
-                }
-            else:
-                # Identical duplicate within same provider: skip duplicate
-                continue
+            return {
+                "verified": False,
+                "reason": "duplicate_same_provider_fixture",
+                "fixture_count": fixture_count,
+                "distinct_fixture_count": len(distinct_pairings),
+                "team_count": len(participating_teams),
+                "expected_team_count": expected_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": expected_fixture_count,
+            }
 
         seen_provider_fids[prov_fid_key] = f
 
@@ -976,6 +1017,24 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
         if match_key in seen_matches_by_key:
             prev_m = seen_matches_by_key[match_key]
+            prev_prov = prev_m.get("provider_provenance", {}).get("provider", "unknown") if isinstance(prev_m.get("provider_provenance"), dict) else "unknown"
+
+            # Same provider canonical match duplicate -> fail closed
+            if prev_prov == p_prov or prev_prov in ("unknown", None) or p_prov in ("unknown", None):
+                return {
+                    "verified": False,
+                    "reason": "duplicate_same_provider_fixture",
+                    "fixture_count": fixture_count,
+                    "distinct_fixture_count": len(distinct_pairings),
+                    "team_count": len(participating_teams),
+                    "expected_team_count": expected_team_count,
+                    "expected_team_ids": sorted(expected_team_set),
+                    "missing_team_ids": [],
+                    "unexpected_team_ids": [],
+                    "team_match_counts": team_match_counts,
+                    "expected_fixture_count": expected_fixture_count,
+                }
+
             prev_g = prev_m.get("goals", {}) if isinstance(prev_m.get("goals"), dict) else {}
             curr_g = f.get("goals", {}) if isinstance(f.get("goals"), dict) else {}
 
@@ -1020,8 +1079,10 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     if not is_double_round_robin:
         # Non-double-round-robin (tournament, cup, international)
         has_authoritative_evidence = (
-            (expected_fixture_count is not None and expected_fixture_count > 0)
-            or (provider_metadata.get("has_authoritative_evidence") is True and expected_fixture_count is not None)
+            provider_metadata.get("has_authoritative_evidence") is True
+            and isinstance(expected_fixture_count, int)
+            and not isinstance(expected_fixture_count, bool)
+            and expected_fixture_count > 0
         )
         if not has_authoritative_evidence:
             return {
@@ -1040,7 +1101,6 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
         is_verified = (
             valid_fixture_count > 0
-            and len(seen_provider_fids) == valid_fixture_count
             and valid_fixture_count == expected_fixture_count
             and (not expected_team_set or expected_team_set.issubset(participating_teams))
         )
@@ -2587,7 +2647,9 @@ class DataResolver:
         if page == 1:
             # 2a. Direct CSV - Attempt direct downloadable CSV BEFORE network-dependent team-universe discovery
             try:
-                csv_fixtures = _fetch_direct_csv_league_fixtures(league_id, season)
+                csv_fixtures = _fetch_direct_csv_league_fixtures(
+                    league_id, season, max_budget=max_budget
+                )
             except Exception as csv_exc:
                 logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
 
@@ -2906,12 +2968,20 @@ class DataResolver:
                 league_id, season, max_budget=max_budget, allow_network=True, provider="football_data_org"
             )
 
+        expected_fix_cnt = fd_meta.get("count") if isinstance(fd_meta, dict) else None
+        has_auth_evidence = (
+            isinstance(fd_meta, dict) and fd_meta.get("is_complete") is True
+        )
+
         final_coverage = _validate_historical_structural_coverage(
             combined_fixtures,
             season=season,
             provider_metadata={
                 "competition_format": competition_format,
                 "expected_team_ids": expected_team_ids,
+                "expected_fixture_count": expected_fix_cnt,
+                "has_authoritative_evidence": has_auth_evidence,
+                "allow_network": True,
             },
             league_id=league_id,
         )

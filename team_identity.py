@@ -98,6 +98,14 @@ def strip_national_team_words(name: str) -> str:
     return norm
 
 
+def _get_sport_alias_map(sport: str) -> dict:
+    """Select the sport-aware canonical team alias map from config."""
+    s_clean = str(sport).strip().lower() if sport else "football"
+    if s_clean == "basketball":
+        return getattr(config, "BASKETBALL_CANONICAL_TEAM_ALIASES", {})
+    return getattr(config, "FOOTBALL_CANONICAL_TEAM_ALIASES", getattr(config, "CANONICAL_TEAM_ALIASES", {}))
+
+
 def resolve_canonical_team_id(
     raw_name: str,
     provider: str,
@@ -113,7 +121,7 @@ def resolve_canonical_team_id(
     1. Check existing verified provider mapping in DB (`team_identities`).
        Validates canonical ID, sport, provider namespace, normalized incoming team name, and league context.
     2. Check exact normalized_name lookup in DB (`team_identities`).
-    3. Check competition-aware alias in `config.CANONICAL_TEAM_ALIASES`.
+    3. Check competition-aware alias in sport-aware alias map.
     4. Check national team variant matching ('Nigeria National Team' -> 'Nigeria').
     5. Check safe stripped name within same league_id context.
     6. If auto_register is True, generate a new canonical identity.
@@ -146,7 +154,7 @@ def resolve_canonical_team_id(
                 )
 
                 if not is_name_match:
-                    alias_dict = getattr(config, "CANONICAL_TEAM_ALIASES", {})
+                    alias_dict = _get_sport_alias_map(sport)
                     for alias_key, target_val in alias_dict.items():
                         target_cid = f"{sport}_team_{sanitize_canonical_slug(target_val)}"
                         if target_cid == stored_canonical:
@@ -201,7 +209,7 @@ def resolve_canonical_team_id(
 
     # Step 3: Competition-aware alias check in config
     if not target_canonical_id:
-        alias_dict = getattr(config, "CANONICAL_TEAM_ALIASES", {})
+        alias_dict = _get_sport_alias_map(sport)
         canonical_alias = None
         for alias_key, target_val in alias_dict.items():
             if isinstance(alias_key, tuple) and len(alias_key) == 2:
@@ -226,9 +234,11 @@ def resolve_canonical_team_id(
                 candidate_ids = {m["canonical_id"] for m in nat_matches}
                 if len(candidate_ids) == 1:
                     target_canonical_id = list(candidate_ids)[0]
-            elif national_stripped in getattr(config, "CANONICAL_TEAM_ALIASES", {}):
-                alias = config.CANONICAL_TEAM_ALIASES[national_stripped]
-                target_canonical_id = f"{sport}_team_{sanitize_canonical_slug(alias)}"
+            else:
+                alias_dict = _get_sport_alias_map(sport)
+                if national_stripped in alias_dict:
+                    alias = alias_dict[national_stripped]
+                    target_canonical_id = f"{sport}_team_{sanitize_canonical_slug(alias)}"
 
     # Step 5: Safe stripped name match within same league_id
     if not target_canonical_id and league_id:

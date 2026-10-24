@@ -133,7 +133,7 @@ def test_sufficient_primary_coverage_prevents_secondary_network_calls(monkeypatc
             })
             fid += 1
 
-    monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", lambda lid, ssn: csv_fixtures)
+    monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", lambda lid, ssn, *args, **kwargs: csv_fixtures)
 
     # Instrument all secondary network entry points to fail if called
     with patch("api_football.get_league_fixtures_page", side_effect=RuntimeError("Secondary API-Football fixtures called!")), \
@@ -158,7 +158,7 @@ def test_strict_provider_execution_ordering(monkeypatch):
 
     calls = []
 
-    def mock_csv(lid, ssn):
+    def mock_csv(lid, ssn, *args, **kwargs):
         calls.append("football_data_csv")
         return []
 

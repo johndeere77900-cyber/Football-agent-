@@ -109,12 +109,13 @@ ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 REQUIRE_NEON = os.environ.get("REQUIRE_NEON", "false").lower() in ("true", "1", "yes")
 
 # --- Historical Seasons Target ----------------------------------------------
-TARGET_SEASONS = [2020, 2021, 2022, 2023, 2024, 2025, 2026]
+TARGET_SEASONS = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
 
-# --- Canonical Team Aliases (Competition-Aware) ---------------------------
+# --- Canonical Team Aliases (Competition-Aware & Sport-Specific) ----------
 # Keyed by (normalized_alias, league_id) where competition context is required,
 # or string normalized_alias for uniquely named clubs across competitions.
-CANONICAL_TEAM_ALIASES = {
+
+FOOTBALL_CANONICAL_TEAM_ALIASES = {
     # Premier League (39)
     ("arsenal", 39): "arsenal",
     ("aston villa", 39): "aston villa",
@@ -155,6 +156,28 @@ CANONICAL_TEAM_ALIASES = {
     ("wolverhampton", 39): "39_wolverhampton",
     ("wolves", 39): "39_wolverhampton",
 
+    # Continental (UCL: 2, UEL: 3) & International (1, 4, 5) - Same football clubs retain identical canonical identities
+    ("real madrid", 2): "real madrid",
+    ("real madrid cf", 2): "real madrid",
+    ("barcelona", 2): "barcelona",
+    ("fc barcelona", 2): "barcelona",
+    ("bayern munich", 2): "bayern munich",
+    ("fc bayern munchen", 2): "bayern munich",
+    ("paris saint germain", 2): "paris saint germain",
+    ("psg", 2): "paris saint germain",
+    ("inter milan", 2): "inter milan",
+    ("inter", 2): "inter milan",
+    ("manchester city", 2): "manchester city",
+    ("man city", 2): "manchester city",
+    ("arsenal", 2): "arsenal",
+    ("borussia dortmund", 2): "borussia dortmund",
+    ("atletico madrid", 2): "atletico madrid",
+    ("bayer leverkusen", 2): "bayer leverkusen",
+    ("juventus", 2): "juventus",
+    ("benfica", 2): "benfica",
+    ("porto", 2): "porto",
+    ("sporting cp", 2): "sporting cp",
+
     # La Liga (140)
     ("fc barcelona", 140): "barcelona",
     ("barcelona", 140): "barcelona",
@@ -179,6 +202,27 @@ CANONICAL_TEAM_ALIASES = {
     ("villarreal", 140): "villarreal",
     ("espanol", 140): "espanyol",
     ("espanyol", 140): "espanyol",
+    ("rcd espanyol", 140): "espanyol",
+    ("rcd espanyol de barcelona", 140): "espanyol",
+    ("celta de vigo", 140): "celta vigo",
+    ("rc celta", 140): "celta vigo",
+    ("rc celta de vigo", 140): "celta vigo",
+    ("ca osasuna", 140): "osasuna",
+    ("cd leganes", 140): "leganes",
+    ("sd eibar", 140): "eibar",
+    ("sd huesca", 140): "huesca",
+    ("ud almeria", 140): "almeria",
+    ("ud las palmas", 140): "las palmas",
+    ("girona fc", 140): "girona",
+    ("getafe cf", 140): "getafe",
+    ("levante ud", 140): "levante",
+    ("elche cf", 140): "elche",
+    ("cadiz cf", 140): "cadiz",
+    ("deportivo alaves", 140): "alaves",
+    ("granada cf", 140): "granada",
+    ("rcd mallorca", 140): "mallorca",
+    ("valencia", 140): "valencia",
+    ("valencia cf", 140): "valencia",
     ("vallecano", 140): "rayo vallecano",
     ("rayo vallecano", 140): "rayo vallecano",
     ("granada", 140): "granada",
@@ -285,6 +329,36 @@ CANONICAL_TEAM_ALIASES = {
     ("team 55", 39): "39_team_55",
     ("team 66", 39): "39_team_66",
 }
+
+BASKETBALL_CANONICAL_TEAM_ALIASES = {
+    # NBA (12)
+    ("boston celtics", 12): "boston celtics",
+    ("celtics", 12): "boston celtics",
+    ("los angeles lakers", 12): "la lakers",
+    ("la lakers", 12): "la lakers",
+    ("lakers", 12): "la lakers",
+    ("golden state warriors", 12): "golden state warriors",
+    ("warriors", 12): "golden state warriors",
+    ("milwaukee bucks", 12): "milwaukee bucks",
+    ("bucks", 12): "milwaukee bucks",
+    ("chicago bulls", 12): "chicago bulls",
+    ("bulls", 12): "chicago bulls",
+    ("miami heat", 12): "miami heat",
+    ("heat", 12): "miami heat",
+    ("denver nuggets", 12): "denver nuggets",
+    ("nuggets", 12): "denver nuggets",
+    ("phoenix suns", 12): "phoenix suns",
+    ("suns", 12): "phoenix suns",
+    ("dallas mavericks", 12): "dallas mavericks",
+    ("mavericks", 12): "dallas mavericks",
+    ("mavs", 12): "dallas mavericks",
+    ("philadelphia 76ers", 12): "philadelphia 76ers",
+    ("76ers", 12): "philadelphia 76ers",
+    ("sixers", 12): "philadelphia 76ers",
+}
+
+# Backwards compatibility reference
+CANONICAL_TEAM_ALIASES = FOOTBALL_CANONICAL_TEAM_ALIASES
 
 # --- League restriction (football) -----------------------------------------
 ALLOWED_LEAGUE_IDS = [39, 140, 135, 78, 61, 2, 3, 5, 1, 4, 88, 94]

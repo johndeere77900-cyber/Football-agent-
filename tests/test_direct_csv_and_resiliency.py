@@ -39,9 +39,10 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
         self.assertEqual(data_resolver._format_fd_csv_season_code(2020), "2021")
         self.assertEqual(data_resolver._format_fd_csv_season_code(1800), "")
 
+    @patch("data_resolver._get_authoritative_historical_team_ids", return_value=["football_team_Man United", "football_team_Fulham"])
     @patch("team_identity.bootstrap_historical_team_identity", side_effect=lambda raw_name, **kwargs: f"football_team_{raw_name}")
     @patch("urllib.request.urlopen")
-    def test_csv_header_normalization_and_stable_id(self, mock_urlopen, mock_bootstrap):
+    def test_csv_header_normalization_and_stable_id(self, mock_urlopen, mock_bootstrap, mock_auth_roster):
         # Header includes BOM, uppercase, extra spaces
         raw_csv = "\ufeffDATE , HOMETEAM , AWAYTEAM , FTHG , FTAG , HS , AS\n16/08/2024, Man United , Fulham , 1 , 0 , 14 , 10\n"
         mock_response = MagicMock()
@@ -70,9 +71,10 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
         self.assertIsInstance(f1["fixture"]["id"], int)
         self.assertGreater(f1["fixture"]["id"], 0)
 
+    @patch("data_resolver._get_authoritative_historical_team_ids", return_value=["football_team_Arsenal", "football_team_Chelsea"])
     @patch("team_identity.bootstrap_historical_team_identity", side_effect=lambda raw_name, **kwargs: f"football_team_{raw_name}")
     @patch("urllib.request.urlopen")
-    def test_csv_invalid_row_rejection(self, mock_urlopen, mock_bootstrap):
+    def test_csv_invalid_row_rejection(self, mock_urlopen, mock_bootstrap, mock_auth_roster):
         # Invalid date format and negative scores
         raw_csv = "Date,HomeTeam,AwayTeam,FTHG,FTAG\ninvalid_date,Arsenal,Chelsea,2,1\n17/08/2024,Arsenal,Chelsea,-1,1\n17/08/2024,Arsenal,Chelsea,2,0\n"
         mock_response = MagicMock()
@@ -122,6 +124,33 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
         import basketball_model
         self.assertTrue(callable(basketball_api.get_games_by_date))
         self.assertTrue(callable(basketball_model.predict_game))
+
+    def test_csv_acquisition_fetches_roster_when_stored_roster_absent(self):
+        """
+        Regression test proving direct CSV acquisition can resolve valid teams when stored roster
+        is initially absent (allow_network=False returns []) but an authoritative roster can be obtained (allow_network=True).
+        """
+        auth_roster = ["football_team_Arsenal", "football_team_Chelsea"]
+
+        def mock_get_team_ids(league_id, season, allow_network=False, **kwargs):
+            if allow_network:
+                return auth_roster
+            return []
+
+        raw_csv = "Date,HomeTeam,AwayTeam,FTHG,FTAG\n17/08/2024,Arsenal,Chelsea,2,1\n"
+        mock_response = MagicMock()
+        mock_response.read.return_value = raw_csv.encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+
+        with patch("data_resolver._get_authoritative_historical_team_ids", side_effect=mock_get_team_ids), \
+             patch("team_identity.bootstrap_historical_team_identity", side_effect=lambda raw_name, **kwargs: f"football_team_{raw_name}"), \
+             patch("urllib.request.urlopen", return_value=mock_response):
+
+            fixtures = data_resolver._fetch_direct_csv_league_fixtures(39, 2024)
+
+            self.assertEqual(len(fixtures), 1)
+            self.assertEqual(fixtures[0]["canonical_home_id"], "football_team_Arsenal")
+            self.assertEqual(fixtures[0]["canonical_away_id"], "football_team_Chelsea")
 
 if __name__ == "__main__":
     unittest.main()

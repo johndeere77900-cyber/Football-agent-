@@ -3162,7 +3162,7 @@ def run_rolling_backtest_window(
     Run a rolling-window historical backtest over completed target fixtures.
     """
     if seasons is None:
-        seasons = tuple(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+        seasons = tuple(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
 
     if (
         isinstance(league_id, bool)
@@ -3173,7 +3173,7 @@ def run_rolling_backtest_window(
     if not isinstance(seasons, (list, tuple)) or not seasons:
         raise ValueError("seasons must be a non-empty sequence of integer years.")
 
-    allowed_rolling_seasons = set(getattr(config, "TARGET_SEASONS", [2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+    allowed_rolling_seasons = set(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
     for s in seasons:
         if (
             isinstance(s, bool)

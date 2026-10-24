@@ -60,39 +60,43 @@ def test_verify_persisted_historical_datasets_football_and_basketball_pass(tmp_p
 
 
 def test_verify_persisted_historical_datasets_active_ongoing_season_incomplete_passes():
-    # Current active season (2026) in INCOMPLETE status with matching counts passes
+    from datetime import datetime, timezone
+    curr_season = datetime.now(timezone.utc).year
+    dt_str = f"{curr_season}-03-01T15:00:00+00:00"
+
     active_fixture = {
-        "fixture": {"id": 10002, "date": "2026-03-01T15:00:00+00:00", "status": {"short": "FT"}},
-        "league": {"id": 39, "season": 2026, "name": "Premier League"},
+        "fixture": {"id": 10002, "date": dt_str, "status": {"short": "FT"}},
+        "league": {"id": 39, "season": curr_season, "name": "Premier League"},
         "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
         "goals": {"home": 1, "away": 0},
     }
-    storage.save_historical_fixtures([active_fixture], 39, 2026)
-    storage.mark_historical_dataset_incomplete(league_id=39, season=2026, fixture_count=1, sport="football")
+    storage.save_historical_fixtures([active_fixture], 39, curr_season)
+    storage.mark_historical_dataset_incomplete(league_id=39, season=curr_season, fixture_count=1, sport="football")
 
-    res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2026)
+    res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=curr_season)
     assert res["success"] is True
-    assert res["verified_count"] == 1
+    assert res["active_in_progress_count"] == 1
+    assert res["verified_count"] == 0
     assert res["results"][0]["issues"] == []
 
     # Count mismatch for active season fails
-    storage.mark_historical_dataset_incomplete(league_id=39, season=2026, fixture_count=99, sport="football")
-    res_mismatch = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2026)
+    storage.mark_historical_dataset_incomplete(league_id=39, season=curr_season, fixture_count=99, sport="football")
+    res_mismatch = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=curr_season)
     assert res_mismatch["success"] is False
     assert any("count_mismatch" in str(i) for i in res_mismatch["results"][0]["issues"])
 
     # Duplicate IDs for active season fails
-    storage.mark_historical_dataset_incomplete(league_id=39, season=2026, fixture_count=2, sport="football")
+    storage.mark_historical_dataset_incomplete(league_id=39, season=curr_season, fixture_count=2, sport="football")
     conn = sqlite3.connect(config.DB_PATH)
     c = conn.cursor()
     c.execute(
         "INSERT INTO historical_fixtures (fixture_id, source, league_id, season, kickoff_at, raw_json, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (10002, "soccerdata", 39, 2026, "2026-03-01T15:00:00+00:00", json.dumps(active_fixture), "2026-03-01T15:00:00+00:00")
+        (10002, "soccerdata", 39, curr_season, dt_str, json.dumps(active_fixture), dt_str)
     )
     conn.commit()
     conn.close()
 
-    res_dup = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2026)
+    res_dup = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=curr_season)
     assert res_dup["success"] is False
     assert any("duplicate_fixture_id" in str(i) for i in res_dup["results"][0]["issues"])
 
