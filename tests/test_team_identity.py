@@ -124,3 +124,26 @@ def test_legacy_provider_mappings_preserved():
     assert mapping_luton["canonical_id"] == "football_team_39_luton_town"
     assert mapping_nottingham["canonical_id"] == "football_team_39_nottingham"
     assert mapping_wolves["canonical_id"] == "football_team_39_wolverhampton"
+
+
+def test_cross_league_team_identity_isolation_and_verified_alias_reuse():
+    """
+    Regression test for cross-league team identity isolation and verified alias reuse:
+    - Registers a team name in another league (e.g. "Nacional" in League 94).
+    - Attempts to bootstrap that name for a different target league (League 140) without a verified cross-league mapping or alias.
+    - Confirms the unrelated canonical ID from League 94 is NOT reused.
+    - Confirms that a genuinely verified cross-league identity (e.g. configured alias or verified mapping) CAN still be reused across leagues.
+    """
+    # 1. Bootstrap "Nacional" in League 94 (Primeira Liga)
+    cid_portugal = team_identity.bootstrap_historical_team_identity("Nacional", "football_data_csv", None, league_id=94)
+    assert cid_portugal == "football_team_nacional"
+
+    # 2. Attempt to bootstrap "Nacional" in League 140 (La Liga) without a verified cross-league mapping
+    cid_spain = team_identity.bootstrap_historical_team_identity("Nacional", "football_data_csv", None, league_id=140)
+    assert cid_spain != cid_portugal
+    assert cid_spain == "football_team_140_nacional"
+
+    # 3. Verify a genuinely verified cross-league identity (e.g., Real Madrid in League 140 vs League 2 Champions League)
+    cid_real_la_liga = team_identity.resolve_canonical_team_id("Real Madrid", "api_football", 541, league_id=140)
+    cid_real_cl = team_identity.resolve_canonical_team_id("Real Madrid", "api_football", 541, league_id=2)
+    assert cid_real_la_liga == cid_real_cl == "football_team_real_madrid"

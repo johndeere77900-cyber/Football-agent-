@@ -362,10 +362,8 @@ def bootstrap_historical_team_identity(
     if not norm_name:
         return None
 
-    # Check for ambiguous name matches in storage
+    # Check for name matches strictly within target league context
     matches = storage.get_team_identities_by_normalized_name(sport, norm_name, league_id)
-    if not matches and league_id:
-        matches = storage.get_team_identities_by_normalized_name(sport, norm_name, None)
 
     if matches:
         candidate_ids = {m["canonical_id"] for m in matches if isinstance(m, dict) and m.get("canonical_id")}
@@ -374,7 +372,7 @@ def bootstrap_historical_team_identity(
             return None
         elif len(candidate_ids) == 1:
             target_canonical = list(candidate_ids)[0]
-            effective_p_id = p_team_id_str if p_team_id_str else norm_name
+            effective_p_id = p_team_id_str if p_team_id_str else (f"{league_id}_{norm_name}" if league_id else norm_name)
             storage.save_team_identity(
                 sport=sport,
                 canonical_id=target_canonical,
@@ -392,14 +390,16 @@ def bootstrap_historical_team_identity(
 
     target_canonical = f"{sport}_team_{slug}"
 
-    # Check if target_canonical collides with a different team's canonical_id in storage
+    # Check if target_canonical collides with a team in another league or with a different name in storage
     existing_by_cid = storage.get_team_identities_by_canonical_id(sport, target_canonical)
     if existing_by_cid:
-        # Check if existing_by_cid represents a different team
         for ex in existing_by_cid:
+            ex_league = ex.get("league_id")
             ex_norm = ex.get("normalized_name", "")
-            if ex_norm and ex_norm != norm_name and safe_stripped_team_name(ex_norm) != safe_stripped_team_name(norm_name):
-                # Canonical slug collision with a different team
+            # Disambiguate if target_canonical is already registered for another league or different team name
+            if (league_id is not None and ex_league is not None and ex_league != league_id) or (
+                ex_norm and ex_norm != norm_name and safe_stripped_team_name(ex_norm) != safe_stripped_team_name(norm_name)
+            ):
                 if league_id:
                     target_canonical = f"{sport}_team_{league_id}_{slug}"
                     existing_by_cid_2 = storage.get_team_identities_by_canonical_id(sport, target_canonical)
@@ -412,7 +412,7 @@ def bootstrap_historical_team_identity(
                     return None
                 break
 
-    effective_p_id = p_team_id_str if p_team_id_str else norm_name
+    effective_p_id = p_team_id_str if p_team_id_str else (f"{league_id}_{norm_name}" if league_id else norm_name)
     storage.save_team_identity(
         sport=sport,
         canonical_id=target_canonical,
