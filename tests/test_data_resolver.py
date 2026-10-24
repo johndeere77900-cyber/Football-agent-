@@ -833,7 +833,7 @@ def test_direct_csv_roster_verification_scenarios(tmp_path, monkeypatch):
     team_identity.register_canonical_team_identity("football_team_39_team_1", "Arsenal", "api_football", 10, league_id=39)
     team_identity.register_canonical_team_identity("football_team_39_team_2", "Chelsea", "api_football", 20, league_id=39)
 
-    # 1. Missing or empty roster test
+    # 1. Missing or empty roster test: valid CSV team identities are resolved and persisted through controlled bootstrap path
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", lambda lid, ssn, *args, **kwargs: [])
     csv_content_missing_roster = "Date,HomeTeam,AwayTeam,FTHG,FTAG\n17/08/2024,Arsenal,Chelsea,2,1\n"
 
@@ -847,7 +847,9 @@ def test_direct_csv_roster_verification_scenarios(tmp_path, monkeypatch):
 
     with patch("urllib.request.urlopen", return_value=MockResponseMissing()):
         fixtures_empty_roster = data_resolver._fetch_direct_csv_league_fixtures(39, 2024)
-        assert len(fixtures_empty_roster) == 0
+        assert len(fixtures_empty_roster) == 1
+        assert fixtures_empty_roster[0]["canonical_home_id"] == "football_team_39_team_1"
+        assert fixtures_empty_roster[0]["canonical_away_id"] == "football_team_39_team_2"
 
     # 2. Roster available
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", lambda lid, ssn, *args, **kwargs: auth_roster)

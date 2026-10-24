@@ -201,59 +201,13 @@ def _fetch_direct_csv_league_fixtures(
                 return batch_identity_cache[cache_key]
 
             cache_misses += 1
-            # 1. Try resolve_canonical_team_id with auto_register=False
-            cid = team_identity.resolve_canonical_team_id(
+            cid = team_identity.bootstrap_historical_team_identity(
                 raw_name=raw_name,
                 provider="football_data_csv",
                 provider_team_id=None,
                 league_id=league_id,
                 sport="football",
-                auto_register=False,
             )
-
-            # 2. Accept identities only when confirmed by the authoritative season roster.
-            roster_ids = {
-                str(auth_id): auth_id for auth_id in (auth_roster or [])
-            }
-
-            if not roster_ids:
-                cid = None
-            else:
-                if cid is not None and str(cid) not in roster_ids:
-                    cid = None
-
-                if cid is not None:
-                    cid = roster_ids[str(cid)]
-                else:
-                    matching_ids = []
-                    for auth_id in roster_ids.values():
-                        auth_slug = (
-                            str(auth_id)
-                            .replace("football_team_", "")
-                            .replace("_", " ")
-                        )
-                        if (
-                            norm_name
-                            == team_identity.normalize_team_name(auth_slug)
-                            or team_identity.safe_stripped_team_name(raw_name)
-                            == team_identity.safe_stripped_team_name(auth_slug)
-                        ):
-                            matching_ids.append(auth_id)
-
-                    if len(matching_ids) == 1:
-                        cid = matching_ids[0]
-
-            # 3. Register only an identity verified against the season roster.
-            if cid is not None and str(cid) in roster_ids:
-                team_identity.bootstrap_historical_team_identity(
-                    raw_name=raw_name,
-                    provider="football_data_csv",
-                    provider_team_id=None,
-                    league_id=league_id,
-                    sport="football",
-                )
-            else:
-                cid = None
 
             batch_identity_cache[cache_key] = cid
             return cid
