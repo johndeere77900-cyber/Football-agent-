@@ -105,7 +105,7 @@ def test_resume_from_incomplete_checkpoint(monkeypatch):
                 "provider_provenance": {"provider": "football_data_csv"}
             })
 
-    def mock_csv(lid, ssn):
+    def mock_csv(lid, ssn, *args, **kwargs):
         return fixtures_all
 
     monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", mock_csv)
@@ -130,7 +130,7 @@ def test_changed_expected_page_count_fails_closed(monkeypatch):
             # Expected pages changed from 3 to 5!
             return {"fixtures": [{"fixture": {"id": 2, "date": "2020-09-02T15:00:00Z", "status": {"short": "FT"}}, "league": {"id": lid, "season": ssn}, "teams": {"home": {"id": 1, "name": "A"}, "away": {"id": 2, "name": "B"}}, "goals": {"home": 1, "away": 0}}], "expected_pages": 5, "page": 2, "source": "api_football"}
 
-    monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", lambda l, s: [])
+    monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", lambda l, s, *args, **kwargs: [])
     monkeypatch.setattr("soccerdata_provider.get_match_history_games", lambda c, s, league_id=None: ("SOURCE_UNAVAILABLE", [], {}))
     monkeypatch.setattr("soccerdata_provider.get_sofascore_historical_games", lambda c, s, league_id=None: ("SOURCE_UNAVAILABLE", [], {}))
     monkeypatch.setattr("api_football.get_league_fixtures_page", mock_af_page)
