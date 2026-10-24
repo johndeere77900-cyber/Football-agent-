@@ -321,8 +321,9 @@ def bootstrap_historical_team_identity(
     if not raw_name or not isinstance(raw_name, str) or not raw_name.strip():
         return None
 
-    provider = str(provider).strip().lower()
-    if provider in INVALID_IDENTITY_PROVIDERS:
+    sport = str(sport).strip().lower() if sport else "football"
+    provider = str(provider).strip().lower() if provider else ""
+    if provider in INVALID_IDENTITY_PROVIDERS or not provider:
         return None
 
     p_team_id_str = None
@@ -334,6 +335,7 @@ def bootstrap_historical_team_identity(
     if not norm_name and not p_team_id_str:
         return None
 
+    # Step 1: Preserve existing identity resolution first
     resolved = resolve_canonical_team_id(
         raw_name=raw_name,
         provider=provider,
@@ -343,18 +345,82 @@ def bootstrap_historical_team_identity(
         auto_register=False,
     )
 
-    if not resolved:
+    if resolved:
+        if p_team_id_str:
+            storage.save_team_identity(
+                sport=sport,
+                canonical_id=resolved,
+                provider=provider,
+                provider_team_id=p_team_id_str,
+                normalized_name=norm_name,
+                display_name=raw_str or f"Team {p_team_id_str}",
+                league_id=league_id,
+            )
+        return resolved
+
+    # Step 2: When existing resolution fails (unknown team), create and persist a deterministic canonical identity
+    if not norm_name:
         return None
 
-    if p_team_id_str:
-        storage.save_team_identity(
-            sport=sport,
-            canonical_id=resolved,
-            provider=provider,
-            provider_team_id=p_team_id_str,
-            normalized_name=norm_name,
-            display_name=raw_str or f"Team {p_team_id_str}",
-            league_id=league_id,
-        )
+    # Check for ambiguous name matches in storage
+    matches = storage.get_team_identities_by_normalized_name(sport, norm_name, league_id)
+    if not matches and league_id:
+        matches = storage.get_team_identities_by_normalized_name(sport, norm_name, None)
 
-    return resolved
+    if matches:
+        candidate_ids = {m["canonical_id"] for m in matches if isinstance(m, dict) and m.get("canonical_id")}
+        if len(candidate_ids) > 1:
+            # Ambiguous team name mapping to multiple existing canonical team IDs -> FAIL CLOSED
+            return None
+        elif len(candidate_ids) == 1:
+            target_canonical = list(candidate_ids)[0]
+            effective_p_id = p_team_id_str if p_team_id_str else norm_name
+            storage.save_team_identity(
+                sport=sport,
+                canonical_id=target_canonical,
+                provider=provider,
+                provider_team_id=effective_p_id,
+                normalized_name=norm_name,
+                display_name=raw_str,
+                league_id=league_id,
+            )
+            return target_canonical
+
+    slug = sanitize_canonical_slug(raw_str)
+    if not slug or slug == "unknown":
+        return None
+
+    target_canonical = f"{sport}_team_{slug}"
+
+    # Check if target_canonical collides with a different team's canonical_id in storage
+    existing_by_cid = storage.get_team_identities_by_canonical_id(sport, target_canonical)
+    if existing_by_cid:
+        # Check if existing_by_cid represents a different team
+        for ex in existing_by_cid:
+            ex_norm = ex.get("normalized_name", "")
+            if ex_norm and ex_norm != norm_name and safe_stripped_team_name(ex_norm) != safe_stripped_team_name(norm_name):
+                # Canonical slug collision with a different team
+                if league_id:
+                    target_canonical = f"{sport}_team_{league_id}_{slug}"
+                    existing_by_cid_2 = storage.get_team_identities_by_canonical_id(sport, target_canonical)
+                    if existing_by_cid_2:
+                        for ex2 in existing_by_cid_2:
+                            ex2_norm = ex2.get("normalized_name", "")
+                            if ex2_norm and ex2_norm != norm_name and safe_stripped_team_name(ex2_norm) != safe_stripped_team_name(norm_name):
+                                return None
+                else:
+                    return None
+                break
+
+    effective_p_id = p_team_id_str if p_team_id_str else norm_name
+    storage.save_team_identity(
+        sport=sport,
+        canonical_id=target_canonical,
+        provider=provider,
+        provider_team_id=effective_p_id,
+        normalized_name=norm_name,
+        display_name=raw_str or f"Team {effective_p_id}",
+        league_id=league_id,
+    )
+
+    return target_canonical

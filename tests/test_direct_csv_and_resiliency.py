@@ -152,5 +152,141 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
             self.assertEqual(fixtures[0]["canonical_home_id"], "football_team_Arsenal")
             self.assertEqual(fixtures[0]["canonical_away_id"], "football_team_Chelsea")
 
+    def test_empty_identity_db_and_unavailable_roster_apis_bootstraps_teams(self):
+        """
+        Regression test proving that with an empty identity DB and unavailable roster APIs,
+        direct CSV acquisition resolves valid CSV team identities and persists them in team_identities.
+        """
+        import storage
+        import team_identity
+
+        storage.init_db()
+
+        raw_csv = "Date,HomeTeam,AwayTeam,FTHG,FTAG\n17/08/2024,Arsenal,Chelsea,2,1\n"
+        mock_response = MagicMock()
+        mock_response.read.return_value = raw_csv.encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+
+        with patch("data_resolver._get_authoritative_historical_team_ids", return_value=[]), \
+             patch("urllib.request.urlopen", return_value=mock_response):
+
+            fixtures = data_resolver._fetch_direct_csv_league_fixtures(39, 2024)
+
+            self.assertEqual(len(fixtures), 1)
+            self.assertEqual(fixtures[0]["canonical_home_id"], "football_team_arsenal")
+            self.assertEqual(fixtures[0]["canonical_away_id"], "football_team_chelsea")
+
+            # Verify persisted in team_identities
+            home_id = team_identity.resolve_canonical_team_id("Arsenal", "football_data_csv", None, league_id=39)
+            away_id = team_identity.resolve_canonical_team_id("Chelsea", "football_data_csv", None, league_id=39)
+            self.assertEqual(home_id, "football_team_arsenal")
+            self.assertEqual(away_id, "football_team_chelsea")
+
+    def test_existing_canonical_identities_reused_without_duplication(self):
+        """
+        Regression test proving existing canonical identities are reused without creating duplicate IDs.
+        """
+        import storage
+        import team_identity
+
+        storage.init_db()
+
+        # Seed existing canonical identity for Arsenal
+        cid_existing = team_identity.bootstrap_historical_team_identity("Arsenal FC", "api_football", 42, league_id=39)
+        self.assertEqual(cid_existing, "football_team_arsenal")
+
+        # Now bootstrap through CSV provider
+        cid_csv = team_identity.bootstrap_historical_team_identity("Arsenal", "football_data_csv", None, league_id=39)
+        self.assertEqual(cid_csv, "football_team_arsenal")
+
+        # Verify only 1 canonical identity exists in team_identities for arsenal
+        identities = storage.get_team_identities_by_canonical_id("football", "football_team_arsenal")
+        self.assertGreaterEqual(len(identities), 1)
+        canonical_ids = {i["canonical_id"] for i in identities}
+        self.assertEqual(canonical_ids, {"football_team_arsenal"})
+
+    def test_ambiguous_team_names_rejected(self):
+        """
+        Regression test proving ambiguous team names (mapping to multiple canonical IDs) are rejected.
+        """
+        import storage
+        import team_identity
+
+        storage.init_db()
+
+        # Pre-seed two conflicting canonical team identity mappings with normalized_name "united"
+        storage.save_team_identity("football", "football_team_manchester_united", "provider_a", "1", "united", "United", 39)
+        storage.save_team_identity("football", "football_team_dc_united", "provider_b", "2", "united", "United", 39)
+
+        # Attempt to bootstrap "United" when normalized name matches multiple candidate IDs
+        cid = team_identity.bootstrap_historical_team_identity("United", "football_data_csv", None, league_id=39)
+        self.assertIsNone(cid)
+
+    def test_incomplete_csv_season_not_marked_complete(self):
+        """
+        Regression test proving an incomplete CSV season (e.g. 1 fixture out of 380) is not marked COMPLETE.
+        """
+        import storage
+
+        storage.init_db()
+
+        raw_csv = "Date,HomeTeam,AwayTeam,FTHG,FTAG\n17/08/2024,Arsenal,Chelsea,2,1\n"
+        mock_response = MagicMock()
+        mock_response.read.return_value = raw_csv.encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+
+        with patch("data_resolver._get_authoritative_historical_team_ids", return_value=[]), \
+             patch("urllib.request.urlopen", return_value=mock_response):
+
+            resolver = data_resolver.DataResolver()
+            res = resolver.get_league_fixtures_page(39, 2024, page=1)
+
+            self.assertFalse(res["provider_metadata"]["is_complete"])
+            self.assertFalse(res["provider_metadata"]["structural_coverage"]["verified"])
+            self.assertEqual(res["provider_metadata"]["structural_coverage"]["reason"], "authoritative_team_universe_unavailable")
+
+    def test_complete_csv_season_accepted_when_independently_verified(self):
+        """
+        Regression test proving a complete CSV season is accepted as COMPLETE when its team universe is independently verified.
+        """
+        import storage
+
+        storage.init_db()
+
+        # Construct 380 valid fixtures for a 20-team double-round-robin league
+        teams = [f"football_team_team_{i}" for i in range(20)]
+        for tid in teams:
+            storage.save_team_identity("football", tid, "test_provider", tid, tid, tid, 39)
+
+        fixtures = []
+        fid = 1000
+        for i in range(20):
+            for j in range(20):
+                if i == j:
+                    continue
+                fid += 1
+                fixtures.append({
+                    "fixture": {"id": fid, "date": "2024-09-01T12:00:00Z", "status": {"short": "FT"}},
+                    "league": {"id": 39, "season": 2024},
+                    "teams": {
+                        "home": {"id": 100 + i, "name": f"team_{i}"},
+                        "away": {"id": 100 + j, "name": f"team_{j}"},
+                    },
+                    "goals": {"home": 1, "away": 0},
+                    "canonical_home_id": teams[i],
+                    "canonical_away_id": teams[j],
+                    "provider_provenance": {"provider": "football_data_csv"},
+                })
+
+        coverage = data_resolver._validate_historical_structural_coverage(
+            fixtures,
+            season=2024,
+            provider_metadata={"expected_team_ids": teams, "competition_format": "double_round_robin"},
+            league_id=39,
+        )
+
+        self.assertTrue(coverage["verified"])
+        self.assertIsNone(coverage["reason"])
+
 if __name__ == "__main__":
     unittest.main()

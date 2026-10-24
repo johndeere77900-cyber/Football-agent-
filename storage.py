@@ -4347,6 +4347,55 @@ def get_team_identities_by_league(sport, league_id):
         conn.close()
 
 
+def get_team_identities_by_canonical_id(sport, canonical_id):
+    """
+    Retrieve team identity records matching canonical_id.
+    """
+    sport = _validate_text(sport, "sport").lower()
+    canonical_id = _validate_text(canonical_id, "canonical_id")
+
+    conn, db_type = _connect()
+
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT sport, canonical_id, provider, provider_team_id,
+                           normalized_name, display_name, league_id
+                    FROM team_identities
+                    WHERE sport = %s AND canonical_id = %s
+                    """,
+                    (sport, canonical_id),
+                )
+                rows = cur.fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT sport, canonical_id, provider, provider_team_id,
+                       normalized_name, display_name, league_id
+                FROM team_identities
+                WHERE sport = ? AND canonical_id = ?
+                """,
+                (sport, canonical_id),
+            ).fetchall()
+
+        results = []
+        for row in rows:
+            results.append({
+                "sport": row[0],
+                "canonical_id": row[1],
+                "provider": row[2],
+                "provider_team_id": row[3],
+                "normalized_name": row[4],
+                "display_name": row[5],
+                "league_id": row[6],
+            })
+        return results
+    finally:
+        conn.close()
+
+
 def get_team_identities_by_normalized_name(sport, normalized_name, league_id=None):
     """
     Retrieve team identity records matching normalized_name (and optional league_id).
