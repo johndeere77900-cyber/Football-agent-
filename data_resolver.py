@@ -105,15 +105,13 @@ def get_expected_league_team_count(league_id, season=None) -> int | None:
     elif lid in (78, 88, 94):
         return 18
     elif lid == 61:
-        if season is not None:
-            try:
-                s_val = int(season)
-                if s_val >= 2023:
-                    return 18
-                return 20
-            except (ValueError, TypeError):
-                pass
-        return 18
+        if season is None:
+            return None
+        try:
+            s_val = int(season)
+        except (ValueError, TypeError):
+            return None
+        return 18 if s_val >= 2023 else 20
     return None
 
 # Exact Source URLs & Reference Constants
@@ -1112,7 +1110,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             try:
                 raw_registered = storage.get_team_identities_by_league(sport, league_id)
                 registered_ids = {
-                    item["canonical_id"] if isinstance(item, dict) and "canonical_id" in item else item
+                    item["canonical_id"] if isinstance(item, dict) and "canonical_id" in item else str(item)
                     for item in raw_registered
                     if item
                 }
@@ -1120,15 +1118,35 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
                 registered_ids = set()
 
             alias_map = config.FOOTBALL_CANONICAL_TEAM_ALIASES if sport == "football" else config.BASKETBALL_CANONICAL_TEAM_ALIASES
-            valid_alias_values = set(alias_map.values())
+            league_alias_canonical_ids = set()
+
+            try:
+                target_lid = int(league_id) if league_id is not None else None
+            except (ValueError, TypeError):
+                target_lid = None
+
+            sport_prefix = f"{sport}_team_"
+
+            for key, target_val in alias_map.items():
+                if isinstance(key, tuple) and len(key) == 2:
+                    alias_name, k_lid = key
+                    if target_lid is not None and k_lid == target_lid:
+                        target_str = str(target_val).strip()
+                        slug = team_identity.sanitize_canonical_slug(target_str)
+                        league_alias_canonical_ids.add(target_str)
+                        league_alias_canonical_ids.add(f"{sport_prefix}{target_str}")
+                        league_alias_canonical_ids.add(f"{sport_prefix}{slug}")
 
             all_verified = True
             for p_tid in participating_teams:
-                if not (isinstance(p_tid, str) and (p_tid.startswith("football_team_") or p_tid.startswith("basketball_team_"))):
+                if not (isinstance(p_tid, str) and p_tid.startswith(sport_prefix)):
                     all_verified = False
                     break
 
                 if registered_ids and p_tid in registered_ids:
+                    continue
+
+                if p_tid in league_alias_canonical_ids:
                     continue
 
                 res_cid = team_identity.resolve_canonical_team_id(
@@ -1139,15 +1157,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
                     sport=sport,
                     auto_register=False,
                 )
-                if res_cid:
-                    continue
-
-                by_cid = storage.get_team_identities_by_canonical_id(sport, p_tid) if hasattr(storage, "get_team_identities_by_canonical_id") else None
-                if by_cid:
-                    continue
-
-                clean_tid = p_tid.replace("football_team_", "").replace("basketball_team_", "")
-                if clean_tid in valid_alias_values or p_tid in valid_alias_values:
+                if res_cid and (res_cid in registered_ids or res_cid in league_alias_canonical_ids):
                     continue
 
                 all_verified = False
