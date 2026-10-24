@@ -42,7 +42,13 @@ def _is_historical_provider_complete(
     if acquisition_failed:
         return False
 
-    if valid_fixtures_count <= 0 or final_stored_count <= 0:
+    if final_stored_count <= 0:
+        return False
+
+    prov_meta_check = page_meta.get("provider_metadata", {}) if isinstance(page_meta, dict) else {}
+    struct_cov = prov_meta_check.get("structural_coverage", {}) if isinstance(prov_meta_check, dict) else {}
+
+    if valid_fixtures_count <= 0 and struct_cov.get("verified") is not True:
         return False
 
     if not page_source or not isinstance(page_source, str):
@@ -315,19 +321,28 @@ def sync_historical_fixtures(
         safe_rejected_cnt = total_rejected_count
         safe_empty_cnt = total_empty_pages_count
     else:
-        safe_exp_pages = dataset_info.get("expected_pages", 0)
-        safe_pages_comp = dataset_info.get("pages_completed", 0)
-        safe_rejected_cnt = dataset_info.get("rejected_count", 0)
-        safe_empty_cnt = dataset_info.get("empty_pages_count", 0)
+        safe_exp_pages = dataset_info.get("expected_pages") or 1
+        safe_pages_comp = dataset_info.get("pages_completed") or 1
+        safe_rejected_cnt = dataset_info.get("rejected_count") or 0
+        safe_empty_cnt = dataset_info.get("empty_pages_count") or 0
 
-    if acquisition_failed or total_valid_fixtures == 0 or storage.get_historical_fixture_count(league_id, season) == 0:
+    stored_fixtures_all = storage.get_historical_fixtures(league_id, season)
+    db_coverage_pre = data_resolver._validate_historical_structural_coverage(
+        stored_fixtures_all,
+        season=season,
+        provider_metadata={"allow_network": False},
+        league_id=league_id,
+    )
+    db_is_verified_pre = (db_coverage_pre.get("verified") is True and len(stored_fixtures_all) > 0)
+
+    if (acquisition_failed or total_valid_fixtures == 0 or len(stored_fixtures_all) == 0) and not db_is_verified_pre:
         acquisition_failed = True
         if not last_error_reason:
             last_error_reason = "secondary_provider_returned_no_fixtures"
         storage.mark_historical_dataset_incomplete(
             league_id,
             season,
-            fixture_count=storage.get_historical_fixture_count(league_id, season),
+            fixture_count=len(stored_fixtures_all),
             sport="football",
             expected_pages=safe_exp_pages,
             pages_completed=safe_pages_comp,
@@ -337,6 +352,9 @@ def sync_historical_fixtures(
             error_reason=last_error_reason,
             source=page_source if total_valid_fixtures > 0 else "mixed",
         )
+    elif db_is_verified_pre:
+        acquisition_failed = False
+        last_error_reason = None
 
     valid_fixtures_count = total_valid_fixtures
     newly_stored = total_newly_stored
@@ -416,7 +434,22 @@ def sync_historical_fixtures(
     # Determine exact source semantics and re-read persisted fixtures for final structural validation
     stored_fixtures_all = storage.get_historical_fixtures(league_id, season)
 
-    page_source_val = str(page_source) if ('page_source' in locals() and page_source is not None) else "api_football"
+    sources_found = set()
+    for f in stored_fixtures_all:
+        if isinstance(f, dict):
+            src = f.get("source") or f.get("provider_provenance", {}).get("provider")
+            if src:
+                sources_found.add(src)
+
+    raw_page_source = str(page_source) if ('page_source' in locals() and page_source is not None) else "api_football"
+    if len(sources_found) > 1:
+        manifest_source = "mixed"
+    elif len(sources_found) == 1:
+        manifest_source = list(sources_found)[0]
+    else:
+        manifest_source = raw_page_source
+
+    page_source_val = manifest_source
     page_meta_val = page_meta if 'page_meta' in locals() else {}
 
     db_coverage = data_resolver._validate_historical_structural_coverage(
@@ -428,11 +461,12 @@ def sync_historical_fixtures(
 
     # Re-verify page metadata with DB structural verification result
     if isinstance(page_meta_val, dict):
-        if "provider_metadata" in page_meta_val and isinstance(page_meta_val["provider_metadata"], dict):
-            page_meta_val["provider_metadata"]["structural_coverage"] = db_coverage
-            if db_coverage.get("verified") is True:
-                page_meta_val["provider_metadata"]["is_complete"] = True
-                page_meta_val["provider_metadata"]["is_partial"] = False
+        if "provider_metadata" not in page_meta_val or not isinstance(page_meta_val["provider_metadata"], dict):
+            page_meta_val["provider_metadata"] = {}
+        page_meta_val["provider_metadata"]["structural_coverage"] = db_coverage
+        if db_coverage.get("verified") is True:
+            page_meta_val["provider_metadata"]["is_complete"] = True
+            page_meta_val["provider_metadata"]["is_partial"] = False
 
     is_fully_complete = _is_historical_provider_complete(
         page_source=page_source_val,
@@ -454,19 +488,6 @@ def sync_historical_fixtures(
         is_fully_complete = False
 
     acquisition_complete = is_fully_complete
-    sources_found = set()
-    for f in stored_fixtures_all:
-        if isinstance(f, dict):
-            src = f.get("source") or f.get("provider_provenance", {}).get("provider")
-            if src:
-                sources_found.add(src)
-
-    if len(sources_found) > 1:
-        manifest_source = "mixed"
-    elif len(sources_found) == 1:
-        manifest_source = list(sources_found)[0]
-    else:
-        manifest_source = page_source_val
 
     exp_team_ids_to_save = db_coverage.get("expected_team_ids") if isinstance(db_coverage, dict) else None
 
@@ -478,7 +499,7 @@ def sync_historical_fixtures(
             source=manifest_source,
             sport="football",
             expected_pages=safe_exp_pages,
-            pages_completed=pages_completed,
+            pages_completed=safe_pages_comp,
             acquisition_complete=True,
             enrichment_status=enrichment_status,
             rejected_count=0,
@@ -487,7 +508,9 @@ def sync_historical_fixtures(
         )
         final_status = "COMPLETE"
     else:
-        if not last_error_reason:
+        if quota_budget_stopped and last_error_reason != "quota_budget_exhausted_before_acquisition":
+            last_error_reason = "quota_budget_exhausted_during_acquisition"
+        elif not last_error_reason:
             if isinstance(db_coverage, dict) and db_coverage.get("verified") is not True:
                 last_error_reason = f"structural_coverage_failed_{db_coverage.get('reason')}"
             elif page_source_val != "api_football":
