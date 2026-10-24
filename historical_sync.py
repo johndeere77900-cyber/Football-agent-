@@ -430,6 +430,9 @@ def sync_historical_fixtures(
     if isinstance(page_meta_val, dict):
         if "provider_metadata" in page_meta_val and isinstance(page_meta_val["provider_metadata"], dict):
             page_meta_val["provider_metadata"]["structural_coverage"] = db_coverage
+            if db_coverage.get("verified") is True:
+                page_meta_val["provider_metadata"]["is_complete"] = True
+                page_meta_val["provider_metadata"]["is_partial"] = False
 
     is_fully_complete = _is_historical_provider_complete(
         page_source=page_source_val,

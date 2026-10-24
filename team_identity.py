@@ -201,7 +201,13 @@ def resolve_canonical_team_id(
 
     # Step 2: Exact normalized_name lookup in DB
     target_canonical_id = None
+    clean_raw_name = raw_name.replace(f"{sport}_team_", "").replace("football_team_", "").replace("basketball_team_", "") if isinstance(raw_name, str) else ""
+    clean_norm_name = normalize_team_name(clean_raw_name) if clean_raw_name else ""
+
     matches = storage.get_team_identities_by_normalized_name(sport, norm_name, league_id)
+    if not matches and clean_norm_name and clean_norm_name != norm_name:
+        matches = storage.get_team_identities_by_normalized_name(sport, clean_norm_name, league_id)
+
     if matches:
         candidate_ids = {m["canonical_id"] for m in matches}
         if len(candidate_ids) == 1:
@@ -214,11 +220,13 @@ def resolve_canonical_team_id(
         for alias_key, target_val in alias_dict.items():
             if isinstance(alias_key, tuple) and len(alias_key) == 2:
                 key_name, key_league = alias_key
-                if normalize_team_name(str(key_name)) == norm_name and (league_id is None or key_league == league_id):
+                k_norm = normalize_team_name(str(key_name))
+                if (k_norm == norm_name or (clean_norm_name and k_norm == clean_norm_name)) and (league_id is None or key_league == league_id):
                     canonical_alias = target_val
                     break
             elif isinstance(alias_key, str):
-                if normalize_team_name(alias_key) == norm_name:
+                k_norm = normalize_team_name(alias_key)
+                if k_norm == norm_name or (clean_norm_name and k_norm == clean_norm_name):
                     canonical_alias = target_val
                     break
 
