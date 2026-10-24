@@ -481,8 +481,8 @@ def sync_historical_fixtures(
             pages_completed=pages_completed,
             acquisition_complete=True,
             enrichment_status=enrichment_status,
-            rejected_count=rejected_count,
-            empty_pages_count=total_empty_pages_count,
+            rejected_count=0,
+            empty_pages_count=0,
             expected_team_ids=exp_team_ids_to_save,
         )
         final_status = "COMPLETE"
