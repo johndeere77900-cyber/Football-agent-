@@ -777,8 +777,7 @@ def sync_historical_basketball_games(
 
     # 1. Primary URL-based Route for NBA Basketball (league_id == 12)
     espn_coverage_meta = None
-    is_bb_api_mocked = hasattr(basketball_api.get_league_games_page, "mock_calls") or hasattr(basketball_api.get_league_games_page, "return_value")
-    if league_id == 12 and not is_bb_api_mocked:
+    if league_id == 12 and getattr(config, "ENABLE_ESPN_BASKETBALL", False):
         try:
             import espn_basketball_provider
             espn_games, espn_coverage_meta = espn_basketball_provider.fetch_espn_nba_season_games(league_id, season)
@@ -795,24 +794,9 @@ def sync_historical_basketball_games(
 
                 all_stored_games = storage.get_historical_basketball_games(league_id, season)
 
-                # Validate persisted dataset revalidation and monthly coverage completeness
-                if (
-                    espn_coverage_meta.get("all_months_succeeded") is True
-                    and total_rejected_count == 0
-                    and len(all_stored_games) > 0
-                ):
-                    # Check dataset integrity without fabricating pagination fields
-                    temp_info = {
-                        "fixture_count": len(all_stored_games),
-                        "expected_pages": 1,
-                        "pages_completed": 1,
-                        "rejected_count": 0,
-                        "empty_pages_count": 0,
-                    }
-                    if _validate_historical_basketball_dataset(all_stored_games, league_id, season, temp_info):
-                        acquisition_complete = True
-                        expected_pages = 1
-                        pages_completed = 1
+                # ESPN monthly request success does not prove complete season coverage.
+                # Do not fabricate pagination metadata or mark the season complete here.
+                # Completion must be established by a separately verified coverage check.
         except Exception as exc:
             print(f"ESPN NBA basketball acquisition route error for league {league_id} season {season}: {exc}", flush=True)
 

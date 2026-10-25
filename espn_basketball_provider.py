@@ -116,9 +116,12 @@ def fetch_espn_nba_season_games(
                 continue
 
             try:
-                game_id = int(eid_raw)
-                if game_id <= 0:
+                raw_eid = int(eid_raw)
+                if raw_eid <= 0:
                     continue
+                # Deterministic provider-scoped integer namespace to avoid ID collisions in storage
+                import hashlib
+                game_id = int(hashlib.sha256(f"espn_nba_game_{raw_eid}".encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
             except (ValueError, TypeError):
                 continue
 
