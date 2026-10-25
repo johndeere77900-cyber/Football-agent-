@@ -11,6 +11,7 @@ https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard
 
 import json
 import logging
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -21,7 +22,9 @@ ESPN_NBA_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketb
 NBA_LEAGUE_ID = 12
 
 
-def fetch_espn_nba_season_games(league_id: int, season: int, timeout: int = 15) -> tuple[list, dict]:
+def fetch_espn_nba_season_games(
+    league_id: int, season: int, per_request_timeout: int = 15, total_deadline_seconds: int = 60
+) -> tuple[list, dict]:
     """
     Fetch and normalize historical NBA games from ESPN scoreboard API for a given season.
 
@@ -61,15 +64,27 @@ def fetch_espn_nba_season_games(league_id: int, season: int, timeout: int = 15) 
     normalized_games = []
 
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    start_time = time.time()
 
     for year, month in months:
+        elapsed = time.time() - start_time
+        remaining = total_deadline_seconds - elapsed
+        if remaining <= 0:
+            logger.warning(f"ESPN NBA acquisition total deadline ({total_deadline_seconds}s) exceeded.")
+            coverage_meta["months_failed"] += 1
+            coverage_meta["monthly_details"].append(
+                {"month": f"{year}{month:02d}", "status": "FAILED", "error": "total_deadline_exceeded"}
+            )
+            continue
+
+        req_timeout = max(1, min(per_request_timeout, int(remaining)))
         date_param = f"{year}{month:02d}"
         url = f"{ESPN_NBA_SCOREBOARD_URL}?dates={date_param}&limit=1000"
         coverage_meta["months_attempted"] += 1
 
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=req_timeout) as resp:
                 raw_bytes = resp.read()
                 data = json.loads(raw_bytes.decode("utf-8", errors="ignore"))
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:

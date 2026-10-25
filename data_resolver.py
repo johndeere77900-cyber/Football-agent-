@@ -503,6 +503,105 @@ def _get_authoritative_historical_team_ids(
         except Exception as exc:
             logger.warning("Unable to obtain DB dataset team universe for league %s season %s: %s", league_id, season, exc)
 
+    # Read-only DB-fixture fallback: derive candidate team universe from persisted fixtures ONLY if complete & internally consistent
+    if league_id and season:
+        try:
+            db_stored = storage.get_historical_fixtures(league_id, season)
+            if db_stored:
+                rel_exp_team_count = get_expected_league_team_count(league_id, season)
+                if rel_exp_team_count and rel_exp_team_count > 0:
+                    exp_fixture_cnt = rel_exp_team_count * (rel_exp_team_count - 1)
+                    exp_matches_per_team = 2 * (rel_exp_team_count - 1)
+                    exp_home_away_per_team = rel_exp_team_count - 1
+
+                    participating_teams = set()
+                    team_match_counts = {}
+                    seen_pairings = set()
+                    valid_cnt = 0
+                    is_consistent = True
+
+                    for f in db_stored:
+                        if not isinstance(f, dict):
+                            is_consistent = False
+                            break
+                        fix_obj = f.get("fixture", {}) if isinstance(f.get("fixture"), dict) else {}
+                        st_short = fix_obj.get("status", {}).get("short") if isinstance(fix_obj.get("status"), dict) else None
+                        if st_short not in ("FT", "AET", "PEN"):
+                            is_consistent = False
+                            break
+                        goals_obj = f.get("goals")
+                        if not isinstance(goals_obj, dict) or goals_obj.get("home") is None or goals_obj.get("away") is None:
+                            is_consistent = False
+                            break
+
+                        teams_obj = f.get("teams", {}) if isinstance(f.get("teams"), dict) else {}
+                        h_obj = teams_obj.get("home", {}) if isinstance(teams_obj.get("home"), dict) else {}
+                        a_obj = teams_obj.get("away", {}) if isinstance(teams_obj.get("away"), dict) else {}
+
+                        c_home = f.get("canonical_home_id") or team_identity.resolve_canonical_team_id(
+                            raw_name=h_obj.get("name", "") or (str(h_obj.get("id")) if h_obj.get("id") is not None else ""),
+                            provider="api_football",
+                            provider_team_id=h_obj.get("id"),
+                            league_id=league_id,
+                            sport="football",
+                            auto_register=False,
+                        )
+                        c_away = f.get("canonical_away_id") or team_identity.resolve_canonical_team_id(
+                            raw_name=a_obj.get("name", "") or (str(a_obj.get("id")) if a_obj.get("id") is not None else ""),
+                            provider="api_football",
+                            provider_team_id=a_obj.get("id"),
+                            league_id=league_id,
+                            sport="football",
+                            auto_register=False,
+                        )
+
+                        if not c_home or not c_away or c_home == c_away:
+                            is_consistent = False
+                            break
+
+                        pairing = (c_home, c_away)
+                        if pairing in seen_pairings:
+                            is_consistent = False
+                            break
+
+                        seen_pairings.add(pairing)
+                        participating_teams.add(c_home)
+                        participating_teams.add(c_away)
+                        valid_cnt += 1
+
+                        if c_home not in team_match_counts:
+                            team_match_counts[c_home] = {"home": 0, "away": 0, "total": 0}
+                        team_match_counts[c_home]["home"] += 1
+                        team_match_counts[c_home]["total"] += 1
+
+                        if c_away not in team_match_counts:
+                            team_match_counts[c_away] = {"home": 0, "away": 0, "total": 0}
+                        team_match_counts[c_away]["away"] += 1
+                        team_match_counts[c_away]["total"] += 1
+
+                    if (
+                        is_consistent
+                        and valid_cnt == exp_fixture_cnt
+                        and len(participating_teams) == rel_exp_team_count
+                        and len(seen_pairings) == exp_fixture_cnt
+                    ):
+                        all_balanced = True
+                        for tid, cnts in team_match_counts.items():
+                            if (
+                                cnts["home"] != exp_home_away_per_team
+                                or cnts["away"] != exp_home_away_per_team
+                                or cnts["total"] != exp_matches_per_team
+                            ):
+                                all_balanced = False
+                                break
+
+                        if all_balanced:
+                            validated = _validate_and_canonicalize_team_manifest(participating_teams, league_id, sport=sport)
+                            if validated and len(validated) == rel_exp_team_count:
+                                return validated
+        except Exception as exc:
+            logger.warning("Error inspecting stored DB fixtures for team universe fallback for league %s season %s: %s", league_id, season, exc)
+
     if not allow_network:
         return []
 
