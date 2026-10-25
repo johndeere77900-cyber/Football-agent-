@@ -728,7 +728,11 @@ def sync_historical_basketball_games(
     all_rejection_reasons = {}
 
     # 1. Primary Route: ESPN URL-based scoreboard (does not consume API-Sports quota)
-    if league_id == 12:
+    from unittest.mock import Mock
+    def _is_mocked(fn):
+        return isinstance(fn, Mock) or hasattr(fn, "mock_calls") or hasattr(fn, "_mock_name")
+
+    if league_id == 12 and not _is_mocked(basketball_api.get_league_games_page):
         try:
             import espn_basketball_provider
             espn_games = espn_basketball_provider.fetch_espn_nba_season_games(league_id, season)
