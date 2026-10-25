@@ -108,12 +108,6 @@ NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 REQUIRE_NEON = os.environ.get("REQUIRE_NEON", "false").lower() in ("true", "1", "yes")
 
-# --- Provider Configuration -------------------------------------------------
-ENABLE_ESPN_BASKETBALL = (
-    ENVIRONMENT == "production"
-    or os.environ.get("ENABLE_ESPN_BASKETBALL", "false").lower() in ("true", "1", "yes")
-)
-
 # --- Historical Seasons Target ----------------------------------------------
 TARGET_SEASONS = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
 

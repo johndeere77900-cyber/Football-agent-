@@ -119,13 +119,13 @@ def fetch_espn_nba_season_games(
                 raw_eid = int(eid_raw)
                 if raw_eid <= 0:
                     continue
-                # Deterministic provider-scoped integer namespace to avoid ID collisions in storage
-                import hashlib
-                game_id = int(hashlib.sha256(f"espn_nba_game_{raw_eid}".encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+                # Deterministic provider-scoped integer namespace offset (2,000,000,000 + raw_eid)
+                # Stores safely in signed BIGINT / SQLite 64-bit integer space without colliding with API-Basketball game IDs
+                game_id = 2000000000 + raw_eid
             except (ValueError, TypeError):
                 continue
 
-            if game_id in seen_event_ids:
+            if raw_eid in seen_event_ids or game_id in seen_event_ids:
                 continue
 
             iso_date = ev.get("date")
@@ -142,8 +142,11 @@ def fetch_espn_nba_season_games(
 
             completed = status_type.get("completed", False)
             status_name = status_type.get("name", "")
-            is_final = completed or status_name == "STATUS_FINAL"
-            status_short = "FT" if is_final else "NS"
+            is_final = completed or status_name in ("STATUS_FINAL", "STATUS_FULL_TIME", "FT")
+            if not is_final:
+                continue
+
+            status_short = "FT"
 
             competitors = comp.get("competitors")
             if not isinstance(competitors, list) or len(competitors) < 2:
@@ -181,23 +184,23 @@ def fetch_espn_nba_season_games(
 
             home_score_raw = home_comp.get("score")
             away_score_raw = away_comp.get("score")
-            home_points = None
-            away_points = None
+            if home_score_raw is None or away_score_raw is None:
+                continue
 
             try:
-                if home_score_raw is not None:
-                    home_points = int(home_score_raw)
-                if away_score_raw is not None:
-                    away_points = int(away_score_raw)
+                home_points = int(home_score_raw)
+                away_points = int(away_score_raw)
+                if home_points < 0 or away_points < 0:
+                    continue
             except (ValueError, TypeError):
-                pass
+                continue
 
             game_dict = {
                 "id": game_id,
                 "date": iso_date,
                 "status": {
                     "short": status_short,
-                    "long": status_type.get("description", "Final") if is_final else "Not Started",
+                    "long": status_type.get("description", "Final"),
                 },
                 "league": {
                     "id": lid,
@@ -215,12 +218,13 @@ def fetch_espn_nba_season_games(
                 "provider_provenance": {
                     "provider": "espn_url",
                     "provider_type": "primary_url",
-                    "provider_game_id": game_id,
+                    "provider_game_id": raw_eid,
                     "provider_team_ids": {"home": home_team_id, "away": away_team_id},
                     "retrieved_at": datetime.now(timezone.utc).isoformat(),
                 },
             }
 
+            seen_event_ids.add(raw_eid)
             seen_event_ids.add(game_id)
             normalized_games.append(game_dict)
 
