@@ -619,7 +619,7 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
             return False
 
         src = game.get("source") or game.get("provider_provenance", {}).get("provider", "unknown")
-        gid = game.get("id")
+        gid = game.get("id") or game.get("game_id")
         key = (src, gid)
         if key in seen_game_ids:
             return False
@@ -709,9 +709,16 @@ def sync_historical_basketball_games(
     all_rejection_reasons = {}
 
     # 1. ESPN Primary Acquisition for NBA (league_id == 12)
-    if league_id == 12 and getattr(config, "ENABLE_ESPN_BASKETBALL", False):
+    espn_coverage_complete = False
+    if league_id == 12 and getattr(config, "ENABLE_ESPN_BASKETBALL", True):
         try:
             espn_games, coverage_meta = espn_basketball_provider.fetch_espn_nba_season_games(league_id, season)
+            if isinstance(coverage_meta, dict):
+                espn_coverage_complete = (
+                    coverage_meta.get("months_attempted") == 9
+                    and coverage_meta.get("months_failed") == 0
+                    and coverage_meta.get("months_succeeded") == 9
+                )
             if espn_games:
                 games_received.extend(espn_games)
                 save_res = storage.save_historical_basketball_games(
@@ -726,17 +733,25 @@ def sync_historical_basketball_games(
         except Exception as exc:
             print(f"ESPN NBA acquisition attempt failed for season {season}: {exc}", flush=True)
 
-    # Check if existing + newly acquired stored games form a complete dataset
-    stored_games_check = storage.get_historical_basketball_games(league_id, season)
-    dataset_info_check = dict(dataset_info or {})
-    if stored_games_check and not dataset_info_check.get("expected_pages"):
-        dataset_info_check["expected_pages"] = 1
-        dataset_info_check["pages_completed"] = 1
-        dataset_info_check["fixture_count"] = len(stored_games_check)
-        dataset_info_check["rejected_count"] = total_rejected_count
-        dataset_info_check["empty_pages_count"] = total_empty_pages_count
+    expected_pages = dataset_info.get("expected_pages", 0)
+    pages_completed = dataset_info.get("pages_completed", 0)
+    acquisition_complete = False
 
-    if initial_request_count >= historical_budget:
+    stored_espn_check = storage.get_historical_basketball_games(league_id, season)
+    if espn_coverage_complete and stored_espn_check:
+        dataset_eval_info = {
+            "fixture_count": len(stored_espn_check),
+            "expected_pages": 9,
+            "pages_completed": 9,
+            "rejected_count": total_rejected_count,
+            "empty_pages_count": total_empty_pages_count,
+        }
+        if _validate_historical_basketball_dataset(stored_espn_check, league_id, season, dataset_eval_info):
+            expected_pages = 9
+            pages_completed = 9
+            acquisition_complete = True
+
+    if initial_request_count >= historical_budget and not acquisition_complete:
         quota_budget_stopped = True
         last_error_reason = "quota_budget_exhausted_before_acquisition"
         print(
@@ -744,12 +759,8 @@ def sync_historical_basketball_games(
             flush=True,
         )
 
-    expected_pages = dataset_info.get("expected_pages", 0)
-    pages_completed = dataset_info.get("pages_completed", 0)
-    acquisition_complete = False
-
-    # 2. Fallback to API-Basketball if quota permits
-    if not quota_budget_stopped:
+    # 2. Fallback to API-Basketball if ESPN incomplete and quota permits
+    if not acquisition_complete and not quota_budget_stopped:
         current_page = 1
         while True:
             try:
@@ -1089,6 +1100,7 @@ def run_historical_queue(
         sport = item["sport"]
         league_id = item["league_id"]
         season = item["season"]
+
 
 
         if sport in quota_stopped_sports:

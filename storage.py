@@ -1492,9 +1492,9 @@ def validate_historical_basketball_game(item, target_league_id=None, target_seas
 
         type_obj = status_obj.get("type")
         if isinstance(type_obj, dict):
-            status_completed_flag = bool(type_obj.get("completed"))
+            status_completed_flag = type_obj.get("completed") is True
         elif isinstance(status_obj.get("completed"), bool):
-            status_completed_flag = bool(status_obj.get("completed"))
+            status_completed_flag = status_obj.get("completed") is True
 
     is_completed = (
         status_completed_flag
@@ -1592,8 +1592,10 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
                     h_name = teams.get("home", {}).get("name", "")
                     a_name = teams.get("away", {}).get("name", "")
                     scores = item.get("scores", {})
-                    h_pts = scores.get("home", {}).get("total") if isinstance(scores.get("home"), dict) else None
-                    a_pts = scores.get("away", {}).get("total") if isinstance(scores.get("away"), dict) else None
+                    home_score = scores.get("home") if isinstance(scores, dict) else None
+                    away_score = scores.get("away") if isinstance(scores, dict) else None
+                    h_pts = home_score.get("total") if isinstance(home_score, dict) else home_score
+                    a_pts = away_score.get("total") if isinstance(away_score, dict) else away_score
 
                     raw_json_str = _json_dumps(item, "raw_json")
 
@@ -1627,8 +1629,10 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
                 h_name = teams.get("home", {}).get("name", "")
                 a_name = teams.get("away", {}).get("name", "")
                 scores = item.get("scores", {})
-                h_pts = scores.get("home", {}).get("total") if isinstance(scores.get("home"), dict) else None
-                a_pts = scores.get("away", {}).get("total") if isinstance(scores.get("away"), dict) else None
+                home_score = scores.get("home") if isinstance(scores, dict) else None
+                away_score = scores.get("away") if isinstance(scores, dict) else None
+                h_pts = home_score.get("total") if isinstance(home_score, dict) else home_score
+                a_pts = away_score.get("total") if isinstance(away_score, dict) else away_score
 
                 raw_json_str = _json_dumps(item, "raw_json")
 

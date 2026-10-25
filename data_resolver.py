@@ -29,6 +29,7 @@ Provider Identity & Field-Level Reconciliation:
 - Disputed critical fields (e.g. score mismatch) are recorded as disputed rather than silently overwritten.
 """
 
+import inspect
 import logging
 import time
 from datetime import datetime, timezone
@@ -786,14 +787,10 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         expected_team_count = len(expected_team_set)
 
     exp_fix_meta = provider_metadata.get("expected_fixture_count")
-    if is_double_round_robin and expected_team_count > 0:
-        drr_expected = expected_team_count * (expected_team_count - 1)
-        if exp_fix_meta is not None:
-            expected_fixture_count = max(drr_expected, exp_fix_meta)
-        else:
-            expected_fixture_count = drr_expected
-    elif exp_fix_meta is not None:
+    if exp_fix_meta is not None:
         expected_fixture_count = exp_fix_meta
+    elif is_double_round_robin and expected_team_count > 0:
+        expected_fixture_count = expected_team_count * (expected_team_count - 1)
     else:
         expected_fixture_count = None
 
@@ -1299,7 +1296,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
         }
-    elif is_double_round_robin and expected_fixture_count == expected_team_count * (expected_team_count - 1):
+    elif is_double_round_robin:
         for t_id in expected_team_set:
             counts = team_match_counts.get(t_id, {"home": 0, "away": 0, "total": 0})
             if (
@@ -2857,11 +2854,12 @@ class DataResolver:
                 t_mh_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData MatchHistory fetch starting for league_id={league_id}, season={season}, sd_code={sd_mh_code}")
                 try:
-                    try:
+                    sig_mh = inspect.signature(soccerdata_provider.get_match_history_games)
+                    if "timeout_seconds" in sig_mh.parameters:
                         sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(
                             sd_mh_code, season, timeout_seconds=rem_time, league_id=league_id
                         )
-                    except TypeError:
+                    else:
                         sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(
                             sd_mh_code, season, league_id=league_id
                         )
@@ -2929,11 +2927,12 @@ class DataResolver:
                 t_ss_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData Sofascore fetch starting for league_id={league_id}, season={season}, sd_code={sd_ss_code}")
                 try:
-                    try:
+                    sig_ss = inspect.signature(soccerdata_provider.get_sofascore_historical_games)
+                    if "timeout_seconds" in sig_ss.parameters:
                         sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(
                             sd_ss_code, season, timeout_seconds=rem_time, league_id=league_id
                         )
-                    except TypeError:
+                    else:
                         sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(
                             sd_ss_code, season, league_id=league_id
                         )
