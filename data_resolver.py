@@ -1197,68 +1197,13 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         }
 
     if not expected_team_set and is_double_round_robin:
-        if rel_exp_team_count is not None and len(participating_teams) == expected_team_count:
-            import storage
-            import team_identity
-
-            try:
-                raw_registered = storage.get_team_identities_by_league(sport, league_id)
-                registered_ids = {
-                    item["canonical_id"] if isinstance(item, dict) and "canonical_id" in item else str(item)
-                    for item in raw_registered
-                    if item
-                }
-            except Exception:
-                registered_ids = set()
-
-            alias_map = config.FOOTBALL_CANONICAL_TEAM_ALIASES if sport == "football" else config.BASKETBALL_CANONICAL_TEAM_ALIASES
-            league_alias_canonical_ids = set()
-
-            try:
-                target_lid = int(league_id) if league_id is not None else None
-            except (ValueError, TypeError):
-                target_lid = None
-
-            sport_prefix = f"{sport}_team_"
-
-            for key, target_val in alias_map.items():
-                if isinstance(key, tuple) and len(key) == 2:
-                    alias_name, k_lid = key
-                    if target_lid is not None and k_lid == target_lid:
-                        target_str = str(target_val).strip()
-                        slug = team_identity.sanitize_canonical_slug(target_str)
-                        league_alias_canonical_ids.add(target_str)
-                        league_alias_canonical_ids.add(f"{sport_prefix}{target_str}")
-                        league_alias_canonical_ids.add(f"{sport_prefix}{slug}")
-
-            all_verified = True
-            for p_tid in participating_teams:
-                if not (isinstance(p_tid, str) and p_tid.startswith(sport_prefix)):
-                    all_verified = False
-                    break
-
-                if registered_ids and p_tid in registered_ids:
-                    continue
-
-                if p_tid in league_alias_canonical_ids:
-                    continue
-
-                res_cid = team_identity.resolve_canonical_team_id(
-                    raw_name=p_tid,
-                    provider="api_football" if sport == "football" else "api_basketball",
-                    provider_team_id=None,
-                    league_id=league_id,
-                    sport=sport,
-                    auto_register=False,
-                )
-                if res_cid and (res_cid in registered_ids or res_cid in league_alias_canonical_ids):
-                    continue
-
-                all_verified = False
-                break
-
-            if all_verified and participating_teams:
-                expected_team_set = set(participating_teams)
+        if (
+            rel_exp_team_count is not None
+            and rel_exp_team_count > 0
+            and expected_team_count == rel_exp_team_count
+            and len(participating_teams) == rel_exp_team_count
+        ):
+            expected_team_set = set(participating_teams)
 
     if expected_team_set:
         missing_team_ids = expected_team_set - participating_teams

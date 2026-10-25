@@ -439,7 +439,34 @@ try:
         records = df_reset.to_dict(orient='records')
         print("SOCCERDATA_JSON_START\\n" + json.dumps(records, default=str) + "\\nSOCCERDATA_JSON_END")
 except Exception as exc:
-    sys.stderr.write(f"MatchHistory Subprocess Error: {{exc}}\\n")
+    response = getattr(exc, "response", None)
+    http_status = getattr(response, "status_code", None)
+    if http_status is None:
+        http_status = getattr(response, "status", None)
+    if http_status is None:
+        http_status = getattr(exc, "status_code", None)
+    if http_status is None:
+        http_status = getattr(exc, "code", None)
+
+    try:
+        if isinstance(http_status, bool):
+            raise ValueError("Boolean is not an HTTP status")
+        http_status = int(http_status)
+        if not 100 <= http_status <= 599:
+            http_status = None
+    except (TypeError, ValueError):
+        http_status = None
+
+    error_payload = {{
+        "error": str(exc),
+        "error_type": type(exc).__name__,
+        "http_status": http_status,
+    }}
+    sys.stdout.write(
+        "SOCCERDATA_ERROR_START\n"
+        + json.dumps(error_payload, default=str)
+        + "\nSOCCERDATA_ERROR_END\n"
+    )
     sys.exit(1)
 """
 
@@ -479,18 +506,42 @@ except Exception as exc:
                     logger.warning(f"Attempt {attempt}/{max_retries} - {err_msg}")
                     return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": err_msg, "stderr": proc.stderr, "source": "soccerdata_match_history"}
             else:
-                stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
-                last_error = f"Missing boundary markers or non-zero exit code: {stderr_msg}"
+                err_start_marker = "SOCCERDATA_ERROR_START"
+                err_end_marker = "SOCCERDATA_ERROR_END"
+                err_payload = None
+                if err_start_marker in stdout_text and err_end_marker in stdout_text:
+                    try:
+                        s_idx = stdout_text.find(err_start_marker) + len(err_start_marker)
+                        e_idx = stdout_text.find(err_end_marker, s_idx)
+                        err_json_str = stdout_text[s_idx:e_idx].strip()
+                        parsed_err = json.loads(err_json_str)
+                        if isinstance(parsed_err, dict):
+                            err_payload = parsed_err
+                    except (json.JSONDecodeError, ValueError):
+                        err_payload = None
+
+                if err_payload:
+                    err_type = err_payload.get("error_type") or "SubprocessError"
+                    err_desc = err_payload.get("error") or "Unknown error"
+                    last_error = f"{err_type}: {err_desc}"
+
+                    http_status = err_payload.get("http_status")
+                    if isinstance(http_status, bool):
+                        http_status = None
+                    if isinstance(http_status, int) and http_status in (401, 403, 404):
+                        logger.info(f"Unrecoverable provider HTTP error {http_status} detected ({last_error}). Skipping remaining retries.")
+                        meta = {
+                            "status": "SOURCE_FAILED",
+                            "error": last_error,
+                            "stderr": proc.stderr if proc else None,
+                            "source": "soccerdata_match_history",
+                        }
+                        return "SOURCE_FAILED", [], meta
+                else:
+                    stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
+                    last_error = f"Missing boundary markers or non-zero exit code: {stderr_msg}"
+
                 logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory subprocess failed: {last_error}")
-                if any(err in stderr_msg.lower() for err in ["403", "401", "404", "forbidden", "unauthorized"]):
-                    logger.info(f"Unrecoverable provider HTTP error detected ({stderr_msg}). Skipping remaining retries.")
-                    meta = {
-                        "status": "SOURCE_FAILED",
-                        "error": last_error,
-                        "stderr": proc.stderr if proc else None,
-                        "source": "soccerdata_match_history",
-                    }
-                    return "SOURCE_FAILED", [], meta
         except subprocess.TimeoutExpired as exc:
             last_error = f"Subprocess timed out after {timeout_seconds}s"
             logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory timeout: {last_error}")
@@ -879,7 +930,34 @@ try:
             + "\\nSOCCERDATA_JSON_END"
         )
 except Exception as exc:
-    sys.stderr.write(f"Sofascore Subprocess Error: {{exc}}\\n")
+    response = getattr(exc, "response", None)
+    http_status = getattr(response, "status_code", None)
+    if http_status is None:
+        http_status = getattr(response, "status", None)
+    if http_status is None:
+        http_status = getattr(exc, "status_code", None)
+    if http_status is None:
+        http_status = getattr(exc, "code", None)
+
+    try:
+        if isinstance(http_status, bool):
+            raise ValueError("Boolean is not an HTTP status")
+        http_status = int(http_status)
+        if not 100 <= http_status <= 599:
+            http_status = None
+    except (TypeError, ValueError):
+        http_status = None
+
+    error_payload = {{
+        "error": str(exc),
+        "error_type": type(exc).__name__,
+        "http_status": http_status,
+    }}
+    sys.stdout.write(
+        "SOCCERDATA_ERROR_START\n"
+        + json.dumps(error_payload, default=str)
+        + "\nSOCCERDATA_ERROR_END\n"
+    )
     sys.exit(1)
 """
 
@@ -929,19 +1007,43 @@ except Exception as exc:
                     logger.warning(f"Attempt {attempt}/{max_retries} - {err_msg}")
                     return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": err_msg, "stderr": proc.stderr, "source": "soccerdata_sofascore"}
             else:
-                stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
-                last_error = f"Missing boundary markers or non-zero exit code: {stderr_msg}"
+                err_start_marker = "SOCCERDATA_ERROR_START"
+                err_end_marker = "SOCCERDATA_ERROR_END"
+                err_payload = None
+                if err_start_marker in stdout_text and err_end_marker in stdout_text:
+                    try:
+                        s_idx = stdout_text.find(err_start_marker) + len(err_start_marker)
+                        e_idx = stdout_text.find(err_end_marker, s_idx)
+                        err_json_str = stdout_text[s_idx:e_idx].strip()
+                        parsed_err = json.loads(err_json_str)
+                        if isinstance(parsed_err, dict):
+                            err_payload = parsed_err
+                    except (json.JSONDecodeError, ValueError):
+                        err_payload = None
+
+                if err_payload:
+                    err_type = err_payload.get("error_type") or "SubprocessError"
+                    err_desc = err_payload.get("error") or "Unknown error"
+                    last_error = f"{err_type}: {err_desc}"
+
+                    http_status = err_payload.get("http_status")
+                    if isinstance(http_status, bool):
+                        http_status = None
+                    if isinstance(http_status, int) and http_status in (401, 403, 404):
+                        logger.info(f"Unrecoverable provider HTTP error {http_status} detected ({last_error}). Skipping remaining retries.")
+                        meta = {
+                            "status": "SOURCE_FAILED",
+                            "error": last_error,
+                            "stderr": proc.stderr if proc else None,
+                            "target_url": "https://api.sofascore.com/api/v1/config/default-unique-tournaments/EN/football",
+                            "source": "soccerdata_sofascore",
+                        }
+                        return "SOURCE_FAILED", [], meta
+                else:
+                    stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
+                    last_error = f"Missing boundary markers or non-zero exit code: {stderr_msg}"
+
                 logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore subprocess failed: {last_error}")
-                if any(err in stderr_msg.lower() for err in ["403", "401", "404", "forbidden", "unauthorized"]):
-                    logger.info(f"Unrecoverable provider HTTP error detected ({stderr_msg}). Skipping remaining retries.")
-                    meta = {
-                        "status": "SOURCE_FAILED",
-                        "error": last_error,
-                        "stderr": proc.stderr if proc else None,
-                        "target_url": "https://api.sofascore.com/api/v1/config/default-unique-tournaments/EN/football",
-                        "source": "soccerdata_sofascore",
-                    }
-                    return "SOURCE_FAILED", [], meta
         except subprocess.TimeoutExpired as exc:
             last_error = f"Subprocess timed out after {timeout_seconds}s"
             logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore timeout: {last_error}")
