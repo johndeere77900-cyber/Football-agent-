@@ -2781,6 +2781,10 @@ class DataResolver:
         combined_fixtures = []
 
         # 2. Primary Route: Direct CSV -> SoccerData MatchHistory -> SoccerData Sofascore
+        # Enforce one shared monotonic deadline across all primary-provider attempts
+        primary_deadline_seconds = getattr(config, "PRIMARY_PROVIDER_DEADLINE_SECONDS", 60.0)
+        t_primary_start = time.monotonic()
+
         csv_fixtures = []
         sd_mh_fixtures = []
         sd_mh_meta = {}
@@ -2789,12 +2793,14 @@ class DataResolver:
 
         if page == 1:
             # 2a. Direct CSV - Attempt direct downloadable CSV BEFORE network-dependent team-universe discovery
-            try:
-                csv_fixtures = _fetch_direct_csv_league_fixtures(
-                    league_id, season, max_budget=max_budget
-                )
-            except Exception as csv_exc:
-                logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
+            rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
+            if rem_time > 0:
+                try:
+                    csv_fixtures = _fetch_direct_csv_league_fixtures(
+                        league_id, season, timeout=max(1, int(rem_time)), max_budget=max_budget
+                    )
+                except Exception as csv_exc:
+                    logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
 
             if completed_only and csv_fixtures:
                 csv_fixtures = [
@@ -2839,12 +2845,15 @@ class DataResolver:
                 }
 
             # 2b. SoccerData MatchHistory
+            rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
-            if sd_mh_code:
+            if sd_mh_code and rem_time > 0:
                 t_mh_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData MatchHistory fetch starting for league_id={league_id}, season={season}, sd_code={sd_mh_code}")
                 try:
-                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
+                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(
+                        sd_mh_code, season, timeout_seconds=rem_time, league_id=league_id
+                    )
                     t_mh_elapsed = time.perf_counter() - t_mh_start
                     logger.info(f"[TIMING COMPLETE] SoccerData MatchHistory fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_mh_elapsed:.2f}s")
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
@@ -2853,6 +2862,8 @@ class DataResolver:
                 except Exception as sd_exc:
                     t_mh_elapsed = time.perf_counter() - t_mh_start
                     logger.warning(f"[TIMING FAILED] DataResolver MatchHistory primary route failed for league_id={league_id}, season={season}, elapsed={t_mh_elapsed:.2f}s: {sd_exc}")
+            elif sd_mh_code and rem_time <= 0:
+                logger.warning(f"Skipping SoccerData MatchHistory for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")
 
             if sd_mh_fixtures:
                 for sm in sd_mh_fixtures:
@@ -2901,12 +2912,15 @@ class DataResolver:
                 }
 
             # 2c. SoccerData Sofascore
+            rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
-            if sd_ss_code:
+            if sd_ss_code and rem_time > 0:
                 t_ss_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData Sofascore fetch starting for league_id={league_id}, season={season}, sd_code={sd_ss_code}")
                 try:
-                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
+                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(
+                        sd_ss_code, season, timeout_seconds=rem_time, league_id=league_id
+                    )
                     t_ss_elapsed = time.perf_counter() - t_ss_start
                     logger.info(f"[TIMING COMPLETE] SoccerData Sofascore fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_ss_elapsed:.2f}s")
                     sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
@@ -2919,6 +2933,8 @@ class DataResolver:
                     t_ss_elapsed = time.perf_counter() - t_ss_start
                     sd_ss_meta = {"status": "SOURCE_FAILED", "error": str(sd_exc)}
                     logger.warning(f"[TIMING FAILED] DataResolver Sofascore primary route failed for league_id={league_id}, season={season}, elapsed={t_ss_elapsed:.2f}s: {sd_exc}")
+            elif sd_ss_code and rem_time <= 0:
+                logger.warning(f"Skipping SoccerData Sofascore for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")
 
             if sd_ss_fixtures:
                 for sm in sd_ss_fixtures:
