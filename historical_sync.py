@@ -618,9 +618,27 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
         if not is_valid:
             return False
 
-        src = game.get("source") or game.get("provider_provenance", {}).get("provider", "unknown")
+        if "_storage_source" in game:
+            src = game.get("_storage_source")
+        else:
+            src = game.get("source")
+            if not src and isinstance(game.get("provider_provenance"), dict):
+                src = game["provider_provenance"].get("provider")
+
+        if not isinstance(src, str) or not src.strip():
+            return False
+
         gid = game.get("id") or game.get("game_id")
-        key = (src, gid)
+        if gid is None or isinstance(gid, bool):
+            return False
+        try:
+            gid_int = int(gid)
+            if gid_int <= 0:
+                return False
+        except (ValueError, TypeError):
+            return False
+
+        key = (src.strip(), gid_int)
         if key in seen_game_ids:
             return False
         seen_game_ids.add(key)
@@ -663,7 +681,7 @@ def sync_historical_basketball_games(
     existing_before = dataset_info["fixture_count"] or storage.get_historical_basketball_game_count(league_id, season)
 
     if current_status == "COMPLETE" and not refresh:
-        stored_games = storage.get_historical_basketball_games(league_id, season)
+        stored_games = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
         if _validate_historical_basketball_dataset(stored_games, league_id, season, dataset_info):
             print(f"Basketball dataset already COMPLETE and revalidated for league {league_id} season {season}; API acquisition skipped.", flush=True)
             return {
@@ -718,6 +736,7 @@ def sync_historical_basketball_games(
                     coverage_meta.get("months_attempted") == 9
                     and coverage_meta.get("months_failed") == 0
                     and coverage_meta.get("months_succeeded") == 9
+                    and coverage_meta.get("all_months_succeeded") is True
                 )
             if espn_games:
                 games_received.extend(espn_games)
@@ -737,7 +756,9 @@ def sync_historical_basketball_games(
     pages_completed = dataset_info.get("pages_completed", 0)
     acquisition_complete = False
 
-    stored_espn_check = storage.get_historical_basketball_games(league_id, season)
+    stored_espn_check = storage.get_historical_basketball_games(
+        league_id, season, source="espn_url", include_storage_source=True
+    )
     if espn_coverage_complete and stored_espn_check:
         dataset_eval_info = {
             "fixture_count": len(stored_espn_check),
@@ -856,7 +877,7 @@ def sync_historical_basketball_games(
         safe_rejected_cnt_b = cum_rejected_cnt_b
         safe_empty_cnt_b = cum_empty_cnt_b
 
-    stored_games_all = storage.get_historical_basketball_games(league_id, season)
+    stored_games_all = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
     db_validation_passed = _validate_historical_basketball_dataset(
         stored_games_all,
         league_id,
@@ -1089,7 +1110,6 @@ def run_historical_queue(
     run_safe_preflight(seasons, queue_items)
 
     reports = []
-    quota_stopped_sports = set()
 
     print(
         f"Starting target historical acquisition queue ({len(queue_items)} datasets across seasons {seasons})...",
@@ -1100,23 +1120,6 @@ def run_historical_queue(
         sport = item["sport"]
         league_id = item["league_id"]
         season = item["season"]
-
-
-
-        if sport in quota_stopped_sports:
-            print(
-                f"Queue: Skipping {sport} league {league_id} season {season} due to earlier quota/budget exhaustion for {sport}.",
-                flush=True,
-            )
-            reports.append({
-                "sport": sport,
-                "league_id": league_id,
-                "season": season,
-                "status": "INCOMPLETE",
-                "api_requests_consumed": 0,
-                "quota_budget_stopped": True,
-            })
-            continue
 
         # Check coverage before making requests
         cov = check_acquisition_coverage(league_id, season, sport=sport)
@@ -1155,9 +1158,8 @@ def run_historical_queue(
             )
 
         if report.get("quota_budget_stopped"):
-            quota_stopped_sports.add(sport)
             print(
-                f"Queue: API quota/budget exhausted for {sport} during league {league_id} season {season}. {sport.capitalize()} acquisitions paused for this run.",
+                f"Queue: API quota/budget exhausted for {sport} during league {league_id} season {season}.",
                 flush=True,
             )
 
@@ -1232,16 +1234,43 @@ def verify_persisted_historical_datasets(
         is_active_season = (ssn == current_year)
 
         if sp == "basketball":
-            records = storage.get_historical_basketball_games(lid, ssn)
+            records = storage.get_historical_basketball_games(lid, ssn, include_storage_source=True)
             actual_count = len(records)
             seen_ids = set()
             dates = []
             for r in records:
-                gid = r.get("id")
-                if gid:
-                    if gid in seen_ids:
-                        issues.append(f"duplicate_game_id_{gid}")
-                    seen_ids.add(gid)
+                if "_storage_source" in r:
+                    src = r.get("_storage_source")
+                else:
+                    src = r.get("source")
+                    if not src and isinstance(r.get("provider_provenance"), dict):
+                        src = r["provider_provenance"].get("provider")
+
+                if not isinstance(src, str) or not src.strip():
+                    issues.append("invalid_or_missing_source")
+                    src = "invalid"
+
+                gid_raw = r.get("id") or r.get("game_id")
+                gid_int = None
+                if gid_raw is not None and not isinstance(gid_raw, bool):
+                    try:
+                        parsed_gid = int(gid_raw)
+                        if parsed_gid > 0:
+                            gid_int = parsed_gid
+                    except (ValueError, TypeError):
+                        pass
+
+                if gid_int is None:
+                    issues.append(f"invalid_or_missing_game_id_{gid_raw}")
+                    gid_val = f"invalid_{gid_raw}"
+                else:
+                    gid_val = gid_int
+
+                key = (src.strip() if isinstance(src, str) else str(src), gid_val)
+                if key in seen_ids:
+                    issues.append(f"duplicate_game_id_{gid_val}")
+                seen_ids.add(key)
+
                 d = r.get("date")
                 if d:
                     dates.append(str(d)[:10])
