@@ -1202,15 +1202,6 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "expected_fixture_count": expected_fixture_count,
         }
 
-    if not expected_team_set and is_double_round_robin:
-        if (
-            rel_exp_team_count is not None
-            and rel_exp_team_count > 0
-            and expected_team_count == rel_exp_team_count
-            and len(participating_teams) == rel_exp_team_count
-        ):
-            expected_team_set = set(participating_teams)
-
     if expected_team_set:
         missing_team_ids = expected_team_set - participating_teams
         unexpected_team_ids = participating_teams - expected_team_set
@@ -1384,11 +1375,20 @@ def _validate_and_filter_primary_soccerdata_matches(matches, league_id, season, 
                 return s.isdigit() and int(s) > 0
             return False
 
-        if not _is_valid_provider_team_id(h_prov_id) or not _is_valid_provider_team_id(a_prov_id):
-            continue
-
-        h_obj["id"] = int(h_prov_id) if isinstance(h_prov_id, str) else h_prov_id
-        a_obj["id"] = int(a_prov_id) if isinstance(a_prov_id, str) else a_prov_id
+        if prov_source == "soccerdata_fbref":
+            if h_prov_id is not None and not _is_valid_provider_team_id(h_prov_id):
+                continue
+            if a_prov_id is not None and not _is_valid_provider_team_id(a_prov_id):
+                continue
+            if h_prov_id is not None:
+                h_obj["id"] = int(h_prov_id) if isinstance(h_prov_id, str) else h_prov_id
+            if a_prov_id is not None:
+                a_obj["id"] = int(a_prov_id) if isinstance(a_prov_id, str) else a_prov_id
+        else:
+            if not _is_valid_provider_team_id(h_prov_id) or not _is_valid_provider_team_id(a_prov_id):
+                continue
+            h_obj["id"] = int(h_prov_id) if isinstance(h_prov_id, str) else h_prov_id
+            a_obj["id"] = int(a_prov_id) if isinstance(a_prov_id, str) else a_prov_id
 
         c_home = team_identity.resolve_canonical_team_id(h_name, prov_source, h_prov_id, league_id=league_id, sport="football", auto_register=False)
         c_away = team_identity.resolve_canonical_team_id(a_name, prov_source, a_prov_id, league_id=league_id, sport="football", auto_register=False)

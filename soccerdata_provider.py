@@ -79,13 +79,12 @@ def _normalize_fbref_row(row, league_id=None, season=None):
     if not date_val or not home_team or not away_team or date_val in ("NaT", "None"):
         return None
 
-    # Preserve actual FBref match identifier (e.g. game_id, game, or id)
-    raw_game_id = data.get("game_id") or data.get("game") or data.get("id") or f"{date_val}_{home_team}_{away_team}"
-    raw_str = str(raw_game_id).strip()
-
-    import hashlib
-    syn_id = f"sd_fbref_{league_id}_{season}_{raw_str}"
-    fixture_id = int(hashlib.sha256(syn_id.encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+    raw_game_id = data.get("game_id") or data.get("game") or data.get("id")
+    provider_fixture_id = None
+    if raw_game_id is not None and not isinstance(raw_game_id, bool):
+        s_val = str(raw_game_id).strip()
+        if s_val and s_val.lower() not in ("nan", "none"):
+            provider_fixture_id = s_val
 
     raw_s = data.get("season") or data.get("Season")
     parsed_raw = _parse_row_season(raw_s, default_s=None)
@@ -99,6 +98,10 @@ def _normalize_fbref_row(row, league_id=None, season=None):
 
     if row_season is None:
         return None
+
+    import hashlib
+    syn_str = f"sd_fbref_{league_id}_{row_season}_{date_val}_{home_team}_{away_team}"
+    fixture_id = int(hashlib.sha256(syn_str.encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
 
     home_goals = data.get("home_score")
     away_goals = data.get("away_score")
@@ -121,8 +124,27 @@ def _normalize_fbref_row(row, league_id=None, season=None):
     except (ValueError, TypeError):
         home_goals, away_goals = None, None
 
+    # Extract real provider team IDs if present as positive ints; otherwise leave None
+    raw_h_id = data.get("home_team_id") or data.get("home_id")
+    raw_a_id = data.get("away_team_id") or data.get("away_id")
+
     home_id = None
+    if raw_h_id is not None and not isinstance(raw_h_id, bool) and str(raw_h_id).strip().lower() not in ("nan", "none", ""):
+        try:
+            val = int(str(raw_h_id).strip())
+            if val > 0:
+                home_id = val
+        except (ValueError, TypeError):
+            home_id = None
+
     away_id = None
+    if raw_a_id is not None and not isinstance(raw_a_id, bool) and str(raw_a_id).strip().lower() not in ("nan", "none", ""):
+        try:
+            val = int(str(raw_a_id).strip())
+            if val > 0:
+                away_id = val
+        except (ValueError, TypeError):
+            away_id = None
 
     field_availability = {
         "fixture": True,
@@ -165,7 +187,7 @@ def _normalize_fbref_row(row, league_id=None, season=None):
         "provider_provenance": {
             "provider": "soccerdata_fbref",
             "provider_type": "primary",
-            "provider_fixture_id": raw_str,
+            "provider_fixture_id": provider_fixture_id,
             "provider_team_ids": {
                 "home": home_id,
                 "away": away_id,
