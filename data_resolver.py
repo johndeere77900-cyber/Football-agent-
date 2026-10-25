@@ -2984,11 +2984,11 @@ class DataResolver:
                 "secondary_quota_exhausted": secondary_quota_exhausted,
             }
 
-        # Secondary 3b: football-data.org API (Skip if API-Football returned a non-retryable access/subscription denial unless independent comp_code exists and is not denied)
+        # Secondary 3b: football-data.org API
         fd_matches = []
         fd_meta = {}
         comp_code = LEAGUE_TO_FD_CODE.get(league_id)
-        if page == 1 and comp_code and not secondary_access_denied:
+        if page == 1 and comp_code:
             try:
                 fd_res = football_data_api.get_competition_matches(comp_code, season=season)
                 if isinstance(fd_res, dict):
