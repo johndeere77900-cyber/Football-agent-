@@ -647,11 +647,19 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
         if not status_short:
             return False
 
+    manifest_count = dataset_info.get("fixture_count", 0) if isinstance(dataset_info, dict) else 0
     e_pages = dataset_info.get("expected_pages", 0) if isinstance(dataset_info, dict) else 0
     p_completed = dataset_info.get("pages_completed", 0) if isinstance(dataset_info, dict) else 0
     rej_cnt = dataset_info.get("rejected_count", 0) if isinstance(dataset_info, dict) else 0
+    empty_pages_count = dataset_info.get("empty_pages_count", 0) if isinstance(dataset_info, dict) else 0
 
-    if e_pages <= 0 or p_completed < e_pages or rej_cnt > 0:
+    if (
+        manifest_count != len(stored_games)
+        or e_pages <= 0
+        or p_completed != e_pages
+        or rej_cnt != 0
+        or empty_pages_count != 0
+    ):
         return False
 
     if len(seen_game_ids) != len(stored_games):
