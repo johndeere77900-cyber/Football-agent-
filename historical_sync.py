@@ -618,9 +618,25 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
         if not is_valid:
             return False
 
-        src = game.get("source") or game.get("provider_provenance", {}).get("provider", "unknown")
+        src = (
+            game.get("_storage_source")
+            or game.get("source")
+            or (game.get("provider_provenance", {}).get("provider") if isinstance(game.get("provider_provenance"), dict) else None)
+        )
+        if not src or not isinstance(src, str) or not src.strip():
+            return False
+
         gid = game.get("id") or game.get("game_id")
-        key = (src, gid)
+        if gid is None or isinstance(gid, bool):
+            return False
+        try:
+            gid_int = int(gid)
+            if gid_int <= 0:
+                return False
+        except (ValueError, TypeError):
+            return False
+
+        key = (src.strip(), gid_int)
         if key in seen_game_ids:
             return False
         seen_game_ids.add(key)
