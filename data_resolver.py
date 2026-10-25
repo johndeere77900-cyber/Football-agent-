@@ -209,15 +209,6 @@ def _fetch_direct_csv_league_fixtures(
         cache_hits = 0
         cache_misses = 0
 
-        # Attempt to obtain authoritative season roster or pre-registered identities first
-        auth_roster = _get_authoritative_historical_team_ids(
-            league_id, season, max_budget=max_budget, allow_network=False
-        )
-        if not auth_roster:
-            auth_roster = _get_authoritative_historical_team_ids(
-                league_id, season, max_budget=max_budget, allow_network=True
-            )
-
         def resolve_cached(raw_name):
             nonlocal cache_hits, cache_misses
             norm_name = team_identity.normalize_team_name(raw_name)
@@ -506,6 +497,26 @@ def _get_authoritative_historical_team_ids(
                 exp_ids = ds_status.get("expected_team_ids")
                 if exp_ids:
                     validated = _validate_and_canonicalize_team_manifest(exp_ids, league_id, sport=sport)
+                    if validated:
+                        return validated
+
+            # Derive trusted season-specific team universe from stored finished DB fixtures if available
+            stored_fixtures = storage.get_historical_fixtures(league_id, season)
+            if stored_fixtures and isinstance(stored_fixtures, list):
+                rel_exp_count = get_expected_league_team_count(league_id, season)
+                db_teams = set()
+                for sf in stored_fixtures:
+                    if not isinstance(sf, dict):
+                        continue
+                    c_h = sf.get("canonical_home_id")
+                    c_a = sf.get("canonical_away_id")
+                    if c_h:
+                        db_teams.add(c_h)
+                    if c_a:
+                        db_teams.add(c_a)
+
+                if db_teams and (rel_exp_count is None or len(db_teams) == rel_exp_count):
+                    validated = _validate_and_canonicalize_team_manifest(list(db_teams), league_id, sport=sport)
                     if validated:
                         return validated
         except Exception as exc:
@@ -2901,7 +2912,12 @@ class DataResolver:
                 logger.warning(f"DataResolver secondary route get_league_fixtures_page quota exhausted for league {league_id}: {exc}")
             except Exception as exc:
                 secondary_failed = True
-                logger.warning(f"DataResolver secondary route get_league_fixtures_page failed for league {league_id}: {exc}")
+                msg = str(exc).lower()
+                is_denial = any(kw in msg for kw in ["subscription", "plan", "forbidden", "unauthorized", "403", "restricted", "access denied"])
+                if is_denial:
+                    logger.warning(f"DataResolver secondary route subscription/permission denial for league {league_id} season {season}: {exc}")
+                else:
+                    logger.warning(f"DataResolver secondary route get_league_fixtures_page failed for league {league_id}: {exc}")
 
         af_fixtures = []
         if primary_page is not None and isinstance(primary_page, dict):
