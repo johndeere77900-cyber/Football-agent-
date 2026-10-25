@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 # Standard default timeout for SoccerData calls in seconds
 DEFAULT_SOCCERDATA_TIMEOUT = 60.0
 
+# Mapping league ID to SoccerData FBref code strings (only supported FBref leagues)
+LEAGUE_TO_SD_FBREF_CODE = {
+    39: "ENG-Premier League",
+    140: "ESP-La Liga",
+    135: "ITA-Serie A",
+    78: "GER-Bundesliga",
+    61: "FRA-Ligue 1",
+    1: "INT-World Cup",
+}
+
 
 def _parse_row_season(raw_s, default_s=None):
     """Parse raw season from row dictionary into integer year (e.g. '2024', '2425' -> 2024)."""
@@ -53,6 +63,116 @@ def _parse_row_season(raw_s, default_s=None):
     if len(s_str) >= 4 and s_str[:4].isdigit():
         return int(s_str[:4])
     return default_s
+
+
+def _normalize_fbref_row(row, league_id=None, season=None):
+    """Normalize a match record from SoccerData FBref."""
+    if row is None or not isinstance(row, dict):
+        return None
+
+    data = row
+
+    date_val = str(data.get("date") or data.get("Date") or "")
+    home_team = str(data.get("home_team") or data.get("Home") or data.get("home") or "")
+    away_team = str(data.get("away_team") or data.get("Away") or data.get("away") or "")
+
+    if not date_val or not home_team or not away_team or date_val in ("NaT", "None"):
+        return None
+
+    # Preserve actual FBref match identifier (e.g. game_id, game, or id)
+    raw_game_id = data.get("game_id") or data.get("game") or data.get("id") or f"{date_val}_{home_team}_{away_team}"
+    raw_str = str(raw_game_id).strip()
+
+    import hashlib
+    syn_id = f"sd_fbref_{league_id}_{season}_{raw_str}"
+    fixture_id = int(hashlib.sha256(syn_id.encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+
+    raw_s = data.get("season") or data.get("Season")
+    parsed_raw = _parse_row_season(raw_s, default_s=None)
+
+    if season is not None:
+        if parsed_raw is not None and parsed_raw != season:
+            return None
+        row_season = season
+    else:
+        row_season = parsed_raw
+
+    if row_season is None:
+        return None
+
+    home_goals = data.get("home_score")
+    away_goals = data.get("away_score")
+
+    if home_goals is None or away_goals is None:
+        score_str = str(data.get("score") or data.get("Score") or "")
+        if "–" in score_str or "-" in score_str:
+            sep = "–" if "–" in score_str else "-"
+            parts = score_str.split(sep)
+            if len(parts) == 2:
+                try:
+                    home_goals = int(parts[0].strip())
+                    away_goals = int(parts[1].strip())
+                except (ValueError, TypeError):
+                    pass
+
+    try:
+        home_goals = int(home_goals) if home_goals is not None and str(home_goals).strip().isdigit() else None
+        away_goals = int(away_goals) if away_goals is not None and str(away_goals).strip().isdigit() else None
+    except (ValueError, TypeError):
+        home_goals, away_goals = None, None
+
+    home_id = None
+    away_id = None
+
+    field_availability = {
+        "fixture": True,
+        "teams": True,
+        "score": (home_goals is not None and away_goals is not None),
+        "shots": False,
+        "shots_on_target": False,
+        "corners": False,
+        "cards": False,
+        "xG": False,
+    }
+
+    return {
+        "fixture": {
+            "id": fixture_id,
+            "date": date_val,
+            "status": {"short": "FT" if home_goals is not None else "NS", "long": "Finished" if home_goals is not None else "Not Started"},
+        },
+        "league": {
+            "id": league_id,
+            "season": row_season,
+            "name": str(data.get("league") or data.get("Comp") or ""),
+        },
+        "teams": {
+            "home": {"id": home_id, "name": home_team},
+            "away": {"id": away_id, "name": away_team},
+        },
+        "goals": {
+            "home": home_goals,
+            "away": away_goals,
+        },
+        "statistics": {
+            "shots": None,
+            "shots_on_target": None,
+            "corners": None,
+            "cards": None,
+            "xG": None,
+        },
+        "field_availability": field_availability,
+        "provider_provenance": {
+            "provider": "soccerdata_fbref",
+            "provider_type": "primary",
+            "provider_fixture_id": raw_str,
+            "provider_team_ids": {
+                "home": home_id,
+                "away": away_id,
+            },
+            "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
+        },
+    }
 
 
 def _normalize_match_history_row(row, league_id=None, season=None):
@@ -389,6 +509,188 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
             "retrieved_at": time_utils.format_utc_iso(datetime.now(timezone.utc)),
         },
     }
+
+
+def get_fbref_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None, max_retries=2):
+    """
+    Retrieve matches for league_code (e.g., 'ENG-Premier League', 'ESP-La Liga') and season via SoccerData FBref.
+    Executes in a clean subprocess to prevent C-level library crashes from affecting the main process.
+
+    Returns tuple: (status_code, matches_list, metadata)
+    """
+    import time
+    if not league_code:
+        return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata_fbref"}
+
+    if timeout_seconds is None or timeout_seconds <= 0:
+        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": "Deadline expired before execution", "source": "soccerdata_fbref"}
+
+    fbref_season = _format_sofascore_season(season) if season is not None else season
+
+    code_str = f"""
+import json, sys
+try:
+    import soccerdata as sd
+
+    fb = sd.FBref(leagues={repr(league_code)}, seasons={repr(fbref_season)})
+    df = fb.read_schedule()
+    if df is None or getattr(df, 'empty', True):
+        print("SOCCERDATA_JSON_START\\n[]\\nSOCCERDATA_JSON_END")
+    else:
+        df_reset = df.reset_index() if hasattr(df, 'reset_index') else df
+        records = df_reset.to_dict(orient='records')
+        print("SOCCERDATA_JSON_START\\n" + json.dumps(records, default=str) + "\\nSOCCERDATA_JSON_END")
+except Exception as exc:
+    response = getattr(exc, "response", None)
+    http_status = getattr(response, "status_code", None)
+    if http_status is None:
+        http_status = getattr(response, "status", None)
+    if http_status is None:
+        http_status = getattr(exc, "status_code", None)
+    if http_status is None:
+        http_status = getattr(exc, "code", None)
+
+    try:
+        if isinstance(http_status, bool):
+            raise ValueError("Boolean is not an HTTP status")
+        http_status = int(http_status)
+        if not 100 <= http_status <= 599:
+            http_status = None
+    except (TypeError, ValueError):
+        http_status = None
+
+    error_payload = {{
+        "error": str(exc),
+        "error_type": type(exc).__name__,
+        "http_status": http_status,
+    }}
+    sys.stdout.write(
+        "SOCCERDATA_ERROR_START\n"
+        + json.dumps(error_payload, default=str)
+        + "\nSOCCERDATA_ERROR_END\n"
+    )
+    sys.exit(1)
+"""
+
+    last_error = None
+    proc = None
+    start_time = time.monotonic()
+
+    for attempt in range(1, max_retries + 1):
+        elapsed = time.monotonic() - start_time
+        remaining = timeout_seconds - elapsed
+        if remaining <= 0:
+            last_error = f"Deadline ({timeout_seconds}s) expired before attempt {attempt}"
+            logger.warning(f"SoccerData FBref deadline expired before attempt {attempt}/{max_retries}")
+            return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_fbref"}
+
+        attempt_timeout = min(remaining, timeout_seconds)
+
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", code_str],
+                capture_output=True,
+                text=True,
+                timeout=attempt_timeout,
+            )
+            stdout_text = proc.stdout if proc and proc.stdout else ""
+            start_marker = "SOCCERDATA_JSON_START"
+            end_marker = "SOCCERDATA_JSON_END"
+            if proc.returncode == 0 and start_marker in stdout_text and end_marker in stdout_text:
+                try:
+                    s_idx = stdout_text.find(start_marker) + len(start_marker)
+                    e_idx = stdout_text.find(end_marker, s_idx)
+                    json_str = stdout_text[s_idx:e_idx].strip()
+                    raw_records = json.loads(json_str)
+                    break
+                except json.JSONDecodeError as exc:
+                    err_msg = f"JSON parse error on stdout between boundary markers: {exc}"
+                    logger.warning(f"Attempt {attempt}/{max_retries} - {err_msg}")
+                    return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": err_msg, "stderr": proc.stderr, "source": "soccerdata_fbref"}
+            else:
+                err_start_marker = "SOCCERDATA_ERROR_START"
+                err_end_marker = "SOCCERDATA_ERROR_END"
+                err_payload = None
+                if err_start_marker in stdout_text and err_end_marker in stdout_text:
+                    try:
+                        s_idx = stdout_text.find(err_start_marker) + len(err_start_marker)
+                        e_idx = stdout_text.find(err_end_marker, s_idx)
+                        err_json_str = stdout_text[s_idx:e_idx].strip()
+                        parsed_err = json.loads(err_json_str)
+                        if isinstance(parsed_err, dict):
+                            err_payload = parsed_err
+                    except (json.JSONDecodeError, ValueError):
+                        err_payload = None
+
+                if err_payload:
+                    err_type = err_payload.get("error_type") or "SubprocessError"
+                    err_desc = err_payload.get("error") or "Unknown error"
+                    last_error = f"{err_type}: {err_desc}"
+
+                    http_status = err_payload.get("http_status")
+                    if isinstance(http_status, bool):
+                        http_status = None
+                    if isinstance(http_status, int) and http_status in (401, 403, 404):
+                        logger.info(f"Unrecoverable provider HTTP error {http_status} detected ({last_error}). Skipping remaining retries.")
+                        meta = {
+                            "status": "SOURCE_FAILED",
+                            "error": last_error,
+                            "stderr": proc.stderr if proc else None,
+                            "source": "soccerdata_fbref",
+                        }
+                        return "SOURCE_FAILED", [], meta
+                else:
+                    stderr_msg = proc.stderr.strip() if proc and proc.stderr else f"Subprocess exited with returncode {proc.returncode if proc else 'N/A'}"
+                    last_error = f"Missing boundary markers or non-zero exit code: {stderr_msg}"
+
+                logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData FBref subprocess failed: {last_error}")
+        except subprocess.TimeoutExpired as exc:
+            last_error = f"Subprocess timed out after {timeout_seconds}s"
+            logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData FBref timeout: {last_error}")
+        except Exception as exc:
+            last_error = f"Subprocess execution error: {exc}"
+            logger.warning(f"Attempt {attempt}/{max_retries} - {last_error}")
+
+    else:
+        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_fbref"}
+
+    if not raw_records:
+        meta = {
+            "status": "SOURCE_NOT_AVAILABLE",
+            "error": "No data returned or empty response",
+            "source": "soccerdata_fbref",
+        }
+        return "SOURCE_NOT_AVAILABLE", [], meta
+
+    normalized_matches = []
+    try:
+        for row in raw_records:
+            norm = _normalize_fbref_row(row, league_id=league_id, season=season)
+            if norm:
+                normalized_matches.append(norm)
+
+        if not normalized_matches:
+            meta = {
+                "status": "SOURCE_RETURNED_PARTIAL_DATA",
+                "count": 0,
+                "source": "soccerdata_fbref",
+            }
+            return "SOURCE_RETURNED_PARTIAL_DATA", [], meta
+
+        meta = {
+            "status": "SOURCE_AVAILABLE",
+            "count": len(normalized_matches),
+            "source": "soccerdata_fbref",
+        }
+        return "SOURCE_AVAILABLE", normalized_matches, meta
+
+    except Exception as exc:
+        meta = {
+            "status": "SOURCE_FAILED",
+            "error": str(exc),
+            "source": "soccerdata_fbref",
+        }
+        return "SOURCE_FAILED", [], meta
 
 
 def get_match_history_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None, max_retries=2):

@@ -56,6 +56,9 @@ LEAGUE_TO_FD_CODE = {
 
 FD_CODE_TO_LEAGUE = {v: k for k, v in LEAGUE_TO_FD_CODE.items()}
 
+# Mapping league ID to SoccerData FBref code strings
+LEAGUE_TO_SD_FBREF_CODE = soccerdata_provider.LEAGUE_TO_SD_FBREF_CODE
+
 # Mapping league ID to SoccerData MatchHistory code strings
 LEAGUE_TO_SD_MH_CODE = {
     39: "ENG-Premier League",
@@ -114,6 +117,9 @@ def get_expected_league_team_count(league_id, season=None) -> int | None:
             return None
         return 18 if s_val >= 2023 else 20
     return None
+
+# Timeout cap for an individual primary provider attempt (seconds)
+PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS = 15.0
 
 # Exact Source URLs & Reference Constants
 FOOTBALL_DATA_CSV_URL_PATTERN = "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv"
@@ -2728,12 +2734,14 @@ class DataResolver:
 
         combined_fixtures = []
 
-        # 2. Primary Route: Direct CSV -> SoccerData MatchHistory -> SoccerData Sofascore
+        # 2. Primary Route: Direct CSV -> FBref -> SoccerData MatchHistory -> SoccerData Sofascore
         # Enforce one shared monotonic deadline across all primary-provider attempts
         primary_deadline_seconds = getattr(config, "PRIMARY_PROVIDER_DEADLINE_SECONDS", 60.0)
         t_primary_start = time.monotonic()
 
         csv_fixtures = []
+        sd_fb_fixtures = []
+        sd_fb_meta = {}
         sd_mh_fixtures = []
         sd_mh_meta = {}
         sd_ss_fixtures = []
@@ -2743,9 +2751,10 @@ class DataResolver:
             # 2a. Direct CSV - Attempt direct downloadable CSV BEFORE network-dependent team-universe discovery
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             if rem_time > 0:
+                attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
                 try:
                     csv_fixtures = _fetch_direct_csv_league_fixtures(
-                        league_id, season, timeout=rem_time, max_budget=max_budget
+                        league_id, season, timeout=attempt_timeout, max_budget=max_budget
                     )
                 except Exception as csv_exc:
                     logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
@@ -2792,17 +2801,86 @@ class DataResolver:
                     "secondary_quota_exhausted": False,
                 }
 
-            # 2b. SoccerData MatchHistory
+            # 2b. SoccerData FBref
+            rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
+            sd_fb_code = LEAGUE_TO_SD_FBREF_CODE.get(league_id)
+            if sd_fb_code and rem_time > 0:
+                attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
+                t_fb_start = time.perf_counter()
+                logger.info(f"[TIMING START] SoccerData FBref fetch starting for league_id={league_id}, season={season}, sd_code={sd_fb_code}")
+                try:
+                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_fbref_games(
+                        sd_fb_code, season, timeout_seconds=attempt_timeout, league_id=league_id
+                    )
+                    t_fb_elapsed = time.perf_counter() - t_fb_start
+                    logger.info(f"[TIMING COMPLETE] SoccerData FBref fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_fb_elapsed:.2f}s")
+                    if sd_status == "SOURCE_AVAILABLE" and sd_games:
+                        sd_fb_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
+                        sd_fb_meta = sd_meta_res or {}
+                except Exception as sd_exc:
+                    t_fb_elapsed = time.perf_counter() - t_fb_start
+                    logger.warning(f"[TIMING FAILED] DataResolver FBref primary route failed for league_id={league_id}, season={season}, elapsed={t_fb_elapsed:.2f}s: {sd_exc}")
+            elif sd_fb_code and rem_time <= 0:
+                logger.warning(f"Skipping SoccerData FBref for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")
+
+            if sd_fb_fixtures:
+                for sm in sd_fb_fixtures:
+                    matching = [cm for cm in combined_fixtures if _strict_fixture_match(cm, sm)]
+                    if matching:
+                        idx = combined_fixtures.index(matching[0])
+                        reconciled_rec = reconcile_fixture_records([matching[0], sm])
+                        if reconciled_rec:
+                            combined_fixtures[idx] = reconciled_rec
+                    else:
+                        combined_fixtures.append(sm)
+
+            fb_coverage = _validate_historical_structural_coverage(
+                combined_fixtures,
+                season=season,
+                provider_metadata={
+                    "competition_format": competition_format,
+                    "expected_team_ids": expected_team_ids_local,
+                    "allow_network": False,
+                },
+                league_id=league_id,
+            )
+
+            if fb_coverage["verified"] is True:
+                contribs = [
+                    p for p, count in [
+                        ("football_data_csv", len(csv_fixtures)),
+                        ("soccerdata_fbref", len(sd_fb_fixtures)),
+                    ] if count > 0
+                ]
+                return {
+                    "fixtures": combined_fixtures,
+                    "expected_pages": 1,
+                    "current_page": 1,
+                    "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                    "provider_metadata": {
+                        "competition_format": competition_format,
+                        "expected_team_ids": expected_team_ids_local,
+                        "is_complete": True,
+                        "is_partial": False,
+                        "structural_coverage": fb_coverage,
+                        "providers_contributed": contribs,
+                    },
+                    "secondary_failed": False,
+                    "secondary_quota_exhausted": False,
+                }
+
+            # 2c. SoccerData MatchHistory
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
             if sd_mh_code and rem_time > 0:
+                attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
                 t_mh_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData MatchHistory fetch starting for league_id={league_id}, season={season}, sd_code={sd_mh_code}")
                 try:
                     sig_mh = inspect.signature(soccerdata_provider.get_match_history_games)
                     if "timeout_seconds" in sig_mh.parameters:
                         sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(
-                            sd_mh_code, season, timeout_seconds=rem_time, league_id=league_id
+                            sd_mh_code, season, timeout_seconds=attempt_timeout, league_id=league_id
                         )
                     else:
                         sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(
@@ -2865,17 +2943,18 @@ class DataResolver:
                     "secondary_quota_exhausted": False,
                 }
 
-            # 2c. SoccerData Sofascore
+            # 2d. SoccerData Sofascore
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
             if sd_ss_code and rem_time > 0:
+                attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
                 t_ss_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData Sofascore fetch starting for league_id={league_id}, season={season}, sd_code={sd_ss_code}")
                 try:
                     sig_ss = inspect.signature(soccerdata_provider.get_sofascore_historical_games)
                     if "timeout_seconds" in sig_ss.parameters:
                         sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(
-                            sd_ss_code, season, timeout_seconds=rem_time, league_id=league_id
+                            sd_ss_code, season, timeout_seconds=attempt_timeout, league_id=league_id
                         )
                     else:
                         sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(
