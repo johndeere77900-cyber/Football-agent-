@@ -1110,7 +1110,6 @@ def run_historical_queue(
     run_safe_preflight(seasons, queue_items)
 
     reports = []
-    quota_stopped_sports = set()
 
     print(
         f"Starting target historical acquisition queue ({len(queue_items)} datasets across seasons {seasons})...",
@@ -1139,22 +1138,6 @@ def run_historical_queue(
             })
             continue
 
-        if sport in quota_stopped_sports:
-            print(
-                f"Queue: API quota/budget exhausted for {sport} during league {league_id} season {season}.",
-                flush=True,
-            )
-            reports.append({
-                "sport": sport,
-                "league_id": league_id,
-                "season": season,
-                "status": "INCOMPLETE",
-                "skipped_reason": "API quota/budget exhausted",
-                "api_requests_consumed": 0,
-                "quota_budget_stopped": True,
-            })
-            continue
-
         print(
             f"Queue: Syncing missing data for {sport} league {league_id} season {season} (est. required requests: {cov['estimated_required_requests']})...",
             flush=True,
@@ -1175,7 +1158,6 @@ def run_historical_queue(
             )
 
         if report.get("quota_budget_stopped"):
-            quota_stopped_sports.add(sport)
             print(
                 f"Queue: API quota/budget exhausted for {sport} during league {league_id} season {season}.",
                 flush=True,

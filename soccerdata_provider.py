@@ -587,9 +587,9 @@ except Exception as exc:
         "http_status": http_status,
     }}
     sys.stdout.write(
-        "SOCCERDATA_ERROR_START\n"
+        "SOCCERDATA_ERROR_START\\n"
         + json.dumps(error_payload, default=str)
-        + "\nSOCCERDATA_ERROR_END\n"
+        + "\\nSOCCERDATA_ERROR_END\\n"
     )
     sys.exit(1)
 """
@@ -787,9 +787,9 @@ except Exception as exc:
         "http_status": http_status,
     }}
     sys.stdout.write(
-        "SOCCERDATA_ERROR_START\n"
+        "SOCCERDATA_ERROR_START\\n"
         + json.dumps(error_payload, default=str)
-        + "\nSOCCERDATA_ERROR_END\n"
+        + "\\nSOCCERDATA_ERROR_END\\n"
     )
     sys.exit(1)
 """
@@ -1310,9 +1310,9 @@ except Exception as exc:
         "http_status": http_status,
     }
     sys.stdout.write(
-        "SOCCERDATA_ERROR_START\n"
+        "SOCCERDATA_ERROR_START\\n"
         + json.dumps(error_payload, default=str)
-        + "\nSOCCERDATA_ERROR_END\n"
+        + "\\nSOCCERDATA_ERROR_END\\n"
     )
     sys.exit(1)
 """.replace("__LEAGUE_CODE__", repr(league_code)).replace("__SOFASCORE_SEASON__", repr(sofascore_season))

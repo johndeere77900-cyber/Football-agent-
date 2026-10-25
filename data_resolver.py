@@ -3117,9 +3117,15 @@ class DataResolver:
             league_id=league_id,
         )
 
-        exp_pages = primary_page.get("expected_pages", 1) if primary_page else 1
+        exp_pages = 1
+        if isinstance(primary_page, dict):
+            raw_pages = primary_page.get("expected_pages")
+            if isinstance(raw_pages, int) and not isinstance(raw_pages, bool) and raw_pages > 0:
+                exp_pages = raw_pages
 
-        if af_coverage["verified"] is True or (primary_page and page < exp_pages):
+        has_more_pages = isinstance(primary_page, dict) and isinstance(page, int) and page < exp_pages
+
+        if af_coverage["verified"] is True or has_more_pages:
             contribs = [
                 p for p, count in [
                     ("football_data_csv", len(csv_fixtures)),
