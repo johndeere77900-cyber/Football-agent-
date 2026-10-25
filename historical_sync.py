@@ -618,12 +618,14 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
         if not is_valid:
             return False
 
-        src = (
-            game.get("_storage_source")
-            or game.get("source")
-            or (game.get("provider_provenance", {}).get("provider") if isinstance(game.get("provider_provenance"), dict) else None)
-        )
-        if not src or not isinstance(src, str) or not src.strip():
+        if "_storage_source" in game:
+            src = game.get("_storage_source")
+        else:
+            src = game.get("source")
+            if not src and isinstance(game.get("provider_provenance"), dict):
+                src = game["provider_provenance"].get("provider")
+
+        if not isinstance(src, str) or not src.strip():
             return False
 
         gid = game.get("id") or game.get("game_id")
@@ -1237,13 +1239,38 @@ def verify_persisted_historical_datasets(
             seen_ids = set()
             dates = []
             for r in records:
-                gid = r.get("id") or r.get("game_id")
-                src = r.get("_storage_source") or r.get("source") or r.get("provider_provenance", {}).get("provider", "unknown")
-                if gid:
-                    key = (src, gid)
-                    if key in seen_ids:
-                        issues.append(f"duplicate_game_id_{gid}")
-                    seen_ids.add(key)
+                if "_storage_source" in r:
+                    src = r.get("_storage_source")
+                else:
+                    src = r.get("source")
+                    if not src and isinstance(r.get("provider_provenance"), dict):
+                        src = r["provider_provenance"].get("provider")
+
+                if not isinstance(src, str) or not src.strip():
+                    issues.append("invalid_or_missing_source")
+                    src = "invalid"
+
+                gid_raw = r.get("id") or r.get("game_id")
+                gid_int = None
+                if gid_raw is not None and not isinstance(gid_raw, bool):
+                    try:
+                        parsed_gid = int(gid_raw)
+                        if parsed_gid > 0:
+                            gid_int = parsed_gid
+                    except (ValueError, TypeError):
+                        pass
+
+                if gid_int is None:
+                    issues.append(f"invalid_or_missing_game_id_{gid_raw}")
+                    gid_val = f"invalid_{gid_raw}"
+                else:
+                    gid_val = gid_int
+
+                key = (src.strip() if isinstance(src, str) else str(src), gid_val)
+                if key in seen_ids:
+                    issues.append(f"duplicate_game_id_{gid_val}")
+                seen_ids.add(key)
+
                 d = r.get("date")
                 if d:
                     dates.append(str(d)[:10])
