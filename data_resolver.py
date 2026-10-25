@@ -500,25 +500,6 @@ def _get_authoritative_historical_team_ids(
                     if validated:
                         return validated
 
-            # Derive trusted season-specific team universe from stored finished DB fixtures if available
-            stored_fixtures = storage.get_historical_fixtures(league_id, season)
-            if stored_fixtures and isinstance(stored_fixtures, list):
-                rel_exp_count = get_expected_league_team_count(league_id, season)
-                db_teams = set()
-                for sf in stored_fixtures:
-                    if not isinstance(sf, dict):
-                        continue
-                    c_h = sf.get("canonical_home_id")
-                    c_a = sf.get("canonical_away_id")
-                    if c_h:
-                        db_teams.add(c_h)
-                    if c_a:
-                        db_teams.add(c_a)
-
-                if db_teams and (rel_exp_count is None or len(db_teams) == rel_exp_count):
-                    validated = _validate_and_canonicalize_team_manifest(list(db_teams), league_id, sport=sport)
-                    if validated:
-                        return validated
         except Exception as exc:
             logger.warning("Unable to obtain DB dataset team universe for league %s season %s: %s", league_id, season, exc)
 
@@ -2895,6 +2876,7 @@ class DataResolver:
         # 3. Secondary Route: API-Football -> football-data.org API
         secondary_failed = False
         secondary_quota_exhausted = False
+        secondary_access_denied = False
         primary_page = None
 
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -2910,11 +2892,16 @@ class DataResolver:
                 secondary_failed = True
                 secondary_quota_exhausted = True
                 logger.warning(f"DataResolver secondary route get_league_fixtures_page quota exhausted for league {league_id}: {exc}")
+            except api_football.APIFootballAccessDeniedError as exc:
+                secondary_failed = True
+                secondary_access_denied = True
+                logger.warning(f"DataResolver secondary route subscription/permission denial for league {league_id} season {season}: {exc}")
             except Exception as exc:
                 secondary_failed = True
                 msg = str(exc).lower()
                 is_denial = any(kw in msg for kw in ["subscription", "plan", "forbidden", "unauthorized", "403", "restricted", "access denied"])
                 if is_denial:
+                    secondary_access_denied = True
                     logger.warning(f"DataResolver secondary route subscription/permission denial for league {league_id} season {season}: {exc}")
                 else:
                     logger.warning(f"DataResolver secondary route get_league_fixtures_page failed for league {league_id}: {exc}")
@@ -2997,11 +2984,11 @@ class DataResolver:
                 "secondary_quota_exhausted": secondary_quota_exhausted,
             }
 
-        # Secondary 3b: football-data.org API
+        # Secondary 3b: football-data.org API (Skip if API-Football returned a non-retryable access/subscription denial unless independent comp_code exists and is not denied)
         fd_matches = []
         fd_meta = {}
         comp_code = LEAGUE_TO_FD_CODE.get(league_id)
-        if page == 1 and comp_code:
+        if page == 1 and comp_code and not secondary_access_denied:
             try:
                 fd_res = football_data_api.get_competition_matches(comp_code, season=season)
                 if isinstance(fd_res, dict):
@@ -3106,6 +3093,7 @@ class DataResolver:
             "provider_metadata": final_provider_metadata,
             "secondary_failed": secondary_failed,
             "secondary_quota_exhausted": secondary_quota_exhausted,
+            "secondary_access_denied": secondary_access_denied,
         }
 
     def check_competition_coverage(self, league_id, season, max_budget=None):

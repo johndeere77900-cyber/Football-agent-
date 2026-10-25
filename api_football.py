@@ -37,6 +37,10 @@ class APIFootballQuotaExhaustedError(APIFootballError):
     """Raised when API-Football daily request quota is exhausted."""
 
 
+class APIFootballAccessDeniedError(APIFootballError):
+    """Raised when API-Football request is denied due to plan, subscription, or permission restrictions (e.g. HTTP 403)."""
+
+
 # ============================================================================
 # API / CACHE CONFIGURATION
 # ============================================================================
@@ -367,14 +371,28 @@ def _get(endpoint, params, max_budget=None, request_type="historical"):
                 f"API-Football returned a non-object JSON response for /{endpoint}."
             )
 
+        if status == 403:
+            errors = data.get("errors") if isinstance(data, dict) else None
+            raise APIFootballAccessDeniedError(
+                f"API-Football access denied (HTTP 403): errors={errors!r}"
+            )
+
         if not response.ok:
             errors = data.get("errors")
+            msg = str(errors).lower() if errors else ""
+            if any(kw in msg for kw in ["subscription", "plan", "forbidden", "unauthorized", "access denied", "restricted"]):
+                raise APIFootballAccessDeniedError(
+                    f"API-Football access denied (HTTP {status}): errors={errors!r}"
+                )
             raise APIFootballError(
                 f"API-Football HTTP error: {status}; errors={errors!r}"
             )
 
         api_errors = data.get("errors")
         if api_errors:
+            msg = str(api_errors).lower()
+            if any(kw in msg for kw in ["subscription", "plan", "forbidden", "unauthorized", "access denied", "restricted"]):
+                raise APIFootballAccessDeniedError(f"API-Football access denied: {api_errors!r}")
             raise APIFootballError(f"API-Football API error: {api_errors!r}")
 
         # Capture defensive rate limit information from headers if available
