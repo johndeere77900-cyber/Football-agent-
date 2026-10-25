@@ -29,6 +29,7 @@ Provider Identity & Field-Level Reconciliation:
 - Disputed critical fields (e.g. score mismatch) are recorded as disputed rather than silently overwritten.
 """
 
+import inspect
 import logging
 import time
 from datetime import datetime, timezone
@@ -785,11 +786,13 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     else:
         expected_team_count = len(expected_team_set)
 
-    expected_fixture_count = (
-        expected_team_count * (expected_team_count - 1)
-        if is_double_round_robin and expected_team_count > 0
-        else provider_metadata.get("expected_fixture_count")
-    )
+    exp_fix_meta = provider_metadata.get("expected_fixture_count")
+    if exp_fix_meta is not None:
+        expected_fixture_count = exp_fix_meta
+    elif is_double_round_robin and expected_team_count > 0:
+        expected_fixture_count = expected_team_count * (expected_team_count - 1)
+    else:
+        expected_fixture_count = None
 
     expected_matches_per_team = 2 * (expected_team_count - 1) if is_double_round_robin else None
     expected_home_away_per_team = expected_team_count - 1 if is_double_round_robin else None
@@ -1279,7 +1282,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
         }
-    elif distinct_fixture_count != expected_fixture_count or valid_fixture_count != expected_fixture_count:
+    elif expected_fixture_count is not None and (distinct_fixture_count != expected_fixture_count or valid_fixture_count != expected_fixture_count):
         res = {
             "verified": False,
             "reason": "fixture_count_mismatch",
@@ -1293,7 +1296,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
         }
-    else:
+    elif is_double_round_robin:
         for t_id in expected_team_set:
             counts = team_match_counts.get(t_id, {"home": 0, "away": 0, "total": 0})
             if (
@@ -2781,6 +2784,10 @@ class DataResolver:
         combined_fixtures = []
 
         # 2. Primary Route: Direct CSV -> SoccerData MatchHistory -> SoccerData Sofascore
+        # Enforce one shared monotonic deadline across all primary-provider attempts
+        primary_deadline_seconds = getattr(config, "PRIMARY_PROVIDER_DEADLINE_SECONDS", 60.0)
+        t_primary_start = time.monotonic()
+
         csv_fixtures = []
         sd_mh_fixtures = []
         sd_mh_meta = {}
@@ -2789,12 +2796,14 @@ class DataResolver:
 
         if page == 1:
             # 2a. Direct CSV - Attempt direct downloadable CSV BEFORE network-dependent team-universe discovery
-            try:
-                csv_fixtures = _fetch_direct_csv_league_fixtures(
-                    league_id, season, max_budget=max_budget
-                )
-            except Exception as csv_exc:
-                logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
+            rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
+            if rem_time > 0:
+                try:
+                    csv_fixtures = _fetch_direct_csv_league_fixtures(
+                        league_id, season, timeout=rem_time, max_budget=max_budget
+                    )
+                except Exception as csv_exc:
+                    logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
 
             if completed_only and csv_fixtures:
                 csv_fixtures = [
@@ -2839,12 +2848,21 @@ class DataResolver:
                 }
 
             # 2b. SoccerData MatchHistory
+            rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
-            if sd_mh_code:
+            if sd_mh_code and rem_time > 0:
                 t_mh_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData MatchHistory fetch starting for league_id={league_id}, season={season}, sd_code={sd_mh_code}")
                 try:
-                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(sd_mh_code, season, league_id=league_id)
+                    sig_mh = inspect.signature(soccerdata_provider.get_match_history_games)
+                    if "timeout_seconds" in sig_mh.parameters:
+                        sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(
+                            sd_mh_code, season, timeout_seconds=rem_time, league_id=league_id
+                        )
+                    else:
+                        sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(
+                            sd_mh_code, season, league_id=league_id
+                        )
                     t_mh_elapsed = time.perf_counter() - t_mh_start
                     logger.info(f"[TIMING COMPLETE] SoccerData MatchHistory fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_mh_elapsed:.2f}s")
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
@@ -2853,6 +2871,8 @@ class DataResolver:
                 except Exception as sd_exc:
                     t_mh_elapsed = time.perf_counter() - t_mh_start
                     logger.warning(f"[TIMING FAILED] DataResolver MatchHistory primary route failed for league_id={league_id}, season={season}, elapsed={t_mh_elapsed:.2f}s: {sd_exc}")
+            elif sd_mh_code and rem_time <= 0:
+                logger.warning(f"Skipping SoccerData MatchHistory for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")
 
             if sd_mh_fixtures:
                 for sm in sd_mh_fixtures:
@@ -2901,12 +2921,21 @@ class DataResolver:
                 }
 
             # 2c. SoccerData Sofascore
+            rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
-            if sd_ss_code:
+            if sd_ss_code and rem_time > 0:
                 t_ss_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData Sofascore fetch starting for league_id={league_id}, season={season}, sd_code={sd_ss_code}")
                 try:
-                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(sd_ss_code, season, league_id=league_id)
+                    sig_ss = inspect.signature(soccerdata_provider.get_sofascore_historical_games)
+                    if "timeout_seconds" in sig_ss.parameters:
+                        sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(
+                            sd_ss_code, season, timeout_seconds=rem_time, league_id=league_id
+                        )
+                    else:
+                        sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(
+                            sd_ss_code, season, league_id=league_id
+                        )
                     t_ss_elapsed = time.perf_counter() - t_ss_start
                     logger.info(f"[TIMING COMPLETE] SoccerData Sofascore fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_ss_elapsed:.2f}s")
                     sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
@@ -2919,6 +2948,8 @@ class DataResolver:
                     t_ss_elapsed = time.perf_counter() - t_ss_start
                     sd_ss_meta = {"status": "SOURCE_FAILED", "error": str(sd_exc)}
                     logger.warning(f"[TIMING FAILED] DataResolver Sofascore primary route failed for league_id={league_id}, season={season}, elapsed={t_ss_elapsed:.2f}s: {sd_exc}")
+            elif sd_ss_code and rem_time <= 0:
+                logger.warning(f"Skipping SoccerData Sofascore for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")
 
             if sd_ss_fixtures:
                 for sm in sd_ss_fixtures:

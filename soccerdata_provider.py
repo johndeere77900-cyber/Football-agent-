@@ -398,8 +398,12 @@ def get_match_history_games(league_code, season, timeout_seconds=DEFAULT_SOCCERD
 
     Returns tuple: (status_code, matches_list, metadata)
     """
+    import time
     if not league_code:
         return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata_match_history"}
+
+    if timeout_seconds is None or timeout_seconds <= 0:
+        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": "Deadline expired before execution", "source": "soccerdata_match_history"}
 
     match_history_season = season
     if season is not None and str(season).isdigit() and len(str(season)) == 4:
@@ -441,14 +445,24 @@ except Exception as exc:
 
     last_error = None
     proc = None
+    start_time = time.monotonic()
 
     for attempt in range(1, max_retries + 1):
+        elapsed = time.monotonic() - start_time
+        remaining = timeout_seconds - elapsed
+        if remaining <= 0:
+            last_error = f"Deadline ({timeout_seconds}s) expired before attempt {attempt}"
+            logger.warning(f"SoccerData MatchHistory deadline expired before attempt {attempt}/{max_retries}")
+            return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_match_history"}
+
+        attempt_timeout = min(remaining, timeout_seconds)
+
         try:
             proc = subprocess.run(
                 [sys.executable, "-c", code_str],
                 capture_output=True,
                 text=True,
-                timeout=timeout_seconds,
+                timeout=attempt_timeout,
             )
             stdout_text = proc.stdout if proc and proc.stdout else ""
             start_marker = "SOCCERDATA_JSON_START"
@@ -609,8 +623,12 @@ def get_sofascore_historical_games(league_code, season, timeout_seconds=DEFAULT_
 
     Returns tuple: (status_code, matches_list, metadata)
     """
+    import time
     if not league_code:
         return "SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE", "source": "soccerdata_sofascore"}
+
+    if timeout_seconds is None or timeout_seconds <= 0:
+        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": "Deadline expired before execution", "source": "soccerdata_sofascore"}
 
     sofascore_season = _format_sofascore_season(season) if season is not None else season
 
@@ -868,14 +886,24 @@ except Exception as exc:
     last_error = None
     proc = None
     enrichment_error = None
+    start_time = time.monotonic()
 
     for attempt in range(1, max_retries + 1):
+        elapsed = time.monotonic() - start_time
+        remaining = timeout_seconds - elapsed
+        if remaining <= 0:
+            last_error = f"Deadline ({timeout_seconds}s) expired before attempt {attempt}"
+            logger.warning(f"SoccerData Sofascore deadline expired before attempt {attempt}/{max_retries}")
+            return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_sofascore"}
+
+        attempt_timeout = min(remaining, timeout_seconds)
+
         try:
             proc = subprocess.run(
                 [sys.executable, "-c", code_str],
                 capture_output=True,
                 text=True,
-                timeout=timeout_seconds,
+                timeout=attempt_timeout,
             )
             stdout_text = proc.stdout if proc and proc.stdout else ""
             start_marker = "SOCCERDATA_JSON_START"

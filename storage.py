@@ -549,7 +549,7 @@ def init_db():
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS historical_basketball_games (
-                        game_id BIGINT PRIMARY KEY,
+                        game_id BIGINT NOT NULL,
                         league_id BIGINT NOT NULL,
                         season INTEGER NOT NULL,
                         game_date TEXT NOT NULL,
@@ -562,8 +562,26 @@ def init_db():
                         away_points INTEGER,
                         raw_json JSONB NOT NULL,
                         source TEXT NOT NULL DEFAULT 'api_basketball',
-                        fetched_at TEXT NOT NULL
+                        fetched_at TEXT NOT NULL,
+                        PRIMARY KEY (source, game_id)
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint WHERE conname = 'historical_basketball_games_pkey'
+                        ) AND NOT EXISTS (
+                            SELECT 1 FROM pg_constraint c
+                            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                            WHERE c.conname = 'historical_basketball_games_pkey' AND a.attname = 'source'
+                        ) THEN
+                            ALTER TABLE historical_basketball_games DROP CONSTRAINT historical_basketball_games_pkey;
+                            ALTER TABLE historical_basketball_games ADD PRIMARY KEY (source, game_id);
+                        END IF;
+                    END $$;
                     """
                 )
                 cur.execute(
@@ -1094,7 +1112,7 @@ def init_db():
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS historical_basketball_games (
-                    game_id INTEGER PRIMARY KEY,
+                    game_id INTEGER NOT NULL,
                     league_id INTEGER NOT NULL,
                     season INTEGER NOT NULL,
                     game_date TEXT NOT NULL,
@@ -1107,10 +1125,59 @@ def init_db():
                     away_points INTEGER,
                     raw_json TEXT NOT NULL,
                     source TEXT NOT NULL DEFAULT 'api_basketball',
-                    fetched_at TEXT NOT NULL
+                    fetched_at TEXT NOT NULL,
+                    PRIMARY KEY (source, game_id)
                 )
                 """
             )
+
+            hbg_info = conn.execute("PRAGMA table_info(historical_basketball_games)").fetchall()
+            hbg_pk_cols = [row[1] for row in hbg_info if row[5] > 0]
+            if hbg_pk_cols and "source" not in hbg_pk_cols:
+                try:
+                    conn.execute("ALTER TABLE historical_basketball_games RENAME TO historical_basketball_games_old")
+                    conn.execute(
+                        """
+                        CREATE TABLE historical_basketball_games (
+                            game_id INTEGER NOT NULL,
+                            league_id INTEGER NOT NULL,
+                            season INTEGER NOT NULL,
+                            game_date TEXT NOT NULL,
+                            status_short TEXT,
+                            home_team_id INTEGER,
+                            away_team_id INTEGER,
+                            home_team TEXT,
+                            away_team TEXT,
+                            home_points INTEGER,
+                            away_points INTEGER,
+                            raw_json TEXT NOT NULL,
+                            source TEXT NOT NULL DEFAULT 'api_basketball',
+                            fetched_at TEXT NOT NULL,
+                            PRIMARY KEY (source, game_id)
+                        )
+                        """
+                    )
+                    old_hbg_cols = {row[1] for row in conn.execute("PRAGMA table_info(historical_basketball_games_old)").fetchall()}
+                    src_expr = "COALESCE(source, 'api_basketball')" if "source" in old_hbg_cols else "'api_basketball'"
+
+                    conn.execute(
+                        f"""
+                        INSERT OR IGNORE INTO historical_basketball_games (
+                            game_id, league_id, season, game_date, status_short,
+                            home_team_id, away_team_id, home_team, away_team,
+                            home_points, away_points, raw_json, source, fetched_at
+                        )
+                        SELECT game_id, league_id, season, game_date, status_short,
+                               home_team_id, away_team_id, home_team, away_team,
+                               home_points, away_points, raw_json, {src_expr}, fetched_at
+                        FROM historical_basketball_games_old
+                        """
+                    )
+                    conn.execute("DROP TABLE historical_basketball_games_old")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_hist_basketball_league_season ON historical_basketball_games (league_id, season)"
             )
@@ -1411,20 +1478,41 @@ def validate_historical_basketball_game(item, target_league_id=None, target_seas
             if target_season is not None and str(p_season) != str(target_season):
                 return False, f"conflicting_season ({p_season} != {target_season})", None
 
-    status_short = item.get("status", {}).get("short") if isinstance(item.get("status"), dict) else None
-    scores_obj = item.get("scores")
+    status_obj = item.get("status")
+    status_short = None
+    status_long = None
+    status_completed_flag = False
+    if isinstance(status_obj, dict):
+        s_short = status_obj.get("short")
+        if isinstance(s_short, str):
+            status_short = s_short.upper().strip()
+        s_long = status_obj.get("long")
+        if isinstance(s_long, str):
+            status_long = s_long.upper().strip()
 
-    is_completed = status_short in ("FT", "AOT")
+        type_obj = status_obj.get("type")
+        if isinstance(type_obj, dict):
+            status_completed_flag = type_obj.get("completed") is True
+        elif isinstance(status_obj.get("completed"), bool):
+            status_completed_flag = status_obj.get("completed") is True
+
+    is_completed = (
+        status_completed_flag
+        or (status_short in ("FT", "AOT", "FINAL", "FINAL/OT"))
+        or (status_long in ("GAME FINISHED", "FINISHED", "FINAL", "AFTER OVER TIME"))
+    )
+
     if require_completed and not is_completed:
-        return False, f"game_not_completed (status={status_short})", None
+        return False, f"game_not_completed (status={status_short or status_long or 'UNKNOWN'})", None
 
+    scores_obj = item.get("scores")
     h_pts = None
     a_pts = None
     if isinstance(scores_obj, dict):
-        home_score = scores_obj.get("home", {})
-        away_score = scores_obj.get("away", {})
-        raw_h_pts = home_score.get("total") if isinstance(home_score, dict) else None
-        raw_a_pts = away_score.get("total") if isinstance(away_score, dict) else None
+        home_score = scores_obj.get("home")
+        away_score = scores_obj.get("away")
+        raw_h_pts = home_score.get("total") if isinstance(home_score, dict) else home_score
+        raw_a_pts = away_score.get("total") if isinstance(away_score, dict) else away_score
 
         if raw_h_pts is not None:
             h_pts = _parse_strict_int(raw_h_pts)
@@ -1438,7 +1526,7 @@ def validate_historical_basketball_game(item, target_league_id=None, target_seas
 
     if is_completed:
         if h_pts is None or a_pts is None:
-            return False, f"completed_game_missing_points (status={status_short})", None
+            return False, f"completed_game_missing_points (status={status_short or status_long})", None
 
     normalized = dict(item)
     normalized["id"] = gid
@@ -1504,8 +1592,10 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
                     h_name = teams.get("home", {}).get("name", "")
                     a_name = teams.get("away", {}).get("name", "")
                     scores = item.get("scores", {})
-                    h_pts = scores.get("home", {}).get("total") if isinstance(scores.get("home"), dict) else None
-                    a_pts = scores.get("away", {}).get("total") if isinstance(scores.get("away"), dict) else None
+                    home_score = scores.get("home") if isinstance(scores, dict) else None
+                    away_score = scores.get("away") if isinstance(scores, dict) else None
+                    h_pts = home_score.get("total") if isinstance(home_score, dict) else home_score
+                    a_pts = away_score.get("total") if isinstance(away_score, dict) else away_score
 
                     raw_json_str = _json_dumps(item, "raw_json")
 
@@ -1517,7 +1607,7 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
                             home_points, away_points, raw_json, source, fetched_at
                         )
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (game_id) DO NOTHING
+                        ON CONFLICT (source, game_id) DO NOTHING
                         """,
                         (
                             gid, league_id, season, gdate, status,
@@ -1539,8 +1629,10 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
                 h_name = teams.get("home", {}).get("name", "")
                 a_name = teams.get("away", {}).get("name", "")
                 scores = item.get("scores", {})
-                h_pts = scores.get("home", {}).get("total") if isinstance(scores.get("home"), dict) else None
-                a_pts = scores.get("away", {}).get("total") if isinstance(scores.get("away"), dict) else None
+                home_score = scores.get("home") if isinstance(scores, dict) else None
+                away_score = scores.get("away") if isinstance(scores, dict) else None
+                h_pts = home_score.get("total") if isinstance(home_score, dict) else home_score
+                a_pts = away_score.get("total") if isinstance(away_score, dict) else away_score
 
                 raw_json_str = _json_dumps(item, "raw_json")
 

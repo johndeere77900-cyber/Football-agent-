@@ -119,13 +119,11 @@ def fetch_espn_nba_season_games(
                 raw_eid = int(eid_raw)
                 if raw_eid <= 0:
                     continue
-                # Deterministic provider-scoped integer namespace offset (2,000,000,000 + raw_eid)
-                # Stores safely in signed BIGINT / SQLite 64-bit integer space without colliding with API-Basketball game IDs
-                game_id = 2000000000 + raw_eid
+                game_id = raw_eid
             except (ValueError, TypeError):
                 continue
 
-            if raw_eid in seen_event_ids or game_id in seen_event_ids:
+            if game_id in seen_event_ids:
                 continue
 
             iso_date = ev.get("date")
