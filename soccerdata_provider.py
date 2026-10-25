@@ -1051,13 +1051,32 @@ try:
         team_id_map = {{}}
         enrichment_error = None
 
-        try:
-            df_seasons = ss.read_seasons()
+        def _has_valid_provider_team_id(val):
+            if val is None or isinstance(val, bool):
+                return False
+            try:
+                s = str(val).strip()
+                return s.isdigit() and int(s) > 0
+            except (ValueError, TypeError):
+                return False
 
-            if df_seasons is None or getattr(df_seasons, "empty", True):
-                raise RuntimeError("Sofascore season metadata unavailable")
+        def _rec_has_real_team_ids(rec):
+            if not isinstance(rec, dict):
+                return False
+            h = rec.get("home_team_id") or rec.get("home_id")
+            a = rec.get("away_team_id") or rec.get("away_id")
+            return _has_valid_provider_team_id(h) and _has_valid_provider_team_id(a)
 
-            def _requested_start_year(value):
+        schedule_has_real_team_ids = bool(records) and all(_rec_has_real_team_ids(r) for r in records)
+
+        if not schedule_has_real_team_ids:
+            try:
+                df_seasons = ss.read_seasons()
+
+                if df_seasons is None or getattr(df_seasons, "empty", True):
+                    raise RuntimeError("Sofascore season metadata unavailable")
+
+                def _requested_start_year(value):
                 raw = str(value).strip()
 
                 if not raw or raw.lower() in {"none", "nan"}:
@@ -1147,57 +1166,68 @@ try:
 
             requested_season = _requested_start_year(req_season_val)
 
-            for (lkey, skey), s_row in df_seasons.iterrows():
-                # Only enrich teams for the requested historical season.
-                season_key = _provider_season_start_year(skey)
+                max_requests = 10
+                request_count = 0
 
-                if requested_season is None or season_key is None:
-                    continue
+                for (lkey, skey), s_row in df_seasons.iterrows():
+                    if request_count >= max_requests:
+                        break
 
-                if season_key != requested_season:
-                    continue
+                    # Only enrich teams for the requested historical season.
+                    season_key = _provider_season_start_year(skey)
 
-                u_league_id = s_row.get("league_id")
-                u_season_id = s_row.get("season_id")
-
-                if u_league_id is None or u_season_id is None:
-                    continue
-
-                url1 = (
-                    f"https://api.sofascore.com/api/v1/"
-                    f"unique-tournament/{{u_league_id}}/season/{{u_season_id}}/rounds"
-                )
-
-                fpath1 = ss.data_dir / f"matches/rounds_{{lkey}}_{{skey}}.json"
-                ss.get(url1, fpath1)
-
-                if not fpath1.exists():
-                    continue
-
-                with open(fpath1, "r", encoding="utf-8") as fp1:
-                    season_data = json.load(fp1)
-
-                for r_info in season_data.get("rounds", []):
-                    r_num = r_info.get("round")
-
-                    if r_num is None:
+                    if requested_season is None or season_key is None:
                         continue
 
-                    url2 = (
+                    if season_key != requested_season:
+                        continue
+
+                    u_league_id = s_row.get("league_id")
+                    u_season_id = s_row.get("season_id")
+
+                    if u_league_id is None or u_season_id is None:
+                        continue
+
+                    url1 = (
                         f"https://api.sofascore.com/api/v1/"
-                        f"unique-tournament/{{u_league_id}}/season/{{u_season_id}}"
-                        f"/events/round/{{r_num}}"
+                        f"unique-tournament/{{u_league_id}}/season/{{u_season_id}}/rounds"
                     )
 
-                    fpath2 = (
-                        ss.data_dir
-                        / f"matches/round_matches_{{lkey}}_{{skey}}_{{r_num}}.json"
-                    )
+                    fpath1 = ss.data_dir / f"matches/rounds_{{lkey}}_{{skey}}.json"
+                    ss.get(url1, fpath1)
+                    request_count += 1
 
-                    ss.get(url2, fpath2)
-
-                    if not fpath2.exists():
+                    if not fpath1.exists():
                         continue
+
+                    with open(fpath1, "r", encoding="utf-8") as fp1:
+                        season_data = json.load(fp1)
+
+                    for r_info in season_data.get("rounds", []):
+                        if request_count >= max_requests:
+                            break
+
+                        r_num = r_info.get("round")
+
+                        if r_num is None:
+                            continue
+
+                        url2 = (
+                            f"https://api.sofascore.com/api/v1/"
+                            f"unique-tournament/{{u_league_id}}/season/{{u_season_id}}"
+                            f"/events/round/{{r_num}}"
+                        )
+
+                        fpath2 = (
+                            ss.data_dir
+                            / f"matches/round_matches_{{lkey}}_{{skey}}_{{r_num}}.json"
+                        )
+
+                        ss.get(url2, fpath2)
+                        request_count += 1
+
+                        if not fpath2.exists():
+                            continue
 
                     with open(fpath2, "r", encoding="utf-8") as fp2:
                         m_data = json.load(fp2)
@@ -1225,8 +1255,8 @@ try:
 
                         team_id_map[str(gid_int)] = (hid_int, aid_int)
 
-        except Exception as exc:
-            enrichment_error = str(exc)
+            except Exception as exc:
+                enrichment_error = str(exc)
 
         # Attach only REAL Sofascore provider team IDs.
         for rec in records:

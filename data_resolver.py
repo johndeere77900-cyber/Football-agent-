@@ -1210,7 +1210,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         unexpected_team_ids = set()
 
     res = None
-    if len(participating_teams) != expected_team_count or missing_team_ids or unexpected_team_ids or not expected_team_set:
+    if len(participating_teams) != expected_team_count or missing_team_ids or unexpected_team_ids:
         res = {
             "verified": False,
             "reason": "team_universe_mismatch" if expected_team_set else "authoritative_team_universe_unavailable",
@@ -1239,7 +1239,8 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "expected_fixture_count": expected_fixture_count,
         }
     elif is_double_round_robin:
-        for t_id in expected_team_set:
+        check_teams = expected_team_set if expected_team_set else participating_teams
+        for t_id in check_teams:
             counts = team_match_counts.get(t_id, {"home": 0, "away": 0, "total": 0})
             if (
                 counts["home"] != expected_home_away_per_team
@@ -2825,14 +2826,20 @@ class DataResolver:
 
             if sd_fb_fixtures:
                 for sm in sd_fb_fixtures:
-                    matching = [cm for cm in combined_fixtures if _strict_fixture_match(cm, sm)]
+                    is_valid, _, norm_sm = storage.validate_historical_fixture(
+                        sm, target_league_id=league_id, target_season=season, require_completed=completed_only
+                    )
+                    if not is_valid:
+                        continue
+                    candidate = norm_sm or sm
+                    matching = [cm for cm in combined_fixtures if _strict_fixture_match(cm, candidate)]
                     if matching:
                         idx = combined_fixtures.index(matching[0])
-                        reconciled_rec = reconcile_fixture_records([matching[0], sm])
+                        reconciled_rec = reconcile_fixture_records([matching[0], candidate])
                         if reconciled_rec:
                             combined_fixtures[idx] = reconciled_rec
                     else:
-                        combined_fixtures.append(sm)
+                        combined_fixtures.append(candidate)
 
             fb_coverage = _validate_historical_structural_coverage(
                 combined_fixtures,
