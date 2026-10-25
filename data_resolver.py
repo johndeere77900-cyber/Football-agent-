@@ -1210,7 +1210,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         unexpected_team_ids = set()
 
     res = None
-    if len(participating_teams) != expected_team_count or missing_team_ids or unexpected_team_ids:
+    if len(participating_teams) != expected_team_count or missing_team_ids or unexpected_team_ids or not expected_team_set:
         res = {
             "verified": False,
             "reason": "team_universe_mismatch" if expected_team_set else "authoritative_team_universe_unavailable",

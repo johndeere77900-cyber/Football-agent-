@@ -1007,21 +1007,21 @@ def get_sofascore_historical_games(league_code, season, timeout_seconds=DEFAULT_
 
     sofascore_season = _format_sofascore_season(season) if season is not None else season
 
-    code_str = f"""
+    code_str = """
 import json, sys
 try:
     import soccerdata as sd
     import soccerdata._config as cfg
 
-    custom_leagues = {{
-        'INT-Champions League': {{'Sofascore': 'UEFA Champions League'}},
-        'INT-Europa League': {{'Sofascore': 'UEFA Europa League'}},
-        'INT-Nations League': {{'Sofascore': 'UEFA Nations League'}},
-        'INT-World Cup': {{'Sofascore': 'World Cup'}},
-        'INT-European Championship': {{'Sofascore': 'EURO'}},
-        'NED-Eredivisie': {{'Sofascore': 'Eredivisie'}},
-        'POR-Primeira Liga': {{'Sofascore': 'Liga Portugal'}},
-    }}
+    custom_leagues = {
+        'INT-Champions League': {'Sofascore': 'UEFA Champions League'},
+        'INT-Europa League': {'Sofascore': 'UEFA Europa League'},
+        'INT-Nations League': {'Sofascore': 'UEFA Nations League'},
+        'INT-World Cup': {'Sofascore': 'World Cup'},
+        'INT-European Championship': {'Sofascore': 'EURO'},
+        'NED-Eredivisie': {'Sofascore': 'Eredivisie'},
+        'POR-Primeira Liga': {'Sofascore': 'Liga Portugal'},
+    }
     for k, v in custom_leagues.items():
         if k not in cfg.LEAGUE_DICT:
             cfg.LEAGUE_DICT[k] = v
@@ -1031,14 +1031,14 @@ try:
     if hasattr(sd.Sofascore, '_all_leagues_dict'):
         delattr(sd.Sofascore, '_all_leagues_dict')
 
-    ss = sd.Sofascore(leagues={repr(league_code)}, seasons={repr(sofascore_season)})
+    ss = sd.Sofascore(leagues=__LEAGUE_CODE__, seasons=__SOFASCORE_SEASON__)
     df = ss.read_schedule()
     if df is None or getattr(df, 'empty', True):
-        output_payload = {{
+        output_payload = {
             "records": [],
             "team_id_map_size": 0,
             "enrichment_error": None,
-        }}
+        }
         print(
             "SOCCERDATA_JSON_START\\n"
             + json.dumps(output_payload)
@@ -1048,7 +1048,7 @@ try:
         df_reset = df.reset_index() if hasattr(df, 'reset_index') else df
         records = df_reset.to_dict(orient='records')
 
-        team_id_map = {{}}
+        team_id_map = {}
         enrichment_error = None
 
         def _has_valid_provider_team_id(val):
@@ -1077,100 +1077,101 @@ try:
                     raise RuntimeError("Sofascore season metadata unavailable")
 
                 def _requested_start_year(value):
-                raw = str(value).strip()
+                    raw = str(value).strip()
 
-                if not raw or raw.lower() in {"none", "nan"}:
-                    return None
+                    if not raw or raw.lower() in {"none", "nan"}:
+                        return None
 
-                # Requested seasons are normalized before being passed
-                # to SoccerData, e.g. "2021-22".
-                if "-" in raw or "/" in raw:
-                    separator = "-" if "-" in raw else "/"
-                    parts = [part.strip() for part in raw.split(separator)]
+                    # Requested seasons are normalized before being passed
+                    # to SoccerData, e.g. "2021-22".
+                    if "-" in raw or "/" in raw:
+                        separator = "-" if "-" in raw else "/"
+                        parts = [part.strip() for part in raw.split(separator)]
 
-                    if len(parts) == 2 and len(parts[0]) == 4 and parts[0].isdigit():
-                        start_year = int(parts[0])
-                        if 1900 <= start_year <= 2100:
-                            return start_year
+                        if len(parts) == 2 and len(parts[0]) == 4 and parts[0].isdigit():
+                            start_year = int(parts[0])
+                            if 1900 <= start_year <= 2100:
+                                return start_year
 
-                    return None
+                        return None
 
-                if not raw.isdigit():
-                    return None
+                    if not raw.isdigit():
+                        return None
 
-                if len(raw) == 4:
-                    number = int(raw)
+                    if len(raw) == 4:
+                        number = int(raw)
 
-                    # A four-digit requested calendar/start year is literal.
-                    if 1900 <= number <= 2100:
-                        return number
+                        # A four-digit requested calendar/start year is literal.
+                        if 1900 <= number <= 2100:
+                            return number
 
-                    # Compact consecutive season, e.g. 2122 -> 2021-22.
-                    first_two = int(raw[:2])
-                    last_two = int(raw[2:])
+                        # Compact consecutive season, e.g. 2122 -> 2021-22.
+                        first_two = int(raw[:2])
+                        last_two = int(raw[2:])
 
-                    if last_two == (first_two + 1) % 100:
-                        return 2000 + first_two
+                        if last_two == (first_two + 1) % 100:
+                            return 2000 + first_two
 
-                    return None
+                        return None
 
-                if len(raw) == 2:
-                    return 2000 + int(raw)
-
-                return None
-
-            def _provider_season_start_year(value):
-                raw = str(value).strip()
-
-                if not raw or raw.lower() in {"none", "nan"}:
-                    return None
-
-                # Provider metadata can contain an explicit season range.
-                if "-" in raw or "/" in raw:
-                    separator = "-" if "-" in raw else "/"
-                    parts = [part.strip() for part in raw.split(separator)]
-
-                    if len(parts) == 2 and len(parts[0]) == 4 and parts[0].isdigit():
-                        start_year = int(parts[0])
-                        if 1900 <= start_year <= 2100:
-                            return start_year
+                    if len(raw) == 2:
+                        return 2000 + int(raw)
 
                     return None
 
-                if not raw.isdigit():
+                def _provider_season_start_year(value):
+                    raw = str(value).strip()
+
+                    if not raw or raw.lower() in {"none", "nan"}:
+                        return None
+
+                    # Provider metadata can contain an explicit season range.
+                    if "-" in raw or "/" in raw:
+                        separator = "-" if "-" in raw else "/"
+                        parts = [part.strip() for part in raw.split(separator)]
+
+                        if len(parts) == 2 and len(parts[0]) == 4 and parts[0].isdigit():
+                            start_year = int(parts[0])
+                            if 1900 <= start_year <= 2100:
+                                return start_year
+
+                        return None
+
+                    if not raw.isdigit():
+                        return None
+
+                    if len(raw) == 4:
+                        number = int(raw)
+
+                        # Preserve literal calendar/start years before compact season keys.
+                        if 1900 <= number <= 2100:
+                            return number
+
+                        # Provider compact season key, e.g. 2122 -> 2021-22.
+                        first_two = int(raw[:2])
+                        last_two = int(raw[2:])
+
+                        if last_two == (first_two + 1) % 100:
+                            return 2000 + first_two
+
+                        return None
+
+                    if len(raw) == 2:
+                        return 2000 + int(raw)
+
                     return None
 
-                if len(raw) == 4:
-                    number = int(raw)
+                # Compare against the same normalized season sent to SoccerData.
+                req_season_val = __SOFASCORE_SEASON__
 
-                    # Preserve literal calendar/start years before compact season keys.
-                    if 1900 <= number <= 2100:
-                        return number
-
-                    # Provider compact season key, e.g. 2122 -> 2021-22.
-                    first_two = int(raw[:2])
-                    last_two = int(raw[2:])
-
-                    if last_two == (first_two + 1) % 100:
-                        return 2000 + first_two
-
-                    return None
-
-                if len(raw) == 2:
-                    return 2000 + int(raw)
-
-                return None
-
-            # Compare against the same normalized season sent to SoccerData.
-            req_season_val = {repr(sofascore_season)}
-
-            requested_season = _requested_start_year(req_season_val)
+                requested_season = _requested_start_year(req_season_val)
 
                 max_requests = 10
                 request_count = 0
 
                 for (lkey, skey), s_row in df_seasons.iterrows():
                     if request_count >= max_requests:
+                        enrichment_error = "Request bound reached prior to complete round coverage"
                         break
 
                     # Only enrich teams for the requested historical season.
@@ -1190,10 +1191,10 @@ try:
 
                     url1 = (
                         f"https://api.sofascore.com/api/v1/"
-                        f"unique-tournament/{{u_league_id}}/season/{{u_season_id}}/rounds"
+                        f"unique-tournament/{u_league_id}/season/{u_season_id}/rounds"
                     )
 
-                    fpath1 = ss.data_dir / f"matches/rounds_{{lkey}}_{{skey}}.json"
+                    fpath1 = ss.data_dir / f"matches/rounds_{lkey}_{skey}.json"
                     ss.get(url1, fpath1)
                     request_count += 1
 
@@ -1205,6 +1206,7 @@ try:
 
                     for r_info in season_data.get("rounds", []):
                         if request_count >= max_requests:
+                            enrichment_error = "Request bound reached prior to complete round coverage"
                             break
 
                         r_num = r_info.get("round")
@@ -1214,13 +1216,13 @@ try:
 
                         url2 = (
                             f"https://api.sofascore.com/api/v1/"
-                            f"unique-tournament/{{u_league_id}}/season/{{u_season_id}}"
-                            f"/events/round/{{r_num}}"
+                            f"unique-tournament/{u_league_id}/season/{u_season_id}"
+                            f"/events/round/{r_num}"
                         )
 
                         fpath2 = (
                             ss.data_dir
-                            / f"matches/round_matches_{{lkey}}_{{skey}}_{{r_num}}.json"
+                            / f"matches/round_matches_{lkey}_{skey}_{r_num}.json"
                         )
 
                         ss.get(url2, fpath2)
@@ -1229,31 +1231,31 @@ try:
                         if not fpath2.exists():
                             continue
 
-                    with open(fpath2, "r", encoding="utf-8") as fp2:
-                        m_data = json.load(fp2)
+                        with open(fpath2, "r", encoding="utf-8") as fp2:
+                            m_data = json.load(fp2)
 
-                    for ev in m_data.get("events", []):
-                        gid = ev.get("id")
-                        home_team = ev.get("homeTeam") or {{}}
-                        away_team = ev.get("awayTeam") or {{}}
+                        for ev in m_data.get("events", []):
+                            gid = ev.get("id")
+                            home_team = ev.get("homeTeam") or {}
+                            away_team = ev.get("awayTeam") or {}
 
-                        hid = home_team.get("id")
-                        aid = away_team.get("id")
+                            hid = home_team.get("id")
+                            aid = away_team.get("id")
 
-                        if gid is None or hid is None or aid is None:
-                            continue
+                            if gid is None or hid is None or aid is None:
+                                continue
 
-                        try:
-                            gid_int = int(gid)
-                            hid_int = int(hid)
-                            aid_int = int(aid)
-                        except (ValueError, TypeError):
-                            continue
+                            try:
+                                gid_int = int(gid)
+                                hid_int = int(hid)
+                                aid_int = int(aid)
+                            except (ValueError, TypeError):
+                                continue
 
-                        if gid_int <= 0 or hid_int <= 0 or aid_int <= 0:
-                            continue
+                            if gid_int <= 0 or hid_int <= 0 or aid_int <= 0:
+                                continue
 
-                        team_id_map[str(gid_int)] = (hid_int, aid_int)
+                            team_id_map[str(gid_int)] = (hid_int, aid_int)
 
             except Exception as exc:
                 enrichment_error = str(exc)
@@ -1273,11 +1275,11 @@ try:
                 rec["home_team_id"] = team_ids[0]
                 rec["away_team_id"] = team_ids[1]
 
-        output_payload = {{
+        output_payload = {
             "records": records,
             "team_id_map_size": len(team_id_map),
             "enrichment_error": enrichment_error,
-        }}
+        }
         print(
             "SOCCERDATA_JSON_START\\n"
             + json.dumps(output_payload, default=str)
@@ -1302,18 +1304,18 @@ except Exception as exc:
     except (TypeError, ValueError):
         http_status = None
 
-    error_payload = {{
+    error_payload = {
         "error": str(exc),
         "error_type": type(exc).__name__,
         "http_status": http_status,
-    }}
+    }
     sys.stdout.write(
         "SOCCERDATA_ERROR_START\n"
         + json.dumps(error_payload, default=str)
         + "\nSOCCERDATA_ERROR_END\n"
     )
     sys.exit(1)
-"""
+""".replace("__LEAGUE_CODE__", repr(league_code)).replace("__SOFASCORE_SEASON__", repr(sofascore_season))
 
     last_error = None
     proc = None
