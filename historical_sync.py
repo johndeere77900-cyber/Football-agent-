@@ -714,46 +714,6 @@ def sync_historical_basketball_games(
     acquisition_failed = False
     last_error_reason = None
 
-    if initial_request_count >= historical_budget:
-        quota_budget_stopped = True
-        print(
-            f"Historical daily budget ceiling reached ({initial_request_count}/{historical_budget} basketball requests used today). Skipping API acquisition.",
-            flush=True,
-        )
-        final_count = storage.get_historical_basketball_game_count(league_id, season)
-        storage.mark_historical_dataset_incomplete(
-            league_id,
-            season,
-            fixture_count=final_count,
-            sport="basketball",
-            expected_pages=dataset_info.get("expected_pages", 0),
-            pages_completed=dataset_info.get("pages_completed", 0),
-            acquisition_complete=dataset_info.get("acquisition_complete", False),
-            enrichment_status=dataset_info.get("enrichment_status", "NONE"),
-            rejected_count=dataset_info.get("rejected_count", 0),
-            empty_pages_count=dataset_info.get("empty_pages_count", 0),
-            error_reason="quota_budget_exhausted_before_acquisition",
-        )
-        return {
-            "sport": "basketball",
-            "league_id": league_id,
-            "season": season,
-            "status": "INCOMPLETE",
-            "existing_before": existing_before,
-            "fixtures_received": 0,
-            "valid_fixtures": 0,
-            "duplicates_skipped": 0,
-            "newly_stored": 0,
-            "already_existing_skipped": 0,
-            "pages_completed": dataset_info.get("pages_completed", 0),
-            "expected_pages": dataset_info.get("expected_pages", 0),
-            "rejected_count": dataset_info.get("rejected_count", 0),
-            "empty_pages_count": dataset_info.get("empty_pages_count", 0),
-            "api_requests_consumed": 0,
-            "quota_budget_stopped": True,
-            "final_stored_count": final_count,
-        }
-
     games_received = []
     start_p = 1
     expected_pages = 0
@@ -767,72 +727,119 @@ def sync_historical_basketball_games(
     total_empty_pages_count = dataset_info.get("empty_pages_count", 0) if not refresh else 0
     all_rejection_reasons = {}
 
-    current_page = start_p
-    while True:
+    # 1. Primary Route: ESPN URL-based scoreboard (does not consume API-Sports quota)
+    if league_id == 12:
         try:
-            page_meta = basketball_api.get_league_games_page(
-                league_id, season, page=current_page, max_budget=historical_budget
-            )
-            page_games = page_meta.get("games", [])
-            page_expected = page_meta.get("expected_pages")
+            import espn_basketball_provider
+            espn_games = espn_basketball_provider.fetch_espn_nba_season_games(league_id, season)
+            if espn_games:
+                save_result = storage.save_historical_basketball_games(espn_games, league_id, season, source="espn_url")
+                all_stored_games = storage.get_historical_basketball_games(league_id, season)
+                updated_dataset_info = dict(dataset_info)
+                updated_dataset_info["expected_pages"] = 1
+                updated_dataset_info["pages_completed"] = 1
+                updated_dataset_info["rejected_count"] = save_result.get("rejected_count", 0)
+                if _validate_historical_basketball_dataset(all_stored_games, league_id, season, updated_dataset_info):
+                    games_received.extend(espn_games)
+                    total_valid_games += save_result.get("valid", 0)
+                    total_newly_stored += save_result.get("inserted", 0)
+                    total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
+                    total_rejected_count += save_result.get("rejected_count", 0)
 
-            if expected_pages == 0:
-                expected_pages = page_expected
-            elif page_expected != expected_pages:
-                acquisition_failed = True
-                last_error_reason = "pagination_metadata_mismatch"
-                print(
-                    f"Basketball pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
-                    flush=True,
-                )
-                break
+                    for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
+                        all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
 
-            if not page_games:
-                total_empty_pages_count += 1
-
-            games_received.extend(page_games)
-
-            save_result = storage.save_historical_basketball_games(page_games, league_id, season)
-            total_valid_games += save_result.get("valid", 0)
-            total_newly_stored += save_result.get("inserted", 0)
-            total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
-            total_rejected_count += save_result.get("rejected_count", 0)
-
-            for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
-                all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
-
-            pages_completed = current_page
-            current_stored_count = storage.get_historical_basketball_game_count(league_id, season)
-
-            if current_page >= expected_pages:
-                acquisition_complete = True
-
-            storage.mark_historical_dataset_incomplete(
-                league_id,
-                season,
-                fixture_count=current_stored_count,
-                sport="basketball",
-                expected_pages=expected_pages,
-                pages_completed=pages_completed,
-                acquisition_complete=acquisition_complete,
-                rejected_count=total_rejected_count,
-                empty_pages_count=total_empty_pages_count,
-                error_reason=last_error_reason,
-            )
-            if acquisition_complete or current_page >= expected_pages:
-                break
-            current_page += 1
-
-        except basketball_api.APIBasketballQuotaExhaustedError as exc:
-            quota_budget_stopped = True
-            last_error_reason = "quota_budget_exhausted_during_acquisition"
-            print(f"API Quota exhausted during basketball games fetch on page {current_page}: {exc}", flush=True)
-            break
+                    acquisition_complete = True
+                    expected_pages = 1
+                    pages_completed = 1
+                else:
+                    # Save acquired games as partial progress if validation fails
+                    games_received.extend(espn_games)
+                    total_valid_games += save_result.get("valid", 0)
+                    total_newly_stored += save_result.get("inserted", 0)
+                    total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
+                    total_rejected_count += save_result.get("rejected_count", 0)
+                    for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
+                        all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
         except Exception as exc:
-            acquisition_failed = True
-            last_error_reason = "api_error_during_acquisition"
-            print(f"API acquisition error during basketball games fetch on page {current_page}: {exc}", flush=True)
-            break
+            print(f"ESPN URL basketball acquisition route failed for league {league_id} season {season}: {exc}", flush=True)
+
+    # 2. Secondary Fallback Route: API-Sports Basketball API (only if primary route did not complete dataset)
+    if not acquisition_complete:
+        if initial_request_count >= historical_budget:
+            quota_budget_stopped = True
+            last_error_reason = "quota_budget_exhausted_before_acquisition"
+            print(
+                f"Historical daily budget ceiling reached ({initial_request_count}/{historical_budget} basketball requests used today). Skipping API-Sports fallback acquisition.",
+                flush=True,
+            )
+        else:
+            current_page = start_p
+            while True:
+                try:
+                    page_meta = basketball_api.get_league_games_page(
+                        league_id, season, page=current_page, max_budget=historical_budget
+                    )
+                    page_games = page_meta.get("games", [])
+                    page_expected = page_meta.get("expected_pages")
+
+                    if expected_pages == 0:
+                        expected_pages = page_expected
+                    elif page_expected != expected_pages:
+                        acquisition_failed = True
+                        last_error_reason = "pagination_metadata_mismatch"
+                        print(
+                            f"Basketball pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
+                            flush=True,
+                        )
+                        break
+
+                    if not page_games:
+                        total_empty_pages_count += 1
+
+                    games_received.extend(page_games)
+
+                    save_result = storage.save_historical_basketball_games(page_games, league_id, season)
+                    total_valid_games += save_result.get("valid", 0)
+                    total_newly_stored += save_result.get("inserted", 0)
+                    total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
+                    total_rejected_count += save_result.get("rejected_count", 0)
+
+                    for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
+                        all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
+
+                    pages_completed = current_page
+                    current_stored_count = storage.get_historical_basketball_game_count(league_id, season)
+
+                    if current_page >= expected_pages:
+                        acquisition_complete = True
+
+                    storage.mark_historical_dataset_incomplete(
+                        league_id,
+                        season,
+                        fixture_count=current_stored_count,
+                        sport="basketball",
+                        expected_pages=expected_pages,
+                        pages_completed=pages_completed,
+                        acquisition_complete=acquisition_complete,
+                        rejected_count=total_rejected_count,
+                        empty_pages_count=total_empty_pages_count,
+                        error_reason=last_error_reason,
+                    )
+                    if acquisition_complete or current_page >= expected_pages:
+                        break
+                    current_page += 1
+
+                except basketball_api.APIBasketballQuotaExhaustedError as exc:
+                    quota_budget_stopped = True
+                    last_error_reason = "quota_budget_exhausted_during_acquisition"
+                    print(f"API Quota exhausted during basketball games fetch on page {current_page}: {exc}", flush=True)
+                    break
+                except Exception as exc:
+                    acquisition_failed = True
+                    last_error_reason = "api_error_during_acquisition"
+                    print(f"API acquisition error during basketball games fetch on page {current_page}: {exc}", flush=True)
+                    break
 
     requests_after = storage.get_api_request_count("api_basketball", today_str, request_type="historical")
     total_consumed = requests_after - initial_request_count
@@ -891,6 +898,7 @@ def sync_historical_basketball_games(
             expected_pages=safe_exp_pages_b,
             pages_completed=safe_pages_comp_b,
             acquisition_complete=acquisition_complete,
+            enrichment_status=dataset_info.get("enrichment_status", "NONE"),
             rejected_count=safe_rejected_cnt_b,
             empty_pages_count=safe_empty_cnt_b,
             error_reason=last_error_reason,
