@@ -315,16 +315,19 @@ def sync_historical_fixtures(
             print(f"Primary acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
             break
 
+    cum_rejected_cnt = (dataset_info.get("rejected_count", 0) if not refresh else 0) + total_rejected_count
+    cum_empty_cnt = (dataset_info.get("empty_pages_count", 0) if not refresh else 0) + total_empty_pages_count
+
     if pages_completed > 0:
         safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
         safe_pages_comp = pages_completed
-        safe_rejected_cnt = total_rejected_count
-        safe_empty_cnt = total_empty_pages_count
+        safe_rejected_cnt = cum_rejected_cnt
+        safe_empty_cnt = cum_empty_cnt
     else:
         safe_exp_pages = dataset_info.get("expected_pages") or 1
         safe_pages_comp = dataset_info.get("pages_completed") or 1
-        safe_rejected_cnt = dataset_info.get("rejected_count") or 0
-        safe_empty_cnt = dataset_info.get("empty_pages_count") or 0
+        safe_rejected_cnt = cum_rejected_cnt
+        safe_empty_cnt = cum_empty_cnt
 
     stored_fixtures_all = storage.get_historical_fixtures(league_id, season)
     db_coverage_pre = data_resolver._validate_historical_structural_coverage(
@@ -544,7 +547,7 @@ def sync_historical_fixtures(
         "fixtures_received": len(fixtures_received),
         "valid_fixtures": valid_fixtures_count,
         "duplicates_skipped": duplicates_skipped,
-        "rejected_count": rejected_count,
+        "rejected_count": cum_rejected_cnt,
         "rejection_reasons": rejection_reasons,
         "newly_stored": newly_stored,
         "already_existing_skipped": already_existing_skipped,
@@ -598,7 +601,7 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
     """
     Validate persisted basketball games against basketball-specific completeness rules:
     - Non-empty game list matching count metadata.
-    - Game IDs present, valid, and unique.
+    - Source-scoped game identity (source, game_id) present, valid, and unique.
     - Requested league and season match.
     - Participating home and away teams valid and distinct.
     - Required game date, completed status, and valid scores present.
@@ -615,10 +618,12 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
         if not is_valid:
             return False
 
+        src = game.get("source") or game.get("provider_provenance", {}).get("provider", "unknown")
         gid = game.get("id")
-        if gid in seen_game_ids:
+        key = (src, gid)
+        if key in seen_game_ids:
             return False
-        seen_game_ids.add(gid)
+        seen_game_ids.add(key)
 
     manifest_count = dataset_info.get("fixture_count", 0) if isinstance(dataset_info, dict) else 0
     e_pages = dataset_info.get("expected_pages", 0) if isinstance(dataset_info, dict) else 0
@@ -704,7 +709,7 @@ def sync_historical_basketball_games(
     all_rejection_reasons = {}
 
     # 1. ESPN Primary Acquisition for NBA (league_id == 12)
-    if league_id == 12:
+    if league_id == 12 and getattr(config, "ENABLE_ESPN_BASKETBALL", False):
         try:
             espn_games, coverage_meta = espn_basketball_provider.fetch_espn_nba_season_games(league_id, season)
             if espn_games:
@@ -826,16 +831,19 @@ def sync_historical_basketball_games(
 
     final_stored_count = storage.get_historical_basketball_game_count(league_id, season)
 
+    cum_rejected_cnt_b = (dataset_info.get("rejected_count", 0) if not refresh else 0) + total_rejected_count
+    cum_empty_cnt_b = (dataset_info.get("empty_pages_count", 0) if not refresh else 0) + total_empty_pages_count
+
     if pages_completed > 0:
         safe_exp_pages_b = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
         safe_pages_comp_b = pages_completed
-        safe_rejected_cnt_b = total_rejected_count
-        safe_empty_cnt_b = total_empty_pages_count
+        safe_rejected_cnt_b = cum_rejected_cnt_b
+        safe_empty_cnt_b = cum_empty_cnt_b
     else:
         safe_exp_pages_b = dataset_info.get("expected_pages", 0)
         safe_pages_comp_b = dataset_info.get("pages_completed", 0)
-        safe_rejected_cnt_b = dataset_info.get("rejected_count", 0)
-        safe_empty_cnt_b = dataset_info.get("empty_pages_count", 0)
+        safe_rejected_cnt_b = cum_rejected_cnt_b
+        safe_empty_cnt_b = cum_empty_cnt_b
 
     stored_games_all = storage.get_historical_basketball_games(league_id, season)
     db_validation_passed = _validate_historical_basketball_dataset(
@@ -880,6 +888,7 @@ def sync_historical_basketball_games(
             expected_pages=safe_exp_pages_b,
             pages_completed=safe_pages_comp_b,
             acquisition_complete=acquisition_complete,
+            enrichment_status=dataset_info.get("enrichment_status", "NONE"),
             rejected_count=safe_rejected_cnt_b,
             empty_pages_count=safe_empty_cnt_b,
             error_reason=last_error_reason,
@@ -895,7 +904,7 @@ def sync_historical_basketball_games(
         "fixtures_received": len(games_received),
         "valid_fixtures": valid_count,
         "duplicates_skipped": duplicates_skipped,
-        "rejected_count": rejected_count,
+        "rejected_count": cum_rejected_cnt_b,
         "rejection_reasons": rejection_reasons,
         "newly_stored": newly_stored,
         "already_existing_skipped": already_existing_skipped,
@@ -1069,6 +1078,7 @@ def run_historical_queue(
     run_safe_preflight(seasons, queue_items)
 
     reports = []
+    quota_stopped_sports = set()
 
     print(
         f"Starting target historical acquisition queue ({len(queue_items)} datasets across seasons {seasons})...",
@@ -1079,6 +1089,22 @@ def run_historical_queue(
         sport = item["sport"]
         league_id = item["league_id"]
         season = item["season"]
+
+
+        if sport in quota_stopped_sports:
+            print(
+                f"Queue: Skipping {sport} league {league_id} season {season} due to earlier quota/budget exhaustion for {sport}.",
+                flush=True,
+            )
+            reports.append({
+                "sport": sport,
+                "league_id": league_id,
+                "season": season,
+                "status": "INCOMPLETE",
+                "api_requests_consumed": 0,
+                "quota_budget_stopped": True,
+            })
+            continue
 
         # Check coverage before making requests
         cov = check_acquisition_coverage(league_id, season, sport=sport)
@@ -1114,6 +1140,13 @@ def run_historical_queue(
                 season=season,
                 with_enrichment=with_enrichment,
                 refresh=refresh,
+            )
+
+        if report.get("quota_budget_stopped"):
+            quota_stopped_sports.add(sport)
+            print(
+                f"Queue: API quota/budget exhausted for {sport} during league {league_id} season {season}. {sport.capitalize()} acquisitions paused for this run.",
+                flush=True,
             )
 
         reports.append(report)

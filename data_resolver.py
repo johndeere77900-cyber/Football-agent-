@@ -785,11 +785,17 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     else:
         expected_team_count = len(expected_team_set)
 
-    expected_fixture_count = (
-        expected_team_count * (expected_team_count - 1)
-        if is_double_round_robin and expected_team_count > 0
-        else provider_metadata.get("expected_fixture_count")
-    )
+    exp_fix_meta = provider_metadata.get("expected_fixture_count")
+    if is_double_round_robin and expected_team_count > 0:
+        drr_expected = expected_team_count * (expected_team_count - 1)
+        if exp_fix_meta is not None:
+            expected_fixture_count = max(drr_expected, exp_fix_meta)
+        else:
+            expected_fixture_count = drr_expected
+    elif exp_fix_meta is not None:
+        expected_fixture_count = exp_fix_meta
+    else:
+        expected_fixture_count = None
 
     expected_matches_per_team = 2 * (expected_team_count - 1) if is_double_round_robin else None
     expected_home_away_per_team = expected_team_count - 1 if is_double_round_robin else None
@@ -1279,7 +1285,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
         }
-    elif distinct_fixture_count != expected_fixture_count or valid_fixture_count != expected_fixture_count:
+    elif expected_fixture_count is not None and (distinct_fixture_count != expected_fixture_count or valid_fixture_count != expected_fixture_count):
         res = {
             "verified": False,
             "reason": "fixture_count_mismatch",
@@ -1293,7 +1299,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
         }
-    else:
+    elif is_double_round_robin and expected_fixture_count == expected_team_count * (expected_team_count - 1):
         for t_id in expected_team_set:
             counts = team_match_counts.get(t_id, {"home": 0, "away": 0, "total": 0})
             if (
@@ -2797,7 +2803,7 @@ class DataResolver:
             if rem_time > 0:
                 try:
                     csv_fixtures = _fetch_direct_csv_league_fixtures(
-                        league_id, season, timeout=max(1, int(rem_time)), max_budget=max_budget
+                        league_id, season, timeout=rem_time, max_budget=max_budget
                     )
                 except Exception as csv_exc:
                     logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
@@ -2851,9 +2857,14 @@ class DataResolver:
                 t_mh_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData MatchHistory fetch starting for league_id={league_id}, season={season}, sd_code={sd_mh_code}")
                 try:
-                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(
-                        sd_mh_code, season, timeout_seconds=rem_time, league_id=league_id
-                    )
+                    try:
+                        sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(
+                            sd_mh_code, season, timeout_seconds=rem_time, league_id=league_id
+                        )
+                    except TypeError:
+                        sd_status, sd_games, sd_meta_res = soccerdata_provider.get_match_history_games(
+                            sd_mh_code, season, league_id=league_id
+                        )
                     t_mh_elapsed = time.perf_counter() - t_mh_start
                     logger.info(f"[TIMING COMPLETE] SoccerData MatchHistory fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_mh_elapsed:.2f}s")
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
@@ -2918,9 +2929,14 @@ class DataResolver:
                 t_ss_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData Sofascore fetch starting for league_id={league_id}, season={season}, sd_code={sd_ss_code}")
                 try:
-                    sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(
-                        sd_ss_code, season, timeout_seconds=rem_time, league_id=league_id
-                    )
+                    try:
+                        sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(
+                            sd_ss_code, season, timeout_seconds=rem_time, league_id=league_id
+                        )
+                    except TypeError:
+                        sd_status, sd_games, sd_meta_res = soccerdata_provider.get_sofascore_historical_games(
+                            sd_ss_code, season, league_id=league_id
+                        )
                     t_ss_elapsed = time.perf_counter() - t_ss_start
                     logger.info(f"[TIMING COMPLETE] SoccerData Sofascore fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_ss_elapsed:.2f}s")
                     sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}

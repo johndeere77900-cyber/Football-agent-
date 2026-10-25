@@ -453,9 +453,9 @@ except Exception as exc:
         if remaining <= 0:
             last_error = f"Deadline ({timeout_seconds}s) expired before attempt {attempt}"
             logger.warning(f"SoccerData MatchHistory deadline expired before attempt {attempt}/{max_retries}")
-            break
+            return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_match_history"}
 
-        attempt_timeout = max(1.0, min(remaining, timeout_seconds))
+        attempt_timeout = min(remaining, timeout_seconds)
 
         try:
             proc = subprocess.run(
@@ -894,9 +894,9 @@ except Exception as exc:
         if remaining <= 0:
             last_error = f"Deadline ({timeout_seconds}s) expired before attempt {attempt}"
             logger.warning(f"SoccerData Sofascore deadline expired before attempt {attempt}/{max_retries}")
-            break
+            return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_sofascore"}
 
-        attempt_timeout = max(1.0, min(remaining, timeout_seconds))
+        attempt_timeout = min(remaining, timeout_seconds)
 
         try:
             proc = subprocess.run(
