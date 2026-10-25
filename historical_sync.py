@@ -663,7 +663,7 @@ def sync_historical_basketball_games(
     existing_before = dataset_info["fixture_count"] or storage.get_historical_basketball_game_count(league_id, season)
 
     if current_status == "COMPLETE" and not refresh:
-        stored_games = storage.get_historical_basketball_games(league_id, season)
+        stored_games = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
         if _validate_historical_basketball_dataset(stored_games, league_id, season, dataset_info):
             print(f"Basketball dataset already COMPLETE and revalidated for league {league_id} season {season}; API acquisition skipped.", flush=True)
             return {
@@ -718,6 +718,7 @@ def sync_historical_basketball_games(
                     coverage_meta.get("months_attempted") == 9
                     and coverage_meta.get("months_failed") == 0
                     and coverage_meta.get("months_succeeded") == 9
+                    and coverage_meta.get("all_months_succeeded") is True
                 )
             if espn_games:
                 games_received.extend(espn_games)
@@ -737,7 +738,9 @@ def sync_historical_basketball_games(
     pages_completed = dataset_info.get("pages_completed", 0)
     acquisition_complete = False
 
-    stored_espn_check = storage.get_historical_basketball_games(league_id, season)
+    stored_espn_check = storage.get_historical_basketball_games(
+        league_id, season, source="espn_url", include_storage_source=True
+    )
     if espn_coverage_complete and stored_espn_check:
         dataset_eval_info = {
             "fixture_count": len(stored_espn_check),
@@ -856,7 +859,7 @@ def sync_historical_basketball_games(
         safe_rejected_cnt_b = cum_rejected_cnt_b
         safe_empty_cnt_b = cum_empty_cnt_b
 
-    stored_games_all = storage.get_historical_basketball_games(league_id, season)
+    stored_games_all = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
     db_validation_passed = _validate_historical_basketball_dataset(
         stored_games_all,
         league_id,
@@ -1089,7 +1092,6 @@ def run_historical_queue(
     run_safe_preflight(seasons, queue_items)
 
     reports = []
-    quota_stopped_sports = set()
 
     print(
         f"Starting target historical acquisition queue ({len(queue_items)} datasets across seasons {seasons})...",
@@ -1100,23 +1102,6 @@ def run_historical_queue(
         sport = item["sport"]
         league_id = item["league_id"]
         season = item["season"]
-
-
-
-        if sport in quota_stopped_sports:
-            print(
-                f"Queue: Skipping {sport} league {league_id} season {season} due to earlier quota/budget exhaustion for {sport}.",
-                flush=True,
-            )
-            reports.append({
-                "sport": sport,
-                "league_id": league_id,
-                "season": season,
-                "status": "INCOMPLETE",
-                "api_requests_consumed": 0,
-                "quota_budget_stopped": True,
-            })
-            continue
 
         # Check coverage before making requests
         cov = check_acquisition_coverage(league_id, season, sport=sport)
@@ -1155,9 +1140,8 @@ def run_historical_queue(
             )
 
         if report.get("quota_budget_stopped"):
-            quota_stopped_sports.add(sport)
             print(
-                f"Queue: API quota/budget exhausted for {sport} during league {league_id} season {season}. {sport.capitalize()} acquisitions paused for this run.",
+                f"Queue: API quota/budget exhausted for {sport} during league {league_id} season {season}.",
                 flush=True,
             )
 
@@ -1232,16 +1216,18 @@ def verify_persisted_historical_datasets(
         is_active_season = (ssn == current_year)
 
         if sp == "basketball":
-            records = storage.get_historical_basketball_games(lid, ssn)
+            records = storage.get_historical_basketball_games(lid, ssn, include_storage_source=True)
             actual_count = len(records)
             seen_ids = set()
             dates = []
             for r in records:
-                gid = r.get("id")
+                gid = r.get("id") or r.get("game_id")
+                src = r.get("_storage_source") or r.get("source") or r.get("provider_provenance", {}).get("provider", "unknown")
                 if gid:
-                    if gid in seen_ids:
+                    key = (src, gid)
+                    if key in seen_ids:
                         issues.append(f"duplicate_game_id_{gid}")
-                    seen_ids.add(gid)
+                    seen_ids.add(key)
                 d = r.get("date")
                 if d:
                     dates.append(str(d)[:10])

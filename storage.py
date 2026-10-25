@@ -1901,7 +1901,7 @@ def get_prediction_snapshots(fixture_id=None, sport=None, limit=100):
         conn.close()
 
 
-def get_historical_basketball_games(league_id, season):
+def get_historical_basketball_games(league_id, season, source=None, include_storage_source=False):
     """
     Retrieve stored historical basketball games for a league and season.
     """
@@ -1913,45 +1913,80 @@ def get_historical_basketball_games(league_id, season):
     try:
         if db_type == "postgres":
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT raw_json
-                    FROM historical_basketball_games
-                    WHERE league_id = %s AND season = %s
-                    ORDER BY game_date ASC, game_id ASC
-                    """,
-                    (league_id, season),
-                )
+                if source is not None:
+                    cur.execute(
+                        """
+                        SELECT raw_json, source
+                        FROM historical_basketball_games
+                        WHERE league_id = %s AND season = %s AND source = %s
+                        ORDER BY game_date ASC, game_id ASC
+                        """,
+                        (league_id, season, source),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT raw_json, source
+                        FROM historical_basketball_games
+                        WHERE league_id = %s AND season = %s
+                        ORDER BY game_date ASC, game_id ASC
+                        """,
+                        (league_id, season),
+                    )
                 rows = cur.fetchall()
         else:
             try:
-                rows = conn.execute(
-                    """
-                    SELECT raw_json
-                    FROM historical_basketball_games
-                    WHERE league_id = ? AND season = ?
-                    ORDER BY game_date ASC, game_id ASC
-                    """,
-                    (league_id, season),
-                ).fetchall()
+                if source is not None:
+                    rows = conn.execute(
+                        """
+                        SELECT raw_json, source
+                        FROM historical_basketball_games
+                        WHERE league_id = ? AND season = ? AND source = ?
+                        ORDER BY game_date ASC, game_id ASC
+                        """,
+                        (league_id, season, source),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT raw_json, source
+                        FROM historical_basketball_games
+                        WHERE league_id = ? AND season = ?
+                        ORDER BY game_date ASC, game_id ASC
+                        """,
+                        (league_id, season),
+                    ).fetchall()
             except sqlite3.OperationalError:
                 conn.close()
                 init_db()
                 conn, _ = _connect()
-                rows = conn.execute(
-                    """
-                    SELECT raw_json
-                    FROM historical_basketball_games
-                    WHERE league_id = ? AND season = ?
-                    ORDER BY game_date ASC, game_id ASC
-                    """,
-                    (league_id, season),
-                ).fetchall()
+                if source is not None:
+                    rows = conn.execute(
+                        """
+                        SELECT raw_json, source
+                        FROM historical_basketball_games
+                        WHERE league_id = ? AND season = ? AND source = ?
+                        ORDER BY game_date ASC, game_id ASC
+                        """,
+                        (league_id, season, source),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT raw_json, source
+                        FROM historical_basketball_games
+                        WHERE league_id = ? AND season = ?
+                        ORDER BY game_date ASC, game_id ASC
+                        """,
+                        (league_id, season),
+                    ).fetchall()
 
         games = []
         for row in rows:
             payload = _json_loads(row[0])
             if isinstance(payload, dict):
+                if include_storage_source:
+                    payload["_storage_source"] = row[1]
                 games.append(payload)
 
         return games
