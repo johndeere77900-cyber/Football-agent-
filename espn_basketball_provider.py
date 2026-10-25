@@ -21,7 +21,7 @@ ESPN_NBA_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketb
 NBA_LEAGUE_ID = 12
 
 
-def fetch_espn_nba_season_games(league_id: int, season: int, timeout: int = 15) -> list:
+def fetch_espn_nba_season_games(league_id: int, season: int, timeout: int = 15) -> tuple[list, dict]:
     """
     Fetch and normalize historical NBA games from ESPN scoreboard API for a given season.
 
@@ -29,19 +29,27 @@ def fetch_espn_nba_season_games(league_id: int, season: int, timeout: int = 15) 
     Deduplicates events by ESPN event ID.
 
     Returns:
-        list of normalized game dicts matching basketball storage schema.
+        tuple (normalized_games, coverage_metadata)
     """
+    coverage_meta = {
+        "months_attempted": 0,
+        "months_succeeded": 0,
+        "months_failed": 0,
+        "all_months_succeeded": False,
+        "monthly_details": [],
+    }
+
     try:
         lid = int(league_id)
         ssn = int(season)
     except (ValueError, TypeError):
         logger.warning(f"Invalid league_id ({league_id}) or season ({season}) provided to ESPN provider.")
-        return []
+        return [], coverage_meta
 
     # Confirm configured league ID represents the NBA (12)
     if lid != NBA_LEAGUE_ID:
         logger.info(f"League ID {lid} is not NBA ({NBA_LEAGUE_ID}). Skipping ESPN NBA provider.")
-        return []
+        return [], coverage_meta
 
     months = [
         (ssn, 10), (ssn, 11), (ssn, 12),
@@ -57,6 +65,7 @@ def fetch_espn_nba_season_games(league_id: int, season: int, timeout: int = 15) 
     for year, month in months:
         date_param = f"{year}{month:02d}"
         url = f"{ESPN_NBA_SCOREBOARD_URL}?dates={date_param}&limit=1000"
+        coverage_meta["months_attempted"] += 1
 
         try:
             req = urllib.request.Request(url, headers=headers)
@@ -65,14 +74,23 @@ def fetch_espn_nba_season_games(league_id: int, season: int, timeout: int = 15) 
                 data = json.loads(raw_bytes.decode("utf-8", errors="ignore"))
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
             logger.warning(f"ESPN scoreboard query failed for date {date_param}: {exc}")
+            coverage_meta["months_failed"] += 1
+            coverage_meta["monthly_details"].append({"month": date_param, "status": "FAILED", "error": str(exc)})
             continue
 
         if not isinstance(data, dict):
+            coverage_meta["months_failed"] += 1
+            coverage_meta["monthly_details"].append({"month": date_param, "status": "FAILED", "error": "non_object_json"})
             continue
 
         events = data.get("events")
-        if not isinstance(events, list) or not events:
+        if not isinstance(events, list):
+            coverage_meta["months_failed"] += 1
+            coverage_meta["monthly_details"].append({"month": date_param, "status": "FAILED", "error": "missing_events_list"})
             continue
+
+        coverage_meta["months_succeeded"] += 1
+        coverage_meta["monthly_details"].append({"month": date_param, "status": "SUCCESS", "event_count": len(events)})
 
         for ev in events:
             if not isinstance(ev, dict):
@@ -188,5 +206,11 @@ def fetch_espn_nba_season_games(league_id: int, season: int, timeout: int = 15) 
             seen_event_ids.add(game_id)
             normalized_games.append(game_dict)
 
-    logger.info(f"ESPN NBA provider fetched {len(normalized_games)} games for season {ssn}.")
-    return normalized_games
+    coverage_meta["all_months_succeeded"] = (
+        coverage_meta["months_attempted"] == len(months)
+        and coverage_meta["months_failed"] == 0
+        and coverage_meta["months_succeeded"] == len(months)
+    )
+
+    logger.info(f"ESPN NBA provider fetched {len(normalized_games)} games for season {ssn} (succeeded {coverage_meta['months_succeeded']}/{coverage_meta['months_attempted']} months).")
+    return normalized_games, coverage_meta

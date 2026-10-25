@@ -703,6 +703,12 @@ def sync_historical_basketball_games(
                 season,
                 fixture_count=len(stored_games),
                 sport="basketball",
+                expected_pages=dataset_info.get("expected_pages", 0),
+                pages_completed=dataset_info.get("pages_completed", 0),
+                acquisition_complete=dataset_info.get("acquisition_complete", False),
+                enrichment_status=dataset_info.get("enrichment_status", "NONE"),
+                rejected_count=dataset_info.get("rejected_count", 0),
+                empty_pages_count=dataset_info.get("empty_pages_count", 0),
                 error_reason="revalidation_failed",
             )
             current_status = "INCOMPLETE"
@@ -735,36 +741,31 @@ def sync_historical_basketball_games(
     if league_id == 12 and not _is_mocked(basketball_api.get_league_games_page):
         try:
             import espn_basketball_provider
-            espn_games = espn_basketball_provider.fetch_espn_nba_season_games(league_id, season)
+            espn_games, cov_meta = espn_basketball_provider.fetch_espn_nba_season_games(league_id, season)
             if espn_games:
                 save_result = storage.save_historical_basketball_games(espn_games, league_id, season, source="espn_url")
+                games_received.extend(espn_games)
+                total_valid_games += save_result.get("valid", 0)
+                total_newly_stored += save_result.get("inserted", 0)
+                total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
+                total_rejected_count += save_result.get("rejected_count", 0)
+
+                for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
+                    all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
+
                 all_stored_games = storage.get_historical_basketball_games(league_id, season)
                 updated_dataset_info = dict(dataset_info)
                 updated_dataset_info["expected_pages"] = 1
                 updated_dataset_info["pages_completed"] = 1
-                updated_dataset_info["rejected_count"] = save_result.get("rejected_count", 0)
-                if _validate_historical_basketball_dataset(all_stored_games, league_id, season, updated_dataset_info):
-                    games_received.extend(espn_games)
-                    total_valid_games += save_result.get("valid", 0)
-                    total_newly_stored += save_result.get("inserted", 0)
-                    total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
-                    total_rejected_count += save_result.get("rejected_count", 0)
+                updated_dataset_info["rejected_count"] = total_rejected_count
 
-                    for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
-                        all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
-
+                if (
+                    cov_meta.get("all_months_succeeded") is True
+                    and _validate_historical_basketball_dataset(all_stored_games, league_id, season, updated_dataset_info)
+                ):
                     acquisition_complete = True
                     expected_pages = 1
                     pages_completed = 1
-                else:
-                    # Save acquired games as partial progress if validation fails
-                    games_received.extend(espn_games)
-                    total_valid_games += save_result.get("valid", 0)
-                    total_newly_stored += save_result.get("inserted", 0)
-                    total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
-                    total_rejected_count += save_result.get("rejected_count", 0)
-                    for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
-                        all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
         except Exception as exc:
             print(f"ESPN URL basketball acquisition route failed for league {league_id} season {season}: {exc}", flush=True)
 
