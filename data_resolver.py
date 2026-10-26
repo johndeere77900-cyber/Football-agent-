@@ -2882,35 +2882,10 @@ class DataResolver:
             league_id, season, max_budget=max_budget, allow_network=False
         )
 
-        # 3. Secondary Route: Direct API providers (football-data.org API fallback)
+        # 3. Secondary Route: football-data.org API fallback
         secondary_failed = False
         secondary_quota_exhausted = False
         secondary_access_denied = False
-        primary_page = None
-
-        sec_fixtures = []
-        if primary_page is not None and isinstance(primary_page, dict):
-            raw_fixtures = primary_page.get("fixtures", [])
-            if isinstance(raw_fixtures, list):
-                sec_fixtures = [_normalize_api_football_fixture(f, league_id, season) for f in raw_fixtures if isinstance(f, dict)]
-
-            if completed_only and sec_fixtures:
-                sec_fixtures = [
-                    f for f in sec_fixtures
-                    if isinstance(f, dict)
-                    and f.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN")
-                ]
-
-        if sec_fixtures:
-            for af in sec_fixtures:
-                matching = [cm for cm in combined_fixtures if _strict_fixture_match(cm, af)]
-                if matching:
-                    idx = combined_fixtures.index(matching[0])
-                    reconciled_rec = reconcile_fixture_records([matching[0], af])
-                    if reconciled_rec:
-                        combined_fixtures[idx] = reconciled_rec
-                else:
-                    combined_fixtures.append(af)
 
         stored_db_fixtures = storage.get_historical_fixtures(league_id, season) if (league_id and season) else []
         all_accumulated_fixtures = list(combined_fixtures)
@@ -2939,7 +2914,8 @@ class DataResolver:
         )
 
         exp_pages = 1
-        if isinstance(primary_page, dict):
+        primary_page = None
+        if False:
             raw_pages = primary_page.get("expected_pages")
             if isinstance(raw_pages, int) and not isinstance(raw_pages, bool) and raw_pages > 0:
                 exp_pages = raw_pages

@@ -395,7 +395,7 @@ def sync_historical_fixtures(
                     )
                     if enriched_batch:
                         enrichment_stored = len(enriched_batch)
-                except APIFootballQuotaExhaustedError:
+                except FootballDataQuotaExhaustedError:
                     quota_budget_stopped = True
                     last_error_reason = "quota_budget_exhausted_during_enrichment"
                 except Exception as exc:
@@ -439,7 +439,7 @@ def sync_historical_fixtures(
             if src:
                 sources_found.add(src)
 
-    raw_page_source = str(page_source) if ('page_source' in locals() and page_source is not None) else "soccerdata"
+    raw_page_source = str(page_source) if ('page_source' in locals() and page_source is not None) else "unknown"
     if len(sources_found) > 1:
         manifest_source = "mixed"
     elif len(sources_found) == 1:
