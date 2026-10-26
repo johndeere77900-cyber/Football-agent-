@@ -1,7 +1,7 @@
 """
 Historical Data Acquisition Collector for Football Agent.
 
-Acquires historical league fixtures and optional statistics enrichment from API-Football
+Acquires historical league fixtures and optional statistics enrichment from direct CSV sources, SoccerData providers, and football-data.org API fallback
 and stores them permanently in persistent storage (Neon PostgreSQL / SQLite).
 
 Key invariants:
@@ -56,10 +56,10 @@ def _is_historical_provider_complete(
 
     prov = page_source.strip().lower()
     supported_providers = {
-        "api_football",
         "football_data_org",
         "football_data_csv",
         "soccerdata",
+        "soccerdata_fbref",
         "soccerdata_match_history",
         "soccerdata_sofascore",
         "mixed",
@@ -67,7 +67,7 @@ def _is_historical_provider_complete(
     if prov not in supported_providers:
         return False
 
-    if quota_budget_stopped and prov in {"api_football", "football_data_org"}:
+    if quota_budget_stopped and prov in {"football_data_org"}:
         return False
 
     prov_meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else {}
@@ -84,9 +84,7 @@ def _is_historical_provider_complete(
     if structural_coverage.get("verified") is not True:
         return False
 
-    if prov == "api_football":
-        if expected_pages <= 0 or pages_completed < expected_pages:
-            return False
+
 
     return True
 
@@ -122,7 +120,7 @@ def sync_historical_fixtures(
         )
 
     if historical_budget is None:
-        historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
+        historical_budget = int(getattr(config, "FOOTBALL_DATA_DAILY_LIMIT", 100))
 
     dataset_info = storage.get_historical_dataset_status(league_id, season)
     current_status = dataset_info["status"]
@@ -213,7 +211,7 @@ def sync_historical_fixtures(
             )
             page_fixtures = page_meta.get("fixtures", [])
             page_expected = page_meta.get("expected_pages", 1)
-            page_source = str(page_meta.get("source") or "api_football")
+            page_source = str(page_meta.get("source") or "unknown")
 
             if page_meta.get("secondary_quota_exhausted"):
                 quota_budget_stopped = True
@@ -231,16 +229,7 @@ def sync_historical_fixtures(
                     break
 
             if isinstance(page_expected, int) and page_expected > 0:
-                if expected_pages == 0 or current_page == 1 or page_expected == 1 or page_source != "api_football":
-                    expected_pages = page_expected
-                elif page_expected != expected_pages and page_fixtures:
-                    acquisition_failed = True
-                    last_error_reason = "pagination_metadata_mismatch"
-                    print(
-                        f"Pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
-                        flush=True,
-                    )
-                    break
+                expected_pages = page_expected
             else:
                 expected_pages = expected_pages or 1
 
@@ -365,45 +354,35 @@ def sync_historical_fixtures(
 
     # Optional statistical enrichment acquisition
     if with_enrichment and not quota_budget_stopped and not acquisition_failed:
-        current_reqs = storage.get_api_request_count("api_football", today_str, request_type="historical")
-        if current_reqs >= historical_budget:
-            quota_budget_stopped = True
-            last_error_reason = "quota_budget_exhausted_during_enrichment"
-            print(
-                f"Historical budget ceiling reached before enrichment fetch ({current_reqs}/{historical_budget}).",
-                flush=True,
-            )
-        else:
-            all_stored = storage.get_historical_fixtures(league_id, season)
-            # CRITICAL: Only API-Football fixtures may be sent to api_football.get_enriched_fixtures()
-            finished_primary_ids = [
-                item.get("fixture", {}).get("id")
-                for item in all_stored
-                if isinstance(item, dict)
-                and item.get("source", item.get("provider_provenance", {}).get("provider", "api_football")) == "api_football"
-                and item.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN")
-                and item.get("fixture", {}).get("id") is not None
-            ]
+        all_stored = storage.get_historical_fixtures(league_id, season)
+        finished_ids = [
+            item.get("fixture", {}).get("id")
+            for item in all_stored
+            if isinstance(item, dict)
+            and item.get("fixture", {}).get("status", {}).get("short") in ("FT", "AET", "PEN")
+            and item.get("fixture", {}).get("id") is not None
+        ]
 
-            stored_enrichment = storage.get_historical_enrichment(finished_primary_ids, source="api_football")
-            missing_enrichment_ids = [fid for fid in finished_primary_ids if fid not in stored_enrichment]
+        stored_enrichment = storage.get_historical_enrichment(finished_ids) if finished_ids else {}
+        missing_enrichment_ids = [fid for fid in finished_ids if fid not in stored_enrichment]
 
-            if missing_enrichment_ids:
-                try:
-                    enriched_batch = resolver.get_enriched_fixtures(
-                        missing_enrichment_ids, max_budget=historical_budget
-                    )
-                    if enriched_batch:
-                        enrichment_stored = len(enriched_batch)
-                except FootballDataQuotaExhaustedError:
+        if missing_enrichment_ids:
+            try:
+                enriched_batch = resolver.get_enriched_fixtures(
+                    missing_enrichment_ids, league_id=league_id, season=season, max_budget=historical_budget
+                )
+                if enriched_batch:
+                    enrichment_stored = len(enriched_batch)
+            except Exception as exc:
+                from football_data_api import FootballDataQuotaExhaustedError
+                if isinstance(exc, FootballDataQuotaExhaustedError):
                     quota_budget_stopped = True
                     last_error_reason = "quota_budget_exhausted_during_enrichment"
-                except Exception as exc:
+                else:
                     acquisition_failed = True
                     last_error_reason = "api_error_during_enrichment"
                     print(f"API acquisition error during enrichment fetch: {exc}", flush=True)
 
-    final_reqs = storage.get_api_request_count("api_football", today_str, request_type="historical")
     total_consumed = 0
 
     final_stored_count = storage.get_historical_fixture_count(league_id, season)
@@ -511,7 +490,7 @@ def sync_historical_fixtures(
         elif not last_error_reason:
             if isinstance(db_coverage, dict) and db_coverage.get("verified") is not True:
                 last_error_reason = f"structural_coverage_failed_{db_coverage.get('reason')}"
-            elif page_source_val != "api_football":
+            elif page_source_val not in ("football_data_csv", "soccerdata_fbref", "soccerdata_match_history", "soccerdata_sofascore", "football_data_org", "mixed"):
                 last_error_reason = "provider_coverage_incomplete"
             else:
                 last_error_reason = "acquisition_incomplete"
@@ -984,13 +963,11 @@ def run_safe_preflight(seasons: list, queue_items: list) -> None:
 
     # 5. Confirm current API request counters
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    fb_reqs = storage.get_api_request_count("api_football", today_str, request_type="historical")
-    fb_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
     bb_reqs = storage.get_api_request_count("api_basketball", today_str, request_type="historical")
     bb_budget = int(getattr(config, "API_BASKETBALL_HISTORICAL_DAILY_BUDGET", 50))
 
     print(f"API Request Counters Today ({today_str}):", flush=True)
-    print(f"  API-Football: {fb_reqs}/{fb_budget} requests used today", flush=True)
+    print("  Football Historical: Direct CSV / SoccerData / football-data.org (0 API-Football calls)", flush=True)
     print(f"  API-Basketball: {bb_reqs}/{bb_budget} requests used today", flush=True)
 
     # 6. Confirm dataset statuses for target datasets
