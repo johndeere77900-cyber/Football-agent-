@@ -17,7 +17,7 @@ import sys
 from datetime import datetime, timezone
 
 import data_resolver
-from data_resolver import DataResolver, APIFootballQuotaExhaustedError
+from data_resolver import DataResolver
 import config
 import storage
 
@@ -181,13 +181,14 @@ def sync_historical_fixtures(
             current_status = "INCOMPLETE"
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    initial_request_count = storage.get_api_request_count("api_football", today_str, request_type="historical")
+    # Football historical acquisition uses direct CSV, SoccerData, and football-data.org
 
     quota_budget_stopped = False
     acquisition_failed = False
     last_error_reason = None
 
-    if initial_request_count >= historical_budget:
+    initial_request_count = 0
+    if False:
         quota_budget_stopped = True
         last_error_reason = "quota_budget_exhausted_before_acquisition"
         print(
@@ -304,7 +305,7 @@ def sync_historical_fixtures(
                 break
             current_page += 1
 
-        except APIFootballQuotaExhaustedError as exc:
+        except Exception as exc:
             quota_budget_stopped = True
             last_error_reason = "quota_budget_exhausted_during_acquisition"
             print(f"API Quota exhausted during fixture fetch on page {current_page}: {exc}", flush=True)
@@ -444,7 +445,7 @@ def sync_historical_fixtures(
             if src:
                 sources_found.add(src)
 
-    raw_page_source = str(page_source) if ('page_source' in locals() and page_source is not None) else "api_football"
+    raw_page_source = str(page_source) if ('page_source' in locals() and page_source is not None) else "soccerdata"
     if len(sources_found) > 1:
         manifest_source = "mixed"
     elif len(sources_found) == 1:
