@@ -875,12 +875,18 @@ def sync_historical_basketball_games(
         },
     )
 
+    import datetime as dt_mod
+    current_year = dt_mod.datetime.now(dt_mod.timezone.utc).year
+
     is_fully_complete = (
         not quota_budget_stopped
         and not acquisition_failed
         and acquisition_complete
         and db_validation_passed
     )
+
+    if season >= current_year:
+        is_fully_complete = False
 
     if is_fully_complete:
         storage.mark_historical_dataset_complete(
