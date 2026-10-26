@@ -432,20 +432,22 @@ def _validate_and_canonicalize_team_manifest(raw_team_ids, league_id, sport="foo
             else:
                 cid = team_identity.resolve_canonical_team_id(
                     raw_name=item_str,
-                    provider="api_football" if sport_str == "football" else "api_basketball",
+                    provider="football_data_org" if sport_str == "football" else "api_basketball",
                     provider_team_id=None,
                     league_id=league_id,
                     sport=sport_str,
                     auto_register=False,
                 )
-                if cid and cid in registered_ids:
+                if cid:
                     canonical_set.add(cid)
+                elif storage.get_team_identities_by_canonical_id(item_str):
+                    canonical_set.add(item_str)
                 else:
                     return []
         else:
             cid = team_identity.resolve_canonical_team_id(
                 raw_name=item_str,
-                provider="api_football" if sport_str == "football" else "api_basketball",
+                provider="football_data_org" if sport_str == "football" else "api_basketball",
                 provider_team_id=item if isinstance(item, int) else None,
                 league_id=league_id,
                 sport=sport_str,
@@ -509,57 +511,66 @@ def _get_authoritative_historical_team_ids(
         except Exception as exc:
             logger.warning("Unable to obtain DB dataset team universe for league %s season %s: %s", league_id, season, exc)
 
-    if not allow_network:
-        return []
+    if allow_network:
+        provider_name = str(provider).strip().lower() if provider else None
 
-    provider_name = str(provider).strip().lower() if provider else None
+        # Secondary source: football-data.org competition teams
+        if provider_name in (None, "football_data_org"):
+            comp_code = LEAGUE_TO_FD_CODE.get(league_id)
 
-    # Secondary source: football-data.org competition teams
-    if provider_name in (None, "football_data_org"):
-        comp_code = LEAGUE_TO_FD_CODE.get(league_id)
+            if comp_code:
+                try:
+                    result = football_data_api.get_competition_teams(
+                        comp_code,
+                        season=season,
+                    )
 
-        if comp_code:
-            try:
-                result = football_data_api.get_competition_teams(
-                    comp_code,
-                    season=season,
-                )
+                    if isinstance(result, dict):
+                        rows = result.get("teams", result.get("response", []))
+                    else:
+                        rows = result
 
-                if isinstance(result, dict):
-                    rows = result.get("teams", result.get("response", []))
-                else:
-                    rows = result
+                    if isinstance(rows, list) and rows:
+                        canonical_ids = set()
+                        all_resolved = True
+                        for row in rows:
+                            team_id = row.get("id") if isinstance(row, dict) else None
+                            team_name = (row.get("shortName") or row.get("name", "")) if isinstance(row, dict) else ""
 
-                if isinstance(rows, list) and rows:
-                    canonical_ids = set()
-                    all_resolved = True
-                    for row in rows:
-                        team_id = row.get("id") if isinstance(row, dict) else None
-                        team_name = (row.get("shortName") or row.get("name", "")) if isinstance(row, dict) else ""
+                            c_id = team_identity.bootstrap_historical_team_identity(
+                                raw_name=team_name or (str(team_id) if team_id is not None else ""),
+                                provider="football_data_org",
+                                provider_team_id=team_id,
+                                league_id=league_id,
+                                sport=sport,
+                            )
+                            if not c_id:
+                                all_resolved = False
+                                break
+                            canonical_ids.add(c_id)
 
-                        c_id = team_identity.resolve_canonical_team_id(
-                            raw_name=team_name or (str(team_id) if team_id is not None else ""),
-                            provider="football_data_org",
-                            provider_team_id=team_id,
-                            league_id=league_id,
-                            sport=sport,
-                            auto_register=False,
-                        )
-                        if not c_id:
-                            all_resolved = False
-                            break
-                        canonical_ids.add(c_id)
+                        if all_resolved and len(canonical_ids) == len(rows):
+                            return sorted(canonical_ids, key=lambda x: str(x))
 
-                    if all_resolved and len(canonical_ids) == len(rows):
-                        return sorted(canonical_ids, key=lambda x: str(x))
+                except Exception as exc:
+                    logger.warning(
+                        "Unable to obtain authoritative football-data.org team universe for league %s season %s: %s",
+                        league_id,
+                        season,
+                        exc,
+                    )
 
-            except Exception as exc:
-                logger.warning(
-                    "Unable to obtain authoritative football-data.org team universe for league %s season %s: %s",
-                    league_id,
-                    season,
-                    exc,
-                )
+    # Secondary fallback: Existing registered canonical mappings in DB team_identities for league_id
+    rel_exp_team_count = get_expected_league_team_count(league_id, season)
+    if rel_exp_team_count is not None:
+        try:
+            registered_ids = storage.get_team_identities_by_league(sport, league_id)
+            if len(registered_ids) == rel_exp_team_count:
+                validated = _validate_and_canonicalize_team_manifest(registered_ids, league_id, sport=sport)
+                if validated and len(validated) == rel_exp_team_count:
+                    return validated
+        except Exception as exc:
+            logger.warning("Unable to obtain registered DB team identities for league %s: %s", league_id, exc)
 
     return []
 
@@ -2981,6 +2992,16 @@ class DataResolver:
                     matches = fd_res if isinstance(fd_res, list) else []
                 fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
             except Exception as fd_exc:
+                from football_data_api import FootballDataQuotaExhaustedError, FootballDataAPIError
+                exc_type_name = type(fd_exc).__name__
+                if isinstance(fd_exc, (FootballDataQuotaExhaustedError, APIFootballQuotaExhaustedError)) or "QuotaExhausted" in exc_type_name:
+                    secondary_quota_exhausted = True
+                    secondary_failed = True
+                elif "AccessDenied" in exc_type_name or "403" in str(fd_exc):
+                    secondary_access_denied = True
+                    secondary_failed = True
+                else:
+                    secondary_failed = True
                 logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
 
         if completed_only and fd_matches:
