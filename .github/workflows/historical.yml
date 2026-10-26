@@ -112,30 +112,28 @@ jobs:
       - name: Verify credentials
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
         run: |
           set -euo pipefail
           if [ -z "$NEON_DATABASE_URL" ]; then
             echo "ERROR: NEON_DATABASE_URL secret is missing."
             exit 1
           fi
-          if [ -n "$API_FOOTBALL_KEY" ]; then
-            echo "API_FOOTBALL_KEY secret is present."
-          else
-            echo "NOTICE: API_FOOTBALL_KEY secret is missing. Acquisition will rely on direct CSV / secondary fallbacks."
-          fi
           if [ -n "$FOOTBALL_DATA_API_KEY" ]; then
             echo "FOOTBALL_DATA_API_KEY secret is present."
           else
             echo "NOTICE: FOOTBALL_DATA_API_KEY secret is missing. Secondary football-data.org API fallback will be unavailable."
           fi
+          if [ -n "$API_BASKETBALL_KEY" ]; then
+            echo "API_BASKETBALL_KEY secret is present for basketball historical acquisition."
+          fi
 
       - name: Historical Data Sync
         id: sync
         env:
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           REQUIRE_NEON: "true"
           ENVIRONMENT: "production"
@@ -175,8 +173,8 @@ jobs:
         if: always() && steps.sync.outcome != 'skipped'
         id: verify
         env:
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           REQUIRE_NEON: "true"
           ENVIRONMENT: "production"
