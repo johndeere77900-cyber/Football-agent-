@@ -37,6 +37,7 @@ import config
 import api_football
 from api_football import APIFootballError, APIFootballQuotaExhaustedError
 import football_data_api
+from football_data_api import FootballDataAPIError, FootballDataQuotaExhaustedError
 import soccerdata_provider
 import time_utils
 
@@ -438,10 +439,8 @@ def _validate_and_canonicalize_team_manifest(raw_team_ids, league_id, sport="foo
                     sport=sport_str,
                     auto_register=False,
                 )
-                if cid:
+                if cid and cid in registered_ids:
                     canonical_set.add(cid)
-                elif storage.get_team_identities_by_canonical_id(item_str):
-                    canonical_set.add(item_str)
                 else:
                     return []
         else:
@@ -537,12 +536,13 @@ def _get_authoritative_historical_team_ids(
                             team_id = row.get("id") if isinstance(row, dict) else None
                             team_name = (row.get("shortName") or row.get("name", "")) if isinstance(row, dict) else ""
 
-                            c_id = team_identity.bootstrap_historical_team_identity(
+                            c_id = team_identity.resolve_canonical_team_id(
                                 raw_name=team_name or (str(team_id) if team_id is not None else ""),
                                 provider="football_data_org",
                                 provider_team_id=team_id,
                                 league_id=league_id,
                                 sport=sport,
+                                auto_register=False,
                             )
                             if not c_id:
                                 all_resolved = False
@@ -559,18 +559,6 @@ def _get_authoritative_historical_team_ids(
                         season,
                         exc,
                     )
-
-    # Secondary fallback: Existing registered canonical mappings in DB team_identities for league_id
-    rel_exp_team_count = get_expected_league_team_count(league_id, season)
-    if rel_exp_team_count is not None:
-        try:
-            registered_ids = storage.get_team_identities_by_league(sport, league_id)
-            if len(registered_ids) == rel_exp_team_count:
-                validated = _validate_and_canonicalize_team_manifest(registered_ids, league_id, sport=sport)
-                if validated and len(validated) == rel_exp_team_count:
-                    return validated
-        except Exception as exc:
-            logger.warning("Unable to obtain registered DB team identities for league %s: %s", league_id, exc)
 
     return []
 
@@ -2991,18 +2979,18 @@ class DataResolver:
                 else:
                     matches = fd_res if isinstance(fd_res, list) else []
                 fd_matches = [_normalize_football_data_match(m, league_id, season) for m in matches if isinstance(m, dict)]
-            except Exception as fd_exc:
-                from football_data_api import FootballDataQuotaExhaustedError, FootballDataAPIError
-                exc_type_name = type(fd_exc).__name__
-                if isinstance(fd_exc, (FootballDataQuotaExhaustedError, APIFootballQuotaExhaustedError)) or "QuotaExhausted" in exc_type_name:
-                    secondary_quota_exhausted = True
-                    secondary_failed = True
-                elif "AccessDenied" in exc_type_name or "403" in str(fd_exc):
+            except FootballDataQuotaExhaustedError as fd_exc:
+                secondary_quota_exhausted = True
+                secondary_failed = True
+                logger.warning(f"DataResolver secondary fallback quota exhausted for league {league_id}: {fd_exc}")
+            except FootballDataAPIError as fd_exc:
+                secondary_failed = True
+                if "403" in str(fd_exc) or "forbidden" in str(fd_exc).lower() or "access" in str(fd_exc).lower():
                     secondary_access_denied = True
-                    secondary_failed = True
-                else:
-                    secondary_failed = True
                 logger.warning(f"DataResolver secondary fallback get_league_fixtures_page failed for league {league_id}: {fd_exc}")
+            except Exception as fd_exc:
+                secondary_failed = True
+                logger.warning(f"DataResolver secondary fallback get_league_fixtures_page error for league {league_id}: {fd_exc}")
 
         if completed_only and fd_matches:
             fd_matches = [

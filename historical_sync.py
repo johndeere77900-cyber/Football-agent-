@@ -270,8 +270,13 @@ def sync_historical_fixtures(
 
             # Update progress in manifest immediately
             safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
-            page_prov_meta = page_meta.get("provider_metadata", {}) if isinstance(page_meta, dict) else {}
-            page_exp_teams = page_prov_meta.get("expected_team_ids") if isinstance(page_prov_meta, dict) else None
+            page_exp_teams = None
+            if isinstance(page_meta, dict):
+                page_exp_teams = (
+                    page_meta.get("expected_team_ids")
+                    or page_meta.get("provider_metadata", {}).get("expected_team_ids")
+                    or page_meta.get("provider_metadata", {}).get("structural_coverage", {}).get("expected_team_ids")
+                )
 
             storage.mark_historical_dataset_incomplete(
                 league_id,
@@ -584,6 +589,7 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
     - Participating home and away teams valid and distinct.
     - Required game date, completed status, and valid scores present.
     - Dataset manifest page counts and rejected counts valid.
+    - Distinguishes completed historical seasons from ongoing seasons using game status and date evidence (no blanket calendar-year rejection).
     """
     if not isinstance(stored_games, list) or not stored_games:
         return False
@@ -637,13 +643,6 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
         return False
 
     if len(seen_game_ids) != len(stored_games):
-        return False
-
-    import datetime as dt_mod
-    current_year = dt_mod.datetime.now(dt_mod.timezone.utc).year
-
-    # Ongoing or current seasons remain INCOMPLETE until season end
-    if season >= current_year:
         return False
 
     return True
