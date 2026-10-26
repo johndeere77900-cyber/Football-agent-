@@ -187,14 +187,7 @@ def sync_historical_fixtures(
     acquisition_failed = False
     last_error_reason = None
 
-    initial_request_count = 0
-    if False:
-        quota_budget_stopped = True
-        last_error_reason = "quota_budget_exhausted_before_acquisition"
-        print(
-            f"Historical daily budget ceiling reached ({initial_request_count}/{historical_budget} requests used today). Attempting quota-free direct URL / secondary fallbacks.",
-            flush=True,
-        )
+    # Football historical acquisition uses direct sources and football-data.org fallback
 
     fixtures_received = []
     start_p = 1
@@ -306,14 +299,15 @@ def sync_historical_fixtures(
             current_page += 1
 
         except Exception as exc:
-            quota_budget_stopped = True
-            last_error_reason = "quota_budget_exhausted_during_acquisition"
-            print(f"API Quota exhausted during fixture fetch on page {current_page}: {exc}", flush=True)
-            break
-        except Exception as exc:
-            acquisition_failed = True
-            last_error_reason = f"api_error_during_acquisition: {str(exc)[:100]}"
-            print(f"Primary acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
+            from football_data_api import FootballDataQuotaExhaustedError
+            if isinstance(exc, FootballDataQuotaExhaustedError):
+                quota_budget_stopped = True
+                last_error_reason = "quota_budget_exhausted_during_acquisition"
+                print(f"API Quota exhausted during fixture fetch on page {current_page}: {exc}", flush=True)
+            else:
+                acquisition_failed = True
+                last_error_reason = f"api_error_during_acquisition: {str(exc)[:100]}"
+                print(f"Primary acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
             break
 
     cum_rejected_cnt = (dataset_info.get("rejected_count", 0) if not refresh else 0) + total_rejected_count
@@ -410,7 +404,7 @@ def sync_historical_fixtures(
                     print(f"API acquisition error during enrichment fetch: {exc}", flush=True)
 
     final_reqs = storage.get_api_request_count("api_football", today_str, request_type="historical")
-    total_consumed = final_reqs - initial_request_count
+    total_consumed = 0
 
     final_stored_count = storage.get_historical_fixture_count(league_id, season)
 
