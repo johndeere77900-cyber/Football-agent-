@@ -472,8 +472,7 @@ def _get_authoritative_historical_team_ids(
 
     Priority:
     1. Provider metadata if supplied (read-first without external calls)
-    2. Stored DB manifest metadata ()
-    3. football-data.org competition teams (if allow_network=True and provider in (None, 'football_data_org'))
+    2. Stored DB manifest metadata
 
     Returns:
         list[str|int] of verified canonical team IDs, or [] when unavailable/incomplete.
@@ -2823,7 +2822,7 @@ class DataResolver:
 
         if not expected_team_ids:
             expected_team_ids = _get_authoritative_historical_team_ids(
-                league_id, season, max_budget=max_budget, allow_network=True, provider="football_data_org"
+                league_id, season, max_budget=max_budget, allow_network=False
             )
 
         sec_coverage = _validate_historical_structural_coverage(

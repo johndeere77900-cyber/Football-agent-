@@ -465,12 +465,6 @@ def sync_historical_fixtures(
         final_stored_count=len(stored_fixtures_all),
     )
 
-    # Current/ongoing seasons (2026+) remain INCOMPLETE until season end
-    import datetime as dt_mod
-    current_year = dt_mod.datetime.now(dt_mod.timezone.utc).year
-    if season >= current_year:
-        is_fully_complete = False
-
     acquisition_complete = is_fully_complete
 
     exp_team_ids_to_save = db_coverage.get("expected_team_ids") if isinstance(db_coverage, dict) else None

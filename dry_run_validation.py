@@ -21,13 +21,11 @@ def evaluate_provider_selection_pure(league_id, season, primary_coverage_availab
     """
     Pure decision function for provider selection without network or database I/O.
     """
-    fd_code = data_resolver.LEAGUE_TO_FD_CODE.get(league_id)
-    if primary_coverage_available:
-        return "API-Football (Primary)", "API-Football provides full coverage for this league and season."
-    elif fd_code:
-        return f"football-data.org (Secondary, Code: {fd_code})", f"API-Football coverage unavailable ({primary_reason}); competition is mapped to secondary provider."
+    csv_code = data_resolver.LEAGUE_TO_FD_CSV_CODE.get(league_id)
+    if primary_coverage_available or csv_code:
+        return f"Direct CSV / SoccerData (League {league_id})", "Approved historical direct CSV and SoccerData providers available for this competition."
     else:
-        return "NONE (Failed Closed)", f"API-Football unavailable and league {league_id} has no secondary mapping."
+        return "NONE (Failed Closed)", f"League {league_id} has no historical acquisition mapping."
 
 
 def run_dry_run_validation():
