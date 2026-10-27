@@ -36,8 +36,6 @@ from datetime import datetime, timezone
 import config
 import api_football
 from api_football import APIFootballError, APIFootballQuotaExhaustedError
-import football_data_api
-from football_data_api import FootballDataAPIError, FootballDataQuotaExhaustedError
 import soccerdata_provider
 import time_utils
 
@@ -583,7 +581,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     else:
         expected_team_set = canonical_expected_set if canonical_expected_set else (set(expected_team_ids) if expected_team_ids else set())
 
-    if is_double_round_robin and rel_exp_team_count is not None and expected_team_set and not (isinstance(provider_metadata, dict) and provider_metadata.get("expected_team_ids")):
+    if is_double_round_robin and rel_exp_team_count is not None and expected_team_set:
         if len(expected_team_set) != rel_exp_team_count:
             return {
                 "verified": False,

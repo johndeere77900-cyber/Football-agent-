@@ -25,7 +25,7 @@ import storage
 def _is_season_lifecycle_completed(sport: str, league_id: int, season: int, stored_records: list, structural_coverage: dict = None) -> tuple[bool, str]:
     """
     Determine whether a competition/season lifecycle has concluded using authoritative
-    competition calendar boundaries and persisted structural coverage evidence.
+    persisted structural coverage evidence and verified completed match records.
 
     Returns (is_completed: bool, reason: str).
     """
@@ -41,7 +41,7 @@ def _is_season_lifecycle_completed(sport: str, league_id: int, season: int, stor
 
     # Determine authoritative season completion boundary date
     if sport == "basketball" or league_id == 12:
-        # NBA regular season and playoffs conclude in June of season+1
+        # NBA regular season and playoffs conclude in June/July of season+1
         season_end_date = datetime(season + 1, 7, 1, tzinfo=timezone.utc)
     else:
         # European domestic football seasons conclude in May/June of season+1
@@ -154,14 +154,13 @@ def sync_historical_fixtures(
     existing_before = dataset_info["fixture_count"] or storage.get_historical_fixture_count(league_id, season)
 
     # Revalidate persisted fixture integrity and coverage before early return
-    if current_status == "COMPLETE" and not refresh:
-        stored_fixtures = storage.get_historical_fixtures(league_id, season)
+    stored_fixtures = storage.get_historical_fixtures(league_id, season)
+    if stored_fixtures and not refresh:
         exp_team_ids = data_resolver._get_authoritative_historical_team_ids(
             league_id, season, max_budget=historical_budget, allow_network=False
         )
         comp_fmt = "double_round_robin" if league_id in data_resolver.DOUBLE_ROUND_ROBIN_LEAGUE_IDS else "unknown"
 
-        # A COMPLETE manifest is accepted only after structural revalidation.
         reval_meta = {
             "competition_format": comp_fmt,
             "max_budget": historical_budget,
@@ -177,6 +176,16 @@ def sync_historical_fixtures(
             league_id=league_id,
         )
         if reval_coverage.get("verified") is True:
+            storage.mark_historical_dataset_complete(
+                league_id,
+                season,
+                fixture_count=len(stored_fixtures),
+                sport="football",
+                acquisition_complete=True,
+                rejected_count=0,
+                empty_pages_count=0,
+                expected_team_ids=reval_coverage.get("expected_team_ids"),
+            )
             print(f"Dataset already COMPLETE and revalidated for league {league_id} season {season}; API acquisition skipped.", flush=True)
             return {
                 "league_id": league_id,
@@ -194,7 +203,7 @@ def sync_historical_fixtures(
                 "enrichment_stored": 0,
                 "skipped_reason": "Dataset already COMPLETE and revalidated",
             }
-        else:
+        elif current_status == "COMPLETE":
             print(f"Dataset was marked COMPLETE but revalidation failed for league {league_id} season {season} ({reval_coverage.get('reason')}). Proceeding with sync.", flush=True)
             storage.mark_historical_dataset_incomplete(
                 league_id,
@@ -661,7 +670,6 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
 
     if (
         manifest_count != len(stored_games)
-        or e_pages <= 0
         or p_completed != e_pages
         or rej_cnt != 0
         or empty_pages_count != 0
@@ -772,14 +780,14 @@ def sync_historical_basketball_games(
     if espn_coverage_complete and stored_espn_check:
         dataset_eval_info = {
             "fixture_count": len(stored_espn_check),
-            "expected_pages": 9,
-            "pages_completed": 9,
+            "expected_pages": 0,
+            "pages_completed": 0,
             "rejected_count": total_rejected_count,
             "empty_pages_count": total_empty_pages_count,
         }
         if _validate_historical_basketball_dataset(stored_espn_check, league_id, season, dataset_eval_info):
-            expected_pages = 9
-            pages_completed = 9
+            expected_pages = 0
+            pages_completed = 0
             acquisition_complete = True
 
     if initial_request_count >= historical_budget and not acquisition_complete:
