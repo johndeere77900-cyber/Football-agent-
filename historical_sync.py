@@ -203,6 +203,7 @@ def sync_historical_fixtures(
     # DataResolver instance initialized without preflight network calls
     resolver = DataResolver()
 
+    page_exp_teams = None
     current_page = start_p
     while True:
         try:
@@ -270,13 +271,21 @@ def sync_historical_fixtures(
 
             # Update progress in manifest immediately
             safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
-            page_exp_teams = None
             if isinstance(page_meta, dict):
-                page_exp_teams = (
-                    page_meta.get("expected_team_ids")
-                    or page_meta.get("provider_metadata", {}).get("expected_team_ids")
-                    or page_meta.get("provider_metadata", {}).get("structural_coverage", {}).get("expected_team_ids")
-                )
+                extracted = None
+                if isinstance(page_meta.get("expected_team_ids"), (list, set)):
+                    extracted = list(page_meta["expected_team_ids"])
+                else:
+                    pm = page_meta.get("provider_metadata")
+                    if isinstance(pm, dict):
+                        if isinstance(pm.get("expected_team_ids"), (list, set)):
+                            extracted = list(pm["expected_team_ids"])
+                        else:
+                            sc = pm.get("structural_coverage")
+                            if isinstance(sc, dict) and isinstance(sc.get("expected_team_ids"), (list, set)):
+                                extracted = list(sc["expected_team_ids"])
+                if extracted:
+                    page_exp_teams = extracted
 
             storage.mark_historical_dataset_incomplete(
                 league_id,
@@ -297,15 +306,9 @@ def sync_historical_fixtures(
             current_page += 1
 
         except Exception as exc:
-            from football_data_api import FootballDataQuotaExhaustedError
-            if isinstance(exc, FootballDataQuotaExhaustedError):
-                quota_budget_stopped = True
-                last_error_reason = "quota_budget_exhausted_during_acquisition"
-                print(f"API Quota exhausted during fixture fetch on page {current_page}: {exc}", flush=True)
-            else:
-                acquisition_failed = True
-                last_error_reason = f"api_error_during_acquisition: {str(exc)[:100]}"
-                print(f"Primary acquisition error during fixture fetch on page {current_page}: {exc}", flush=True)
+            acquisition_failed = True
+            last_error_reason = "api_error_during_acquisition"
+            print(f"API acquisition error on page {current_page}: {exc}", flush=True)
             break
 
     cum_rejected_cnt = (dataset_info.get("rejected_count", 0) if not refresh else 0) + total_rejected_count
@@ -383,14 +386,9 @@ def sync_historical_fixtures(
                 if enriched_batch:
                     enrichment_stored = len(enriched_batch)
             except Exception as exc:
-                from football_data_api import FootballDataQuotaExhaustedError
-                if isinstance(exc, FootballDataQuotaExhaustedError):
-                    quota_budget_stopped = True
-                    last_error_reason = "quota_budget_exhausted_during_enrichment"
-                else:
-                    acquisition_failed = True
-                    last_error_reason = "api_error_during_enrichment"
-                    print(f"API acquisition error during enrichment fetch: {exc}", flush=True)
+                acquisition_failed = True
+                last_error_reason = "api_error_during_enrichment"
+                print(f"API acquisition error during enrichment fetch: {exc}", flush=True)
 
     total_consumed = 0
 
@@ -875,18 +873,12 @@ def sync_historical_basketball_games(
         },
     )
 
-    import datetime as dt_mod
-    current_year = dt_mod.datetime.now(dt_mod.timezone.utc).year
-
     is_fully_complete = (
         not quota_budget_stopped
         and not acquisition_failed
         and acquisition_complete
         and db_validation_passed
     )
-
-    if season >= current_year:
-        is_fully_complete = False
 
     if is_fully_complete:
         storage.mark_historical_dataset_complete(
