@@ -22,54 +22,35 @@ import config
 import storage
 
 
-def _is_season_lifecycle_completed(sport: str, league_id: int, season: int, stored_records: list) -> tuple[bool, str]:
+def _is_season_lifecycle_completed(sport: str, league_id: int, season: int, stored_records: list, structural_coverage: dict = None) -> tuple[bool, str]:
     """
-    Determine whether a sport/league/season competition lifecycle has concluded based on
-    authoritative schedule boundaries and persisted record dates/status.
+    Determine whether a competition/season lifecycle has concluded using authoritative
+    competition calendar boundaries and persisted structural coverage evidence.
 
     Returns (is_completed: bool, reason: str).
     """
     if not isinstance(stored_records, list) or not stored_records:
         return False, "no_records_available"
 
+    # Require structural coverage verification for football
+    if sport == "football" and isinstance(structural_coverage, dict):
+        if structural_coverage.get("verified") is not True:
+            return False, f"structural_coverage_incomplete_{structural_coverage.get('reason', 'unverified')}"
+
     now_utc = datetime.now(timezone.utc)
-    current_year = now_utc.year
 
-    # Past concluded historical seasons (season < current_year - 1)
-    if season < current_year - 1:
-        return True, "historical_season_concluded"
+    # Determine authoritative season completion boundary date
+    if sport == "basketball" or league_id == 12:
+        # NBA regular season and playoffs conclude in June of season+1
+        season_end_date = datetime(season + 1, 7, 1, tzinfo=timezone.utc)
+    else:
+        # European domestic football seasons conclude in May/June of season+1
+        season_end_date = datetime(season + 1, 6, 1, tzinfo=timezone.utc)
 
-    # Extract match/game dates from stored records
-    record_dates = []
-    for r in stored_records:
-        if not isinstance(r, dict):
-            continue
-        dt_str = None
-        if sport == "football":
-            dt_str = r.get("fixture", {}).get("date")
-        else:
-            dt_str = r.get("date") or r.get("game_date")
-        if dt_str and isinstance(dt_str, str):
-            try:
-                dt_clean = dt_str.replace("Z", "+00:00")
-                parsed_dt = datetime.fromisoformat(dt_clean)
-                if parsed_dt.tzinfo is None:
-                    parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
-                record_dates.append(parsed_dt)
-            except (ValueError, TypeError):
-                pass
+    if now_utc < season_end_date:
+        return False, f"active_season_in_progress_until_{season_end_date.strftime('%Y-%m-%d')}"
 
-    if not record_dates:
-        return False, "unparseable_record_dates"
-
-    latest_date = max(record_dates)
-    days_since_latest = (now_utc - latest_date).days
-
-    # Active season currently in progress (latest match within last 60 days)
-    if days_since_latest <= 60 and season >= current_year - 1:
-        return False, f"active_season_in_progress_{days_since_latest}_days_since_last_match"
-
-    return True, "season_concluded"
+    return True, "season_concluded_with_valid_matches"
 
 
 def _is_historical_provider_complete(
@@ -331,7 +312,9 @@ def sync_historical_fixtures(
                             if isinstance(sc, dict) and isinstance(sc.get("expected_team_ids"), (list, set)):
                                 extracted = list(sc["expected_team_ids"])
                 if extracted:
-                    page_exp_teams = extracted
+                    val_teams = data_resolver._validate_and_canonicalize_team_manifest(extracted, league_id, sport="football")
+                    if val_teams:
+                        page_exp_teams = val_teams
 
             storage.mark_historical_dataset_incomplete(
                 league_id,
@@ -511,7 +494,7 @@ def sync_historical_fixtures(
         final_stored_count=len(stored_fixtures_all),
     )
 
-    lifecycle_completed, lifecycle_reason = _is_season_lifecycle_completed("football", league_id, season, stored_fixtures_all)
+    lifecycle_completed, lifecycle_reason = _is_season_lifecycle_completed("football", league_id, season, stored_fixtures_all, structural_coverage=db_coverage)
     if not lifecycle_completed:
         is_fully_complete = False
         last_error_reason = f"season_lifecycle_ongoing_{lifecycle_reason}"
@@ -542,7 +525,7 @@ def sync_historical_fixtures(
         elif not last_error_reason:
             if isinstance(db_coverage, dict) and db_coverage.get("verified") is not True:
                 last_error_reason = f"structural_coverage_failed_{db_coverage.get('reason')}"
-            elif page_source_val not in ("football_data_csv", "soccerdata_fbref", "soccerdata_match_history", "soccerdata_sofascore", "football_data_org", "mixed"):
+            elif page_source_val not in ("football_data_csv", "soccerdata_fbref", "soccerdata_match_history", "soccerdata_sofascore", "mixed"):
                 last_error_reason = "provider_coverage_incomplete"
             else:
                 last_error_reason = "acquisition_incomplete"

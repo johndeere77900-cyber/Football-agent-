@@ -1,12 +1,12 @@
 """
 Provider-neutral Data Resolver for Football data.
 
-Implements Two-Route Architecture for Historical Acquisition:
+Implements Direct-Source Architecture for Historical Acquisition:
 1. Read-first persistence: Reuse stored DB dataset when COMPLETE and verified without external calls.
-2. Primary Route: Direct Football-Data CSV -> SoccerData MatchHistory -> SoccerData Sofascore.
-3. Secondary Route: football-data.org API fallback.
+2. Direct Routes: Direct Football-Data CSV -> SoccerData FBref -> SoccerData MatchHistory -> SoccerData Sofascore.
+3. Fail-closed handling when required coverage cannot be established.
 
-Football historical acquisition uses Direct CSV, SoccerData providers, and football-data.org API fallback without API-Football.
+Football historical acquisition uses Direct CSV and SoccerData providers without external API-Football or secondary API dependencies.
 
 Result Status Codes:
 - PRIMARY_SUCCESS: Primary provider (Direct CSV / SoccerData) returned valid, sufficient data.
