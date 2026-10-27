@@ -510,6 +510,16 @@ def _get_authoritative_historical_team_ids(
         except Exception as exc:
             logger.warning("Unable to obtain DB dataset team universe for league %s season %s: %s", league_id, season, exc)
 
+        try:
+            reg_ids = storage.get_team_identities_by_league(sport, league_id)
+            exp_count = get_expected_league_team_count(league_id, season)
+            if exp_count and len(reg_ids) == exp_count:
+                validated = _validate_and_canonicalize_team_manifest(reg_ids, league_id, sport=sport)
+                if validated:
+                    return validated
+        except Exception as exc:
+            logger.warning("Unable to obtain DB registered team universe for league %s season %s: %s", league_id, season, exc)
+
     if allow_network:
         provider_name = str(provider).strip().lower() if provider else None
 
@@ -544,6 +554,14 @@ def _get_authoritative_historical_team_ids(
                                 sport=sport,
                                 auto_register=False,
                             )
+                            if not c_id and team_name:
+                                c_id = team_identity.bootstrap_historical_team_identity(
+                                    sport=sport,
+                                    raw_name=team_name,
+                                    provider="football_data_org",
+                                    provider_team_id=str(team_id) if team_id is not None else f"{league_id}_{team_name}",
+                                    league_id=league_id,
+                                )
                             if not c_id:
                                 all_resolved = False
                                 break
