@@ -1975,24 +1975,21 @@ def handle_provider_status_op():
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     af_used = storage.get_api_request_count("api_football", today_str)
-    fd_used = storage.get_api_request_count("football_data_org", today_str)
     ab_used = storage.get_api_request_count("api_basketball", today_str)
     odds_used = storage.get_api_request_count("odds_api", today_str)
 
     af_key = getattr(config, "API_FOOTBALL_KEY", None) or os.environ.get("API_FOOTBALL_KEY")
-    fd_key = getattr(config, "FOOTBALL_DATA_API_KEY", None) or os.environ.get("FOOTBALL_DATA_API_KEY")
     odds_key = getattr(config, "ODDS_API_KEY", None) or os.environ.get("ODDS_API_KEY")
 
     lines = [
         "📡 *DATA PROVIDER TELEMETRY*",
         "",
-        "⚽ *API-Football (Primary Football):*",
+        "⚽ *API-Football (Live Predictions):*",
         f"• Status: {'CONFIGURED' if af_key else 'UNAVAILABLE'}",
         f"• Daily Quota: {af_used} / {getattr(config, 'API_FOOTBALL_DAILY_CREDIT_LIMIT', 100)} credits",
         "",
-        "⚽ *football-data.org (Secondary Fallback):*",
-        f"• Status: {'CONFIGURED' if fd_key else 'UNAVAILABLE'}",
-        f"• Daily Quota: {fd_used} / {getattr(config, 'FOOTBALL_DATA_DAILY_LIMIT', 100)} requests",
+        "⚽ *Direct CSV & SoccerData (Historical Football):*",
+        "• Status: ACTIVE (Direct CSV & Subprocess Execution)",
         "",
         "🏀 *API-Basketball (Basketball Primary):*",
         f"• Status: {'CONFIGURED' if af_key else 'UNAVAILABLE'}",

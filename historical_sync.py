@@ -22,6 +22,56 @@ import config
 import storage
 
 
+def _is_season_lifecycle_completed(sport: str, league_id: int, season: int, stored_records: list) -> tuple[bool, str]:
+    """
+    Determine whether a sport/league/season competition lifecycle has concluded based on
+    authoritative schedule boundaries and persisted record dates/status.
+
+    Returns (is_completed: bool, reason: str).
+    """
+    if not isinstance(stored_records, list) or not stored_records:
+        return False, "no_records_available"
+
+    now_utc = datetime.now(timezone.utc)
+    current_year = now_utc.year
+
+    # Past concluded historical seasons (season < current_year - 1)
+    if season < current_year - 1:
+        return True, "historical_season_concluded"
+
+    # Extract match/game dates from stored records
+    record_dates = []
+    for r in stored_records:
+        if not isinstance(r, dict):
+            continue
+        dt_str = None
+        if sport == "football":
+            dt_str = r.get("fixture", {}).get("date")
+        else:
+            dt_str = r.get("date") or r.get("game_date")
+        if dt_str and isinstance(dt_str, str):
+            try:
+                dt_clean = dt_str.replace("Z", "+00:00")
+                parsed_dt = datetime.fromisoformat(dt_clean)
+                if parsed_dt.tzinfo is None:
+                    parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+                record_dates.append(parsed_dt)
+            except (ValueError, TypeError):
+                pass
+
+    if not record_dates:
+        return False, "unparseable_record_dates"
+
+    latest_date = max(record_dates)
+    days_since_latest = (now_utc - latest_date).days
+
+    # Active season currently in progress (latest match within last 60 days)
+    if days_since_latest <= 60 and season >= current_year - 1:
+        return False, f"active_season_in_progress_{days_since_latest}_days_since_last_match"
+
+    return True, "season_concluded"
+
+
 def _is_historical_provider_complete(
     page_source: str,
     page_meta: dict,
@@ -56,7 +106,6 @@ def _is_historical_provider_complete(
 
     prov = page_source.strip().lower()
     supported_providers = {
-        "football_data_org",
         "football_data_csv",
         "soccerdata",
         "soccerdata_fbref",
@@ -65,9 +114,6 @@ def _is_historical_provider_complete(
         "mixed",
     }
     if prov not in supported_providers:
-        return False
-
-    if quota_budget_stopped and prov in {"football_data_org"}:
         return False
 
     prov_meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else {}
@@ -464,6 +510,11 @@ def sync_historical_fixtures(
         empty_pages_count=total_empty_pages_count,
         final_stored_count=len(stored_fixtures_all),
     )
+
+    lifecycle_completed, lifecycle_reason = _is_season_lifecycle_completed("football", league_id, season, stored_fixtures_all)
+    if not lifecycle_completed:
+        is_fully_complete = False
+        last_error_reason = f"season_lifecycle_ongoing_{lifecycle_reason}"
 
     acquisition_complete = is_fully_complete
 
@@ -867,12 +918,18 @@ def sync_historical_basketball_games(
         },
     )
 
+    lifecycle_completed_b, lifecycle_reason_b = _is_season_lifecycle_completed("basketball", league_id, season, stored_games_all)
+
     is_fully_complete = (
         not quota_budget_stopped
         and not acquisition_failed
         and acquisition_complete
         and db_validation_passed
+        and lifecycle_completed_b
     )
+
+    if not lifecycle_completed_b and not last_error_reason:
+        last_error_reason = f"season_lifecycle_ongoing_{lifecycle_reason_b}"
 
     if is_fully_complete:
         storage.mark_historical_dataset_complete(
