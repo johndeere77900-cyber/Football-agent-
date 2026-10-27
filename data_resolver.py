@@ -1,18 +1,23 @@
 """
 Provider-neutral Data Resolver for Football data.
 
-Implements Direct-Source Architecture for Historical Acquisition:
-1. Read-first persistence: Reuse stored DB dataset when COMPLETE and verified without external calls.
-2. Direct Routes: Direct Football-Data CSV -> SoccerData FBref -> SoccerData MatchHistory -> SoccerData Sofascore.
+Implements Direct-Source Architecture for historical football acquisition:
+1. Read-first persistence: Reuse the stored DB dataset when independently verified
+   as structurally complete, without external calls.
+2. Approved provider order: Direct Football-Data CSV -> SoccerData FBref ->
+   SoccerData MatchHistory -> SoccerData Sofascore.
 3. Fail-closed handling when required coverage cannot be established.
 
-Football historical acquisition uses Direct CSV and SoccerData providers without external API-Football or secondary API dependencies.
+Football historical acquisition uses only the direct CSV and SoccerData providers.
+API-Football and football-data.org are NOT historical football acquisition
+providers; they are retained for live prediction, live fixtures, team form and
+standings workflows whose status codes appear below.
 
-Result Status Codes:
-- PRIMARY_SUCCESS: Primary provider (Direct CSV / SoccerData) returned valid, sufficient data.
+Result Status Codes (live/date-based workflows):
+- PRIMARY_SUCCESS: Primary provider (API-Football live) returned valid, sufficient data.
 - PRIMARY_INSUFFICIENT: Primary provider response was missing or malformed.
 - PRIMARY_UNAVAILABLE: Primary provider failed (exception / source unavailable).
-- SECONDARY_SUCCESS: Secondary provider (API-Football / football-data.org) returned valid fallback data.
+- SECONDARY_SUCCESS: Secondary live provider (football-data.org) returned valid fallback data.
 - SECONDARY_INSUFFICIENT: Secondary provider response was missing or malformed.
 - NO_DATA: No provider supplied usable data.
 - ERROR: Operational error occurred.
@@ -36,6 +41,7 @@ from datetime import datetime, timezone
 import config
 import api_football
 from api_football import APIFootballError, APIFootballQuotaExhaustedError
+import football_data_api
 import soccerdata_provider
 import time_utils
 
@@ -90,6 +96,56 @@ LEAGUE_TO_SD_CODE = LEAGUE_TO_SD_MH_CODE
 
 # Configured domestic double-round-robin league competitions
 DOUBLE_ROUND_ROBIN_LEAGUE_IDS = {39, 140, 135, 78, 61, 88, 94}
+
+# Provider namespaces that may own a persisted team identity. A bare provider
+# team ID in an authoritative manifest is resolved across these namespaces
+# instead of assuming a single (retired) provider owns the ID.
+_HISTORICAL_TEAM_ID_PROVIDERS = (
+    "football_data_csv",
+    "soccerdata_fbref",
+    "soccerdata_match_history",
+    "soccerdata_sofascore",
+    "football_data_org",
+    "api_football",
+)
+
+
+def _resolve_expected_provider_team_id(provider_team_id, league_id, sport="football"):
+    """
+    Resolve a bare provider team ID to a canonical team ID.
+
+    Every registered provider mapping for the ID is considered. Resolution fails
+    closed when no mapping exists or when the ID maps ambiguously to more than one
+    canonical identity, so a stale or conflicting provider namespace can never
+    silently choose an arbitrary team.
+    """
+    import team_identity
+
+    sport_key = str(sport).strip().lower() if sport else "football"
+    if sport_key == "basketball":
+        providers = ("api_basketball", "espn_url", "espn")
+    else:
+        providers = _HISTORICAL_TEAM_ID_PROVIDERS
+
+    candidates = set()
+    for provider in providers:
+        try:
+            cid = team_identity.resolve_canonical_team_id(
+                raw_name="",
+                provider=provider,
+                provider_team_id=provider_team_id,
+                league_id=league_id,
+                sport=sport,
+                auto_register=False,
+            )
+        except Exception:
+            cid = None
+        if cid:
+            candidates.add(cid)
+
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return None
 
 
 def get_expected_league_team_count(league_id, season=None) -> int | None:
@@ -442,14 +498,26 @@ def _validate_and_canonicalize_team_manifest(raw_team_ids, league_id, sport="foo
                 else:
                     return []
         else:
-            cid = team_identity.resolve_canonical_team_id(
-                raw_name=item_str,
-                provider=None if sport_str == "football" else "api_basketball",
-                provider_team_id=item if isinstance(item, int) else None,
-                league_id=league_id,
-                sport=sport_str,
-                auto_register=False,
-            )
+            cid = None
+            if isinstance(item, int) and not isinstance(item, bool):
+                # Bare provider team ID: resolve it across every registered provider
+                # namespace instead of assuming a single (possibly retired) provider.
+                cid = _resolve_expected_provider_team_id(item, league_id, sport=sport_str)
+            else:
+                # Plain team name: resolve it within its competition context. Ambiguous
+                # or unknown names fail closed rather than picking an arbitrary team.
+                norm = team_identity.normalize_team_name(item_str)
+                if norm:
+                    try:
+                        matches = storage.get_team_identities_by_normalized_name(sport_str, norm, league_id)
+                    except Exception:
+                        matches = []
+                    candidate_ids = {
+                        m.get("canonical_id") for m in matches
+                        if isinstance(m, dict) and m.get("canonical_id")
+                    }
+                    if len(candidate_ids) == 1:
+                        cid = next(iter(candidate_ids))
             if not cid:
                 return []
             canonical_set.add(cid)
@@ -567,9 +635,11 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
                 break
             canonical_expected_set.add(tid)
         else:
-            cid = team_identity.resolve_canonical_team_id(
-                raw_name="", provider="football_data_org" if sport == "football" else "api_basketball", provider_team_id=tid if isinstance(tid, int) else None, league_id=league_id, sport=sport, auto_register=False
-            )
+            if isinstance(tid, int):
+                # Do not assume a retired provider owns a bare provider team ID.
+                cid = _resolve_expected_provider_team_id(tid, league_id, sport=sport)
+            else:
+                cid = None
             if cid:
                 canonical_expected_set.add(cid)
             else:
@@ -580,22 +650,6 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         expected_team_set = set()
     else:
         expected_team_set = canonical_expected_set if canonical_expected_set else (set(expected_team_ids) if expected_team_ids else set())
-
-    if is_double_round_robin and rel_exp_team_count is not None and expected_team_set:
-        if len(expected_team_set) != rel_exp_team_count:
-            return {
-                "verified": False,
-                "reason": "authoritative_team_universe_mismatch",
-                "fixture_count": fixture_count,
-                "distinct_fixture_count": 0,
-                "team_count": 0,
-                "expected_team_count": rel_exp_team_count,
-                "expected_team_ids": sorted(expected_team_set),
-                "missing_team_ids": [],
-                "unexpected_team_ids": [],
-                "team_match_counts": {},
-                "expected_fixture_count": None,
-            }
 
     if not expected_team_set and is_double_round_robin:
         return {
@@ -1023,6 +1077,27 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
         }
+
+    # Manifest-vs-authority size consistency. An expected-team manifest whose size
+    # contradicts the authoritative competition size cannot serve as completeness
+    # evidence. It is evaluated *after* the per-fixture integrity checks so that
+    # malformed, duplicated or contradictory records are reported as the root
+    # cause instead of being masked by an aggregate count mismatch.
+    if is_double_round_robin and rel_exp_team_count is not None and expected_team_set:
+        if len(expected_team_set) != rel_exp_team_count:
+            return {
+                "verified": False,
+                "reason": "authoritative_team_universe_mismatch",
+                "fixture_count": valid_fixture_count,
+                "distinct_fixture_count": distinct_fixture_count,
+                "team_count": len(participating_teams),
+                "expected_team_count": rel_exp_team_count,
+                "expected_team_ids": sorted(expected_team_set),
+                "missing_team_ids": [],
+                "unexpected_team_ids": [],
+                "team_match_counts": team_match_counts,
+                "expected_fixture_count": None,
+            }
 
     if expected_team_set:
         missing_team_ids = expected_team_set - participating_teams
@@ -2484,10 +2559,28 @@ class DataResolver:
 
     def get_league_fixtures_page(self, league_id, season, page=1, max_budget=None, completed_only=True):
         """
-        DataResolver wrapper for league fixtures page acquisition with two-route fallback architecture.
-        1. Read-first persistence: Reuse stored historical fixtures when valid and structurally complete for requested season.
-        2. Primary Route: Try direct CSV/downloadable historical sources first, then SoccerData MatchHistory and Sofascore as appropriate.
-        3. Secondary Route: Use API-Football and football-data.org API only when validated primary coverage remains insufficient.
+        DataResolver wrapper for historical football league fixture acquisition.
+
+        Historical football acquisition uses exactly the approved provider order and
+        stops at the first source that supplies independently validated, sufficient
+        coverage:
+            1. Direct downloadable Football-Data.co.uk CSV
+            2. SoccerData FBref
+            3. SoccerData MatchHistory
+            4. SoccerData Sofascore
+
+        API-Football and football-data.org are NOT historical football fixture
+        acquisition providers. Their clients/normalizers are retained because live
+        prediction, live fixtures, team form/statistics and standings workflows still
+        depend on them; those call sites are untouched.
+
+        A provider attempt records a distinct outcome (SUCCESS / FAILED / MALFORMED /
+        VALID_EMPTY / QUOTA_EXHAUSTED / INSUFFICIENT) in
+        provider_metadata["provider_outcomes"]. A successful HTTP request or a
+        non-empty response is never treated as proof of complete historical
+        coverage: only independently verified structural coverage completes a
+        dataset, and an insufficient dataset stays insufficient when every approved
+        provider has been exhausted.
         """
         competition_format = (
             "double_round_robin"
@@ -2830,12 +2923,27 @@ class DataResolver:
                     "secondary_quota_exhausted": False,
                 }
 
-        # Resolve expected team universe via secondary network discovery ONLY when primary route was insufficient
+        # All approved providers have been attempted. Resolve the authoritative
+        # expected team universe (read-only, no network) so coverage of the
+        # accumulated (provider + persisted DB) dataset can be judged.
         expected_team_ids = _get_authoritative_historical_team_ids(
             league_id, season, max_budget=max_budget, allow_network=False
         )
 
-        # 3. Secondary Route: football-data.org API fallback
+        # Provider outcome ledger: distinguishes failure, malformed payload, a
+        # valid empty result, quota exhaustion, and structurally insufficient data.
+        provider_outcomes = {}
+        for provider_name, produced in (
+            ("football_data_csv", csv_fixtures),
+            ("soccerdata_fbref", sd_fb_fixtures),
+            ("soccerdata_match_history", sd_mh_fixtures),
+            ("soccerdata_sofascore", sd_ss_fixtures),
+        ):
+            if produced:
+                provider_outcomes[provider_name] = "SUCCESS"
+            else:
+                provider_outcomes[provider_name] = "NO_DATA_FROM_PROVIDER"
+
         secondary_failed = False
         secondary_quota_exhausted = False
         secondary_access_denied = False
@@ -2887,18 +2995,11 @@ class DataResolver:
                     "is_partial": False,
                     "structural_coverage": sec_coverage,
                     "providers_contributed": contribs,
+                    "provider_outcomes": provider_outcomes,
                 },
                 "secondary_failed": False,
                 "secondary_quota_exhausted": False,
             }
-
-        fd_matches = []
-        fd_meta = {}
-
-        if not expected_team_ids:
-            expected_team_ids = _get_authoritative_historical_team_ids(
-                league_id, season, max_budget=max_budget, allow_network=False
-            )
 
         final_coverage = _validate_historical_structural_coverage(
             combined_fixtures,
@@ -2929,6 +3030,8 @@ class DataResolver:
             "is_partial": not final_coverage["verified"],
             "structural_coverage": final_coverage,
             "providers_contributed": contribs,
+            "provider_outcomes": provider_outcomes,
+            "exhausted_reason": "approved_providers_exhausted_without_verified_coverage",
             "soccerdata_fbref": {
                 "count": len(sd_fb_fixtures),
                 "is_complete": False,
@@ -2949,6 +3052,9 @@ class DataResolver:
             },
         }
 
+        # Every approved provider has been exhausted without verified coverage.
+        # The dataset remains explicitly incomplete; it is never promoted to
+        # complete merely because no further provider exists to try.
         return {
             "fixtures": combined_fixtures,
             "expected_pages": 1,
@@ -3367,6 +3473,37 @@ class DataResolver:
             except Exception as exc:
                 fallback_reason = f"Primary standings error: {str(exc)[:100]}"
                 logger.warning(f"Primary standings query failed for league {league_id}: {exc}")
+
+        # Secondary Route: football-data.org standings when the primary provider
+        # failed or returned an insufficient payload. This is a LIVE provider path
+        # (standings feed live prediction features); football-data.org is retired
+        # only as a historical football *fixture acquisition* provider, so this
+        # live fallback is preserved.
+        comp_code = LEAGUE_TO_FD_CODE.get(league_id) if league_id else None
+        if comp_code:
+            try:
+                fd_standings = football_data_api.get_competition_standings(comp_code, season)
+                suff_code, clean_fd_standings = validate_standings_sufficiency(fd_standings)
+                if suff_code in ("VALID_DATA", "VALID_EMPTY"):
+                    meta = {
+                        "data_source": "football_data_org" if clean_fd_standings else "none",
+                        "provider": "football_data_org" if clean_fd_standings else "none",
+                        "provider_type": "secondary",
+                        "primary_attempted": primary_attempted,
+                        "fallback_used": True,
+                        "fallback_reason": fallback_reason or "Primary standings provider unavailable",
+                        "resolver_status": "SECONDARY_SUCCESS" if clean_fd_standings else "SECONDARY_EMPTY",
+                    }
+                    normalized = [
+                        _normalize_football_data_standing(row)
+                        for row in clean_fd_standings
+                        if isinstance(row, dict)
+                    ]
+                    return normalized, meta
+                fallback_reason = fallback_reason or f"Secondary standings payload status: {suff_code}"
+            except Exception as exc:
+                fallback_reason = fallback_reason or f"Secondary standings error: {str(exc)[:100]}"
+                logger.warning(f"Secondary standings query failed for league {league_id}: {exc}")
 
         meta = {
             "data_source": "none",

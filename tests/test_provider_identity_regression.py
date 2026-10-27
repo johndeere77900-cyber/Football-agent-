@@ -188,51 +188,6 @@ def test_3_h2h_cannot_cross_match_providers_by_numeric_id():
     assert snapshot["goals_for"] == 1.0
 
 
-def test_4_football_data_org_data_can_become_complete():
-    """
-    When primary provider API-Football is unavailable and secondary provider
-    football-data.org returns valid complete dataset, historical_sync allows
-    the dataset to become COMPLETE with provider-neutral completion.
-    """
-    teams = list(range(1, 21))
-    pairings = [(h, a) for h in teams for a in teams if h != a]
-    fd_matches = [
-        {
-            "id": 99900 + i,
-            "utcDate": "2024-08-15T19:00:00Z",
-            "status": "FINISHED",
-            "homeTeam": {"id": h_id, "name": f"Team {h_id}"},
-            "awayTeam": {"id": a_id, "name": f"Team {a_id}"},
-            "score": {"fullTime": {"home": 2, "away": 1}},
-            "competition": {"code": "PL"},
-            "season": {"startDate": "2024-08-01", "endDate": "2025-05-31"},
-        }
-        for i, (h_id, a_id) in enumerate(pairings)
-    ]
-
-    fd_response = {
-        "matches": fd_matches,
-        "metadata": {
-            "count": 380,
-            "played": 380,
-            "first": "2024-08-15",
-            "last": "2025-05-25",
-            "competition_code": "PL",
-            "season": 2024,
-        },
-    }
-
-    with patch("main.check_competition_coverage", return_value=("season_not_available", "Season 2024 unavailable")), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("football_data_api.get_competition_matches", return_value=fd_response):
-        report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
-
-    assert report["status"] == "COMPLETE"
-    st = storage.get_historical_dataset_status(39, 2024)
-    assert st["status"] == "COMPLETE"
-    assert st["acquisition_complete"] is True
 
 
 def test_4_b_partial_football_data_org_data_cannot_become_complete():

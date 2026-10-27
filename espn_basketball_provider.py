@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 ESPN_NBA_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
 NBA_LEAGUE_ID = 12
 
+# ESPN acquisition units: one monthly scoreboard request per NBA season month
+# (October of the season year through June of the following year). Each month is
+# an independent coverage unit and must never be reported as a single API page.
+NBA_SEASON_MONTHS = [10, 11, 12, 1, 2, 3, 4, 5, 6]
+NBA_SEASON_MONTH_COUNT = len(NBA_SEASON_MONTHS)
+
 
 def fetch_espn_nba_season_games(
     league_id: int, season: int, per_request_timeout: int = 15, total_deadline_seconds: int = 60
@@ -55,9 +61,8 @@ def fetch_espn_nba_season_games(
         return [], coverage_meta
 
     months = [
-        (ssn, 10), (ssn, 11), (ssn, 12),
-        (ssn + 1, 1), (ssn + 1, 2), (ssn + 1, 3),
-        (ssn + 1, 4), (ssn + 1, 5), (ssn + 1, 6),
+        (ssn if month >= 10 else ssn + 1, month)
+        for month in NBA_SEASON_MONTHS
     ]
 
     seen_event_ids = set()

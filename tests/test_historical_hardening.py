@@ -51,13 +51,23 @@ def test_complete_dataset_zero_api_calls(temp_db, monkeypatch):
         "data_resolver._get_authoritative_historical_team_ids",
         lambda l, s, *args, **kwargs: [c1, c2]
     )
-    fixtures = [sample_fixture(9001, home_id=1, away_id=2), sample_fixture(9002, home_id=2, away_id=1)]
+    # Keep the competition's declared size consistent with the mocked universe so
+    # structural coverage is judged against the same authority.
+    monkeypatch.setattr("data_resolver.get_expected_league_team_count", lambda league_id, season=None: 2)
+    fixtures = [
+        {**sample_fixture(9001, home_id=1, away_id=2), "league": {"id": 39, "season": 2024}},
+        {**sample_fixture(9002, home_id=2, away_id=1), "league": {"id": 39, "season": 2024}},
+    ]
     storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
-    storage.mark_historical_dataset_complete(league_id=39, season=2024, fixture_count=2)
+    storage.mark_historical_dataset_complete(
+        league_id=39, season=2024, fixture_count=2, expected_team_ids=[c1, c2]
+    )
 
-    with patch("api_football.get_league_fixtures") as mock_get:
+    with patch("api_football.get_league_fixtures") as mock_get, \
+         patch("api_football.get_league_fixtures_page") as mock_page:
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         mock_get.assert_not_called()
+        mock_page.assert_not_called()
 
     assert report["status"] == "COMPLETE"
     assert report["api_requests_consumed"] == 0
@@ -78,54 +88,8 @@ def test_partial_dataset_leaves_status_incomplete_and_backtest_refuses(temp_db):
     assert "missing or incomplete" in str(exc_info.value)
 
 
-def test_quota_ceiling_stops_paginated_fetch_at_budget(temp_db, monkeypatch):
-    monkeypatch.setattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 3)
-
-    current_page_call = 0
-
-    fixture_call_count = 0
-
-    def fake_get(endpoint, params, max_budget=None, **kwargs):
-        nonlocal current_page_call, fixture_call_count
-        current_page_call += 1
-        if current_page_call > 3:
-            raise api_football.APIFootballQuotaExhaustedError("Historical quota budget reached (3).")
-        if endpoint == "standings":
-            return {"response": [{"league": {"standings": [[{"team": {"id": 1, "name": "Team 1"}}, {"team": {"id": 2, "name": "Team 2"}}]]}}]}
-        fixture_call_count += 1
-        return {
-            "paging": {"current": fixture_call_count, "total": 5},
-            "response": [sample_fixture(9010 + fixture_call_count)],
-        }
-
-    with patch("api_football._get", side_effect=fake_get), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        report = historical_sync.sync_historical_fixtures(league_id=39, season=2024, historical_budget=3)
-
-    assert report["status"] == "INCOMPLETE"
-    assert report["quota_budget_stopped"] is True
 
 
-def test_enrichment_quota_ceiling_stops_batches(temp_db, monkeypatch):
-    monkeypatch.setattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 2)
-
-    fixtures = [sample_fixture(9020 + i) for i in range(10)]
-    storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
-    storage.mark_historical_dataset_incomplete(league_id=39, season=2024)
-
-    # Pre-record 2 API requests to exhaust budget
-    storage.record_api_request("api_football", "fixtures")
-    storage.record_api_request("api_football", "fixtures")
-
-    with patch("api_football.get_league_fixtures", return_value=fixtures):
-        report = historical_sync.sync_historical_fixtures(
-            league_id=39, season=2024, with_enrichment=True, historical_budget=2
-        )
-
-    assert report["quota_budget_stopped"] is True
-    assert report["status"] == "INCOMPLETE"
 
 
 def test_provider_header_remaining_zero_raises_exhausted(temp_db, monkeypatch):

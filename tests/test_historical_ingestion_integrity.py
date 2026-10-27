@@ -216,21 +216,17 @@ def test_req14_duplicate_fixture_idempotent(temp_db):
 
 
 # 15. Malformed fixture cannot cause a dataset to become COMPLETE
-@patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
+@patch("data_resolver._fetch_direct_csv_league_fixtures")
 @patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
 @patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
 def test_req15_malformed_fixture_cannot_cause_complete(mock_sd_mh, mock_sd_ss, mock_csv, temp_db):
     valid_fix = make_fixture(fid=3001)
     malformed_fix = make_fixture(fid=3002, home_id=None)
 
-    fetch_meta = {
-        "fixtures": [valid_fix, malformed_fix],
-        "page": 1,
-        "expected_pages": 1,
-    }
+    # Malformed fixture arrives from the first approved provider (direct CSV).
+    mock_csv.return_value = [valid_fix, malformed_fix]
 
-    with patch("api_football.get_league_fixtures_page", return_value=fetch_meta):
-        report = historical_sync.sync_historical_fixtures(league_id=39, season=2024, refresh=True)
+    report = historical_sync.sync_historical_fixtures(league_id=39, season=2024, refresh=True)
 
     assert report["rejected_count"] == 1
     assert report["status"] == "INCOMPLETE"
@@ -289,15 +285,19 @@ def test_req18_normal_backtest_makes_zero_api_calls(temp_db, monkeypatch):
     assert res["graded"] > 0
 
 
-# 19. Existing quota tests still pass
-def test_req19_quota_tests_pass(temp_db, monkeypatch):
+# 19. Football historical acquisition makes ZERO API-Football calls, regardless of
+#     the API-Football historical budget, and stays INCOMPLETE without approved-provider coverage.
+def test_req19_football_historical_makes_zero_api_football_calls(temp_db, monkeypatch):
     monkeypatch.setattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 1)
     storage.record_api_request("api_football", "test_endpoint")
 
     with patch("api_football.get_league_fixtures_with_metadata") as mock_get, \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
+         patch("api_football.get_league_fixtures_page") as mock_page, \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
         report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
         mock_get.assert_not_called()
+        mock_page.assert_not_called()
 
-    assert report["quota_budget_stopped"] is True
     assert report["status"] == "INCOMPLETE"

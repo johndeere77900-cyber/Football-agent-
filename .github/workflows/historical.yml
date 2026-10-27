@@ -112,7 +112,6 @@ jobs:
       - name: Verify credentials
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
         run: |
           set -euo pipefail
@@ -120,19 +119,16 @@ jobs:
             echo "ERROR: NEON_DATABASE_URL secret is missing."
             exit 1
           fi
-          if [ -n "$FOOTBALL_DATA_API_KEY" ]; then
-            echo "FOOTBALL_DATA_API_KEY secret is present."
-          else
-            echo "NOTICE: FOOTBALL_DATA_API_KEY secret is missing. Secondary football-data.org API fallback will be unavailable."
-          fi
+          echo "Football historical acquisition uses the direct Football-Data.co.uk CSV and SoccerData providers; no football API key is required."
           if [ -n "$API_BASKETBALL_KEY" ]; then
-            echo "API_BASKETBALL_KEY secret is present for basketball historical acquisition."
+            echo "API_BASKETBALL_KEY secret is present for the basketball API-Basketball fallback (ESPN scoreboards are used first and need no key)."
+          else
+            echo "NOTICE: API_BASKETBALL_KEY secret is missing. Basketball acquisition will rely on ESPN scoreboards only; the API-Basketball fallback will report UNAVAILABLE."
           fi
 
       - name: Historical Data Sync
         id: sync
         env:
-          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           REQUIRE_NEON: "true"
@@ -173,7 +169,6 @@ jobs:
         if: always() && steps.sync.outcome != 'skipped'
         id: verify
         env:
-          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           REQUIRE_NEON: "true"
