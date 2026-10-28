@@ -1,3 +1,4 @@
+from tests import completion_helpers
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -237,7 +238,7 @@ def test_req16_manifest_fixture_count_equals_actual_stored(temp_db):
     valid_fix = make_fixture(fid=4001)
     storage.save_historical_fixtures([valid_fix], league_id=39, season=2024)
     count = storage.get_historical_fixture_count(39, 2024)
-    storage.mark_historical_dataset_complete(league_id=39, season=2024, fixture_count=count)
+    completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=count)
 
     status = storage.get_historical_dataset_status(39, 2024)
     assert status["fixture_count"] == count == 1
@@ -255,7 +256,7 @@ def test_req17_database_first_backtest_behavior(temp_db):
         fixtures.append(make_fixture(fid=5000 + i, date=d, home_id=h, away_id=a))
 
     storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
-    storage.mark_historical_dataset_complete(league_id=39, season=2024, fixture_count=len(fixtures))
+    completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=len(fixtures))
 
     res = backtest.run_real_backtest(league_id=39, season=2024, sample_size=2, min_prior_matches=1)
     assert res["graded"] > 0
@@ -273,7 +274,7 @@ def test_req18_normal_backtest_makes_zero_api_calls(temp_db, monkeypatch):
         fixtures.append(make_fixture(fid=6000 + i, date=d, home_id=h, away_id=a))
 
     storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
-    storage.mark_historical_dataset_complete(league_id=39, season=2024, fixture_count=len(fixtures))
+    completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=len(fixtures))
 
     def fail_api(*args, **kwargs):
         pytest.fail("API-Football network call attempted during normal backtest!")

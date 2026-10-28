@@ -682,7 +682,27 @@ def sync_historical_fixtures(
 
     enrichment_stored = 0
 
-    # Optional statistical enrichment acquisition
+    # Optional statistical enrichment acquisition. It has its own API-Football
+    # quota ceiling: when that ceiling is already reached, enrichment is skipped
+    # and the stop is reported truthfully, without invalidating fixtures that were
+    # acquired and validated without enrichment.
+    enrichment_requests_used = storage.get_api_request_count(
+        "api_football", datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
+    if (
+        with_enrichment
+        and not quota_budget_stopped
+        and not acquisition_failed
+        and enrichment_requests_used >= historical_budget
+    ):
+        quota_budget_stopped = True
+        last_error_reason = "quota_budget_exhausted_during_enrichment"
+        print(
+            f"API-Football enrichment budget ceiling reached "
+            f"({enrichment_requests_used}/{historical_budget} requests used today). Skipping enrichment.",
+            flush=True,
+        )
+
     if with_enrichment and not quota_budget_stopped and not acquisition_failed:
         all_stored = storage.get_historical_fixtures(league_id, season)
         finished_ids = [
@@ -970,6 +990,32 @@ import basketball_api
 import espn_basketball_provider
 
 
+def _expected_min_season_games(league_id, season):
+    """
+    Independently established expected game coverage for a basketball season.
+
+    The NBA's published regular-season game totals are the authority for the
+    season (see config.NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES). Returns None when
+    no authoritative expectation exists for the competition or season, so callers
+    fail closed instead of treating the stored record count as its own evidence of
+    completeness.
+    """
+    label = parse_season_label(season)
+    if label is None:
+        return None
+    try:
+        lid = int(league_id)
+    except (TypeError, ValueError):
+        return None
+    if lid != NBA_LEAGUE_ID:
+        return None
+
+    expected = (getattr(config, "NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES", {}) or {}).get(label)
+    if not isinstance(expected, int) or isinstance(expected, bool) or expected <= 0:
+        return None
+    return expected
+
+
 def _validate_historical_basketball_dataset(stored_games: list, league_id: int, season: int, dataset_info: dict) -> bool:
     """
     Validate persisted basketball games against basketball-specific completeness rules:
@@ -1025,42 +1071,65 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
     rej_cnt = dataset_info.get("rejected_count", 0) if isinstance(dataset_info, dict) else 0
     empty_pages_count = dataset_info.get("empty_pages_count", 0) if isinstance(dataset_info, dict) else 0
 
-    if (
-        manifest_count != len(stored_games)
-        or e_pages <= 0
-        or p_completed != e_pages
-        or rej_cnt != 0
-        or empty_pages_count != 0
-    ):
+    provider_coverage = dataset_info.get("provider_coverage") if isinstance(dataset_info, dict) else None
+    if not isinstance(provider_coverage, dict) or not provider_coverage:
+        return False
+
+    # Empty coverage units are legitimate only where a provider recorded the
+    # period as successfully acquired with no games (for example an NBA month that
+    # genuinely contains no fixtures). A failed, missing or unverified unit is
+    # never treated as a legitimate empty period, and empty units never stand in
+    # for acquired games. This mirrors the storage-level completion rule.
+    verified_empty_units = 0
+    for provider_entry in provider_coverage.values():
+        if not isinstance(provider_entry, dict):
+            return False
+        entry_empty = provider_entry.get("valid_empty_units")
+        if isinstance(entry_empty, int) and not isinstance(entry_empty, bool) and entry_empty > 0:
+            verified_empty_units += entry_empty
+
+    if manifest_count != len(stored_games) or e_pages <= 0 or p_completed != e_pages or rej_cnt != 0:
+        return False
+
+    if empty_pages_count > verified_empty_units:
         return False
 
     if len(seen_game_ids) != len(stored_games):
         return False
 
     # Provider-specific coverage units and their recorded outcomes must be present
-    # and internally consistent, and at least one provider must have completed with
-    # a VALIDATED outcome. ESPN months and API pages are separate namespaces and
-    # each is checked against its own recorded expectation.
-    provider_coverage = dataset_info.get("provider_coverage") if isinstance(dataset_info, dict) else None
-    if not isinstance(provider_coverage, dict) or not provider_coverage:
-        return False
-
+    # and internally consistent. ESPN months and API pages are separate
+    # namespaces, each checked against its own recorded expectation. At least one
+    # provider must have completed with a VALIDATED outcome; a provider that was
+    # attempted and failed (for example ESPN before the API-Basketball fallback)
+    # is reported truthfully without invalidating the validated route.
     validated_provider_found = False
     for provider_entry in provider_coverage.values():
         if not isinstance(provider_entry, dict):
             return False
-        if provider_entry.get("status") == ACQUISITION_STATE_VALIDATED:
-            validated_provider_found = True
         expected_units = provider_entry.get("expected")
         completed_units = provider_entry.get("completed")
-        if not isinstance(expected_units, int) or isinstance(expected_units, bool) or expected_units <= 0:
+        if not isinstance(expected_units, int) or isinstance(expected_units, bool) or expected_units < 0:
             return False
-        if not isinstance(completed_units, int) or isinstance(completed_units, bool):
+        if not isinstance(completed_units, int) or isinstance(completed_units, bool) or completed_units < 0:
             return False
-        if completed_units < expected_units:
+        if completed_units > expected_units:
             return False
+        if provider_entry.get("status") == ACQUISITION_STATE_VALIDATED:
+            if expected_units <= 0:
+                return False
+            validated_provider_found = True
 
     if not validated_provider_found:
+        return False
+
+    # A manifest that agrees with its own records is not proof that the season is
+    # complete. The independently established NBA regular-season total is the
+    # authority, and a season without such an expectation fails closed.
+    expected_min_games = _expected_min_season_games(league_id, season)
+    if expected_min_games is None:
+        return False
+    if len(seen_game_ids) < expected_min_games:
         return False
 
     return True

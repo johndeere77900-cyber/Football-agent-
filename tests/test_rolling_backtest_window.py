@@ -1,3 +1,4 @@
+from tests import completion_helpers
 import pytest
 from unittest.mock import patch
 
@@ -156,7 +157,7 @@ def test_existing_single_season_backtest_compatibility(temp_db):
     """J: Single-season run_real_backtest() continues working."""
     fixtures_2024 = [sample_fixture(50 + i, f"2024-04-{i+1:02d}T15:00:00+00:00", home_id=(i%2)+1, away_id=(i%2)+3, season=2024) for i in range(10)]
     storage.save_historical_fixtures(fixtures_2024, league_id=39, season=2024)
-    storage.mark_historical_dataset_complete(league_id=39, season=2024, fixture_count=10)
+    completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=10)
 
     res = backtest.run_real_backtest(
         league_id=39,

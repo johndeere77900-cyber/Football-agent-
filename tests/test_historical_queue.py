@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 import config
 import storage
+from tests import completion_helpers
 import historical_sync
 
 
@@ -17,7 +18,7 @@ def test_queue_skips_complete_datasets(temp_db, monkeypatch):
     monkeypatch.setattr(config, "ALLOWED_LEAGUE_IDS", [39, 140])
 
     # Mark league 39 season 2024 COMPLETE
-    storage.mark_historical_dataset_complete(
+    completion_helpers.force_manifest(
         league_id=39,
         season=2024,
         fixture_count=380,
@@ -108,7 +109,7 @@ def test_queue_resumes_from_first_unfinished_dataset(temp_db, monkeypatch):
     monkeypatch.setattr(config, "ALLOWED_LEAGUE_IDS", [39, 140, 135])
 
     # Run 1: League 39 completes, League 140 hits quota and stays INCOMPLETE
-    storage.mark_historical_dataset_complete(
+    completion_helpers.force_manifest(
         league_id=39, season=2024, fixture_count=380, sport="football", expected_pages=10, pages_completed=10, acquisition_complete=True
     )
     storage.mark_historical_dataset_incomplete(

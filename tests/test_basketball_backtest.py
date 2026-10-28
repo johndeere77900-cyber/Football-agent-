@@ -1,3 +1,4 @@
+from tests import completion_helpers
 import pytest
 import storage
 import backtest
@@ -53,7 +54,8 @@ def test_basketball_backtest_database_first(temp_db, monkeypatch):
 
     # Save to storage and mark COMPLETE
     storage.save_historical_basketball_games(games, league_id=12, season=2024)
-    storage.mark_historical_dataset_complete(12, 2024, fixture_count=len(games), sport="basketball")
+    completion_helpers.allow_synthetic_nba_season(monkeypatch, 2024, len(games))
+    completion_helpers.mark_complete(12, 2024, fixture_count=len(games), sport="basketball")
 
     # Prevent API calls
     def throw_api_error(*args, **kwargs):

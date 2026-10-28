@@ -2638,6 +2638,16 @@ def mark_historical_dataset_complete(
     if rejected_count > 0:
         raise ValueError(f"Cannot mark dataset COMPLETE when rejected_count ({rejected_count}) > 0.")
 
+    # Empty coverage units are accepted only when an approved provider recorded
+    # them as a legitimate no-games period. This is a caller-supplied-consistency
+    # check, so it is evaluated before the persisted-data reconciliation below.
+    verified_empty_units = _verified_empty_coverage_units(provider_coverage)
+    if empty_pages_count > verified_empty_units:
+        raise ValueError(
+            f"Cannot mark dataset COMPLETE when empty_pages_count ({empty_pages_count}) exceeds the "
+            f"independently verified empty coverage units ({verified_empty_units})."
+        )
+
     # Persisted-data reconciliation: the manifest describes what the database
     # actually holds for this sport/league/season.
     persisted_count = _persisted_historical_record_count(sport, league_id, season)
@@ -2669,15 +2679,8 @@ def mark_historical_dataset_complete(
             f"Cannot mark dataset COMPLETE: the persisted dataset failed validation ({evidence_reason})."
         )
 
-    # Empty coverage units are accepted only when an approved provider recorded
-    # them as a legitimate no-games period.
-    verified_empty_units = _verified_empty_coverage_units(provider_coverage)
-    if empty_pages_count > verified_empty_units:
-        raise ValueError(
-            f"Cannot mark dataset COMPLETE when empty_pages_count ({empty_pages_count}) exceeds the "
-            f"independently verified empty coverage units ({verified_empty_units})."
-        )
-
+    # Empty coverage units were already reconciled against the provider's
+    # verified empty periods above.
     if not _has_validated_provider_coverage(provider_coverage):
         raise ValueError(
             "Cannot mark dataset COMPLETE without at least one provider whose acquisition "
@@ -2849,6 +2852,12 @@ def mark_historical_dataset_incomplete(
             fixture_count = get_historical_fixture_count(league_id, season)
     else:
         fixture_count = _validate_non_negative_int(fixture_count, "fixture_count")
+
+    # Coverage counters are recorded facts, never provider objects: a malformed or
+    # non-numeric value must not reach the manifest where it would corrupt later
+    # reconciliation.
+    expected_pages = _validate_non_negative_int(expected_pages, "expected_pages")
+    pages_completed = _validate_non_negative_int(pages_completed, "pages_completed")
 
     acq_int = 1 if acquisition_complete else 0
     now_str = _utc_now()

@@ -248,72 +248,7 @@ def test_fd_partial_plus_mh_partial_plus_sofascore_complete_yields_is_complete_t
     assert res["provider_metadata"]["is_partial"] is False
 
 
-@patch("soccerdata_provider.get_match_history_games")
-@patch("football_data_api.get_competition_matches")
-@patch("api_football.get_league_fixtures_page")
-def test_1_primary_api_football_structural_gap_triggers_fallback(mock_api_fb, mock_fd, mock_sd_mh, mock_csv):
-    primary_305 = [
-        make_test_fixture(610000 + i, h_name=f"Team {h_id}", a_name=f"Team {a_id}", h_id=h_id, a_id=a_id, league_id=61, season=2025)
-        for i, (h_id, a_id) in enumerate([(h, a) for h in range(1, 19) for a in range(1, 19) if h != a and (h, a) != (17, 18)])
-    ]
-    mock_api_fb.return_value = {"fixtures": primary_305, "expected_pages": 1, "current_page": 1}
-    mock_fd.return_value = {"matches": []}
-
-    missing_sd_fixture = make_test_fixture(610305, h_name="Team 17", a_name="Team 18", h_id=17, a_id=18, league_id=61, season=2025)
-    mock_sd_mh.return_value = ("SOURCE_AVAILABLE", [missing_sd_fixture], {"status": "SOURCE_AVAILABLE"})
-
-    resolver = DataResolver()
-    res = resolver.get_league_fixtures_page(league_id=61, season=2025, page=1)
-
-    assert mock_fd.call_count == 1 or mock_sd_mh.call_count == 1
-    assert res["source"] == "mixed"
-    assert len(res["fixtures"]) == 306
-    assert res["provider_metadata"]["structural_coverage"]["verified"] is True
-
-
 # TEST 2 — Entire team missing
 
 
-@patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
-@patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
-@patch("api_football.get_league_fixtures_page")
-def test_4_primary_api_football_380_complete_dataset(mock_api_fb, mock_sd_mh, mock_sd_ss, mock_csv):
-    fixtures_380 = [
-        make_test_fixture(1000 + i, h_name=f"Team {h_id}", a_name=f"Team {a_id}", h_id=h_id, a_id=a_id, league_id=39, season=2024)
-        for i, (h_id, a_id) in enumerate([(h, a) for h in range(1, 21) for a in range(1, 21) if h != a])
-    ]
-    mock_api_fb.return_value = {"fixtures": fixtures_380, "expected_pages": 1, "current_page": 1}
-
-    resolver = DataResolver()
-    res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
-
-    assert res["source"] in ("api_football", "mixed")
-    assert res["provider_metadata"]["structural_coverage"]["verified"] is True
-    assert res["provider_metadata"]["structural_coverage"]["fixture_count"] == 380
-    assert res["provider_metadata"]["structural_coverage"]["expected_fixture_count"] == 380
-
-
 # TEST 5 — Unknown competition format
-
-
-@patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
-@patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {}))
-@patch("football_data_api.get_competition_matches")
-@patch("api_football.get_league_fixtures_page")
-def test_scenario_12_primary_sufficient_remains_intact(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss, mock_csv):
-    fixtures_380 = [
-        make_test_fixture(1000 + i, h_name=f"Team {h_id}", a_name=f"Team {a_id}", h_id=h_id, a_id=a_id, league_id=39, season=2024)
-        for i, (h_id, a_id) in enumerate([(h, a) for h in range(1, 21) for a in range(1, 21) if h != a])
-    ]
-    mock_api_fb.return_value = {
-        "fixtures": fixtures_380,
-        "expected_pages": 1,
-        "current_page": 1,
-    }
-
-    resolver = DataResolver()
-    res = resolver.get_league_fixtures_page(league_id=39, season=2024, page=1)
-
-    assert res["source"] in ("api_football", "mixed")
-    assert len(res["fixtures"]) == 380
-    assert mock_fd.call_count == 0

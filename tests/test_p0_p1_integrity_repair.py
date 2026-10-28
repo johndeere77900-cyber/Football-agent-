@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 import config
 import data_resolver
 import storage
+from tests import completion_helpers
 import api_football
 import basketball_api
 import espn_basketball_provider
@@ -24,6 +25,21 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ENVIRONMENT", "development")
     storage.init_db()
     return db_file
+
+
+@pytest.fixture(autouse=True)
+def synthetic_nba_season_expectation(monkeypatch):
+    """State the scale of this module's synthetic basketball fixtures.
+
+    Production keeps the published NBA regular-season totals in
+    config.NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES; these tests persist a handful of
+    games, so they declare their own explicit expectation instead of the
+    production minimum being loosened.
+    """
+    expected = dict(getattr(config, "NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES", {}) or {})
+    for season in (2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026):
+        expected[season] = 1
+    monkeypatch.setattr(config, "NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES", expected, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -371,7 +387,7 @@ def test_legacy_sqlite_primary_key_migration(tmp_path, monkeypatch):
     assert status_fb["fixture_count"] == 380
 
     # Insert basketball row with identical league_id=12 and season=2024
-    storage.mark_historical_dataset_complete(12, 2024, fixture_count=1230, sport="basketball")
+    completion_helpers.force_manifest(12, 2024, fixture_count=1230, sport="basketball")
 
     # Verify coexistence without primary key collision
     status_bb = storage.get_historical_dataset_status(12, 2024, sport="basketball")
@@ -723,7 +739,7 @@ def test_changing_pagination_totals_fails_closed(isolated_db, espn_enabled):
     assert st["error_reason"] == "pagination_metadata_mismatch"
 
 
-def test_storage_level_complete_invariant_enforcement(isolated_db):
+def test_storage_level_complete_invariant_enforcement(isolated_db, monkeypatch):
     # 1. fixture_count <= 0 -> rejected
     with pytest.raises(ValueError, match="fixture_count is 0"):
         storage.mark_historical_dataset_complete(39, 2024, fixture_count=0, expected_pages=1, pages_completed=1, acquisition_complete=True)
@@ -749,7 +765,10 @@ def test_storage_level_complete_invariant_enforcement(isolated_db):
         storage.mark_historical_dataset_complete(39, 2024, fixture_count=10, expected_pages=1, pages_completed=1, acquisition_complete=True, empty_pages_count=1)
 
     # 7. Basketball valid dataset -> accepted
-    storage.mark_historical_dataset_complete(12, 2024, fixture_count=100, sport="basketball", expected_pages=2, pages_completed=2, acquisition_complete=True)
+    bb_games = [sample_basketball_game(2000 + i, date=f"2024-11-{(i % 28) + 1:02d}T20:00:00+00:00") for i in range(100)]
+    storage.save_historical_basketball_games(bb_games, league_id=12, season=2024)
+    completion_helpers.allow_synthetic_nba_season(monkeypatch, 2024, len(bb_games))
+    completion_helpers.mark_complete(12, 2024, fixture_count=100, sport="basketball", expected_pages=2, pages_completed=2, acquisition_complete=True)
     st = storage.get_historical_dataset_status(12, 2024, sport="basketball")
     assert st["status"] == "COMPLETE"
 
@@ -758,7 +777,8 @@ def test_U_to_Y_backtest_persistence_status_and_errors(isolated_db, monkeypatch)
     # Setup complete dataset
     games = [sample_basketball_game(1000 + i, date=f"2024-11-{i:02d}T20:00:00+00:00") for i in range(1, 10)]
     storage.save_historical_basketball_games(games, league_id=12, season=2024)
-    storage.mark_historical_dataset_complete(12, 2024, fixture_count=len(games), sport="basketball")
+    completion_helpers.allow_synthetic_nba_season(monkeypatch, 2024, len(games))
+    completion_helpers.mark_complete(12, 2024, fixture_count=len(games), sport="basketball")
 
     # U: successful backtest + successful persistence
     res_ok = backtest.run_basketball_backtest(league_id=12, season=2024, sample_size=5, min_prior_matches=2)

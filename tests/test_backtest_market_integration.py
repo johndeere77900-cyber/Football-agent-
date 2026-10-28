@@ -1,3 +1,4 @@
+from tests import completion_helpers
 import pytest
 
 import backtest
@@ -326,7 +327,7 @@ def test_statistical_enrichment_is_optional(monkeypatch, tmp_path):
     backtest.storage.init_db()
     fixtures = historical_dataset()
     backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
-    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
+    completion_helpers.mark_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -347,7 +348,7 @@ def test_statistical_enrichment_uses_one_batched_call(monkeypatch, tmp_path):
     backtest.storage.init_db()
     fixtures = historical_dataset()
     backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
-    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
+    completion_helpers.mark_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,
@@ -366,7 +367,7 @@ def test_missing_statistical_data_is_not_fabricated(monkeypatch, tmp_path):
     backtest.storage.init_db()
     fixtures = historical_dataset()
     backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
-    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
+    completion_helpers.mark_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
         league_id=39,

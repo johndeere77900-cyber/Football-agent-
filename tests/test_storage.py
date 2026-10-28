@@ -1,3 +1,4 @@
+from tests import completion_helpers
 import sqlite3
 
 import pytest
@@ -659,7 +660,7 @@ def test_historical_dataset_status_storage(temp_database):
     assert init_status["fixture_count"] == 0
 
     # Mark complete
-    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380)
+    completion_helpers.force_manifest(39, 2024, fixture_count=380)
     status = storage.get_historical_dataset_status(39, 2024)
     assert status["status"] == "COMPLETE"
     assert status["fixture_count"] == 380

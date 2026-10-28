@@ -3096,6 +3096,36 @@ class DataResolver:
         if not missing_fids:
             return existing
 
+        # Tier 1: API-Football batched fixture fetch. Grading depends on this
+        # call (it is the batched result source for live result grading), and the
+        # batch size is the caller's documented batching contract: N fixture ids
+        # are fetched in ceil(N / batch_size) requests. The provider's own daily
+        # budget ceiling is enforced inside api_football.get_enriched_fixtures.
+        fetched_api = {}
+        if missing_fids:
+            try:
+                fetched_api = api_football.get_enriched_fixtures(
+                    missing_fids, batch_size=batch_size, max_budget=max_budget
+                ) or {}
+            except api_football.APIFootballQuotaExhaustedError:
+                # Quota exhaustion is a distinct outcome: report it to the caller
+                # instead of silently downgrading to a partial result.
+                raise
+            except Exception as exc:
+                logger.warning(f"API-Football enrichment batch fetch failed: {exc}")
+                fetched_api = {}
+
+            for fid, record in fetched_api.items():
+                if not isinstance(record, dict):
+                    continue
+                prior = existing.get(fid)
+                if prior:
+                    merged = reconcile_fixture_records([prior, record])
+                    if merged:
+                        existing[fid] = merged
+                else:
+                    existing[fid] = record
+
         # Tier 3: SoccerData if gaps still remain
         still_missing = [fid for fid in missing_fids if len(get_missing_fixture_fields(existing.get(fid), require_stats=True)) > 0]
         if still_missing and league_id:
@@ -3156,7 +3186,16 @@ class DataResolver:
             except Exception as exc:
                 logger.warning(f"Error saving enriched fixtures to DB: {exc}")
 
-        return storage.get_historical_enrichment(fixture_ids)
+        stored = storage.get_historical_enrichment(fixture_ids) or {}
+        # Return the freshest merged view: persisted enrichment plus anything
+        # acquired in this call (a record the persistence layer declined to keep
+        # is still a valid fetched result for the caller).
+        requested = set(fixture_ids)
+        merged_result = dict(stored)
+        merged_result.update(
+            {fid: record for fid, record in existing.items() if fid in requested and isinstance(record, dict)}
+        )
+        return merged_result
 
     def get_team_statistics(self, team_id, league_id, season, team_name=None):
         """

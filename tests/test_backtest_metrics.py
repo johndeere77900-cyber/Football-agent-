@@ -1,5 +1,6 @@
 """Focused unit tests for backtest evaluation metrics: Brier score, log loss, ECE, and calibration bins."""
 
+from tests import completion_helpers
 import math
 import pytest
 import backtest
@@ -143,7 +144,7 @@ def test_over_under_and_all_markets_evaluated_in_backtest(monkeypatch, tmp_path)
     backtest.storage.init_db()
     fixtures = historical_dataset()
     backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
-    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures))
+    completion_helpers.mark_complete(39, 2025, len(fixtures))
 
     res = backtest.run_real_backtest(
         league_id=39,
@@ -229,9 +230,9 @@ def test_run_multi_season_backtest(monkeypatch, tmp_path):
         fixtures_2025.append(item_copy)
 
     backtest.storage.save_historical_fixtures(fixtures_2024, league_id=39, season=2024)
-    backtest.storage.mark_historical_dataset_complete(39, 2024, len(fixtures_2024))
+    completion_helpers.mark_complete(39, 2024, len(fixtures_2024))
     backtest.storage.save_historical_fixtures(fixtures_2025, league_id=39, season=2025)
-    backtest.storage.mark_historical_dataset_complete(39, 2025, len(fixtures_2025))
+    completion_helpers.mark_complete(39, 2025, len(fixtures_2025))
 
     res = backtest.run_multi_season_backtest(
         league_id=39,

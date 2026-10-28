@@ -1,3 +1,4 @@
+from tests import completion_helpers
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -59,7 +60,7 @@ def test_complete_dataset_zero_api_calls(temp_db, monkeypatch):
         {**sample_fixture(9002, home_id=2, away_id=1), "league": {"id": 39, "season": 2024}},
     ]
     storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
-    storage.mark_historical_dataset_complete(
+    completion_helpers.mark_complete(
         league_id=39, season=2024, fixture_count=2, expected_team_ids=[c1, c2]
     )
 
@@ -107,7 +108,7 @@ def test_provider_header_remaining_zero_raises_exhausted(temp_db, monkeypatch):
 def test_backtest_fails_if_api_football_called(temp_db, monkeypatch):
     fixtures = dataset_with_history()
     storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
-    storage.mark_historical_dataset_complete(league_id=39, season=2024, fixture_count=len(fixtures))
+    completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=len(fixtures))
 
     def fail_call(*args, **kwargs):
         raise AssertionError("API-Football should NOT be called by backtest!")

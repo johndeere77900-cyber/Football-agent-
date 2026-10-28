@@ -9,6 +9,7 @@ import config
 import data_resolver
 import historical_sync
 import storage
+from tests import completion_helpers
 import team_identity
 
 
@@ -79,7 +80,7 @@ def test_1_valid_complete_dataset_skips_acquisition(mock_page):
     """
     fixtures = make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20)
     storage.save_historical_fixtures(fixtures, 39, 2024, source="api_football", require_completed=True)
-    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+    completion_helpers.mark_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
 
     report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
@@ -96,7 +97,7 @@ def test_2_complete_manifest_with_missing_fixtures_not_trusted(mock_page):
     # Store only 10 fixtures out of 380, but mark as COMPLETE
     fixtures = make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20)[:10]
     storage.save_historical_fixtures(fixtures, 39, 2024, source="api_football", require_completed=True)
-    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+    completion_helpers.force_manifest(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
 
     mock_page.return_value = {
         "fixtures": [],
@@ -122,7 +123,7 @@ def test_3_complete_manifest_with_wrong_season_or_league_rejected(mock_page):
         f["league"]["season"] = 2023
 
     storage.save_historical_fixtures(fixtures, 39, 2024, source="api_football", require_completed=True)
-    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+    completion_helpers.force_manifest(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
 
     mock_page.return_value = {
         "fixtures": [],
@@ -146,7 +147,7 @@ def test_4_complete_manifest_with_duplicate_identities_rejected(mock_page):
     fixtures[1]["fixture"]["id"] = 1000
 
     storage.save_historical_fixtures(fixtures, 39, 2024, source="api_football", require_completed=True)
-    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+    completion_helpers.force_manifest(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
 
     mock_page.return_value = {
         "fixtures": [],
@@ -165,7 +166,7 @@ def test_5_complete_basketball_manifest_with_invalid_persisted_data(mock_page):
     """
     5. A COMPLETE basketball manifest with invalid persisted data is not trusted.
     """
-    storage.mark_historical_dataset_complete(12, 2024, fixture_count=100, sport="basketball", expected_pages=2, pages_completed=2)
+    completion_helpers.force_manifest(12, 2024, sport="basketball", fixture_count=100, expected_pages=2, pages_completed=2)
 
     mock_page.return_value = {
         "games": [],
@@ -184,7 +185,7 @@ def test_6_quota_exhaustion_cannot_promote_invalid_dataset_to_complete(mock_page
     6. Quota exhaustion cannot turn an invalid persisted dataset into COMPLETE.
     """
     # 0 stored fixtures, manifest marked COMPLETE
-    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+    completion_helpers.force_manifest(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
 
     # Force request count to historical budget limit
     monkeypatch.setattr("storage.get_api_request_count", lambda *args, **kwargs: 100)
@@ -201,7 +202,7 @@ def test_7_valid_complete_dataset_remains_idempotent():
     """
     fixtures = make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20)
     storage.save_historical_fixtures(fixtures, 39, 2024, source="api_football", require_completed=True)
-    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+    completion_helpers.mark_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
 
     with patch("data_resolver.DataResolver.get_league_fixtures_page") as mock_page:
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
@@ -219,7 +220,7 @@ def test_8_failed_validation_does_not_erase_existing_records(mock_page):
     """
     fixtures = make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20)[:100]
     storage.save_historical_fixtures(fixtures, 39, 2024, source="api_football", require_completed=True)
-    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+    completion_helpers.force_manifest(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
 
     mock_page.return_value = {
         "fixtures": [],
@@ -264,7 +265,7 @@ def test_failed_revalidation_never_returns_complete(mock_page):
     # Fixtures marked COMPLETE but failing structural revalidation due to missing fixtures
     fixtures = make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20)[:5]
     storage.save_historical_fixtures(fixtures, 39, 2024, source="api_football", require_completed=True)
-    storage.mark_historical_dataset_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+    completion_helpers.force_manifest(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
 
     mock_page.return_value = {
         "fixtures": [],

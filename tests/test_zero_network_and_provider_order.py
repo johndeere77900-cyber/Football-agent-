@@ -2,6 +2,7 @@
 Tests for zero-network COMPLETE dataset revalidation and strict provider execution ordering.
 """
 
+from tests import completion_helpers
 from unittest.mock import patch, MagicMock
 import pytest
 import storage
@@ -46,7 +47,7 @@ def test_complete_dataset_zero_network_calls():
             fid += 1
 
     storage.save_historical_fixtures(fixtures, league_id, season, source="football_data_csv")
-    storage.mark_historical_dataset_complete(
+    completion_helpers.mark_complete(
         league_id, season, fixture_count=len(fixtures), source="football_data_csv", expected_pages=1, pages_completed=1, acquisition_complete=True, expected_team_ids=teams
     )
 

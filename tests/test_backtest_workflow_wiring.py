@@ -1,3 +1,4 @@
+from tests import completion_helpers
 from pathlib import Path
 from unittest.mock import patch
 
@@ -141,7 +142,7 @@ def test_canonical_backtest_with_complete_dataset_zero_api_calls(tmp_path, monke
     ]
 
     storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
-    storage.mark_historical_dataset_complete(league_id=39, season=2025, fixture_count=len(fixtures))
+    completion_helpers.mark_complete(league_id=39, season=2025, fixture_count=len(fixtures))
 
     def fail_if_called(*args, **kwargs):
         raise AssertionError("API-Football should NOT be called during canonical backtest!")
