@@ -451,3 +451,54 @@ COMPETITION_SEASON_WINDOWS = {
 # considered closed, absorbing rescheduled/postponed fixtures, suspensions and
 # schedule drift without weakening the coverage requirement.
 COMPETITION_SEASON_COMPLETION_GRACE_DAYS = 21
+
+# Season-specific competition window overrides.
+#
+# Some competition seasons do not follow the standing calendar window above.
+# These entries are keyed by (sport, league_id, season_start_year) and take
+# precedence over the generic window. They describe authoritative, externally
+# documented season boundaries instead of derived year offsets, so a season whose
+# schedule genuinely deviates is never judged against the wrong dates.
+#
+# 2019-20 NBA: the season was suspended on 2020-03-11 and resumed in the Orlando
+# bubble on 2020-07-30; the Finals ended 2020-10-11. The completed season
+# therefore extends well past the usual June boundary and must be judged against
+# a window that includes the resumption.
+# 2020-21 NBA: the season started late (2020-12-22) and the Finals ended
+# 2021-07-20.
+COMPETITION_SEASON_WINDOW_OVERRIDES = {
+    ("basketball", 12, 2019): {
+        "start": (0, 10, 1),
+        "end": (1, 10, 31),
+        "format": "league",
+        "exception": "covid19_suspension_and_orlando_resumption",
+    },
+    ("basketball", 12, 2020): {
+        "start": (0, 12, 22),
+        "end": (1, 7, 31),
+        "format": "league",
+        "exception": "late_start_and_covid_schedule_changes",
+    },
+}
+
+# Independently established expected NBA coverage: the published number of
+# regular-season games the league actually played in each season (a full season
+# is 82 games per team across 30 teams, i.e. 30 * 82 / 2 = 1230 games).
+#
+# 2019-20 was interrupted and resumed with a shortened schedule (1059 regular
+# season games played, including the Orlando seeding games); 2020-21 was a
+# 72-game season (30 * 72 / 2 = 1080).
+#
+# The ESPN and API-Basketball routes also acquire playoff games, so a complete
+# dataset holds AT LEAST this many persisted games. A season absent from this map
+# has no independently established expectation and therefore fails closed: its
+# stored record count is never treated as its own evidence of completeness.
+NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES = {
+    2019: 1059,
+    2020: 1080,
+    2021: 1230,
+    2022: 1230,
+    2023: 1230,
+    2024: 1230,
+    2025: 1230,
+}

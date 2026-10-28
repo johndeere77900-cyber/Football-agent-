@@ -188,8 +188,6 @@ def test_3_h2h_cannot_cross_match_providers_by_numeric_id():
     assert snapshot["goals_for"] == 1.0
 
 
-
-
 def test_4_b_partial_football_data_org_data_cannot_become_complete():
     """
     When secondary provider football-data.org returns partial/insufficient data (is_partial=True),
@@ -281,3 +279,5 @@ def test_8_mixed_or_invalid_providers_rejected_for_identity_mapping():
 
     with pytest.raises(ValueError, match="Invalid team identity provider"):
         storage.save_team_identity("football", "football_team_arsenal", "mixed", "100", "arsenal", "Arsenal")
+
+

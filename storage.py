@@ -2443,6 +2443,130 @@ def get_historical_dataset_status(league_id, season, sport="football"):
         conn.close()
 
 
+def _persisted_historical_record_count(sport, league_id, season):
+    """Return the record count the database actually holds for a dataset."""
+    if sport == "basketball":
+        return get_historical_basketball_game_count(league_id, season)
+    return get_historical_fixture_count(league_id, season)
+
+
+def _persisted_historical_records(sport, league_id, season):
+    """Return the persisted records for a dataset (the database is the source of truth)."""
+    if sport == "basketball":
+        return get_historical_basketball_games(league_id, season, include_storage_source=True)
+    return get_historical_fixtures(league_id, season)
+
+
+def _verified_empty_coverage_units(provider_coverage):
+    """
+    Count the coverage units an approved provider independently recorded as a
+    legitimate no-games period (for example an NBA month whose request succeeded
+    and returned zero events).
+
+    An empty period is only accepted when the provider evidence says so; an empty
+    response on its own is never treated as proof of completion.
+    """
+    total = 0
+    if isinstance(provider_coverage, dict):
+        for entry in provider_coverage.values():
+            if isinstance(entry, dict):
+                value = entry.get("valid_empty_units")
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    total += value
+    return total
+
+
+def _has_validated_provider_coverage(provider_coverage):
+    """
+    True when the recorded provider coverage contains at least one provider whose
+    acquisition completed with a VALIDATED outcome.
+    """
+    if not isinstance(provider_coverage, dict) or not provider_coverage:
+        return False
+    if provider_coverage.get("status") == "VALIDATED":
+        return True
+    for entry in provider_coverage.values():
+        if isinstance(entry, dict) and entry.get("status") == "VALIDATED":
+            return True
+    return False
+
+
+def _validate_persisted_completion_evidence(
+    sport,
+    league_id,
+    season,
+    expected_team_ids=None,
+    provider_coverage=None,
+    expected_pages=None,
+    pages_completed=None,
+    rejected_count=None,
+    empty_pages_count=None,
+    coverage_unit=None,
+):
+    """
+    Independently validate a persisted dataset before it may be marked COMPLETE.
+
+    Returns (is_valid, reason). The database is the source of truth: every
+    persisted record is re-validated here, duplicate source-scoped identities are
+    rejected, and the caller's provider coverage must be internally consistent and
+    supported by a validated provider. Caller-supplied counts are never accepted
+    in place of persisted facts.
+    """
+    records = _persisted_historical_records(sport, league_id, season)
+    if not isinstance(records, list) or not records:
+        return False, "no_persisted_records"
+
+    if sport == "basketball":
+        import historical_sync
+
+        evidence = {
+            "fixture_count": len(records),
+            "expected_pages": expected_pages,
+            "pages_completed": pages_completed,
+            "rejected_count": rejected_count,
+            "empty_pages_count": empty_pages_count,
+            "coverage_unit": coverage_unit,
+            "provider_coverage": provider_coverage,
+        }
+        if not historical_sync._validate_historical_basketball_dataset(
+            records, league_id, season, evidence
+        ):
+            return False, "persisted_basketball_dataset_invalid"
+        return True, "basketball_records_validated"
+
+    seen_identities = set()
+    for record in records:
+        is_valid, reason, _ = validate_historical_fixture(
+            record,
+            target_league_id=league_id,
+            target_season=season,
+            require_completed=True,
+        )
+        if not is_valid:
+            return False, f"invalid_persisted_fixture_{reason}"
+
+        fixture_obj = record.get("fixture") if isinstance(record.get("fixture"), dict) else {}
+        fixture_id = _parse_strict_int(fixture_obj.get("id"))
+        record_source = record.get("source")
+        if not record_source and isinstance(record.get("provider_provenance"), dict):
+            record_source = record["provider_provenance"].get("provider")
+        identity = (str(record_source or ""), fixture_id)
+        if identity in seen_identities:
+            return False, "duplicate_persisted_fixture_identity"
+        seen_identities.add(identity)
+
+    if expected_team_ids:
+        import data_resolver
+
+        canonical_ids = data_resolver._validate_and_canonicalize_team_manifest(
+            expected_team_ids, league_id, sport=sport
+        )
+        if not canonical_ids:
+            return False, "expected_team_universe_invalid"
+
+    return True, "football_records_validated"
+
+
 def mark_historical_dataset_complete(
     league_id,
     season,
@@ -2462,13 +2586,30 @@ def mark_historical_dataset_complete(
     """
     Mark a historical dataset as COMPLETE.
 
-    Storage-level completion invariants enforced:
-    - fixture_count > 0
-    - expected_pages > 0
-    - pages_completed == expected_pages
-    - acquisition_complete is True
-    - rejected_count == 0
-    - empty_pages_count == 0
+    Storage-level completion invariants enforced (all of them must hold):
+    - The persisted dataset exists and the supplied `fixture_count` equals the
+      persisted record count; the database is the source of truth, so a caller can
+      never promote a dataset with a fabricated or stale count.
+    - Every persisted record independently passes the sport-specific validation
+      (canonical team identities, valid kickoff, completed status, valid scores,
+      unique source-scoped identities).
+    - expected_pages > 0, pages_completed == expected_pages and
+      acquisition_complete is True.
+    - rejected_count == 0.
+    - empty_pages_count does not exceed the coverage units that an approved
+      provider independently recorded as a legitimate no-games period; an empty
+      response is never assumed to be a legitimate empty period.
+    - At least one provider completed with a VALIDATED outcome.
+    - The competition lifecycle is independently COMPLETED. Acquisition state and
+      competition lifecycle are separate concepts, so an ongoing, upcoming or
+      unverifiable season can never be marked COMPLETE.
+    - After the write, the persisted manifest is re-read and reconciled against the
+      persisted records; a mismatch reverts the dataset to INCOMPLETE so the
+      manifest and the records can never contradict each other.
+
+    The same invariant is used by fresh acquisition, resumed acquisition and
+    read-only revalidation; there is no path that accepts what another path
+    rejects.
 
     `expected_pages`/`pages_completed` are generic acquisition coverage units;
     `coverage_unit` names the unit actually used (for example 'api_pages',
@@ -2496,8 +2637,78 @@ def mark_historical_dataset_complete(
         raise ValueError("Cannot mark dataset COMPLETE when acquisition_complete is False.")
     if rejected_count > 0:
         raise ValueError(f"Cannot mark dataset COMPLETE when rejected_count ({rejected_count}) > 0.")
-    if empty_pages_count > 0:
-        raise ValueError(f"Cannot mark dataset COMPLETE when empty_pages_count ({empty_pages_count}) > 0.")
+
+    # Persisted-data reconciliation: the manifest describes what the database
+    # actually holds for this sport/league/season.
+    persisted_count = _persisted_historical_record_count(sport, league_id, season)
+    if persisted_count <= 0:
+        raise ValueError(
+            f"Cannot mark dataset COMPLETE: no persisted records for sport={sport}, "
+            f"league_id={league_id}, season={season}."
+        )
+    if fixture_count != persisted_count:
+        raise ValueError(
+            f"Cannot mark dataset COMPLETE: reported fixture_count ({fixture_count}) does not "
+            f"match the {persisted_count} persisted record(s)."
+        )
+
+    evidence_valid, evidence_reason = _validate_persisted_completion_evidence(
+        sport,
+        league_id,
+        season,
+        expected_team_ids=expected_team_ids,
+        provider_coverage=provider_coverage,
+        expected_pages=expected_pages,
+        pages_completed=pages_completed,
+        rejected_count=rejected_count,
+        empty_pages_count=empty_pages_count,
+        coverage_unit=coverage_unit,
+    )
+    if not evidence_valid:
+        raise ValueError(
+            f"Cannot mark dataset COMPLETE: the persisted dataset failed validation ({evidence_reason})."
+        )
+
+    # Empty coverage units are accepted only when an approved provider recorded
+    # them as a legitimate no-games period.
+    verified_empty_units = _verified_empty_coverage_units(provider_coverage)
+    if empty_pages_count > verified_empty_units:
+        raise ValueError(
+            f"Cannot mark dataset COMPLETE when empty_pages_count ({empty_pages_count}) exceeds the "
+            f"independently verified empty coverage units ({verified_empty_units})."
+        )
+
+    if not _has_validated_provider_coverage(provider_coverage):
+        raise ValueError(
+            "Cannot mark dataset COMPLETE without at least one provider whose acquisition "
+            "completed with a VALIDATED outcome."
+        )
+
+    # Competition lifecycle is decided independently of acquisition state. The
+    # coverage evidence passed here is justified by the persisted-record and
+    # provider-coverage validation performed above, not by the caller's assertion.
+    import historical_sync
+
+    lifecycle_coverage = {
+        "verified": True,
+        "reason": None,
+        "coverage_unit": coverage_unit,
+        "expected_coverage_units": expected_pages,
+        "completed_coverage_units": pages_completed,
+        "provider_coverage": provider_coverage,
+    }
+    lifecycle_state, lifecycle_reason, _ = historical_sync.get_competition_lifecycle(
+        sport,
+        league_id,
+        season,
+        _persisted_historical_records(sport, league_id, season),
+        coverage=lifecycle_coverage,
+    )
+    if lifecycle_state != historical_sync.COMPETITION_LIFECYCLE_COMPLETED:
+        raise ValueError(
+            f"Cannot mark dataset COMPLETE: the competition lifecycle is {lifecycle_state} "
+            f"({lifecycle_reason})."
+        )
 
     acq_int = 1 if acquisition_complete else 0
     now_str = _utc_now()
@@ -2576,6 +2787,26 @@ def mark_historical_dataset_complete(
         raise
     finally:
         conn.close()
+
+    # Post-write reconciliation: the persisted manifest must agree with the
+    # persisted records, otherwise the completion transition is reverted so the
+    # manifest and the records can never contradict each other.
+    written_status = get_historical_dataset_status(league_id, season, sport=sport)
+    if (
+        written_status.get("status") != "COMPLETE"
+        or int(written_status.get("fixture_count") or 0) != persisted_count
+    ):
+        mark_historical_dataset_incomplete(
+            league_id,
+            season,
+            fixture_count=persisted_count,
+            sport=sport,
+            error_reason="completion_reconciliation_mismatch",
+        )
+        raise ValueError(
+            "Cannot mark dataset COMPLETE: the persisted manifest did not reconcile with the "
+            "persisted records."
+        )
 
 
 def mark_historical_dataset_incomplete(

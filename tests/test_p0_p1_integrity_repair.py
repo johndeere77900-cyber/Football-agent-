@@ -777,3 +777,5 @@ def test_U_to_Y_backtest_persistence_status_and_errors(isolated_db, monkeypatch)
     assert res_fail["persisted"] is False
     assert "Database disk full error" in res_fail["persistence_error"]
     assert res_fail["graded"] > 0 # computation succeeded
+
+

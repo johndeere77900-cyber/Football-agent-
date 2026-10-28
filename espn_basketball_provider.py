@@ -27,6 +27,45 @@ NBA_LEAGUE_ID = 12
 NBA_SEASON_MONTHS = [10, 11, 12, 1, 2, 3, 4, 5, 6]
 NBA_SEASON_MONTH_COUNT = len(NBA_SEASON_MONTHS)
 
+# Acquisition units are (year_offset, month) pairs relative to the season's start
+# year, so each entry is exactly one monthly scoreboard request.
+NBA_SEASON_MONTH_OFFSETS = [
+    (0, 10), (0, 11), (0, 12), (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6)
+]
+
+# Season-specific coverage. The 2019-20 NBA season is the documented exception:
+# it was suspended on 2020-03-11 and resumed in the Orlando bubble on
+# 2020-07-30, with the Finals ending 2020-10-11. Those resumed months hold real
+# regular-season and playoff games, so a season whose acquisition stops in June
+# cannot have acquired the season and stays incomplete.
+NBA_SEASON_MONTH_OFFSETS_2019 = [
+    (0, 10), (0, 11), (0, 12), (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6),
+    (1, 7), (1, 8), (1, 9), (1, 10)
+]
+
+_SEASON_MONTH_OFFSETS_OVERRIDES = {
+    2019: NBA_SEASON_MONTH_OFFSETS_2019,
+}
+
+
+def get_season_month_offsets(season) -> list:
+    """
+    Return the (year_offset, month) acquisition units for a season.
+
+    Falls back to the standard October-to-June window when the season is not an
+    integer or has no season-specific coverage.
+    """
+    try:
+        ssn = int(season)
+    except (TypeError, ValueError):
+        return list(NBA_SEASON_MONTH_OFFSETS)
+    return list(_SEASON_MONTH_OFFSETS_OVERRIDES.get(ssn, NBA_SEASON_MONTH_OFFSETS))
+
+
+def get_season_month_count(season) -> int:
+    """Return the number of monthly scoreboards a season's coverage requires."""
+    return len(get_season_month_offsets(season))
+
 
 def fetch_espn_nba_season_games(
     league_id: int, season: int, per_request_timeout: int = 15, total_deadline_seconds: int = 60
@@ -61,8 +100,8 @@ def fetch_espn_nba_season_games(
         return [], coverage_meta
 
     months = [
-        (ssn if month >= 10 else ssn + 1, month)
-        for month in NBA_SEASON_MONTHS
+        (ssn + year_offset, month)
+        for year_offset, month in get_season_month_offsets(ssn)
     ]
 
     seen_event_ids = set()

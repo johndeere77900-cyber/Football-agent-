@@ -303,3 +303,47 @@ def test_insufficient_data_preserves_records_and_stays_incomplete(temp_db):
     stored = storage.get_historical_fixtures(39, 2024)
     assert len(stored) == 1
     assert stored[0]["fixture"]["id"] == 9001
+
+
+def test_ongoing_2026_fixtures_handled_by_status():
+    """
+    Ongoing 2026 season fixtures are handled according to status: unplayed
+    fixtures (NS, PST) are never persisted, while completed fixtures (FT, AET,
+    PEN) are persisted. Because the 2026 season is still in progress the
+    competition lifecycle is ONGOING, so the dataset is never marked COMPLETE no
+    matter how many fixtures were acquired successfully.
+    """
+    fixtures_2026 = [
+        {
+            "fixture": {"id": 202601, "date": "2026-03-01T15:00:00+00:00", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2026},
+            "teams": {"home": {"id": 1, "name": "Team A"}, "away": {"id": 2, "name": "Team B"}},
+            "goals": {"home": 2, "away": 1},
+        },
+        {
+            "fixture": {"id": 202602, "date": "2026-04-01T15:00:00+00:00", "status": {"short": "NS"}},
+            "league": {"id": 39, "season": 2026},
+            "teams": {"home": {"id": 2, "name": "Team B"}, "away": {"id": 1, "name": "Team A"}},
+            "goals": {"home": None, "away": None},
+        },
+    ]
+
+    from contextlib import ExitStack
+
+    with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=fixtures_2026), \
+         patch("api_football.get_league_fixtures_page") as mock_api_fixtures:
+        with ExitStack() as stack:
+            for provider_patch in no_other_sources():
+                stack.enter_context(provider_patch)
+            report = historical_sync.sync_historical_fixtures(league_id=39, season=2026)
+
+        mock_api_fixtures.assert_not_called()
+
+    assert report["final_stored_count"] == 1
+    stored = storage.get_historical_fixtures(39, 2026)
+    assert len(stored) == 1
+    assert stored[0]["fixture"]["id"] == 202601
+    assert report["status"] == "INCOMPLETE"
+    assert report["lifecycle_state"] == "ONGOING"
+
+

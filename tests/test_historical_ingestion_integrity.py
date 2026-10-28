@@ -301,3 +301,5 @@ def test_req19_football_historical_makes_zero_api_football_calls(temp_db, monkey
         mock_page.assert_not_called()
 
     assert report["status"] == "INCOMPLETE"
+
+

@@ -88,10 +88,6 @@ def test_partial_dataset_leaves_status_incomplete_and_backtest_refuses(temp_db):
     assert "missing or incomplete" in str(exc_info.value)
 
 
-
-
-
-
 def test_provider_header_remaining_zero_raises_exhausted(temp_db, monkeypatch):
     monkeypatch.setattr(config, "API_FOOTBALL_KEY", "test_key")
 
@@ -468,3 +464,23 @@ def test_get_fixtures_for_date_multi_provider_persists_reconciled_source(
 
     assert 9211 in result
     assert 9211 not in api_result
+
+
+def test_enrichment_quota_ceiling_stops_batches(temp_db, monkeypatch):
+    monkeypatch.setattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 2)
+
+    fixtures = [sample_fixture(9020 + i) for i in range(10)]
+    storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
+    storage.mark_historical_dataset_incomplete(league_id=39, season=2024)
+
+    # Pre-record 2 API requests to exhaust budget
+    storage.record_api_request("api_football", "fixtures")
+    storage.record_api_request("api_football", "fixtures")
+
+    with patch("api_football.get_league_fixtures", return_value=fixtures):
+        report = historical_sync.sync_historical_fixtures(
+            league_id=39, season=2024, with_enrichment=True, historical_budget=2
+        )
+
+    assert report["quota_budget_stopped"] is True
+    assert report["status"] == "INCOMPLETE"

@@ -127,3 +127,57 @@ To view past backtest run history:
 ```bash
 python3 main.py --backtest-history
 ```
+
+## Completion invariant
+
+A historical dataset can only be marked `COMPLETE` when all of the following hold.
+The same invariant is applied by fresh acquisition, resumed acquisition and
+read-only revalidation, so no path accepts what another path rejects.
+
+- The persisted records for the sport/league/season exist, and the manifest
+  `fixture_count` equals the persisted record count. The database is the source of
+  truth, so a fabricated or stale count can never promote a dataset.
+- Every persisted record re-validates: canonical team identities, valid kickoff,
+  completed status, valid scores and unique source-scoped identities.
+- Acquisition coverage units are complete (`expected > 0`, `completed == expected`)
+  and at least one provider finished with a `VALIDATED` outcome.
+- `rejected_count == 0`.
+- Empty coverage units are accepted only when a provider recorded them as a
+  legitimate no-games period. An empty response on its own proves nothing.
+- The competition lifecycle is independently `COMPLETED`.
+- After the write, the persisted manifest is re-read and reconciled against the
+  persisted records; a mismatch reverts the dataset to `INCOMPLETE`.
+
+Competition lifecycle (`UPCOMING` / `ONGOING` / `COMPLETED` / `UNKNOWN`) is kept
+separate from acquisition state (`PENDING` / `RUNNING` / `INCOMPLETE` /
+`VALIDATED` / `FAILED`). Season windows are declared per competition in
+`config.COMPETITION_SEASON_WINDOWS`, with authoritative per-season overrides in
+`config.COMPETITION_SEASON_WINDOW_OVERRIDES` (for example the COVID-extended
+2019-20 NBA season, suspended in March 2020, resumed in the Orlando bubble and
+finished in October 2020, and the late-starting 2020-21 season). Season labels are
+parsed from `2019`, `2019/2020`, `2019/20`, `2019-20` and the en/em dash forms. A
+competition with no declared window fails closed with lifecycle `UNKNOWN`.
+
+## Basketball coverage units and expected season coverage
+
+- ESPN monthly scoreboards are the acquisition units: nine for a standard NBA
+  season and thirteen for the COVID-extended 2019-20 season, whose resumption
+  months must also be acquired. ESPN months are never reported as API pages.
+- API-Basketball pagination is tracked separately in its own units, from the
+  provider's own paging metadata.
+- The NBA's published regular-season game totals
+  (`config.NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES`) are the independent expected
+  season coverage. A season with no established expectation, or a dataset below
+  the expected total, fails closed and stays incomplete.
+- A month whose request succeeded but which contains no games is recorded as a
+  verified empty coverage unit, never as a failure and never as acquired games.
+- A previously `COMPLETE` dataset whose lifecycle or coverage no longer verifies is
+  marked `INCOMPLETE` with an accurate reason and resumed, without deleting valid
+  records.
+
+## Queue budget behaviour
+
+When a sport's acquisition budget is exhausted, the remaining datasets for that
+sport are skipped for the rest of the run (recorded as `INCOMPLETE` with
+`quota_budget_stopped`), while the other sport's independent budget continues to be
+processed.
