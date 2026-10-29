@@ -578,6 +578,34 @@ def _get_authoritative_historical_team_ids(
     return []
 
 
+def _classify_provider_attempt_outcome(fixtures, meta):
+    """
+    Map one approved-provider attempt to one distinct outcome.
+
+    Producing no fixtures is not, by itself, evidence of a legitimate empty
+    result: a recorded failure, quota stop, malformed payload or insufficient
+    dataset keeps its own outcome. This prevents a provider error (for example
+    an access-restricted response) from being reported as "no data", which the
+    completion path could otherwise read as a valid empty coverage unit.
+    """
+    if fixtures:
+        return "SUCCESS"
+
+    meta = meta if isinstance(meta, dict) else {}
+    status = str(meta.get("status") or "").strip().upper()
+    if status in ("SOURCE_FAILED", "FAILED", "ERROR"):
+        return "FAILED"
+    if status in ("QUOTA_EXHAUSTED", "QUOTA_STOPPED") or meta.get("quota_exhausted") is True:
+        return "QUOTA_EXHAUSTED"
+    if status in ("VALID_EMPTY", "SOURCE_EMPTY", "EMPTY"):
+        return "VALID_EMPTY"
+    if status in ("MALFORMED", "INVALID", "INVALID_PAYLOAD"):
+        return "MALFORMED"
+    if status in ("INSUFFICIENT", "SOURCE_INSUFFICIENT"):
+        return "INSUFFICIENT"
+    return "NO_DATA_FROM_PROVIDER"
+
+
 def _football_season_coverage_exception(league_id, season):
     """
     Return the recorded authoritative season coverage exception for a football
@@ -2671,6 +2699,7 @@ class DataResolver:
         t_primary_start = time.monotonic()
 
         csv_fixtures = []
+        csv_meta = {}
         sd_fb_fixtures = []
         sd_fb_meta = {}
         sd_mh_fixtures = []
@@ -2688,6 +2717,11 @@ class DataResolver:
                         league_id, season, timeout=attempt_timeout, max_budget=max_budget
                     )
                 except Exception as csv_exc:
+                    csv_meta = {
+                        "status": "SOURCE_FAILED",
+                        "error": str(csv_exc),
+                        "source": "football_data_csv",
+                    }
                     logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
 
             if completed_only and csv_fixtures:
@@ -2727,6 +2761,9 @@ class DataResolver:
                         "is_partial": False,
                         "structural_coverage": csv_coverage,
                         "providers_contributed": ["football_data_csv"],
+                        "provider_outcomes": {
+                            "football_data_csv": _classify_provider_attempt_outcome(csv_fixtures, csv_meta),
+                        },
                     },
                     "secondary_failed": False,
                     "secondary_quota_exhausted": False,
@@ -2745,9 +2782,14 @@ class DataResolver:
                     )
                     t_fb_elapsed = time.perf_counter() - t_fb_start
                     logger.info(f"[TIMING COMPLETE] SoccerData FBref fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_fb_elapsed:.2f}s")
+                    # Keep the provider's own metadata for every attempt, not only
+                    # successful ones, so a failure and its category stay visible in
+                    # the dataset diagnostics instead of being dropped.
+                    sd_fb_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_fb_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
-                        sd_fb_meta = sd_meta_res or {}
+                    else:
+                        sd_fb_meta.setdefault("status", sd_status)
                 except Exception as sd_exc:
                     t_fb_elapsed = time.perf_counter() - t_fb_start
                     logger.warning(f"[TIMING FAILED] DataResolver FBref primary route failed for league_id={league_id}, season={season}, elapsed={t_fb_elapsed:.2f}s: {sd_exc}")
@@ -2801,6 +2843,10 @@ class DataResolver:
                         "is_partial": False,
                         "structural_coverage": fb_coverage,
                         "providers_contributed": contribs,
+                        "provider_outcomes": {
+                            "football_data_csv": _classify_provider_attempt_outcome(csv_fixtures, csv_meta),
+                            "soccerdata_fbref": _classify_provider_attempt_outcome(sd_fb_fixtures, sd_fb_meta),
+                        },
                     },
                     "secondary_failed": False,
                     "secondary_quota_exhausted": False,
@@ -2825,9 +2871,11 @@ class DataResolver:
                         )
                     t_mh_elapsed = time.perf_counter() - t_mh_start
                     logger.info(f"[TIMING COMPLETE] SoccerData MatchHistory fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_mh_elapsed:.2f}s")
+                    sd_mh_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_mh_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
-                        sd_mh_meta = sd_meta_res or {}
+                    else:
+                        sd_mh_meta.setdefault("status", sd_status)
                 except Exception as sd_exc:
                     t_mh_elapsed = time.perf_counter() - t_mh_start
                     logger.warning(f"[TIMING FAILED] DataResolver MatchHistory primary route failed for league_id={league_id}, season={season}, elapsed={t_mh_elapsed:.2f}s: {sd_exc}")
@@ -2875,6 +2923,11 @@ class DataResolver:
                         "is_partial": False,
                         "structural_coverage": mh_coverage,
                         "providers_contributed": contribs,
+                        "provider_outcomes": {
+                            "football_data_csv": _classify_provider_attempt_outcome(csv_fixtures, csv_meta),
+                            "soccerdata_fbref": _classify_provider_attempt_outcome(sd_fb_fixtures, sd_fb_meta),
+                            "soccerdata_match_history": _classify_provider_attempt_outcome(sd_mh_fixtures, sd_mh_meta),
+                        },
                     },
                     "secondary_failed": False,
                     "secondary_quota_exhausted": False,
@@ -2954,6 +3007,12 @@ class DataResolver:
                         "is_partial": False,
                         "structural_coverage": primary_route_coverage,
                         "providers_contributed": contribs,
+                        "provider_outcomes": {
+                            "football_data_csv": _classify_provider_attempt_outcome(csv_fixtures, csv_meta),
+                            "soccerdata_fbref": _classify_provider_attempt_outcome(sd_fb_fixtures, sd_fb_meta),
+                            "soccerdata_match_history": _classify_provider_attempt_outcome(sd_mh_fixtures, sd_mh_meta),
+                            "soccerdata_sofascore": _classify_provider_attempt_outcome(sd_ss_fixtures, sd_ss_meta),
+                        },
                     },
                     "secondary_failed": False,
                     "secondary_quota_exhausted": False,
@@ -2969,16 +3028,13 @@ class DataResolver:
         # Provider outcome ledger: distinguishes failure, malformed payload, a
         # valid empty result, quota exhaustion, and structurally insufficient data.
         provider_outcomes = {}
-        for provider_name, produced in (
-            ("football_data_csv", csv_fixtures),
-            ("soccerdata_fbref", sd_fb_fixtures),
-            ("soccerdata_match_history", sd_mh_fixtures),
-            ("soccerdata_sofascore", sd_ss_fixtures),
+        for provider_name, produced, attempt_meta in (
+            ("football_data_csv", csv_fixtures, csv_meta),
+            ("soccerdata_fbref", sd_fb_fixtures, sd_fb_meta),
+            ("soccerdata_match_history", sd_mh_fixtures, sd_mh_meta),
+            ("soccerdata_sofascore", sd_ss_fixtures, sd_ss_meta),
         ):
-            if produced:
-                provider_outcomes[provider_name] = "SUCCESS"
-            else:
-                provider_outcomes[provider_name] = "NO_DATA_FROM_PROVIDER"
+            provider_outcomes[provider_name] = _classify_provider_attempt_outcome(produced, attempt_meta)
 
         secondary_failed = False
         secondary_quota_exhausted = False
@@ -3068,6 +3124,12 @@ class DataResolver:
             "providers_contributed": contribs,
             "provider_outcomes": provider_outcomes,
             "exhausted_reason": "approved_providers_exhausted_without_verified_coverage",
+            "football_data_csv": {
+                "count": len(csv_fixtures),
+                "is_complete": False,
+                "is_partial": True,
+                "raw_metadata": csv_meta,
+            },
             "soccerdata_fbref": {
                 "count": len(sd_fb_fixtures),
                 "is_complete": False,
