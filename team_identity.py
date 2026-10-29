@@ -354,16 +354,25 @@ def bootstrap_historical_team_identity(
     )
 
     if resolved:
-        if p_team_id_str:
-            storage.save_team_identity(
-                sport=sport,
-                canonical_id=resolved,
-                provider=provider,
-                provider_team_id=p_team_id_str,
-                normalized_name=norm_name,
-                display_name=raw_str or f"Team {p_team_id_str}",
-                league_id=league_id,
-            )
+        # Persist the resolution even when the provider supplied no team id.
+        # The stored row carries the competition context that later
+        # disambiguates the same club name in another league; without it an
+        # alias-resolved bootstrap leaves no database evidence and the next
+        # league's bootstrap silently reuses the canonical id instead of
+        # minting a league-qualified one. The synthetic provider id keeps the
+        # existing effective_p_id convention used below.
+        effective_p_id = p_team_id_str if p_team_id_str else (
+            f"{league_id}_{norm_name}" if league_id else norm_name
+        )
+        storage.save_team_identity(
+            sport=sport,
+            canonical_id=resolved,
+            provider=provider,
+            provider_team_id=effective_p_id,
+            normalized_name=norm_name,
+            display_name=raw_str or f"Team {effective_p_id}",
+            league_id=league_id,
+        )
         return resolved
 
     # Step 2: When existing resolution fails (unknown team), create and persist a deterministic canonical identity
