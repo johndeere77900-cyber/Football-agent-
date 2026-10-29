@@ -24,6 +24,82 @@ logger = logging.getLogger(__name__)
 # Standard default timeout for SoccerData calls in seconds
 DEFAULT_SOCCERDATA_TIMEOUT = 60.0
 
+# --- Distinct provider failure categories ----------------------------------
+# Acquisition reports must distinguish WHY a source failed. An access
+# restriction (Sofascore answers 403 for this environment on every endpoint,
+# including its site root) is not a parsing error, an unknown competition is not
+# a network error, and a provider whose own configuration endpoint cannot be
+# downloaded is unreachable for the whole run rather than transiently slow.
+#
+# Verified live evidence (2026-10-29): api.sofascore.com returns HTTP 403 for
+# /api/v1/config/default-unique-tournaments/EN/football, /api/v1/sport/football/
+# events/live and https://www.sofascore.com/ with browser headers, HTTP/2 and
+# Origin/Referer variants, while soccerdata's TLS client surfaces the same block
+# as a ConnectionError whose exception carries no HTTP status.
+ACCESS_RESTRICTED_HTTP_STATUSES = (401, 403)
+UNSUPPORTED_COVERAGE_HTTP_STATUSES = (404,)
+
+# Categories that cannot change within a single acquisition run: retrying them
+# only burns the retry/timeout budget before the approved fallback provider runs.
+DETERMINISTIC_FAILURE_CATEGORIES = {
+    "access_restricted",
+    "unsupported_coverage",
+    "provider_config_unavailable",
+}
+
+
+def _classify_provider_error(http_status=None, error_type=None, error_text=""):
+    """
+    Classify a provider failure into one stable, distinct category.
+
+    Categories:
+    - access_restricted: 401/403, or the status text visible in the error message
+      (covers clients that surface a block as a connection error).
+    - unsupported_coverage: 404 - the endpoint or competition does not exist.
+    - provider_config_unavailable: the provider's own configuration/season
+      endpoint could not be downloaded, so no request it depends on can succeed.
+    - network_error: DNS, connection, TLS or timeout failures.
+    - parsing_error: the response arrived but could not be decoded.
+    - provider_error: any other provider-side error.
+    """
+    text = str(error_text or "")
+    low = text.lower()
+
+    if isinstance(http_status, int) and not isinstance(http_status, bool):
+        if http_status in ACCESS_RESTRICTED_HTTP_STATUSES:
+            return "access_restricted"
+        if http_status in UNSUPPORTED_COVERAGE_HTTP_STATUSES:
+            return "unsupported_coverage"
+
+    # Status text visible in the message even when the exception carries none.
+    if "403" in low or "forbidden" in low or "401" in low or "unauthorized" in low:
+        return "access_restricted"
+    if "404" in low or "not found" in low:
+        return "unsupported_coverage"
+    if "/config/" in low and ("could not download" in low or "download" in low or "failed" in low):
+        return "provider_config_unavailable"
+
+    if isinstance(error_type, str) and error_type in (
+        "ConnectionError",
+        "TimeoutError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "SSLError",
+        "NewConnectionError",
+        "MaxRetryError",
+    ):
+        return "network_error"
+    if any(tok in low for tok in ("timeout", "timed out", "could not download", "name resolution", "temporary failure", "connection refused", "connection reset")):
+        return "network_error"
+
+    if "json" in low and ("decode" in low or "parse" in low):
+        return "parsing_error"
+    combined = f"{error_type or ''} {text}".lower()
+    if "json" in combined and ("decode" in combined or "parse" in combined):
+        return "parsing_error"
+
+    return "provider_error"
+
 # Mapping league ID to SoccerData FBref code strings (only supported FBref leagues)
 LEAGUE_TO_SD_FBREF_CODE = {
     39: "ENG-Premier League",
@@ -652,11 +728,17 @@ except Exception as exc:
                     http_status = err_payload.get("http_status")
                     if isinstance(http_status, bool):
                         http_status = None
-                    if isinstance(http_status, int) and http_status in (401, 403, 404):
-                        logger.info(f"Unrecoverable provider HTTP error {http_status} detected ({last_error}). Skipping remaining retries.")
+                    error_category = _classify_provider_error(http_status, err_type, last_error)
+                    if error_category in DETERMINISTIC_FAILURE_CATEGORIES:
+                        logger.info(
+                            f"Deterministic provider failure ({error_category}, http_status={http_status}) "
+                            f"detected ({last_error}). Skipping remaining retries."
+                        )
                         meta = {
                             "status": "SOURCE_FAILED",
                             "error": last_error,
+                            "error_category": error_category,
+                            "http_status": http_status,
                             "stderr": proc.stderr if proc else None,
                             "source": "soccerdata_fbref",
                         }
@@ -674,7 +756,12 @@ except Exception as exc:
             logger.warning(f"Attempt {attempt}/{max_retries} - {last_error}")
 
     else:
-        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_fbref"}
+        return "SOURCE_FAILED", [], {
+            "status": "SOURCE_FAILED",
+            "error": last_error,
+            "error_category": _classify_provider_error(None, None, last_error),
+            "source": "soccerdata_fbref",
+        }
 
     if not raw_records:
         meta = {
@@ -852,11 +939,17 @@ except Exception as exc:
                     http_status = err_payload.get("http_status")
                     if isinstance(http_status, bool):
                         http_status = None
-                    if isinstance(http_status, int) and http_status in (401, 403, 404):
-                        logger.info(f"Unrecoverable provider HTTP error {http_status} detected ({last_error}). Skipping remaining retries.")
+                    error_category = _classify_provider_error(http_status, err_type, last_error)
+                    if error_category in DETERMINISTIC_FAILURE_CATEGORIES:
+                        logger.info(
+                            f"Deterministic provider failure ({error_category}, http_status={http_status}) "
+                            f"detected ({last_error}). Skipping remaining retries."
+                        )
                         meta = {
                             "status": "SOURCE_FAILED",
                             "error": last_error,
+                            "error_category": error_category,
+                            "http_status": http_status,
                             "stderr": proc.stderr if proc else None,
                             "source": "soccerdata_match_history",
                         }
@@ -875,7 +968,12 @@ except Exception as exc:
 
     else:
         # All retries exhausted due to transient subprocess error or non-zero exit code
-        return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_match_history"}
+        return "SOURCE_FAILED", [], {
+            "status": "SOURCE_FAILED",
+            "error": last_error,
+            "error_category": _classify_provider_error(None, None, last_error),
+            "source": "soccerdata_match_history",
+        }
 
     if not raw_records:
         meta = {
@@ -1385,11 +1483,17 @@ except Exception as exc:
                     http_status = err_payload.get("http_status")
                     if isinstance(http_status, bool):
                         http_status = None
-                    if isinstance(http_status, int) and http_status in (401, 403, 404):
-                        logger.info(f"Unrecoverable provider HTTP error {http_status} detected ({last_error}). Skipping remaining retries.")
+                    error_category = _classify_provider_error(http_status, err_type, last_error)
+                    if error_category in DETERMINISTIC_FAILURE_CATEGORIES:
+                        logger.info(
+                            f"Deterministic provider failure ({error_category}, http_status={http_status}) "
+                            f"detected ({last_error}). Skipping remaining retries."
+                        )
                         meta = {
                             "status": "SOURCE_FAILED",
                             "error": last_error,
+                            "error_category": error_category,
+                            "http_status": http_status,
                             "stderr": proc.stderr if proc else None,
                             "target_url": "https://api.sofascore.com/api/v1/config/default-unique-tournaments/EN/football",
                             "source": "soccerdata_sofascore",
@@ -1412,6 +1516,7 @@ except Exception as exc:
         meta = {
             "status": "SOURCE_FAILED",
             "error": last_error,
+            "error_category": _classify_provider_error(None, None, last_error),
             "stderr": proc.stderr if proc else None,
             "target_url": "https://api.sofascore.com/api/v1/config/default-unique-tournaments/EN/football",
             "source": "soccerdata_sofascore",
