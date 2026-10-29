@@ -250,7 +250,14 @@ def get_competition_lifecycle(
     if not records:
         if now_utc < start_utc:
             return COMPETITION_LIFECYCLE_UPCOMING, "season_not_started", evidence
-        return COMPETITION_LIFECYCLE_ONGOING, "no_records_available", evidence
+        if now_utc < end_utc:
+            return COMPETITION_LIFECYCLE_ONGOING, "no_records_available", evidence
+        # The declared window has closed but nothing is persisted, so neither an
+        # active season nor a concluded one can be evidenced from stored data.
+        # This is UNKNOWN (fail closed), not ONGOING: reporting a season that
+        # ended years ago as still in progress misrepresents historical
+        # competitions and their acquisition state.
+        return COMPETITION_LIFECYCLE_UNKNOWN, "no_records_after_window_closed", evidence
 
     if not (isinstance(coverage, dict) and coverage.get("verified") is True):
         if now_utc < end_utc:
