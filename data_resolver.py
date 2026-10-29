@@ -731,10 +731,14 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         season_exception_count = None
 
     exp_fix_meta = provider_metadata.get("expected_fixture_count")
-    if exp_fix_meta is not None:
-        expected_fixture_count = exp_fix_meta
-    elif season_exception_count is not None:
+    if season_exception_count is not None:
+        # A recorded authoritative season exception is external evidence about the
+        # season's real schedule and outranks a provider-supplied count. Letting the
+        # provider win here would let a truncated acquisition define its own target
+        # for a curtailed season (whose per-team balance check does not apply).
         expected_fixture_count = season_exception_count
+    elif exp_fix_meta is not None:
+        expected_fixture_count = exp_fix_meta
     elif is_double_round_robin and expected_team_count > 0:
         expected_fixture_count = expected_team_count * (expected_team_count - 1)
     else:
