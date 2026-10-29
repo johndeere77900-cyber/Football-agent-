@@ -1,5 +1,5 @@
 {
- "generated_at_utc": "2026-10-29T19:34:49+00:00",
+ "generated_at_utc": "2026-10-29T19:54:55+00:00",
  "generated_from": [
   "config.py",
   "data_resolver.py",
@@ -48,6 +48,62 @@
   "sofascore_access": "HTTP 403 on config, live-events and site root from this environment (2026-10-29); soccerdata surfaces it as a ConnectionError without an HTTP status.",
   "football_data_csv": "All 49 season CSVs reachable (HTTP 200 after redirect); row counts match authoritative expectations for every season, including 279 (Ligue 1 2019-20) and 232 (Eredivisie 2019-20).",
   "identity_audit": "127 unmapped club names found and mapped (commit b85616d); 0 unmapped names remain across all 49 CSVs."
+ },
+ "source_candidate_evaluation": {
+  "evaluated_at_utc": "2026-10-29",
+  "candidates": [
+   {
+    "name": "openfootball/football.json",
+    "url": "https://github.com/openfootball/football.json",
+    "availability": "raw.githubusercontent.com reachable (HTTP 200 for README)",
+    "coverage_verified": "NOT_VERIFIED",
+    "probe_result": "guessed season paths for england/netherlands/portugal returned HTTP 404; repository layout differs and was not confirmed",
+    "fills_verified_gap": false,
+    "status": "candidate_not_integrated",
+    "notes": "Requires layout discovery before any coverage claim; no evidence yet that it covers UCL/UEL/Nations League."
+   },
+   {
+    "name": "openfootball/world",
+    "url": "https://github.com/openfootball/world",
+    "availability": "GitHub API contents endpoint reachable (HTTP 200)",
+    "coverage_verified": "NOT_VERIFIED",
+    "status": "candidate_not_integrated",
+    "notes": "Primarily international competitions; not yet mapped to configured league ids 1/4/5."
+   },
+   {
+    "name": "jalapic/engsoccerdata",
+    "url": "https://github.com/jalapic/engsoccerdata",
+    "availability": "raw README reachable (HTTP 200)",
+    "coverage_verified": "documented in README: England, Spain, Germany, Italy, Holland, France, Portugal (updated to 2024-25 as of 2026-02)",
+    "fills_verified_gap": false,
+    "status": "candidate_not_integrated",
+    "license": "README states 'Free to use for non-commercial use' - licensing must be confirmed before production integration",
+    "notes": "Covers the same 7 domestic divisions already served by Football-Data.co.uk, so it adds redundancy rather than new coverage; cup data only to 2017."
+   },
+   {
+    "name": "soccerdata datasources documentation",
+    "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+    "availability": "reference documentation for the already-integrated soccerdata library",
+    "status": "reference_only"
+   }
+  ],
+  "approved_source_coverage_gaps": [
+   {
+    "league_ids": [
+     2,
+     3,
+     5
+    ],
+    "competitions": [
+     "UEFA Champions League",
+     "UEFA Europa League",
+     "UEFA Nations League"
+    ],
+    "detail": "No direct Football-Data.co.uk CSV exists (only divisions E0/SP1/I1/D1/F1/N1/P1), soccerdata's FBref league dictionary exposes no Champions League/Europa League/Nations League entries (only INT-World Cup and INT-European Championship), LEAGUE_TO_SD_MH_CODE has no entries for these ids, and the Sofascore route is the only approved source left - which returns HTTP 403 from this environment.",
+    "consequence": "These competition-seasons cannot acquire historical fixtures through any currently reachable approved source and must remain INCOMPLETE with that exact reason.",
+    "corrective_action": "Either restore a reachable Sofascore route, extend FBref/MatchHistory mappings where the upstream library supports them, or approve an additional verified source for these competitions."
+   }
+  ]
  },
  "production_database": {
   "status": "NOT_INSPECTED",
