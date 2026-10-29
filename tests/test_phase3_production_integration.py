@@ -11,6 +11,7 @@ Tests:
 - Actual backtest walk-forward calibration order verification (target fixture T excluded from its own calibrator training)
 """
 
+from tests import completion_helpers
 import math
 import pytest
 from datetime import datetime, timezone
@@ -269,7 +270,7 @@ def test_football_backtest_database_first_e2e(tmp_path, monkeypatch):
     assert save_res["inserted"] == 24
 
     # Mark dataset COMPLETE through real storage function
-    storage.mark_historical_dataset_complete(
+    completion_helpers.mark_complete(
         league_id=39,
         season=2024,
         fixture_count=24,
@@ -320,7 +321,8 @@ def test_basketball_backtest_database_first_e2e(tmp_path, monkeypatch):
     assert save_res["inserted"] == 24
 
     # Mark dataset COMPLETE through real storage function
-    storage.mark_historical_dataset_complete(
+    completion_helpers.allow_synthetic_nba_season(monkeypatch, 2024, 24)
+    completion_helpers.mark_complete(
         league_id=12,
         season=2024,
         fixture_count=24,
@@ -376,7 +378,7 @@ def test_backtest_actual_calibration_order(tmp_path, monkeypatch):
     ]
 
     storage.save_historical_fixtures(raw_fixtures, league_id=39, season=2024)
-    storage.mark_historical_dataset_complete(
+    completion_helpers.mark_complete(
         league_id=39,
         season=2024,
         fixture_count=24,
@@ -435,7 +437,8 @@ def test_basketball_backtest_actual_calibration_order(tmp_path, monkeypatch):
     ]
 
     storage.save_historical_basketball_games(raw_games, league_id=12, season=2024)
-    storage.mark_historical_dataset_complete(
+    completion_helpers.allow_synthetic_nba_season(monkeypatch, 2024, 24)
+    completion_helpers.mark_complete(
         league_id=12,
         season=2024,
         fixture_count=24,

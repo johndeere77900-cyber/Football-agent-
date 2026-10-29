@@ -2,6 +2,7 @@
 Tests for zero-network COMPLETE dataset revalidation and strict provider execution ordering.
 """
 
+from tests import completion_helpers
 from unittest.mock import patch, MagicMock
 import pytest
 import storage
@@ -46,7 +47,7 @@ def test_complete_dataset_zero_network_calls():
             fid += 1
 
     storage.save_historical_fixtures(fixtures, league_id, season, source="football_data_csv")
-    storage.mark_historical_dataset_complete(
+    completion_helpers.mark_complete(
         league_id, season, fixture_count=len(fixtures), source="football_data_csv", expected_pages=1, pages_completed=1, acquisition_complete=True, expected_team_ids=teams
     )
 
@@ -149,9 +150,9 @@ def test_sufficient_primary_coverage_prevents_secondary_network_calls(monkeypatc
 
 def test_strict_provider_execution_ordering(monkeypatch):
     """
-    Verify strict provider execution order:
-    CSV -> SoccerData MatchHistory -> SoccerData Sofascore -> API-Football (fixtures) -> football-data.org (matches)
-    and confirm football_data_api.get_competition_teams CANNOT run before api_football.get_league_fixtures_page.
+    Verify the approved historical football provider order:
+    direct CSV -> SoccerData FBref -> SoccerData MatchHistory -> SoccerData Sofascore,
+    and confirm the retired secondary API providers are never consulted.
     """
     league_id = 39
     season = 2024
@@ -162,46 +163,45 @@ def test_strict_provider_execution_ordering(monkeypatch):
         calls.append("football_data_csv")
         return []
 
-    def mock_sd_mh(code, ssn, league_id=None):
+    def mock_sd_fb(code, ssn, *args, **kwargs):
+        calls.append("soccerdata_fbref")
+        return ("SOURCE_UNAVAILABLE", [], {})
+
+    def mock_sd_mh(code, ssn, *args, **kwargs):
         calls.append("soccerdata_match_history")
         return ("SOURCE_UNAVAILABLE", [], {})
 
-    def mock_sd_ss(code, ssn, league_id=None):
+    def mock_sd_ss(code, ssn, *args, **kwargs):
         calls.append("soccerdata_sofascore")
         return ("SOURCE_UNAVAILABLE", [], {})
 
-    def mock_af_page(lid, ssn, page=1, max_budget=None, **kwargs):
+    def mock_af_page(*args, **kwargs):
         calls.append("api_football_fixtures")
         return {"fixtures": [], "expected_pages": 1, "page": 1}
 
-    def mock_af_standings(lid, ssn, max_budget=None):
-        calls.append("api_football_standings")
-        return []
-
-    def mock_fd_matches(code, season=None):
+    def mock_fd_matches(*args, **kwargs):
         calls.append("football_data_org_matches")
         return []
 
-    def mock_fd_teams(code, season=None):
+    def mock_fd_teams(*args, **kwargs):
         calls.append("football_data_org_teams")
         return []
 
     monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", mock_csv)
+    monkeypatch.setattr("soccerdata_provider.get_fbref_games", mock_sd_fb)
     monkeypatch.setattr("soccerdata_provider.get_match_history_games", mock_sd_mh)
     monkeypatch.setattr("soccerdata_provider.get_sofascore_historical_games", mock_sd_ss)
     monkeypatch.setattr("api_football.get_league_fixtures_page", mock_af_page)
-    monkeypatch.setattr("api_football.get_league_standings", mock_af_standings)
     monkeypatch.setattr("football_data_api.get_competition_matches", mock_fd_matches)
     monkeypatch.setattr("football_data_api.get_competition_teams", mock_fd_teams)
 
     resolver = DataResolver()
-    res = resolver.get_league_fixtures_page(league_id, season, page=1)
+    resolver.get_league_fixtures_page(league_id, season, page=1)
 
-    # Assert api_football_fixtures ran BEFORE football_data_org_matches or football_data_org_teams
-    af_idx = calls.index("api_football_fixtures")
-    if "football_data_org_teams" in calls:
-        fd_teams_idx = calls.index("football_data_org_teams")
-        assert af_idx < fd_teams_idx, "football_data_org_teams ran before api_football_fixtures!"
+    expected_order = ["football_data_csv", "soccerdata_fbref", "soccerdata_match_history", "soccerdata_sofascore"]
+    assert calls[:4] == expected_order
 
-    expected_primary = ["football_data_csv", "soccerdata_match_history", "soccerdata_sofascore", "api_football_fixtures"]
-    assert calls[:4] == expected_primary
+    # The retired secondary API providers must never be used for historical fixtures.
+    assert "api_football_fixtures" not in calls
+    assert "football_data_org_matches" not in calls
+    assert "football_data_org_teams" not in calls

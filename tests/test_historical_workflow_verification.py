@@ -2,6 +2,7 @@
 Tests for historical workflow season selection and post-acquisition dataset verification.
 """
 
+from tests import completion_helpers
 import json
 import os
 import sqlite3
@@ -23,7 +24,7 @@ def init_test_db(tmp_path, monkeypatch):
     storage.init_db()
 
 
-def test_verify_persisted_historical_datasets_football_and_basketball_pass(tmp_path):
+def test_verify_persisted_historical_datasets_football_and_basketball_pass(tmp_path, monkeypatch):
     # Populate a valid football dataset (39, 2024)
     valid_fixture = {
         "fixture": {"id": 10001, "date": "2024-09-15T15:00:00+00:00", "status": {"short": "FT"}},
@@ -44,8 +45,9 @@ def test_verify_persisted_historical_datasets_football_and_basketball_pass(tmp_p
     }
     storage.save_historical_basketball_games([valid_game], 12, 2024)
 
-    storage.mark_historical_dataset_complete(league_id=39, season=2024, fixture_count=1, sport="football", source="api_football")
-    storage.mark_historical_dataset_complete(league_id=12, season=2024, fixture_count=1, sport="basketball", expected_pages=1, pages_completed=1)
+    completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=1, sport="football", source="api_football")
+    completion_helpers.allow_synthetic_nba_season(monkeypatch, 2024, 1)
+    completion_helpers.mark_complete(league_id=12, season=2024, fixture_count=1, sport="basketball", expected_pages=1, pages_completed=1)
 
     with patch("data_resolver._validate_historical_structural_coverage", return_value={"verified": True}):
         res_fb = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=2024)

@@ -4,6 +4,9 @@ __pycache__/
 *.pyd
 .pytest_cache/
 .api_cache/
+# Runtime lock artifacts written at runtime; never tracked source.
+downloaded_files/*.lock
 predictions.db
 telegram_memory.json
 data/backtests/*.json
+.venv/

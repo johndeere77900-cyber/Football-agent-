@@ -88,24 +88,30 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
 
     @patch("data_resolver._fetch_direct_csv_league_fixtures")
     @patch("api_football.get_league_fixtures_page")
-    def test_direct_fallback_when_api_quota_exhausted(self, mock_api_page, mock_csv):
-        mock_api_page.side_effect = data_resolver.APIFootballQuotaExhaustedError("Quota exhausted")
+    def test_direct_csv_provider_used_without_secondary_api(self, mock_api_page, mock_csv):
+        """
+        The first approved provider (direct CSV) supplies fixtures and the retired
+        secondary API providers are never consulted.
+        """
         mock_csv.return_value = [{
             "fixture": {"id": 100, "date": "2024-08-16T12:00:00Z", "status": {"short": "FT"}},
             "league": {"id": 39, "season": 2024},
             "teams": {"home": {"id": None, "name": "A"}, "away": {"id": None, "name": "B"}},
             "goals": {"home": 1, "away": 0},
-            "canonical_home_id": "football_team_A",
-            "canonical_away_id": "football_team_B",
+            "canonical_home_id": "football_team_a",
+            "canonical_away_id": "football_team_b",
             "provider_provenance": {"provider": "football_data_csv"}
         }]
 
-        resolver = data_resolver.DataResolver()
-        res = resolver.get_league_fixtures_page(39, 2024, page=1)
+        with patch("soccerdata_provider.get_fbref_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+             patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
+             patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
+            resolver = data_resolver.DataResolver()
+            res = resolver.get_league_fixtures_page(39, 2024, page=1)
 
-        self.assertTrue(res["secondary_quota_exhausted"])
-        self.assertTrue(res["secondary_failed"])
+        mock_api_page.assert_not_called()
         self.assertEqual(len(res["fixtures"]), 1)
+        self.assertIn("football_data_csv", res["provider_metadata"]["provider_outcomes"])
 
     def test_multi_season_cli_and_incomplete_status(self):
         parser = main.build_parser()
@@ -288,10 +294,13 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
         self.assertTrue(coverage["verified"])
         self.assertIsNone(coverage["reason"])
 
-    def test_complete_csv_dataset_without_authoritative_roster_skips_secondary_provider(self):
+    def test_complete_csv_dataset_without_authoritative_roster_stays_incomplete(self):
         """
-        Regression test: Complete primary CSV dataset without authoritative roster passes structural coverage
-        and returns immediately without calling secondary providers.
+        Regression test: A structurally complete-looking CSV dataset is NOT accepted as
+        complete when no authoritative team universe can be established. The dataset must
+        remain explicitly incomplete, and the retired secondary API providers must not be
+        consulted (their removal must never be compensated by inferring a roster from the
+        returned matches).
         """
         import storage
         import team_identity
@@ -336,9 +345,12 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
             resolver = data_resolver.DataResolver()
             res = resolver.get_league_fixtures_page(140, 2019, page=1)
 
-            self.assertTrue(res["provider_metadata"]["is_complete"])
-            self.assertTrue(res["provider_metadata"]["structural_coverage"]["verified"])
-            self.assertEqual(res["source"], "football_data_csv")
+            self.assertFalse(res["provider_metadata"]["is_complete"])
+            self.assertFalse(res["provider_metadata"]["structural_coverage"]["verified"])
+            self.assertEqual(
+                res["provider_metadata"]["structural_coverage"]["reason"],
+                "authoritative_team_universe_unavailable",
+            )
             mock_af_page.assert_not_called()
 
     def test_incomplete_csv_dataset_triggers_secondary_fallback(self):
@@ -414,7 +426,12 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
                 })
 
         storage.save_historical_fixtures(fixtures, 140, 2019, source="football_data_csv", require_completed=True)
-        storage.mark_historical_dataset_incomplete(140, 2019, fixture_count=380, rejected_count=0, empty_pages_count=0)
+        # Persist the authoritative expected-team universe so coverage can be verified
+        # independently of the returned matches.
+        storage.mark_historical_dataset_incomplete(
+            140, 2019, fixture_count=380, rejected_count=0, empty_pages_count=0,
+            expected_team_ids=canonical_teams,
+        )
 
         with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
             res = historical_sync.sync_historical_fixtures(140, 2019, refresh=False)

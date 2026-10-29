@@ -1959,7 +1959,7 @@ def handle_config_op():
         "• *Configured Sports:* Football, Basketball",
         f"• *Configured Football Leagues:* {len(config.ALLOWED_LEAGUE_IDS)} leagues",
         f"• *Configured Basketball Leagues:* {len(config.ALLOWED_BASKETBALL_LEAGUE_IDS)} leagues",
-        "• *API Providers:* API-Football (Active), API-Basketball (Active), The Odds API (Active)",
+        "• *API Providers:* API-Football (Active for live football), ESPN Scoreboards (Active for historical basketball), API-Basketball (Fallback), The Odds API (Active)",
         "• *API Keys / Credentials:* REDACTED / SECURE",
     ]
     return "\n".join(lines)
@@ -1979,6 +1979,8 @@ def handle_provider_status_op():
     odds_used = storage.get_api_request_count("odds_api", today_str)
 
     af_key = getattr(config, "API_FOOTBALL_KEY", None) or os.environ.get("API_FOOTBALL_KEY")
+    ab_key = getattr(config, "API_BASKETBALL_KEY", None) or os.environ.get("API_BASKETBALL_KEY")
+    fd_key = getattr(config, "FOOTBALL_DATA_API_KEY", None) or os.environ.get("FOOTBALL_DATA_API_KEY")
     odds_key = getattr(config, "ODDS_API_KEY", None) or os.environ.get("ODDS_API_KEY")
 
     lines = [
@@ -1991,8 +1993,14 @@ def handle_provider_status_op():
         "⚽ *Direct CSV & SoccerData (Historical Football):*",
         "• Status: ACTIVE (Direct CSV & Subprocess Execution)",
         "",
-        "🏀 *API-Basketball (Basketball Primary):*",
-        f"• Status: {'CONFIGURED' if af_key else 'UNAVAILABLE'}",
+        "⚽ *football-data.org (Live Standings & Team Stats Fallback):*",
+        f"• Status: {'CONFIGURED' if fd_key else 'UNAVAILABLE'}",
+        "",
+        "🏀 *ESPN URL Scoreboards (Historical Basketball Primary):*",
+        f"• Status: {'ENABLED' if getattr(config, 'ENABLE_ESPN_BASKETBALL', True) else 'DISABLED'}",
+        "",
+        "🏀 *API-Basketball (Basketball Fallback):*",
+        f"• Status: {'CONFIGURED' if ab_key else 'UNAVAILABLE'}",
         f"• Daily Quota: {ab_used} / {getattr(config, 'API_BASKETBALL_DAILY_CREDIT_LIMIT', 100)} credits",
         "",
         "🎲 *The Odds API (Market Odds):*",
@@ -2028,10 +2036,10 @@ def handle_coverage_op():
     lines = [
         "🌐 *SUPPORTED COMPETITION COVERAGE*",
         "",
-        "⚽ *Football Competitions (API-Football Primary → football-data.org Fallback):*",
+        "⚽ *Football Competitions (Historical: Direct CSV → SoccerData FBref → MatchHistory → Sofascore):*",
     ] + [f"• {lg}" for lg in fb_leagues] + [
         "",
-        "🏀 *Basketball Competitions:*",
+        "🏀 *Basketball Competitions (Historical: ESPN URL → API-Basketball Fallback):*",
     ] + [f"• {lg}" for lg in bb_leagues]
 
     return "\n".join(lines)

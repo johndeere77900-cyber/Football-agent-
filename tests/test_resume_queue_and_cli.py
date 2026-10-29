@@ -2,6 +2,7 @@
 Tests for resume, queue execution, dataset verification, and CLI exit codes.
 """
 
+from tests import completion_helpers
 from unittest.mock import patch, MagicMock
 import pytest
 import storage
@@ -52,7 +53,7 @@ def test_verify_historical_datasets_returns_exit_code_0_on_successful_verificati
             fid += 1
 
     storage.save_historical_fixtures(fixtures, league_id, season, source="football_data_csv")
-    storage.mark_historical_dataset_complete(
+    completion_helpers.mark_complete(
         league_id, season, fixture_count=380, source="football_data_csv", expected_pages=1, pages_completed=1, acquisition_complete=True, expected_team_ids=teams
     )
 

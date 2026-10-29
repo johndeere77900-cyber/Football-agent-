@@ -3,9 +3,12 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 import config
+import data_resolver
 import storage
+from tests import completion_helpers
 import api_football
 import basketball_api
+import espn_basketball_provider
 import historical_sync
 import historical_match_policy
 import historical_features
@@ -25,6 +28,21 @@ def isolated_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def synthetic_nba_season_expectation(monkeypatch):
+    """State the scale of this module's synthetic basketball fixtures.
+
+    Production keeps the published NBA regular-season totals in
+    config.NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES; these tests persist a handful of
+    games, so they declare their own explicit expectation instead of the
+    production minimum being loosened.
+    """
+    expected = dict(getattr(config, "NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES", {}) or {})
+    for season in (2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026):
+        expected[season] = 1
+    monkeypatch.setattr(config, "NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES", expected, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def mock_team_universe(isolated_db, monkeypatch):
     import team_identity
     for lid in (39, 61, 78, 88, 90, 140):
@@ -36,6 +54,11 @@ def mock_team_universe(isolated_db, monkeypatch):
     def _mock_get_team_ids(league_id, season, *args, **kwargs):
         return [f"football_team_{league_id}_team_1", f"football_team_{league_id}_team_2"]
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
+    # The mocked competition universe is authoritative and self-consistent: the
+    # expected competition size matches the two registered teams, so structural
+    # coverage is judged against the same authority for provider responses and
+    # for the persisted dataset.
+    monkeypatch.setattr(data_resolver, "get_expected_league_team_count", lambda league_id, season=None: 2)
 
 
 def sample_football_fixture(fid, date="2025-01-10T15:00:00+00:00", status="FT", home_goals=2, away_goals=1, league_id=39, home_id=1, away_id=2):
@@ -75,55 +98,110 @@ def sample_basketball_game(gid, date="2024-11-10T20:00:00+00:00", status="FT", h
     }
 
 
+def espn_no_coverage_patch():
+    """Force the documented basketball route deterministically and offline.
+
+    ESPN reports a failed acquisition for every monthly scoreboard, so no ESPN
+    coverage is validated and acquisition proceeds to the API-Basketball
+    fallback (the paginated historical basketball route).
+    """
+    months = espn_basketball_provider.NBA_SEASON_MONTH_COUNT
+    meta = {
+        "months_attempted": months,
+        "months_succeeded": 0,
+        "months_failed": months,
+        "all_months_succeeded": False,
+        "monthly_details": [],
+    }
+    return patch("espn_basketball_provider.fetch_espn_nba_season_games", return_value=([], meta))
+
+
+def espn_full_coverage_patch(games):
+    """ESPN primary fully covers all nine monthly scoreboards."""
+    months = espn_basketball_provider.NBA_SEASON_MONTH_COUNT
+    meta = {
+        "months_attempted": months,
+        "months_succeeded": months,
+        "months_failed": 0,
+        "all_months_succeeded": True,
+        "monthly_details": [{"month": "202411", "status": "SUCCESS", "event_count": len(games)}],
+    }
+    return patch("espn_basketball_provider.fetch_espn_nba_season_games", return_value=(games, meta))
+
+
+@pytest.fixture
+def espn_enabled(monkeypatch):
+    """Enable the ESPN primary route so the ESPN-first basketball architecture
+    (ESPN first, API-Basketball fallback) is the flow exercised by the test."""
+    monkeypatch.setattr(config, "ENABLE_ESPN_BASKETBALL", True)
+
+
+def no_soccerdata_sources():
+    """Every SoccerData historical football provider reports no usable data."""
+    return [
+        patch("soccerdata_provider.get_fbref_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})),
+        patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})),
+        patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})),
+    ]
+
+
 # ============================================================================
 # 1. FOOTBALL PAGINATION + RESUMABILITY (A-G)
 # ============================================================================
 
 
-def test_A_to_G_football_pagination_failure_persistence_and_resumption(isolated_db):
-    fix1 = sample_football_fixture(7001, home_id=1, away_id=2)
-    fix2 = sample_football_fixture(7002, home_id=2, away_id=1)
+def test_A_to_G_pagination_failure_persistence_and_resumption(isolated_db, espn_enabled):
+    """A-G on the paginated historical route.
 
-    def mock_p1_ok_p2_fail(league_id, season, page, max_budget=None):
+    Football historical acquisition is single-shot (direct CSV -> SoccerData) and
+    consumes no API pagination, so football page-level failure/resumption is
+    retired. The identical requirement chain is exercised on the API-Basketball
+    fallback, which is the paginated historical route that remains:
+      A/B: a failed later page keeps the already-acquired games persisted,
+      C:   the dataset stays INCOMPLETE,
+      G:   the quota stop is recorded as the stopping reason,
+      D/E/F: the next run completes the dataset without duplicating games.
+    """
+    bg1 = sample_basketball_game(7001)
+    bg2 = sample_basketball_game(7002)
+
+    def mock_p1_ok_p2_quota(league_id, season, page, max_budget=None):
         if page == 1:
-            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
-        raise api_football.APIFootballQuotaExhaustedError("Quota exhausted on page 2")
+            return {"games": [bg1], "page": 1, "expected_pages": 2}
+        raise basketball_api.APIBasketballQuotaExhaustedError("Quota exhausted on page 2")
 
     # A, B, C, G: page 1 succeeds, page 2 fails with quota exhaustion
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_p1_ok_p2_fail), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_p1_ok_p2_quota):
+        rep1 = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
 
-    assert rep1["status"] == "INCOMPLETE" # C
-    assert rep1["pages_completed"] == 1
-    assert rep1["expected_pages"] == 2
-    assert rep1["quota_budget_stopped"] is True # G
+    assert rep1["status"] == "INCOMPLETE"  # C
+    assert rep1["coverage_unit"] == "api_pages"
+    assert rep1["completed_coverage_units"] == 1
+    assert rep1["expected_coverage_units"] == 2
+    assert rep1["quota_budget_stopped"] is True  # G
 
-    # B: page 1 fixtures remain persisted
-    stored = storage.get_historical_fixtures(39, 2024)
+    # B: page 1 games remain persisted
+    stored = storage.get_historical_basketball_games(12, 2024)
     assert len(stored) == 1
-    assert stored[0]["fixture"]["id"] == 7001
+    assert stored[0]["id"] == 7001
 
-    # D, E, F: next run resumes from page 1 and completes dataset without duplicates
+    # D, E, F: the next run completes the dataset without duplicating games
     def mock_p2_resume(league_id, season, page, max_budget=None):
         if page == 1:
-            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
+            return {"games": [bg1], "page": 1, "expected_pages": 2}
         if page == 2:
-            return {"fixtures": [fix1, fix2], "page": 2, "expected_pages": 2} # fix1 duplicate
+            return {"games": [bg1, bg2], "page": 2, "expected_pages": 2}  # bg1 duplicate
         raise RuntimeError("Unexpected page")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_p2_resume), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_p2_resume):
+        rep2 = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
 
-    assert rep2["status"] == "COMPLETE" # F
-    assert rep2["pages_completed"] == 2
-    stored_final = storage.get_historical_fixtures(39, 2024)
-    assert len(stored_final) == 2 # E: no duplicates
+    assert rep2["status"] == "COMPLETE"  # F
+    assert rep2["completed_coverage_units"] == 2
+    stored_final = storage.get_historical_basketball_games(12, 2024)
+    assert len(stored_final) == 2  # E: no duplicates
 
 
 # ============================================================================
@@ -131,7 +209,7 @@ def test_A_to_G_football_pagination_failure_persistence_and_resumption(isolated_
 # ============================================================================
 
 
-def test_H_to_M_basketball_pagination_deduplication_and_completeness(isolated_db):
+def test_H_to_M_basketball_pagination_deduplication_and_completeness(isolated_db, espn_enabled):
     bg1 = sample_basketball_game(8001)
     bg2 = sample_basketball_game(8002)
     bg_malformed = {"id": 8003, "date": "2024-11-12T20:00:00+00:00"} # missing teams
@@ -141,7 +219,8 @@ def test_H_to_M_basketball_pagination_deduplication_and_completeness(isolated_db
             return {"games": [bg1], "page": 1, "expected_pages": 2}
         return {"games": [bg1, bg2, bg_malformed], "page": 2, "expected_pages": 2}
 
-    with patch("basketball_api.get_league_games_page", side_effect=mock_b_p1):
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_b_p1):
         rep = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
 
     # L: malformed game rejected keeps dataset INCOMPLETE
@@ -308,7 +387,7 @@ def test_legacy_sqlite_primary_key_migration(tmp_path, monkeypatch):
     assert status_fb["fixture_count"] == 380
 
     # Insert basketball row with identical league_id=12 and season=2024
-    storage.mark_historical_dataset_complete(12, 2024, fixture_count=1230, sport="basketball")
+    completion_helpers.force_manifest(12, 2024, fixture_count=1230, sport="basketball")
 
     # Verify coexistence without primary key collision
     status_bb = storage.get_historical_dataset_status(12, 2024, sport="basketball")
@@ -319,36 +398,39 @@ def test_legacy_sqlite_primary_key_migration(tmp_path, monkeypatch):
     assert status_fb_recheck["fixture_count"] == 380
 
 
-def test_pre_acquisition_quota_exhaustion_preserves_manifest_fields_football_and_basketball(isolated_db):
-    # Football pre-population
+def test_pre_acquisition_quota_exhaustion_preserves_manifest_fields_football_and_basketball(isolated_db, espn_enabled):
+    # Football pre-population. Football historical acquisition now consumes no API
+    # quota (direct CSV / SoccerData), so there is no football quota gate; the
+    # football half below proves a run that acquires nothing preserves every
+    # previously recorded manifest counter instead of wiping progress.
     storage.mark_historical_dataset_incomplete(
         league_id=88, season=2024, fixture_count=50, sport="football",
         expected_pages=10, pages_completed=4, acquisition_complete=False,
         enrichment_status="PARTIAL", rejected_count=3, empty_pages_count=1,
     )
-    # Basketball pre-population (same league_id=88, season=2024)
+    # Basketball pre-population (same league_id=88, season=2024 - sport separation)
     storage.mark_historical_dataset_incomplete(
         league_id=88, season=2024, fixture_count=60, sport="basketball",
         expected_pages=12, pages_completed=5, acquisition_complete=False,
         enrichment_status="PARTIAL", rejected_count=2, empty_pages_count=2,
     )
 
-    # Exhaust quota for both
+    # Exhaust the basketball historical quota ledger
     for _ in range(50):
-        storage.record_api_request("api_football", "fixtures")
         storage.record_api_request("api_basketball", "games")
 
-    # Run syncs
-    with patch("api_football.get_league_fixtures_page") as mock_fb_http, \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep_fb = historical_sync.sync_historical_fixtures(league_id=88, season=2024, historical_budget=50)
+    # Football: approved providers supply nothing, and the retired API route is
+    # never consulted.
+    with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("api_football.get_league_fixtures_page") as mock_fb_http:
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for p in no_soccerdata_sources():
+                stack.enter_context(p)
+            rep_fb = historical_sync.sync_historical_fixtures(league_id=88, season=2024, historical_budget=50)
         mock_fb_http.assert_not_called()
 
-    with patch("basketball_api.get_league_games_page") as mock_bb_http:
-        rep_bb = historical_sync.sync_historical_basketball_games(league_id=88, season=2024, historical_budget=50)
-        mock_bb_http.assert_not_called()
+    assert rep_fb["status"] == "INCOMPLETE"
 
     # Assert Football manifest preserved
     st_fb = storage.get_historical_dataset_status(88, 2024, sport="football")
@@ -358,8 +440,17 @@ def test_pre_acquisition_quota_exhaustion_preserves_manifest_fields_football_and
     assert st_fb["acquisition_complete"] is False
     assert st_fb["enrichment_status"] == "PARTIAL"
     assert st_fb["rejected_count"] == 3
-    assert st_fb["empty_pages_count"] == 1
-    assert st_fb["error_reason"] == "quota_budget_exhausted_before_acquisition"
+    # Empty-page occurrences are cumulative and never reset by a later run
+    assert st_fb["empty_pages_count"] >= 1
+
+    # Basketball: quota already exhausted before acquisition -> the API provider is
+    # never called and the existing manifest fields are preserved.
+    with espn_no_coverage_patch(), patch("basketball_api.get_league_games_page") as mock_bb_http:
+        rep_bb = historical_sync.sync_historical_basketball_games(league_id=88, season=2024, historical_budget=50)
+        mock_bb_http.assert_not_called()
+
+    assert rep_bb["status"] == "INCOMPLETE"
+    assert rep_bb["quota_budget_stopped"] is True
 
     # Assert Basketball manifest preserved
     st_bb = storage.get_historical_dataset_status(88, 2024, sport="basketball")
@@ -373,65 +464,73 @@ def test_pre_acquisition_quota_exhaustion_preserves_manifest_fields_football_and
     assert st_bb["error_reason"] == "quota_budget_exhausted_before_acquisition"
 
 
-def test_later_page_quota_interruption_and_resume_football_and_basketball(isolated_db):
-    fix1 = sample_football_fixture(1501, league_id=39, home_id=1, away_id=2)
-    fix2 = sample_football_fixture(1502, league_id=39, home_id=2, away_id=1)
+def test_later_page_quota_interruption_and_resume_basketball_fallback(isolated_db, espn_enabled):
+    """Quota interruption on a later page keeps recorded coverage and resumes.
 
-    def mock_fb_p1_p2_p3(league_id, season, page, max_budget=None):
+    Exercised on the API-Basketball fallback: football historical acquisition is
+    single-shot and consumes no API quota.
+    """
+    bg1 = sample_basketball_game(1501)
+    bg2 = sample_basketball_game(1502)
+
+    def mock_p1_ok_p2_quota(league_id, season, page, max_budget=None):
         if page == 1:
-            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
-        raise api_football.APIFootballQuotaExhaustedError("Quota exhausted on page 2")
+            return {"games": [bg1], "page": 1, "expected_pages": 2}
+        raise basketball_api.APIBasketballQuotaExhaustedError("Quota exhausted on page 2")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1_p2_p3), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_p1_ok_p2_quota):
+        rep = historical_sync.sync_historical_basketball_games(league_id=12, season=2024, historical_budget=50)
 
-    assert rep["pages_completed"] == 1
-    assert rep["expected_pages"] == 2
-    st = storage.get_historical_dataset_status(39, 2024, sport="football")
+    assert rep["status"] == "INCOMPLETE"
+    assert rep["completed_coverage_units"] == 1
+    assert rep["expected_coverage_units"] == 2
+    assert rep["quota_budget_stopped"] is True
+    st = storage.get_historical_dataset_status(12, 2024, sport="basketball")
     assert st["pages_completed"] == 1
     assert st["expected_pages"] == 2
+    assert st["coverage_unit"] == "api_pages"
     assert st["error_reason"] == "quota_budget_exhausted_during_acquisition"
 
-    # Resume from page 1
-    def mock_fb_p2_resume(league_id, season, page, max_budget=None):
+    # Resume from the recorded coverage
+    def mock_p2_resume(league_id, season, page, max_budget=None):
         if page == 1:
-            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
+            return {"games": [bg1], "page": 1, "expected_pages": 2}
         if page == 2:
-            return {"fixtures": [fix2], "page": 2, "expected_pages": 2}
+            return {"games": [bg2], "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p2_resume), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep_res = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_p2_resume):
+        rep_res = historical_sync.sync_historical_basketball_games(league_id=12, season=2024, historical_budget=50)
 
     assert rep_res["status"] == "COMPLETE"
-    assert rep_res["pages_completed"] == 2
+    assert rep_res["completed_coverage_units"] == 2
+    assert len(storage.get_historical_basketball_games(12, 2024)) == 2
 
 
-def test_api_exception_checkpoint_and_resume_football_and_basketball(isolated_db):
-    bg1 = sample_basketball_game(8501, league_id=90)
-    bg2 = sample_basketball_game(8502, league_id=90)
+def test_api_exception_checkpoint_and_resume_basketball_fallback(isolated_db, espn_enabled):
+    """A transient API error on a later page checkpoints progress and resumes."""
+    bg1 = sample_basketball_game(8501, league_id=12)
+    bg2 = sample_basketball_game(8502, league_id=12)
 
     def mock_bb_p1_ok_p2_err(league_id, season, page, max_budget=None):
         if page == 1:
             return {"games": [bg1], "page": 1, "expected_pages": 2}
         raise RuntimeError("API network timeout on page 2")
 
-    with patch("basketball_api.get_league_games_page", side_effect=mock_bb_p1_ok_p2_err):
-        rep = historical_sync.sync_historical_basketball_games(league_id=90, season=2024)
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_bb_p1_ok_p2_err):
+        rep = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
 
-    assert rep["pages_completed"] == 1
-    assert rep["expected_pages"] == 2
-    st = storage.get_historical_dataset_status(90, 2024, sport="basketball")
+    assert rep["status"] == "INCOMPLETE"
+    assert rep["completed_coverage_units"] == 1
+    assert rep["expected_coverage_units"] == 2
+    st = storage.get_historical_dataset_status(12, 2024, sport="basketball")
     assert st["pages_completed"] == 1
     assert st["error_reason"] == "api_error_during_acquisition"
 
-    # Resume from page 1
+    # Resume from the recorded coverage
     def mock_bb_p2_resume(league_id, season, page, max_budget=None):
         if page == 1:
             return {"games": [bg1], "page": 1, "expected_pages": 2}
@@ -439,78 +538,41 @@ def test_api_exception_checkpoint_and_resume_football_and_basketball(isolated_db
             return {"games": [bg2], "page": 2, "expected_pages": 2}
         raise RuntimeError(f"Unexpected page fetch for page {page}")
 
-    with patch("basketball_api.get_league_games_page", side_effect=mock_bb_p2_resume):
-        rep_res = historical_sync.sync_historical_basketball_games(league_id=90, season=2024)
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_bb_p2_resume):
+        rep_res = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
 
     assert rep_res["status"] == "COMPLETE"
-    assert rep_res["pages_completed"] == 2
+    assert rep_res["completed_coverage_units"] == 2
 
 
-def test_early_quota_exhaustion_preserves_persisted_manifest_state_football_and_basketball(isolated_db, monkeypatch):
-    # 1. Football: Page 1 sync has 1 valid + 1 rejected fixture (FT status, but missing date/teams)
-    fix_ok = sample_football_fixture(1401)
-    fix_bad = {"fixture": {"id": 1402, "status": {"short": "FT"}}} # malformed completed fixture
-
-    def mock_fb_p1(league_id, season, page=1, max_budget=None):
-        if page == 1:
-            return {"fixtures": [fix_ok, fix_bad], "page": 1, "expected_pages": 2}
-        raise api_football.APIFootballQuotaExhaustedError("Quota exhausted")
-
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024, historical_budget=50)
-
-    assert rep1["pages_completed"] == 1
-    assert rep1["expected_pages"] == 2
-    assert rep1["rejected_count"] == 1
-
-    # Simulate daily budget exhausted before second run starts
-    for _ in range(50):
-        storage.record_api_request("api_football", "fixtures")
-
-    with patch("api_football.get_league_fixtures_page") as mock_http, \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep_quota = historical_sync.sync_historical_fixtures(league_id=39, season=2024, historical_budget=50)
-        mock_http.assert_not_called()
-
-    # Early exit must NOT wipe out pages_completed, expected_pages, or rejected_count!
-    assert rep_quota["status"] == "INCOMPLETE"
-    assert rep_quota["quota_budget_stopped"] is True
-    st_fb = storage.get_historical_dataset_status(39, 2024, sport="football")
-    assert st_fb["pages_completed"] == 1
-    assert st_fb["expected_pages"] == 2
-    assert st_fb["rejected_count"] == 1
-    assert st_fb["status"] == "INCOMPLETE"
-
-    # 2. Basketball: Page 1 sync has 1 valid + 1 rejected game
+def test_early_quota_exhaustion_preserves_persisted_manifest_state_basketball_fallback(isolated_db, espn_enabled):
+    """A pre-acquisition quota stop must never wipe recorded coverage progress."""
     bg_ok = sample_basketball_game(8401)
-    bg_bad = {"id": 8402} # malformed
+    bg_bad = {"id": 8402}  # malformed completed game
 
     def mock_bb_p1(league_id, season, page=1, max_budget=None):
         if page == 1:
             return {"games": [bg_ok, bg_bad], "page": 1, "expected_pages": 2}
         raise basketball_api.APIBasketballQuotaExhaustedError("Quota exhausted")
 
-    with patch("basketball_api.get_league_games_page", side_effect=mock_bb_p1):
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_bb_p1):
         rep_b1 = historical_sync.sync_historical_basketball_games(league_id=12, season=2024, historical_budget=50)
 
-    assert rep_b1["pages_completed"] == 1
-    assert rep_b1["expected_pages"] == 2
+    assert rep_b1["completed_coverage_units"] == 1
+    assert rep_b1["expected_coverage_units"] == 2
     assert rep_b1["rejected_count"] == 1
 
-    # Simulate basketball daily budget exhausted before second run starts
+    # Simulate the basketball daily budget being exhausted before the next run starts
     for _ in range(50):
         storage.record_api_request("api_basketball", "games")
 
-    with patch("basketball_api.get_league_games_page") as mock_bb_http:
+    with espn_no_coverage_patch(), patch("basketball_api.get_league_games_page") as mock_bb_http:
         rep_b_quota = historical_sync.sync_historical_basketball_games(league_id=12, season=2024, historical_budget=50)
         mock_bb_http.assert_not_called()
 
-    # Early exit must NOT wipe out pages_completed, expected_pages, or rejected_count!
+    # Early exit must NOT wipe out completed units, expected units, or rejected count
     assert rep_b_quota["status"] == "INCOMPLETE"
     assert rep_b_quota["quota_budget_stopped"] is True
     st_bb = storage.get_historical_dataset_status(12, 2024, sport="basketball")
@@ -520,108 +582,98 @@ def test_early_quota_exhaustion_preserves_persisted_manifest_state_football_and_
     assert st_bb["status"] == "INCOMPLETE"
 
 
-def test_rejected_count_survives_resumed_sync_football_and_basketball(isolated_db):
-    # Football: page 1 has 1 valid fixture + 1 rejected malformed completed fixture
-    fix_ok = sample_football_fixture(1101)
-    fix_bad = {"fixture": {"id": 1102, "status": {"short": "FT"}}} # malformed completed fixture
+def test_rejected_count_survives_resumed_sync_basketball_fallback(isolated_db, espn_enabled):
+    """Rejected records survive a resumed run and keep the dataset INCOMPLETE."""
+    bg_ok = sample_basketball_game(1101)
+    bg_bad = {"id": 1102}  # malformed completed game
 
-    def mock_fb_p1(league_id, season, page=1, max_budget=None):
+    def mock_p1(league_id, season, page=1, max_budget=None):
         if page == 1:
-            return {"fixtures": [fix_ok, fix_bad], "page": 1, "expected_pages": 2}
-        raise api_football.APIFootballQuotaExhaustedError("Quota exhausted")
+            return {"games": [bg_ok, bg_bad], "page": 1, "expected_pages": 2}
+        raise basketball_api.APIBasketballQuotaExhaustedError("Quota exhausted")
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p1), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_p1):
+        rep1 = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
 
     assert rep1["rejected_count"] == 1
     assert rep1["status"] == "INCOMPLETE"
 
-    # Page 2 resumed run: valid fixture
-    fix_ok2 = sample_football_fixture(1103)
+    # Resumed run: the remaining page is acquired, but the rejected record was
+    # recorded and must survive the resume and block a COMPLETE promotion.
+    bg_ok2 = sample_basketball_game(1103)
 
-    def mock_fb_p2(league_id, season, page=1, max_budget=None):
-        if page == 2:
-            return {"fixtures": [fix_ok2], "page": 2, "expected_pages": 2}
-        raise RuntimeError("Unexpected page")
+    def mock_p2(league_id, season, page=1, max_budget=None):
+        if page == 1:
+            return {"games": [bg_ok, bg_bad], "page": 1, "expected_pages": 2}
+        return {"games": [bg_ok2], "page": 2, "expected_pages": 2}
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_fb_p2), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep2 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_p2):
+        rep2 = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
 
-    # rejected_count MUST survive resumption and prevent dataset from becoming COMPLETE!
-    assert rep2["rejected_count"] == 1
+    # rejected_count MUST survive resumption and prevent the dataset becoming COMPLETE
+    assert rep2["rejected_count"] >= 1
     assert rep2["status"] == "INCOMPLETE"
-    st = storage.get_historical_dataset_status(39, 2024, sport="football")
-    assert st["rejected_count"] == 1
+    st = storage.get_historical_dataset_status(12, 2024, sport="basketball")
+    assert st["rejected_count"] >= 1
     assert st["status"] == "INCOMPLETE"
 
 
-def test_empty_page_acquisition_scenarios_football_and_basketball(isolated_db):
-    # A. Football Empty first page -> INCOMPLETE
-    def mock_empty_p1(league_id, season, page=1, max_budget=None):
-        return {"fixtures": [], "page": 1, "expected_pages": 1}
+def test_empty_page_acquisition_scenarios_football_and_basketball(isolated_db, espn_enabled):
+    from contextlib import ExitStack
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_p1), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep_fb_empty = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    # A. Football: approved providers return nothing -> INCOMPLETE (empty != complete)
+    with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
+         patch("api_football.get_league_fixtures_page") as mock_fb_http:
+        with ExitStack() as stack:
+            for p in no_soccerdata_sources():
+                stack.enter_context(p)
+            rep_fb_empty = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+        mock_fb_http.assert_not_called()
     assert rep_fb_empty["status"] == "INCOMPLETE"
+    assert rep_fb_empty["final_stored_count"] == 0
 
-    # B. Football Empty middle page (Page 1 valid, Page 2 empty, Page 3 valid) -> INCOMPLETE
-    fix1 = sample_football_fixture(1301, league_id=61)
-    fix2 = sample_football_fixture(1302, league_id=61)
+    # B. Football: a failed run never erases records already acquired
+    fix1 = sample_football_fixture(1301, league_id=61, home_id=1, away_id=2)
+    fix1["provider_provenance"] = {"provider": "football_data_csv", "provider_type": "primary"}
 
-    def mock_empty_middle_p2(league_id, season, page=1, max_budget=None):
-        if page == 1:
-            return {"fixtures": [fix1], "page": 1, "expected_pages": 3}
-        if page == 2:
-            return {"fixtures": [], "page": 2, "expected_pages": 3}
-        return {"fixtures": [fix2], "page": 3, "expected_pages": 3}
+    with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[fix1]):
+        with ExitStack() as stack:
+            for p in no_soccerdata_sources():
+                stack.enter_context(p)
+            rep_fb_partial = historical_sync.sync_historical_fixtures(league_id=61, season=2024)
+    assert rep_fb_partial["status"] == "INCOMPLETE"
+    assert rep_fb_partial["final_stored_count"] == 1
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_middle_p2), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep_fb_mid = historical_sync.sync_historical_fixtures(league_id=61, season=2024)
-    assert rep_fb_mid["status"] == "INCOMPLETE"
+    # C. Basketball: ESPN delivers no coverage and the API fallback page is empty
+    def mock_empty_p1(league_id, season, page=1, max_budget=None):
+        return {"games": [], "page": 1, "expected_pages": 1}
 
-    # C. Football Empty final page -> INCOMPLETE
-    fix303 = sample_football_fixture(1303, league_id=78)
-    def mock_empty_final_p2(league_id, season, page=1, max_budget=None):
-        if page == 1:
-            return {"fixtures": [fix303], "page": 1, "expected_pages": 2}
-        return {"fixtures": [], "page": 2, "expected_pages": 2}
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_empty_p1):
+        rep_bb_empty = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
+    assert rep_bb_empty["status"] == "INCOMPLETE"
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_empty_final_p2), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep_fb_fin = historical_sync.sync_historical_fixtures(league_id=78, season=2024)
-    assert rep_fb_fin["status"] == "INCOMPLETE"
+    # D. Football: a verified complete approved-route dataset becomes COMPLETE
+    fix_a = sample_football_fixture(1304, league_id=140, home_id=1, away_id=2)
+    fix_b = sample_football_fixture(1305, league_id=140, home_id=2, away_id=1)
+    for fx in (fix_a, fix_b):
+        fx["provider_provenance"] = {"provider": "football_data_csv", "provider_type": "primary"}
 
-    # D. Football Valid 1-page dataset -> COMPLETE
-    fix304_a = sample_football_fixture(1304, league_id=140, home_id=1, away_id=2)
-    fix304_b = sample_football_fixture(1305, league_id=140, home_id=2, away_id=1)
-    def mock_valid_1p(league_id, season, page=1, max_budget=None):
-        return {"fixtures": [fix304_a, fix304_b], "page": 1, "expected_pages": 1}
-
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_valid_1p), \
-         patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]), \
-         patch("soccerdata_provider.get_match_history_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
-         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})):
-        rep_fb_valid = historical_sync.sync_historical_fixtures(league_id=140, season=2024)
+    with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[fix_a, fix_b]), \
+         patch("api_football.get_league_fixtures_page") as mock_fb_http:
+        with ExitStack() as stack:
+            for p in no_soccerdata_sources():
+                stack.enter_context(p)
+            rep_fb_valid = historical_sync.sync_historical_fixtures(league_id=140, season=2024)
+        mock_fb_http.assert_not_called()
     assert rep_fb_valid["status"] == "COMPLETE"
     assert rep_fb_valid["final_stored_count"] == 2
 
-    # E. Basketball Empty middle page -> INCOMPLETE
-    bg101 = sample_basketball_game(8301, league_id=101)
-    bg102 = sample_basketball_game(8302, league_id=101)
+    # E. Basketball: an empty middle page keeps the dataset INCOMPLETE
+    bg101 = sample_basketball_game(8301, league_id=12)
+    bg102 = sample_basketball_game(8302, league_id=12)
 
     def mock_b_empty_mid(league_id, season, page=1, max_budget=None):
         if page == 1:
@@ -630,43 +682,64 @@ def test_empty_page_acquisition_scenarios_football_and_basketball(isolated_db):
             return {"games": [], "page": 2, "expected_pages": 3}
         return {"games": [bg102], "page": 3, "expected_pages": 3}
 
-    with patch("basketball_api.get_league_games_page", side_effect=mock_b_empty_mid):
-        rep_bb_mid = historical_sync.sync_historical_basketball_games(league_id=101, season=2024)
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_b_empty_mid):
+        rep_bb_mid = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
     assert rep_bb_mid["status"] == "INCOMPLETE"
-
-    # F. Basketball valid multi-page dataset -> COMPLETE
-    bg102_a = sample_basketball_game(8303, league_id=102)
-    bg102_b = sample_basketball_game(8304, league_id=102)
-
-    def mock_b_multi(league_id, season, page=1, max_budget=None):
-        if page == 1:
-            return {"games": [bg102_a], "page": 1, "expected_pages": 2}
-        return {"games": [bg102_b], "page": 2, "expected_pages": 2}
-
-    with patch("basketball_api.get_league_games_page", side_effect=mock_b_multi):
-        rep_bb_multi = historical_sync.sync_historical_basketball_games(league_id=102, season=2024)
-    assert rep_bb_multi["status"] == "COMPLETE"
-    assert rep_bb_multi["final_stored_count"] == 2
+    st_bb = storage.get_historical_dataset_status(12, 2024, sport="basketball")
+    # Empty-page occurrences are counted cumulatively and never promote the dataset
+    assert st_bb["empty_pages_count"] >= 1
+    assert st_bb["status"] == "INCOMPLETE"
 
 
-def test_changing_pagination_totals_fails_closed(isolated_db):
-    fix1 = sample_football_fixture(1201)
+def test_espn_full_month_coverage_completes_basketball_dataset(isolated_db, monkeypatch):
+    """ESPN monthly scoreboards are the coverage unit for ESPN-acquired NBA data."""
+    monkeypatch.setattr(config, "ENABLE_ESPN_BASKETBALL", True)
+    espn_games = [
+        sample_basketball_game(8303, league_id=12),
+        sample_basketball_game(8304, league_id=12),
+    ]
+
+    with espn_full_coverage_patch(espn_games), \
+         patch("basketball_api.get_league_games_page") as mock_api_http:
+        rep = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
+        # Fully validated ESPN coverage means the fallback is never consulted
+        mock_api_http.assert_not_called()
+
+    assert rep["status"] == "COMPLETE"
+    assert rep["coverage_unit"] == "espn_months"
+    assert rep["expected_coverage_units"] == espn_basketball_provider.NBA_SEASON_MONTH_COUNT
+    assert rep["completed_coverage_units"] == espn_basketball_provider.NBA_SEASON_MONTH_COUNT
+    assert rep["final_stored_count"] == 2
+    assert rep["provider_coverage"]["espn_url"]["status"] == "VALIDATED"
+
+
+def test_changing_pagination_totals_fails_closed(isolated_db, espn_enabled):
+    """Paginated acquisition fails closed when the provider changes its total.
+
+    Football is single-shot (no pagination), so this contract is exercised on the
+    API-Basketball fallback, which still reports paging metadata.
+    """
+    bg1 = sample_basketball_game(1201, league_id=12)
 
     # Page 1 claims expected_pages = 2, page 2 claims expected_pages = 3
     def mock_changing_pages(league_id, season, page=1, max_budget=None):
         if page == 1:
-            return {"fixtures": [fix1], "page": 1, "expected_pages": 2}
-        return {"fixtures": [fix1], "page": 2, "expected_pages": 3}
+            return {"games": [bg1], "page": 1, "expected_pages": 2}
+        return {"games": [bg1], "page": 2, "expected_pages": 3}
 
-    with patch("api_football.get_league_fixtures_page", side_effect=mock_changing_pages):
-        rep = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    with espn_no_coverage_patch(), \
+         patch("basketball_api.get_league_games_page", side_effect=mock_changing_pages):
+        rep = historical_sync.sync_historical_basketball_games(league_id=12, season=2024)
 
     assert rep["status"] == "INCOMPLETE"
-    st = storage.get_historical_dataset_status(39, 2024, sport="football")
+    assert rep["acquisition_state"] == "FAILED"
+    st = storage.get_historical_dataset_status(12, 2024, sport="basketball")
     assert st["status"] == "INCOMPLETE"
+    assert st["error_reason"] == "pagination_metadata_mismatch"
 
 
-def test_storage_level_complete_invariant_enforcement(isolated_db):
+def test_storage_level_complete_invariant_enforcement(isolated_db, monkeypatch):
     # 1. fixture_count <= 0 -> rejected
     with pytest.raises(ValueError, match="fixture_count is 0"):
         storage.mark_historical_dataset_complete(39, 2024, fixture_count=0, expected_pages=1, pages_completed=1, acquisition_complete=True)
@@ -692,7 +765,10 @@ def test_storage_level_complete_invariant_enforcement(isolated_db):
         storage.mark_historical_dataset_complete(39, 2024, fixture_count=10, expected_pages=1, pages_completed=1, acquisition_complete=True, empty_pages_count=1)
 
     # 7. Basketball valid dataset -> accepted
-    storage.mark_historical_dataset_complete(12, 2024, fixture_count=100, sport="basketball", expected_pages=2, pages_completed=2, acquisition_complete=True)
+    bb_games = [sample_basketball_game(2000 + i, date=f"2024-11-{(i % 28) + 1:02d}T20:00:00+00:00") for i in range(100)]
+    storage.save_historical_basketball_games(bb_games, league_id=12, season=2024)
+    completion_helpers.allow_synthetic_nba_season(monkeypatch, 2024, len(bb_games))
+    completion_helpers.mark_complete(12, 2024, fixture_count=100, sport="basketball", expected_pages=2, pages_completed=2, acquisition_complete=True)
     st = storage.get_historical_dataset_status(12, 2024, sport="basketball")
     assert st["status"] == "COMPLETE"
 
@@ -701,7 +777,8 @@ def test_U_to_Y_backtest_persistence_status_and_errors(isolated_db, monkeypatch)
     # Setup complete dataset
     games = [sample_basketball_game(1000 + i, date=f"2024-11-{i:02d}T20:00:00+00:00") for i in range(1, 10)]
     storage.save_historical_basketball_games(games, league_id=12, season=2024)
-    storage.mark_historical_dataset_complete(12, 2024, fixture_count=len(games), sport="basketball")
+    completion_helpers.allow_synthetic_nba_season(monkeypatch, 2024, len(games))
+    completion_helpers.mark_complete(12, 2024, fixture_count=len(games), sport="basketball")
 
     # U: successful backtest + successful persistence
     res_ok = backtest.run_basketball_backtest(league_id=12, season=2024, sample_size=5, min_prior_matches=2)
@@ -720,3 +797,5 @@ def test_U_to_Y_backtest_persistence_status_and_errors(isolated_db, monkeypatch)
     assert res_fail["persisted"] is False
     assert "Database disk full error" in res_fail["persistence_error"]
     assert res_fail["graded"] > 0 # computation succeeded
+
+

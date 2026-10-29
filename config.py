@@ -405,3 +405,100 @@ LEAGUE_ID_TO_ODDS_SPORT_KEY = {
 ALLOWED_BASKETBALL_LEAGUE_IDS = [12]
 BASKETBALL_HOME_ADVANTAGE_POINTS = 3.0
 BASKETBALL_ODDS_SPORT_KEY = "basketball_nba"
+
+# --- Competition lifecycle metadata (authoritative season windows) ----------
+# Declared season windows keyed by (sport, league_id).
+#
+# `start` and `end` are (year_offset, month, day) relative to the season's
+# nominal start year, so a European domestic season runs from (0, 8, 1) to
+# (1, 5, 31) of the following calendar year.
+#
+# This is the authoritative competition metadata used by the historical
+# lifecycle decision (see historical_sync.get_competition_lifecycle).
+# A competition season is only eligible to be marked COMPLETED when its
+# declared window has closed AND independently verified coverage exists for
+# the persisted data. Competitions absent from this map fail closed with a
+# lifecycle state of UNKNOWN, so a dataset is never promoted to COMPLETE on
+# the strength of a generic calendar boundary plus non-empty records.
+#
+# `format` describes the expected competition shape used for coverage checks:
+#   double_round_robin - every pair plays home and away
+#   cup                - knockout/group hybrid (no fixed pair schedule)
+#   international      - multi-window international competition
+#   tournament         - single-window finals tournament
+#   league             - regular-season league (basketball)
+COMPETITION_SEASON_WINDOWS = {
+    # European domestic leagues
+    ("football", 39): {"start": (0, 8, 1), "end": (1, 6, 15), "format": "double_round_robin"},
+    ("football", 140): {"start": (0, 8, 1), "end": (1, 6, 15), "format": "double_round_robin"},
+    ("football", 135): {"start": (0, 8, 1), "end": (1, 6, 15), "format": "double_round_robin"},
+    ("football", 78): {"start": (0, 8, 1), "end": (1, 5, 31), "format": "double_round_robin"},
+    ("football", 61): {"start": (0, 8, 1), "end": (1, 6, 15), "format": "double_round_robin"},
+    ("football", 88): {"start": (0, 8, 1), "end": (1, 6, 15), "format": "double_round_robin"},
+    ("football", 94): {"start": (0, 8, 1), "end": (1, 6, 15), "format": "double_round_robin"},
+    # European club cups (qualifying begins in July)
+    ("football", 2): {"start": (0, 7, 1), "end": (1, 6, 30), "format": "cup"},
+    ("football", 3): {"start": (0, 7, 1), "end": (1, 6, 30), "format": "cup"},
+    # International competitions
+    ("football", 5): {"start": (0, 8, 1), "end": (1, 7, 31), "format": "international"},
+    ("football", 1): {"start": (0, 6, 1), "end": (0, 7, 31), "format": "tournament"},
+    ("football", 4): {"start": (0, 6, 1), "end": (0, 7, 31), "format": "tournament"},
+    # NBA regular season and playoffs
+    ("basketball", 12): {"start": (0, 10, 1), "end": (1, 6, 30), "format": "league"},
+}
+
+# Grace period applied after a declared season window before a season is
+# considered closed, absorbing rescheduled/postponed fixtures, suspensions and
+# schedule drift without weakening the coverage requirement.
+COMPETITION_SEASON_COMPLETION_GRACE_DAYS = 21
+
+# Season-specific competition window overrides.
+#
+# Some competition seasons do not follow the standing calendar window above.
+# These entries are keyed by (sport, league_id, season_start_year) and take
+# precedence over the generic window. They describe authoritative, externally
+# documented season boundaries instead of derived year offsets, so a season whose
+# schedule genuinely deviates is never judged against the wrong dates.
+#
+# 2019-20 NBA: the season was suspended on 2020-03-11 and resumed in the Orlando
+# bubble on 2020-07-30; the Finals ended 2020-10-11. The completed season
+# therefore extends well past the usual June boundary and must be judged against
+# a window that includes the resumption.
+# 2020-21 NBA: the season started late (2020-12-22) and the Finals ended
+# 2021-07-20.
+COMPETITION_SEASON_WINDOW_OVERRIDES = {
+    ("basketball", 12, 2019): {
+        "start": (0, 10, 1),
+        "end": (1, 10, 31),
+        "format": "league",
+        "exception": "covid19_suspension_and_orlando_resumption",
+    },
+    ("basketball", 12, 2020): {
+        "start": (0, 12, 22),
+        "end": (1, 7, 31),
+        "format": "league",
+        "exception": "late_start_and_covid_schedule_changes",
+    },
+}
+
+# Independently established expected NBA coverage: the published number of
+# regular-season games the league actually played in each season (a full season
+# is 82 games per team across 30 teams, i.e. 30 * 82 / 2 = 1230 games).
+#
+# 2019-20 was interrupted and resumed with a shortened schedule (1059 regular
+# season games played, including the Orlando seeding games); 2020-21 was a
+# 72-game season (30 * 72 / 2 = 1080).
+#
+# The ESPN and API-Basketball routes also acquire playoff games, so a complete
+# dataset holds AT LEAST this many persisted games. A season absent from this map
+# has no independently established expectation and therefore fails closed: its
+# stored record count is never treated as its own evidence of completeness.
+NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES = {
+    2019: 1059,
+    2020: 1080,
+    2021: 1230,
+    2022: 1230,
+    2023: 1230,
+    2024: 1230,
+    2025: 1230,
+}

@@ -1,56 +1,296 @@
 """
 Historical Data Acquisition Collector for Football Agent.
 
-Acquires historical league fixtures and optional statistics enrichment from direct CSV sources, SoccerData providers, and football-data.org API fallback
-and stores them permanently in persistent storage (Neon PostgreSQL / SQLite).
+Acquires historical league fixtures/games and optional statistics enrichment and
+stores them permanently in persistent storage (Neon PostgreSQL / SQLite).
+
+Approved historical football acquisition route (no secondary API providers):
+    direct Football-Data.co.uk CSV -> SoccerData FBref -> SoccerData MatchHistory
+    -> SoccerData Sofascore
+
+Approved historical basketball acquisition route:
+    ESPN URL scoreboard (primary) -> API-Basketball (fallback)
+
+API-Football and football-data.org are NOT historical football fixture
+acquisition providers. Their clients and normalizers are retained because live
+prediction, live fixtures, team form/statistics and standings workflows still
+use them; those call sites are intentionally untouched.
 
 Key invariants:
-- Backtests read from database, NOT API-Football.
-- COMPLETE datasets bypass API acquisition (0 requests made).
-- Strict quota safety: enforces API_FOOTBALL_HISTORICAL_DAILY_BUDGET on every HTTP attempt.
-- Idempotent and safe to run repeatedly or resume after partial sync.
+- Backtests read from the database, not from external APIs.
+- COMPLETE datasets bypass acquisition (0 requests) only once the persisted data
+  independently passes coverage validation on a revalidation run.
+- Competition lifecycle and provider acquisition state are distinct concepts:
+  lifecycle is UPCOMING/ONGOING/COMPLETED/UNKNOWN, acquisition state is
+  PENDING/RUNNING/INCOMPLETE/VALIDATED/FAILED.
+- A dataset becomes COMPLETE only when acquisition coverage is complete AND the
+  competition lifecycle is independently established as COMPLETED. Calendar
+  dates plus non-empty records can never establish completion.
+- Strict quota safety: the configured historical daily budget is enforced on
+  every HTTP attempt.
+- Idempotent and safe to run repeatedly or resume after a partial sync.
 """
 
 import argparse
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import data_resolver
 from data_resolver import DataResolver
 import config
 import storage
 
+# --- Competition lifecycle states (independent of acquisition state) -------
+COMPETITION_LIFECYCLE_UPCOMING = "UPCOMING"
+COMPETITION_LIFECYCLE_ONGOING = "ONGOING"
+COMPETITION_LIFECYCLE_COMPLETED = "COMPLETED"
+COMPETITION_LIFECYCLE_UNKNOWN = "UNKNOWN"
+
+# --- Provider acquisition states --------------------------------------------
+ACQUISITION_STATE_PENDING = "PENDING"
+ACQUISITION_STATE_RUNNING = "RUNNING"
+ACQUISITION_STATE_INCOMPLETE = "INCOMPLETE"
+ACQUISITION_STATE_VALIDATED = "VALIDATED"
+ACQUISITION_STATE_FAILED = "FAILED"
+
+# --- Manifest coverage unit labels ------------------------------------------
+# `expected_pages`/`pages_completed` are generic coverage units; these labels
+# record what was actually counted so provider progress is never misrepresented.
+COVERAGE_UNIT_API_PAGES = "api_pages"
+COVERAGE_UNIT_ESPN_MONTHS = "espn_months"
+COVERAGE_UNIT_SINGLE_SHOT = "single_shot"
+
+NBA_LEAGUE_ID = 12
+
+
+def _parse_iso_utc(raw) -> datetime | None:
+    """Parse an ISO-8601 timestamp into a timezone-aware UTC datetime."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    text = raw.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _max_record_date_utc(records, sport) -> datetime | None:
+    """Return the latest observed match date across persisted records, or None."""
+    latest = None
+    sport_key = str(sport).strip().lower() if sport else "football"
+    for record in records if isinstance(records, list) else []:
+        if not isinstance(record, dict):
+            continue
+        if sport_key == "basketball":
+            raw = record.get("date")
+        else:
+            fix_obj = record.get("fixture") if isinstance(record.get("fixture"), dict) else {}
+            raw = fix_obj.get("date") or record.get("date")
+        parsed = _parse_iso_utc(raw)
+        if parsed is not None and (latest is None or parsed > latest):
+            latest = parsed
+    return latest
+
+
+def parse_season_label(season):
+    """
+    Return a competition season's start year as an int, or None when the label is
+    not a recognized season label.
+
+    Handles every label form used across providers, configuration and CLI input:
+    a single year ("2019"), split-year labels with a slash or dash ("2019/2020",
+    "2019/20", "2019-20") and en/em dash forms ("2019\u201320", "2020\u201321"). A
+    two-digit end year is completed against the start year ("1999/00" -> 2000).
+    Only consecutive season labels are accepted; anything else fails closed with
+    None rather than being guessed.
+    """
+    if isinstance(season, bool):
+        return None
+    if isinstance(season, int):
+        return season if season > 0 else None
+    if not isinstance(season, str):
+        return None
+
+    text = season.strip()
+    if not text:
+        return None
+    for separator in ("\u2013", "\u2014", "\\", "-", "/"):
+        text = text.replace(separator, "/")
+
+    parts = [part.strip() for part in text.split("/") if part.strip()]
+    if not parts or len(parts) > 2:
+        return None
+
+    start_text = parts[0]
+    if len(start_text) != 4 or not start_text.isdigit():
+        return None
+    start_year = int(start_text)
+
+    if len(parts) == 2:
+        end_text = parts[1]
+        if not end_text.isdigit() or len(end_text) not in (2, 4):
+            return None
+        if len(end_text) == 4:
+            end_year = int(end_text)
+        else:
+            end_year = (start_year // 100) * 100 + int(end_text)
+            if end_year <= start_year:
+                end_year += 100
+        if end_year != start_year + 1:
+            return None
+
+    return start_year if start_year > 0 else None
+
+
+def _competition_season_window(sport, league_id, season):
+    """
+    Return (start_utc, end_utc) for a competition's declared season window.
+
+    Windows come from config.COMPETITION_SEASON_WINDOWS, which describes each
+    supported competition explicitly instead of assuming every competition is a
+    European domestic league. config.COMPETITION_SEASON_WINDOW_OVERRIDES takes
+    precedence for seasons with authoritative, externally documented boundaries
+    (for example the COVID-extended 2019-20 NBA season).
+
+    Returns None when no authoritative metadata exists for the competition or
+    season, so callers fail closed instead of assuming a calendar boundary.
+    """
+    try:
+        lid = int(league_id)
+    except (TypeError, ValueError):
+        return None
+
+    ssn = parse_season_label(season)
+    if ssn is None:
+        return None
+
+    sport_key = str(sport).strip().lower() if sport else "football"
+
+    overrides = getattr(config, "COMPETITION_SEASON_WINDOW_OVERRIDES", {}) or {}
+    window = overrides.get((sport_key, lid, ssn))
+    if not isinstance(window, dict):
+        windows = getattr(config, "COMPETITION_SEASON_WINDOWS", {}) or {}
+        window = windows.get((sport_key, lid))
+    if not isinstance(window, dict):
+        return None
+
+    start_spec = window.get("start")
+    end_spec = window.get("end")
+    if not (
+        isinstance(start_spec, (tuple, list)) and len(start_spec) == 3
+        and isinstance(end_spec, (tuple, list)) and len(end_spec) == 3
+    ):
+        return None
+
+    try:
+        start_utc = datetime(ssn + int(start_spec[0]), int(start_spec[1]), int(start_spec[2]), tzinfo=timezone.utc)
+        end_utc = datetime(ssn + int(end_spec[0]), int(end_spec[1]), int(end_spec[2]), tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+    if end_utc <= start_utc:
+        return None
+
+    return start_utc, end_utc
+
+
+def get_competition_lifecycle(
+    sport: str,
+    league_id: int,
+    season: int,
+    stored_records: list,
+    coverage: dict = None,
+    now_utc: datetime = None,
+) -> tuple[str, str, dict]:
+    """
+    Decide the competition lifecycle state independently of acquisition state.
+
+    Returns (state, reason, evidence) where state is one of UPCOMING, ONGOING,
+    COMPLETED or UNKNOWN.
+
+    Completion requires ALL of:
+      - authoritative competition/season metadata (declared season window),
+      - independently verified coverage of the persisted dataset,
+      - a declared window that has already closed, and
+      - an observed schedule that stays inside the declared window (plus a
+        bounded grace period for postponed/rescheduled fixtures).
+
+    Anything else fails closed: UNKNOWN (metadata/coverage unavailable) or
+    ONGOING (window still open). A date boundary combined with non-empty records
+    is never sufficient.
+    """
+    evidence = {
+        "sport": str(sport).strip().lower() if sport else None,
+        "league_id": league_id,
+        "season": season,
+        "record_count": len(stored_records) if isinstance(stored_records, list) else 0,
+        "coverage_verified": bool(isinstance(coverage, dict) and coverage.get("verified") is True),
+        "coverage_reason": coverage.get("reason") if isinstance(coverage, dict) else None,
+        "season_window": None,
+        "observed_last_match_date": None,
+    }
+
+    window = _competition_season_window(sport, league_id, season)
+    if window is None:
+        return COMPETITION_LIFECYCLE_UNKNOWN, "competition_metadata_unavailable", evidence
+
+    start_utc, end_utc = window
+    evidence["season_window"] = {"start": start_utc.isoformat(), "end": end_utc.isoformat()}
+
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+
+    records = stored_records if isinstance(stored_records, list) else []
+    if not records:
+        if now_utc < start_utc:
+            return COMPETITION_LIFECYCLE_UPCOMING, "season_not_started", evidence
+        return COMPETITION_LIFECYCLE_ONGOING, "no_records_available", evidence
+
+    if not (isinstance(coverage, dict) and coverage.get("verified") is True):
+        if now_utc < end_utc:
+            return COMPETITION_LIFECYCLE_ONGOING, "active_season_in_progress", evidence
+        reason = coverage.get("reason") if isinstance(coverage, dict) and coverage.get("reason") else "unverified"
+        return COMPETITION_LIFECYCLE_UNKNOWN, f"coverage_unverified_{reason}", evidence
+
+    if now_utc < start_utc:
+        return COMPETITION_LIFECYCLE_UPCOMING, "season_not_started", evidence
+
+    if now_utc < end_utc:
+        return (
+            COMPETITION_LIFECYCLE_ONGOING,
+            f"active_season_in_progress_until_{end_utc.strftime('%Y-%m-%d')}",
+            evidence,
+        )
+
+    max_date = _max_record_date_utc(records, sport)
+    evidence["observed_last_match_date"] = max_date.isoformat() if max_date is not None else None
+
+    grace_days = int(getattr(config, "COMPETITION_SEASON_COMPLETION_GRACE_DAYS", 0) or 0)
+    if max_date is not None and max_date > end_utc + timedelta(days=grace_days):
+        # Postponed/rescheduled fixtures extending well past the declared window
+        # mean the lifecycle cannot be established authoritatively.
+        return COMPETITION_LIFECYCLE_UNKNOWN, "schedule_extends_beyond_declared_window", evidence
+
+    return COMPETITION_LIFECYCLE_COMPLETED, "season_concluded_with_verified_coverage", evidence
+
 
 def _is_season_lifecycle_completed(sport: str, league_id: int, season: int, stored_records: list, structural_coverage: dict = None) -> tuple[bool, str]:
     """
-    Determine whether a competition/season lifecycle has concluded using authoritative
-    persisted structural coverage evidence and verified completed match records.
+    Compatibility wrapper: True only when the competition lifecycle is COMPLETED.
 
-    Returns (is_completed: bool, reason: str).
+    Returns (is_completed: bool, reason: str). The reason is prefixed with the
+    lifecycle state so logs distinguish ONGOING from UNKNOWN.
     """
-    if not isinstance(stored_records, list) or not stored_records:
-        return False, "no_records_available"
-
-    # Require structural coverage verification for football
-    if sport == "football" and isinstance(structural_coverage, dict):
-        if structural_coverage.get("verified") is not True:
-            return False, f"structural_coverage_incomplete_{structural_coverage.get('reason', 'unverified')}"
-
-    now_utc = datetime.now(timezone.utc)
-
-    # Determine authoritative season completion boundary date
-    if sport == "basketball" or league_id == 12:
-        # NBA regular season and playoffs conclude in June/July of season+1
-        season_end_date = datetime(season + 1, 7, 1, tzinfo=timezone.utc)
-    else:
-        # European domestic football seasons conclude in May/June of season+1
-        season_end_date = datetime(season + 1, 6, 1, tzinfo=timezone.utc)
-
-    if now_utc < season_end_date:
-        return False, f"active_season_in_progress_until_{season_end_date.strftime('%Y-%m-%d')}"
-
-    return True, "season_concluded_with_valid_matches"
+    state, reason, _ = get_competition_lifecycle(
+        sport, league_id, season, stored_records, coverage=structural_coverage
+    )
+    return (state == COMPETITION_LIFECYCLE_COMPLETED), f"{state.lower()}_{reason}"
 
 
 def _is_historical_provider_complete(
@@ -147,7 +387,11 @@ def sync_historical_fixtures(
         )
 
     if historical_budget is None:
-        historical_budget = int(getattr(config, "FOOTBALL_DATA_DAILY_LIMIT", 100))
+        # Football historical fixture acquisition itself is API-key free (direct
+        # Football-Data.co.uk CSV and SoccerData). The only API budget this path
+        # can consume is the optional API-Football statistical-enrichment
+        # backfill, which is bounded by the API-Football historical daily budget.
+        historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
 
     dataset_info = storage.get_historical_dataset_status(league_id, season)
     current_status = dataset_info["status"]
@@ -175,7 +419,10 @@ def sync_historical_fixtures(
             provider_metadata=reval_meta,
             league_id=league_id,
         )
-        if reval_coverage.get("verified") is True:
+        reval_lifecycle, reval_lifecycle_reason, _ = get_competition_lifecycle(
+            "football", league_id, season, stored_fixtures, coverage=reval_coverage
+        )
+        if reval_coverage.get("verified") is True and reval_lifecycle == COMPETITION_LIFECYCLE_COMPLETED:
             storage.mark_historical_dataset_complete(
                 league_id,
                 season,
@@ -185,6 +432,13 @@ def sync_historical_fixtures(
                 rejected_count=0,
                 empty_pages_count=0,
                 expected_team_ids=reval_coverage.get("expected_team_ids"),
+                coverage_unit=COVERAGE_UNIT_SINGLE_SHOT,
+                provider_coverage={
+                    "read_only_revalidation": {
+                        "coverage_unit": "dataset",
+                        "status": ACQUISITION_STATE_VALIDATED,
+                    }
+                },
             )
             print(f"Dataset already COMPLETE and revalidated for league {league_id} season {season}; API acquisition skipped.", flush=True)
             return {
@@ -204,24 +458,30 @@ def sync_historical_fixtures(
                 "skipped_reason": "Dataset already COMPLETE and revalidated",
             }
         elif current_status == "COMPLETE":
-            print(f"Dataset was marked COMPLETE but revalidation failed for league {league_id} season {season} ({reval_coverage.get('reason')}). Proceeding with sync.", flush=True)
+            reval_failure_reason = (
+                f"lifecycle_{reval_lifecycle.lower()}_{reval_lifecycle_reason}"
+                if reval_coverage.get("verified") is True
+                else f"revalidation_failed_{reval_coverage.get('reason')}"
+            )
+            print(f"Dataset was marked COMPLETE but revalidation failed for league {league_id} season {season} ({reval_failure_reason}). Proceeding with sync.", flush=True)
             storage.mark_historical_dataset_incomplete(
                 league_id,
                 season,
                 fixture_count=len(stored_fixtures),
                 sport="football",
-                error_reason=f"revalidation_failed_{reval_coverage.get('reason')}",
+                error_reason=reval_failure_reason,
             )
             current_status = "INCOMPLETE"
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    # Football historical acquisition uses direct CSV, SoccerData, and football-data.org
+
+    # Approved football historical providers (in order): direct CSV, SoccerData
+    # FBref, SoccerData MatchHistory, SoccerData Sofascore. API-Football and
+    # football-data.org are not used on this path.
 
     quota_budget_stopped = False
     acquisition_failed = False
     last_error_reason = None
-
-    # Football historical acquisition uses direct sources and football-data.org fallback
 
     fixtures_received = []
     start_p = 1
@@ -236,8 +496,10 @@ def sync_historical_fixtures(
     total_empty_pages_count = 0
     all_rejection_reasons = {}
 
-    # DataResolver instance initialized without preflight network calls
-    resolver = DataResolver()
+    # DataResolver instance initialized without preflight network calls.
+    # A refresh must bypass the read-first DB shortcut so acquisition really
+    # re-fetches instead of replaying already-persisted records.
+    resolver = DataResolver(force_fallback=bool(refresh))
 
     page_exp_teams = None
     current_page = start_p
@@ -275,16 +537,22 @@ def sync_historical_fixtures(
 
             fixtures_received.extend(page_fixtures)
 
-            # Persist valid fixtures from this page immediately
-            completed_page_fixtures = [
-                fixture
-                for fixture in page_fixtures
-                if (
-                    isinstance(fixture, dict)
-                    and fixture.get("fixture", {}).get("status", {}).get("short")
-                    in ("FT", "AET", "PEN")
-                )
-            ]
+            # Persist valid fixtures from this page immediately.
+            # Records served from the internal DB are already persisted facts and
+            # must never be re-inserted under a new source (that would duplicate
+            # logical games and corrupt coverage counting).
+            if page_source == "internal_db":
+                completed_page_fixtures = []
+            else:
+                completed_page_fixtures = [
+                    fixture
+                    for fixture in page_fixtures
+                    if (
+                        isinstance(fixture, dict)
+                        and fixture.get("fixture", {}).get("status", {}).get("short")
+                        in ("FT", "AET", "PEN")
+                    )
+                ]
 
             save_result = storage.save_historical_fixtures(
                 completed_page_fixtures,
@@ -333,6 +601,7 @@ def sync_historical_fixtures(
                 expected_pages=safe_exp_pages,
                 pages_completed=pages_completed,
                 acquisition_complete=False,
+                enrichment_status=dataset_info.get("enrichment_status", "NONE"),
                 rejected_count=total_rejected_count,
                 empty_pages_count=total_empty_pages_count,
                 error_reason=last_error_reason,
@@ -352,14 +621,24 @@ def sync_historical_fixtures(
     cum_rejected_cnt = (dataset_info.get("rejected_count", 0) if not refresh else 0) + total_rejected_count
     cum_empty_cnt = (dataset_info.get("empty_pages_count", 0) if not refresh else 0) + total_empty_pages_count
 
-    if pages_completed > 0:
+    if total_valid_fixtures > 0:
+        # This run acquired valid fixtures of its own; report its own coverage units.
         safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
         safe_pages_comp = pages_completed
         safe_rejected_cnt = cum_rejected_cnt
         safe_empty_cnt = cum_empty_cnt
+    elif (dataset_info.get("expected_pages") or 0) > 0:
+        # This run acquired nothing (provider failure, valid empty result, or an
+        # unverified dataset). The coverage progress already recorded for the
+        # persisted dataset is preserved instead of being reset to this attempt's
+        # zero-yield units, so a later resume continues from recorded coverage.
+        safe_exp_pages = dataset_info.get("expected_pages")
+        safe_pages_comp = dataset_info.get("pages_completed") or 0
+        safe_rejected_cnt = cum_rejected_cnt
+        safe_empty_cnt = cum_empty_cnt
     else:
-        safe_exp_pages = dataset_info.get("expected_pages") or 1
-        safe_pages_comp = dataset_info.get("pages_completed") or 1
+        safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
+        safe_pages_comp = dataset_info.get("pages_completed") or pages_completed
         safe_rejected_cnt = cum_rejected_cnt
         safe_empty_cnt = cum_empty_cnt
 
@@ -384,6 +663,7 @@ def sync_historical_fixtures(
             expected_pages=safe_exp_pages,
             pages_completed=safe_pages_comp,
             acquisition_complete=False,
+            enrichment_status=dataset_info.get("enrichment_status", "NONE"),
             rejected_count=safe_rejected_cnt,
             empty_pages_count=safe_empty_cnt,
             error_reason=last_error_reason,
@@ -402,7 +682,27 @@ def sync_historical_fixtures(
 
     enrichment_stored = 0
 
-    # Optional statistical enrichment acquisition
+    # Optional statistical enrichment acquisition. It has its own API-Football
+    # quota ceiling: when that ceiling is already reached, enrichment is skipped
+    # and the stop is reported truthfully, without invalidating fixtures that were
+    # acquired and validated without enrichment.
+    enrichment_requests_used = storage.get_api_request_count(
+        "api_football", datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
+    if (
+        with_enrichment
+        and not quota_budget_stopped
+        and not acquisition_failed
+        and enrichment_requests_used >= historical_budget
+    ):
+        quota_budget_stopped = True
+        last_error_reason = "quota_budget_exhausted_during_enrichment"
+        print(
+            f"API-Football enrichment budget ceiling reached "
+            f"({enrichment_requests_used}/{historical_budget} requests used today). Skipping enrichment.",
+            flush=True,
+        )
+
     if with_enrichment and not quota_budget_stopped and not acquisition_failed:
         all_stored = storage.get_historical_fixtures(league_id, season)
         finished_ids = [
@@ -503,12 +803,40 @@ def sync_historical_fixtures(
         final_stored_count=len(stored_fixtures_all),
     )
 
-    lifecycle_completed, lifecycle_reason = _is_season_lifecycle_completed("football", league_id, season, stored_fixtures_all, structural_coverage=db_coverage)
+    # Competition lifecycle is decided independently of provider acquisition state.
+    lifecycle_state, lifecycle_reason, lifecycle_evidence = get_competition_lifecycle(
+        "football", league_id, season, stored_fixtures_all, coverage=db_coverage
+    )
+    lifecycle_completed = lifecycle_state == COMPETITION_LIFECYCLE_COMPLETED
+    lifecycle_reason = f"{lifecycle_state.lower()}_{lifecycle_reason}"
     if not lifecycle_completed:
         is_fully_complete = False
-        last_error_reason = f"season_lifecycle_ongoing_{lifecycle_reason}"
+        # Preserve a more specific acquisition failure reason if one exists; the
+        # lifecycle state is reported separately in the log and manifest metadata.
+        if not last_error_reason:
+            last_error_reason = f"season_lifecycle_{lifecycle_reason}"
 
+    acquisition_state = (
+        ACQUISITION_STATE_VALIDATED if is_fully_complete
+        else (ACQUISITION_STATE_FAILED if acquisition_failed else ACQUISITION_STATE_INCOMPLETE)
+    )
     acquisition_complete = is_fully_complete
+
+    provider_coverage_football = {
+        "coverage_unit": COVERAGE_UNIT_SINGLE_SHOT,
+        "status": acquisition_state,
+        "providers_contributed": (page_meta_val.get("provider_metadata", {}) or {}).get("providers_contributed")
+        if isinstance(page_meta_val, dict) else None,
+        "provider_outcomes": (page_meta_val.get("provider_metadata", {}) or {}).get("provider_outcomes")
+        if isinstance(page_meta_val, dict) else None,
+    }
+
+    print(
+        f"[FOOTBALL] league {league_id} season {season}: provider={manifest_source}, "
+        f"lifecycle={lifecycle_state} ({lifecycle_reason}), acquisition_state={acquisition_state}, "
+        f"stored={final_stored_count}, coverage={db_coverage.get('reason') if isinstance(db_coverage, dict) else None}",
+        flush=True,
+    )
 
     exp_team_ids_to_save = db_coverage.get("expected_team_ids") if isinstance(db_coverage, dict) else None
 
@@ -526,6 +854,8 @@ def sync_historical_fixtures(
             rejected_count=0,
             empty_pages_count=0,
             expected_team_ids=exp_team_ids_to_save,
+            coverage_unit=COVERAGE_UNIT_SINGLE_SHOT,
+            provider_coverage=provider_coverage_football,
         )
         final_status = "COMPLETE"
     else:
@@ -553,14 +883,22 @@ def sync_historical_fixtures(
             empty_pages_count=safe_empty_cnt,
             error_reason=last_error_reason,
             expected_team_ids=exp_team_ids_to_save,
+            coverage_unit=COVERAGE_UNIT_SINGLE_SHOT,
+            provider_coverage=provider_coverage_football,
         )
         final_status = "INCOMPLETE"
 
     total_sync_elapsed = time.perf_counter() - t_sync_start
     report = {
+        "sport": "football",
         "league_id": league_id,
         "season": season,
         "status": final_status,
+        "source": manifest_source,
+        "providers_contributed": provider_coverage_football.get("providers_contributed"),
+        "provider_outcomes": provider_coverage_football.get("provider_outcomes"),
+        "provider_coverage": provider_coverage_football,
+        "incomplete_reason": None if is_fully_complete else last_error_reason,
         "existing_before": existing_before,
         "fixtures_received": len(fixtures_received),
         "valid_fixtures": valid_fixtures_count,
@@ -569,9 +907,13 @@ def sync_historical_fixtures(
         "rejection_reasons": rejection_reasons,
         "newly_stored": newly_stored,
         "already_existing_skipped": already_existing_skipped,
-        "expected_pages": expected_pages,
-        "pages_completed": pages_completed,
+        "expected_pages": safe_exp_pages,
+        "pages_completed": safe_pages_comp,
+        "coverage_unit": COVERAGE_UNIT_SINGLE_SHOT,
         "acquisition_complete": acquisition_complete,
+        "acquisition_state": acquisition_state,
+        "lifecycle_state": lifecycle_state,
+        "lifecycle_reason": lifecycle_reason,
         "api_requests_consumed": total_consumed,
         "historical_budget": historical_budget,
         "quota_budget_stopped": quota_budget_stopped,
@@ -587,11 +929,42 @@ def sync_historical_fixtures(
 
 def _print_sync_report(report: dict) -> None:
     print("\n=== HISTORICAL SYNC REPORT ===")
+    print(f"Sport: {report.get('sport', 'football')}")
     print(f"League ID: {report['league_id']}")
     print(f"Season: {report['season']}")
     print(f"Dataset Status: {report['status']}")
+    if report.get("acquisition_state") is not None:
+        print(f"Acquisition state: {report.get('acquisition_state')}")
+    if report.get("lifecycle_state") is not None:
+        print(f"Competition lifecycle: {report.get('lifecycle_state')} ({report.get('lifecycle_reason')})")
+    if report.get("source") is not None:
+        print(f"Selected provider/source: {report.get('source')}")
+    if report.get("providers_contributed"):
+        print(f"Providers contributing persisted records: {', '.join(report.get('providers_contributed') or [])}")
+    if report.get("provider_outcomes"):
+        for outcome_provider, outcome_value in report["provider_outcomes"].items():
+            if isinstance(outcome_value, dict):
+                print(
+                    f"  provider outcome {outcome_provider}: "
+                    f"{outcome_value.get('outcome')} ({outcome_value.get('reason')})"
+                )
+            else:
+                print(f"  provider outcome {outcome_provider}: {outcome_value}")
+    if report.get("coverage_unit") is not None:
+        print(
+            f"Coverage unit: {report.get('coverage_unit')} "
+            f"({report.get('completed_coverage_units', report.get('pages_completed'))}/"
+            f"{report.get('expected_coverage_units', report.get('expected_pages'))})"
+        )
+    if report.get("provider_coverage"):
+        for provider_name, prov in report["provider_coverage"].items():
+            if isinstance(prov, dict):
+                print(
+                    f"  provider {provider_name}: unit={prov.get('coverage_unit')} "
+                    f"{prov.get('completed')}/{prov.get('expected')} status={prov.get('status')}"
+                )
     print(f"Existing fixtures before sync: {report['existing_before']}")
-    print(f"Fixtures received from API: {report['fixtures_received']}")
+    print(f"Fixtures received from provider(s): {report['fixtures_received']}")
     print(f"Valid fixtures: {report['valid_fixtures']}")
     print(f"Duplicates skipped: {report['duplicates_skipped']}")
     print(f"Rejected fixtures: {report.get('rejected_count', 0)}")
@@ -606,13 +979,89 @@ def _print_sync_report(report: dict) -> None:
     print(f"Final stored fixture count: {report['final_stored_count']}")
     if "total_sync_duration" in report:
         print(f"Total sync duration: {report['total_sync_duration']:.3f}s (DB write duration: {report.get('db_write_duration', 0):.3f}s)")
+    if report.get("status") != "COMPLETE":
+        print(f"Reason dataset remains incomplete: {report.get('incomplete_reason') or report.get('error_reason') or 'unspecified'}")
     if report.get("status") == "COMPLETE" and report.get("api_requests_consumed") == 0:
-        print("Dataset already COMPLETE; API acquisition skipped.")
+        print("Dataset already COMPLETE; acquisition skipped.")
     print("=== END HISTORICAL SYNC REPORT ===\n")
 
 
 import basketball_api
 import espn_basketball_provider
+
+
+def _expected_min_season_games(league_id, season):
+    """
+    Independently established expected game coverage for a basketball season.
+
+    The NBA's published regular-season game totals are the authority for the
+    season (see config.NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES). Returns None when
+    no authoritative expectation exists for the competition or season, so callers
+    fail closed instead of treating the stored record count as its own evidence of
+    completeness.
+    """
+    label = parse_season_label(season)
+    if label is None:
+        return None
+    try:
+        lid = int(league_id)
+    except (TypeError, ValueError):
+        return None
+    if lid != NBA_LEAGUE_ID:
+        return None
+
+    expected = (getattr(config, "NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES", {}) or {}).get(label)
+    if not isinstance(expected, int) or isinstance(expected, bool) or expected <= 0:
+        return None
+    return expected
+
+
+def _basketball_game_source(game):
+    """Return the provider that produced a persisted basketball game, or None."""
+    if not isinstance(game, dict):
+        return None
+    if game.get("_storage_source"):
+        src = game.get("_storage_source")
+    else:
+        src = game.get("source")
+        if not src and isinstance(game.get("provider_provenance"), dict):
+            src = game["provider_provenance"].get("provider")
+    return src.strip() if isinstance(src, str) and src.strip() else None
+
+
+def _basketball_game_season_type(game):
+    """
+    Return the recorded competition phase of a persisted basketball game.
+
+    ESPN records the provider-native season type (preseason, regular_season,
+    postseason, all_star) on each record. Records persisted before that
+    classification existed return None, which callers treat as "not known to be
+    another phase" rather than as a regular-season claim.
+    """
+    if not isinstance(game, dict):
+        return None
+    provenance = game.get("provider_provenance") if isinstance(game.get("provider_provenance"), dict) else {}
+    for raw in (provenance.get("season_type"), game.get("season_type"), game.get("game_type")):
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip().lower().replace("-", "_").replace(" ", "_")
+    return None
+
+
+def _basketball_season_type_counts(stored_games) -> dict:
+    """
+    Count persisted basketball games by recorded competition phase.
+
+    Reported with every basketball acquisition and verification run so that
+    regular-season, preseason, play-in, postseason and All-Star coverage are
+    visibly distinct, and records persisted before the provider recorded a phase
+    are visible as ``unclassified`` instead of being silently folded into the
+    regular-season total.
+    """
+    counts = {}
+    for game in stored_games if isinstance(stored_games, list) else []:
+        phase = _basketball_game_season_type(game) or "unclassified"
+        counts[phase] = counts.get(phase, 0) + 1
+    return counts
 
 
 def _validate_historical_basketball_dataset(stored_games: list, league_id: int, season: int, dataset_info: dict) -> bool:
@@ -623,13 +1072,16 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
     - Requested league and season match.
     - Participating home and away teams valid and distinct.
     - Required game date, completed status, and valid scores present.
-    - Dataset manifest page counts and rejected counts valid.
+    - Positive, fully completed provider coverage units (ESPN months or API pages)
+      and zero rejected/empty counters. A zero/zero coverage count is never proof
+      of completed acquisition and fails closed.
     - Distinguishes completed historical seasons from ongoing seasons using game status and date evidence (no blanket calendar-year rejection).
     """
     if not isinstance(stored_games, list) or not stored_games:
         return False
 
     seen_game_ids = set()
+    counts_by_source = {}
     for game in stored_games:
         is_valid, reason, _ = storage.validate_historical_basketball_game(
             game, target_league_id=league_id, target_season=season, require_completed=True
@@ -637,15 +1089,11 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
         if not is_valid:
             return False
 
-        if "_storage_source" in game:
-            src = game.get("_storage_source")
-        else:
-            src = game.get("source")
-            if not src and isinstance(game.get("provider_provenance"), dict):
-                src = game["provider_provenance"].get("provider")
+        src = _basketball_game_source(game)
 
-        if not isinstance(src, str) or not src.strip():
+        if not src:
             return False
+        counts_by_source[src] = counts_by_source.get(src, 0) + 1
 
         gid = game.get("id") or game.get("game_id")
         if gid is None or isinstance(gid, bool):
@@ -668,15 +1116,108 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
     rej_cnt = dataset_info.get("rejected_count", 0) if isinstance(dataset_info, dict) else 0
     empty_pages_count = dataset_info.get("empty_pages_count", 0) if isinstance(dataset_info, dict) else 0
 
-    if (
-        manifest_count != len(stored_games)
-        or p_completed != e_pages
-        or rej_cnt != 0
-        or empty_pages_count != 0
-    ):
+    provider_coverage = dataset_info.get("provider_coverage") if isinstance(dataset_info, dict) else None
+    if not isinstance(provider_coverage, dict) or not provider_coverage:
+        return False
+
+    # Empty coverage units are legitimate only where a provider recorded the
+    # period as successfully acquired with no games (for example an NBA month that
+    # genuinely contains no fixtures). A failed, missing or unverified unit is
+    # never treated as a legitimate empty period, and empty units never stand in
+    # for acquired games. This mirrors the storage-level completion rule.
+    verified_empty_units = 0
+    for provider_entry in provider_coverage.values():
+        if not isinstance(provider_entry, dict):
+            return False
+        entry_empty = provider_entry.get("valid_empty_units")
+        if isinstance(entry_empty, int) and not isinstance(entry_empty, bool) and entry_empty > 0:
+            verified_empty_units += entry_empty
+
+    if manifest_count != len(stored_games) or e_pages <= 0 or p_completed != e_pages or rej_cnt != 0:
+        return False
+
+    if empty_pages_count > verified_empty_units:
         return False
 
     if len(seen_game_ids) != len(stored_games):
+        return False
+
+    # Provider-specific coverage units and their recorded outcomes must be present
+    # and internally consistent. ESPN months and API pages are separate
+    # namespaces, each checked against its own recorded expectation. At least one
+    # provider must have completed with a VALIDATED outcome; a provider that was
+    # attempted and failed (for example ESPN before the API-Basketball fallback)
+    # is reported truthfully without invalidating the validated route.
+    validated_provider_found = False
+    for provider_entry in provider_coverage.values():
+        if not isinstance(provider_entry, dict):
+            return False
+        expected_units = provider_entry.get("expected")
+        completed_units = provider_entry.get("completed")
+        if not isinstance(expected_units, int) or isinstance(expected_units, bool) or expected_units < 0:
+            return False
+        if not isinstance(completed_units, int) or isinstance(completed_units, bool) or completed_units < 0:
+            return False
+        if completed_units > expected_units:
+            return False
+        if provider_entry.get("status") == ACQUISITION_STATE_VALIDATED:
+            if expected_units <= 0:
+                return False
+            validated_provider_found = True
+
+    if not validated_provider_found:
+        return False
+
+    # Per-source coverage reconciliation: every persisted record is attributed to
+    # the provider that actually produced it, and that provider's own coverage
+    # units must be complete and validated. ESPN months and API-Basketball pages
+    # never substitute for each other, so a dataset holding ESPN rows can never be
+    # described (or completed) by an API-Basketball coverage record alone.
+    for source_name, source_count in counts_by_source.items():
+        source_entry = provider_coverage.get(source_name)
+        if not isinstance(source_entry, dict):
+            return False
+        if source_entry.get("status") != ACQUISITION_STATE_VALIDATED:
+            return False
+        entry_expected = source_entry.get("expected")
+        entry_completed = source_entry.get("completed")
+        if not isinstance(entry_expected, int) or isinstance(entry_expected, bool) or entry_expected <= 0:
+            return False
+        if entry_completed != entry_expected:
+            return False
+        if source_count <= 0:
+            return False
+        if source_name == "espn_url":
+            # ESPN coverage is measured in the season's own monthly scoreboards
+            # (13 for the COVID-extended 2019-20 season), never in API pages.
+            if entry_expected != espn_basketball_provider.get_season_month_count(season):
+                return False
+            if source_entry.get("competition_verified") is False:
+                return False
+
+    # A manifest that agrees with its own records is not proof that the season is
+    # complete. The independently established NBA regular-season total is the
+    # authority, and a season without such an expectation fails closed.
+    expected_min_games = _expected_min_season_games(league_id, season)
+    if expected_min_games is None:
+        return False
+
+    # Event classification separates regular-season coverage from preseason,
+    # postseason and All-Star events, so a playoff or exhibition schedule can never
+    # substitute for missing regular-season games. Records persisted before the
+    # provider recorded a phase are counted only when they are not known to belong
+    # to another phase; anything classified otherwise is excluded from the
+    # regular-season total.
+    regular_season_games = 0
+    non_regular_season_games = 0
+    for game in stored_games:
+        phase = _basketball_game_season_type(game)
+        if phase in (None, "regular_season", "regular"):
+            regular_season_games += 1
+        else:
+            non_regular_season_games += 1
+
+    if regular_season_games < expected_min_games:
         return False
 
     return True
@@ -701,8 +1242,39 @@ def sync_historical_basketball_games(
     if current_status == "COMPLETE" and not refresh:
         stored_games = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
         if _validate_historical_basketball_dataset(stored_games, league_id, season, dataset_info):
-            print(f"Basketball dataset already COMPLETE and revalidated for league {league_id} season {season}; API acquisition skipped.", flush=True)
-            return {
+            # The persisted records and the recorded provider coverage agree, but
+            # the competition lifecycle is recalculated independently before the
+            # COMPLETE manifest is retained: an ongoing or unverifiable season can
+            # never be kept complete on the strength of its stored records alone.
+            retention_coverage = {
+                "verified": True,
+                "reason": None,
+                "coverage_unit": dataset_info.get("coverage_unit"),
+                "expected_coverage_units": dataset_info.get("expected_pages"),
+                "completed_coverage_units": dataset_info.get("pages_completed"),
+                "provider_coverage": dataset_info.get("provider_coverage"),
+            }
+            retained_lifecycle, retained_lifecycle_reason, _ = get_competition_lifecycle(
+                "basketball", league_id, season, stored_games, coverage=retention_coverage
+            )
+            if retained_lifecycle != COMPETITION_LIFECYCLE_COMPLETED:
+                print(
+                    f"Basketball dataset was marked COMPLETE but its competition lifecycle is "
+                    f"{retained_lifecycle} ({retained_lifecycle_reason}) for league {league_id} "
+                    f"season {season}. Proceeding with sync.",
+                    flush=True,
+                )
+                storage.mark_historical_dataset_incomplete(
+                    league_id,
+                    season,
+                    fixture_count=len(stored_games),
+                    sport="basketball",
+                    error_reason=f"season_lifecycle_{retained_lifecycle.lower()}_{retained_lifecycle_reason}",
+                )
+                current_status = "INCOMPLETE"
+            else:
+                print(f"Basketball dataset already COMPLETE and revalidated for league {league_id} season {season}; API acquisition skipped.", flush=True)
+                return {
                 "sport": "basketball",
                 "league_id": league_id,
                 "season": season,
@@ -744,18 +1316,29 @@ def sync_historical_basketball_games(
     total_empty_pages_count = 0
     all_rejection_reasons = {}
 
-    # 1. ESPN Primary Acquisition for NBA (league_id == 12)
-    espn_coverage_complete = False
-    if league_id == 12 and getattr(config, "ENABLE_ESPN_BASKETBALL", True):
+    # 1. ESPN URL-based primary acquisition for the NBA (league_id == 12).
+    # Provider selection is explicit and deterministic: ESPN runs first for the
+    # NBA when enabled; API-Basketball is only attempted when ESPN did not
+    # produce independently validated coverage. No test/mock inspection decides
+    # which production provider runs.
+    # ESPN coverage is measured in the season's monthly scoreboards: nine for a
+    # standard NBA season, and more for the COVID-extended 2019-20 season whose
+    # resumption months must also be acquired.
+    espn_expected_units = espn_basketball_provider.get_season_month_count(season)
+    espn_attempted = False
+    espn_coverage = None
+    espn_completed_units = 0
+    espn_rejected_count = 0
+    espn_valid_empty_units = 0
+    espn_dataset_validated = False
+
+    if league_id == NBA_LEAGUE_ID and getattr(config, "ENABLE_ESPN_BASKETBALL", True):
+        espn_attempted = True
         try:
             espn_games, coverage_meta = espn_basketball_provider.fetch_espn_nba_season_games(league_id, season)
             if isinstance(coverage_meta, dict):
-                espn_coverage_complete = (
-                    coverage_meta.get("months_attempted") == 9
-                    and coverage_meta.get("months_failed") == 0
-                    and coverage_meta.get("months_succeeded") == 9
-                    and coverage_meta.get("all_months_succeeded") is True
-                )
+                espn_coverage = coverage_meta
+                espn_completed_units = int(coverage_meta.get("months_succeeded") or 0)
             if espn_games:
                 games_received.extend(espn_games)
                 save_res = storage.save_historical_basketball_games(
@@ -764,31 +1347,78 @@ def sync_historical_basketball_games(
                 total_valid_games += save_res.get("valid", 0)
                 total_newly_stored += save_res.get("inserted", 0)
                 total_duplicates_skipped += save_res.get("duplicates_skipped", 0)
-                total_rejected_count += save_res.get("rejected_count", 0)
+                espn_rejected_count = save_res.get("rejected_count", 0)
+                total_rejected_count += espn_rejected_count
                 for r_reason, r_cnt in save_res.get("rejection_reasons", {}).items():
                     all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
         except Exception as exc:
             print(f"ESPN NBA acquisition attempt failed for season {season}: {exc}", flush=True)
 
-    expected_pages = dataset_info.get("expected_pages", 0)
-    pages_completed = dataset_info.get("pages_completed", 0)
-    acquisition_complete = False
+    # ESPN coverage is measured in the season's own monthly scoreboards (nine for a
+    # standard NBA season, thirteen for the COVID-extended 2019-20 season, eight for
+    # the late-starting 2020-21 season). A month is considered covered when its
+    # request succeeded and the payload proved NBA competition membership; a
+    # successful request that returns zero events is a valid no-games result (for
+    # example early October), not a failure. Monthly units are never described as a
+    # single API page, and a payload whose competition metadata contradicts the NBA
+    # is never accepted as covered.
+    espn_coverage_complete = bool(
+        espn_attempted
+        and isinstance(espn_coverage, dict)
+        and espn_coverage.get("months_attempted") == espn_expected_units
+        and espn_coverage.get("months_failed") == 0
+        and espn_coverage.get("months_succeeded") == espn_expected_units
+        and espn_coverage.get("all_months_succeeded") is True
+        and espn_coverage.get("competition_verified") is not False
+    )
 
     stored_espn_check = storage.get_historical_basketball_games(
         league_id, season, source="espn_url", include_storage_source=True
     )
+    # A month whose request succeeded but which legitimately contains no games
+    # (for example early October) is recorded as a verified empty coverage unit. It
+    # is never reported as a failure, and never as acquired games.
+    if isinstance(espn_coverage, dict):
+        for month_detail in espn_coverage.get("monthly_details") or []:
+            if (
+                isinstance(month_detail, dict)
+                and month_detail.get("status") == "SUCCESS"
+                and int(month_detail.get("event_count") or 0) == 0
+            ):
+                espn_valid_empty_units += 1
+
     if espn_coverage_complete and stored_espn_check:
-        dataset_eval_info = {
+        espn_eval_info = {
             "fixture_count": len(stored_espn_check),
-            "expected_pages": 0,
-            "pages_completed": 0,
-            "rejected_count": total_rejected_count,
-            "empty_pages_count": total_empty_pages_count,
+            "expected_pages": espn_expected_units,
+            "pages_completed": espn_completed_units,
+            "rejected_count": espn_rejected_count,
+            # A month that succeeded with no events is a verified empty unit, not a
+            # missing acquisition unit, so it is reported as such here instead of
+            # being hidden behind a zero counter.
+            "empty_pages_count": espn_valid_empty_units,
+            "coverage_unit": COVERAGE_UNIT_ESPN_MONTHS,
+            "provider_coverage": {
+                "espn_url": {
+                    "coverage_unit": "months",
+                    "expected": espn_expected_units,
+                    "completed": espn_completed_units,
+                    "valid_empty_units": espn_valid_empty_units,
+                    "status": ACQUISITION_STATE_VALIDATED,
+                }
+            },
         }
-        if _validate_historical_basketball_dataset(stored_espn_check, league_id, season, dataset_eval_info):
-            expected_pages = 0
-            pages_completed = 0
-            acquisition_complete = True
+        espn_dataset_validated = _validate_historical_basketball_dataset(
+            stored_espn_check, league_id, season, espn_eval_info
+        )
+
+    # API-Basketball pagination is tracked in its own units, independently of
+    # ESPN months. These variables never describe ESPN acquisition.
+    api_attempted = False
+    api_expected_pages = 0
+    api_pages_completed = 0
+
+    acquisition_complete = espn_dataset_validated
 
     if initial_request_count >= historical_budget and not acquisition_complete:
         quota_budget_stopped = True
@@ -798,8 +1428,11 @@ def sync_historical_basketball_games(
             flush=True,
         )
 
-    # 2. Fallback to API-Basketball if ESPN incomplete and quota permits
+    # 2. Fallback to API-Basketball when ESPN coverage is absent or unvalidated.
+    # Pagination coverage is tracked in API pages using the provider's own
+    # paging metadata; none of these counters describe ESPN months.
     if not acquisition_complete and not quota_budget_stopped:
+        api_attempted = True
         current_page = 1
         while True:
             try:
@@ -809,13 +1442,13 @@ def sync_historical_basketball_games(
                 page_games = page_meta.get("games", [])
                 page_expected = page_meta.get("expected_pages")
 
-                if expected_pages == 0:
-                    expected_pages = page_expected
-                elif page_expected != expected_pages:
+                if api_expected_pages == 0:
+                    api_expected_pages = page_expected
+                elif page_expected != api_expected_pages:
                     acquisition_failed = True
                     last_error_reason = "pagination_metadata_mismatch"
                     print(
-                        f"Basketball pagination error: Total pages changed during sync ({expected_pages} -> {page_expected}). Failing closed.",
+                        f"Basketball pagination error: Total pages changed during sync ({api_expected_pages} -> {page_expected}). Failing closed.",
                         flush=True,
                     )
                     break
@@ -836,10 +1469,10 @@ def sync_historical_basketball_games(
                 for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
                     all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
 
-                pages_completed = current_page
+                api_pages_completed = current_page
                 current_stored_count = storage.get_historical_basketball_game_count(league_id, season)
 
-                if current_page >= expected_pages:
+                if current_page >= api_expected_pages:
                     acquisition_complete = True
 
                 storage.mark_historical_dataset_incomplete(
@@ -847,14 +1480,15 @@ def sync_historical_basketball_games(
                     season,
                     fixture_count=current_stored_count,
                     sport="basketball",
-                    expected_pages=expected_pages,
-                    pages_completed=pages_completed,
+                    expected_pages=api_expected_pages,
+                    pages_completed=api_pages_completed,
                     acquisition_complete=acquisition_complete,
                     rejected_count=total_rejected_count,
                     empty_pages_count=total_empty_pages_count,
                     error_reason=last_error_reason,
+                    coverage_unit=COVERAGE_UNIT_API_PAGES,
                 )
-                if acquisition_complete or current_page >= expected_pages:
+                if acquisition_complete or current_page >= api_expected_pages:
                     break
                 current_page += 1
 
@@ -884,16 +1518,114 @@ def sync_historical_basketball_games(
     cum_rejected_cnt_b = (dataset_info.get("rejected_count", 0) if not refresh else 0) + total_rejected_count
     cum_empty_cnt_b = (dataset_info.get("empty_pages_count", 0) if not refresh else 0) + total_empty_pages_count
 
-    if pages_completed > 0:
-        safe_exp_pages_b = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
-        safe_pages_comp_b = pages_completed
-        safe_rejected_cnt_b = cum_rejected_cnt_b
-        safe_empty_cnt_b = cum_empty_cnt_b
+    # Which providers actually produced the persisted records, as distinct from
+    # providers that were merely attempted. The manifest source and every provider
+    # entry report this distinction, so persisted ESPN rows can never be described
+    # by an API-Basketball manifest (or the reverse).
+    persisted_by_source = {}
+    for persisted_game in storage.get_historical_basketball_games(
+        league_id, season, include_storage_source=True
+    ):
+        persisted_source = _basketball_game_source(persisted_game)
+        if persisted_source:
+            persisted_by_source[persisted_source] = persisted_by_source.get(persisted_source, 0) + 1
+
+    if len(persisted_by_source) == 1:
+        manifest_source_b = next(iter(persisted_by_source))
+    elif persisted_by_source:
+        manifest_source_b = "mixed"
     else:
-        safe_exp_pages_b = dataset_info.get("expected_pages", 0)
-        safe_pages_comp_b = dataset_info.get("pages_completed", 0)
-        safe_rejected_cnt_b = cum_rejected_cnt_b
-        safe_empty_cnt_b = cum_empty_cnt_b
+        manifest_source_b = "unknown"
+
+    # Provider-specific coverage. ESPN months and API pages are kept in separate
+    # namespaces and only combined when both providers actually contributed; the
+    # manifest records which unit was counted.
+    provider_coverage = {}
+    if espn_attempted:
+        provider_coverage["espn_url"] = {
+            "coverage_unit": "months",
+            "expected": espn_expected_units,
+            "completed": espn_completed_units,
+            "valid_empty_units": espn_valid_empty_units,
+            "months_attempted": (espn_coverage or {}).get("months_attempted") if isinstance(espn_coverage, dict) else None,
+            "months_failed": (espn_coverage or {}).get("months_failed") if isinstance(espn_coverage, dict) else None,
+            "competition_verified": (espn_coverage or {}).get("competition_verified") if isinstance(espn_coverage, dict) else None,
+            "events_accepted": (espn_coverage or {}).get("events_accepted") if isinstance(espn_coverage, dict) else None,
+            "events_rejected": (espn_coverage or {}).get("events_rejected") if isinstance(espn_coverage, dict) else None,
+            "rejection_reasons": (espn_coverage or {}).get("rejection_reasons") if isinstance(espn_coverage, dict) else None,
+            "attempted": True,
+            "contributed": bool(persisted_by_source.get("espn_url")),
+            "records_persisted": persisted_by_source.get("espn_url", 0),
+            "status": (
+                ACQUISITION_STATE_VALIDATED if espn_dataset_validated
+                else (ACQUISITION_STATE_FAILED if espn_coverage is None else ACQUISITION_STATE_INCOMPLETE)
+            ),
+            "monthly_details": (espn_coverage or {}).get("monthly_details") if isinstance(espn_coverage, dict) else None,
+        }
+    if api_attempted:
+        provider_coverage["api_basketball"] = {
+            "coverage_unit": "pages",
+            "expected": api_expected_pages,
+            "completed": api_pages_completed,
+            "attempted": True,
+            "contributed": bool(persisted_by_source.get("api_basketball")),
+            "records_persisted": persisted_by_source.get("api_basketball", 0),
+            "status": (
+                ACQUISITION_STATE_VALIDATED
+                if (acquisition_complete and api_expected_pages > 0 and api_pages_completed >= api_expected_pages)
+                else (ACQUISITION_STATE_FAILED if acquisition_failed else ACQUISITION_STATE_INCOMPLETE)
+            ),
+        }
+
+    # The dataset's coverage unit describes the acquisition route that is actually
+    # being counted for completeness. When ESPN delivers validated coverage its nine
+    # monthly scoreboards are the units; when ESPN did not deliver validated coverage
+    # and the documented API-Basketball fallback did, the units are API pages; the
+    # two namespaces are combined only when both routes produced validated coverage.
+    # A failed ESPN attempt therefore never inflates the expected unit total of a
+    # fallback-completed dataset, and ESPN months are never reported as API pages
+    # (or the reverse).
+    espn_contributed_validated_coverage = bool(espn_dataset_validated)
+    api_contributed_validated_coverage = bool(
+        acquisition_complete and api_expected_pages > 0 and api_pages_completed >= api_expected_pages
+    )
+
+    if espn_contributed_validated_coverage and api_contributed_validated_coverage:
+        dataset_coverage_unit = f"{COVERAGE_UNIT_ESPN_MONTHS}+{COVERAGE_UNIT_API_PAGES}"
+        dataset_expected_units = espn_expected_units + api_expected_pages
+        dataset_completed_units = espn_completed_units + api_pages_completed
+    elif espn_contributed_validated_coverage:
+        dataset_coverage_unit = COVERAGE_UNIT_ESPN_MONTHS
+        dataset_expected_units = espn_expected_units
+        dataset_completed_units = espn_completed_units
+    elif api_attempted:
+        dataset_coverage_unit = COVERAGE_UNIT_API_PAGES
+        dataset_expected_units = api_expected_pages
+        dataset_completed_units = api_pages_completed
+    elif espn_attempted:
+        dataset_coverage_unit = COVERAGE_UNIT_ESPN_MONTHS
+        dataset_expected_units = espn_expected_units
+        dataset_completed_units = espn_completed_units
+    else:
+        dataset_coverage_unit = dataset_info.get("coverage_unit") or COVERAGE_UNIT_SINGLE_SHOT
+        dataset_expected_units = dataset_info.get("expected_pages", 0) or 0
+        dataset_completed_units = dataset_info.get("pages_completed", 0) or 0
+
+    if dataset_completed_units <= 0 and (dataset_info.get("expected_pages") or 0) > 0:
+        # This run acquired no completed coverage unit (for example a
+        # pre-acquisition quota stop, or an ESPN attempt that produced nothing).
+        # The previously recorded coverage progress describes the persisted data
+        # and is preserved so a later run resumes from recorded coverage instead
+        # of resetting the manifest to zero. The current attempt is still reported
+        # truthfully in provider_coverage.
+        dataset_coverage_unit = dataset_info.get("coverage_unit") or dataset_coverage_unit
+        dataset_expected_units = dataset_info.get("expected_pages") or 0
+        dataset_completed_units = dataset_info.get("pages_completed") or 0
+
+    safe_exp_pages_b = dataset_expected_units
+    safe_pages_comp_b = dataset_completed_units
+    safe_rejected_cnt_b = cum_rejected_cnt_b
+    safe_empty_cnt_b = cum_empty_cnt_b
 
     stored_games_all = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
     db_validation_passed = _validate_historical_basketball_dataset(
@@ -906,21 +1638,89 @@ def sync_historical_basketball_games(
             "pages_completed": safe_pages_comp_b,
             "rejected_count": safe_rejected_cnt_b,
             "empty_pages_count": safe_empty_cnt_b,
+            "coverage_unit": dataset_coverage_unit,
+            "provider_coverage": provider_coverage,
         },
     )
 
-    lifecycle_completed_b, lifecycle_reason_b = _is_season_lifecycle_completed("basketball", league_id, season, stored_games_all)
+    # Independently established expected season coverage. The NBA's published
+    # regular-season game total is the authority for the season; the number of
+    # persisted records is never used as its own evidence, and a season without an
+    # established expectation (for example the ongoing season) fails closed.
+    expected_min_season_games = None
+    season_label_bb = parse_season_label(season)
+    if league_id == NBA_LEAGUE_ID and season_label_bb is not None:
+        expected_min_season_games = (
+            getattr(config, "NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES", {}) or {}
+        ).get(season_label_bb)
+
+    if expected_min_season_games is None:
+        season_coverage_sufficient = False
+        season_coverage_reason = "expected_season_coverage_unavailable"
+    elif final_stored_count < expected_min_season_games:
+        season_coverage_sufficient = False
+        season_coverage_reason = (
+            f"persisted_games_below_expected_season_coverage_{final_stored_count}_of_{expected_min_season_games}"
+        )
+    else:
+        season_coverage_sufficient = True
+        season_coverage_reason = None
+
+    coverage_units_complete = safe_exp_pages_b > 0 and safe_pages_comp_b == safe_exp_pages_b
+    if not coverage_units_complete:
+        coverage_reason = "coverage_units_incomplete"
+    elif not db_validation_passed:
+        coverage_reason = "persisted_dataset_invalid"
+    elif not season_coverage_sufficient:
+        coverage_reason = season_coverage_reason
+    else:
+        coverage_reason = None
+
+    basketball_coverage = {
+        "verified": bool(
+            db_validation_passed and coverage_units_complete and season_coverage_sufficient
+        ),
+        "reason": coverage_reason,
+        "coverage_unit": dataset_coverage_unit,
+        "expected_coverage_units": safe_exp_pages_b,
+        "completed_coverage_units": safe_pages_comp_b,
+        "expected_min_season_games": expected_min_season_games,
+        "season_coverage_verified": bool(season_coverage_sufficient),
+        "season_type_counts": _basketball_season_type_counts(stored_games_all),
+        "provider_coverage": provider_coverage,
+    }
+
+    lifecycle_state_b, lifecycle_reason_raw_b, _ = get_competition_lifecycle(
+        "basketball", league_id, season, stored_games_all, coverage=basketball_coverage
+    )
+    lifecycle_completed_b = lifecycle_state_b == COMPETITION_LIFECYCLE_COMPLETED
+    lifecycle_reason_b = f"{lifecycle_state_b.lower()}_{lifecycle_reason_raw_b}"
+
+    acquisition_state_b = (
+        ACQUISITION_STATE_VALIDATED if (acquisition_complete and basketball_coverage["verified"])
+        else (ACQUISITION_STATE_FAILED if acquisition_failed else ACQUISITION_STATE_INCOMPLETE)
+    )
 
     is_fully_complete = (
         not quota_budget_stopped
         and not acquisition_failed
         and acquisition_complete
-        and db_validation_passed
+        and basketball_coverage["verified"]
         and lifecycle_completed_b
     )
 
     if not lifecycle_completed_b and not last_error_reason:
-        last_error_reason = f"season_lifecycle_ongoing_{lifecycle_reason_b}"
+        last_error_reason = f"season_lifecycle_{lifecycle_reason_b}"
+    if not basketball_coverage["verified"] and not last_error_reason:
+        last_error_reason = f"coverage_failed_{coverage_reason}"
+
+    print(
+        f"[BASKETBALL] league {league_id} season {season}: coverage_unit={dataset_coverage_unit}, "
+        f"coverage={safe_pages_comp_b}/{safe_exp_pages_b}, lifecycle={lifecycle_state_b} ({lifecycle_reason_b}), "
+        f"acquisition_state={acquisition_state_b}, stored={final_stored_count}, "
+        f"season_types={basketball_coverage['season_type_counts']}",
+        flush=True,
+    )
 
     if is_fully_complete:
         storage.mark_historical_dataset_complete(
@@ -928,11 +1728,14 @@ def sync_historical_basketball_games(
             season,
             fixture_count=final_stored_count,
             sport="basketball",
+            source=manifest_source_b,
             expected_pages=safe_exp_pages_b,
             pages_completed=safe_pages_comp_b,
             acquisition_complete=acquisition_complete,
             rejected_count=safe_rejected_cnt_b,
             empty_pages_count=safe_empty_cnt_b,
+            coverage_unit=dataset_coverage_unit,
+            provider_coverage=provider_coverage,
         )
         final_status = "COMPLETE"
     else:
@@ -941,6 +1744,7 @@ def sync_historical_basketball_games(
             season,
             fixture_count=final_stored_count,
             sport="basketball",
+            source=manifest_source_b,
             expected_pages=safe_exp_pages_b,
             pages_completed=safe_pages_comp_b,
             acquisition_complete=acquisition_complete,
@@ -948,6 +1752,8 @@ def sync_historical_basketball_games(
             rejected_count=safe_rejected_cnt_b,
             empty_pages_count=safe_empty_cnt_b,
             error_reason=last_error_reason,
+            coverage_unit=dataset_coverage_unit,
+            provider_coverage=provider_coverage,
         )
         final_status = "INCOMPLETE"
 
@@ -956,6 +1762,7 @@ def sync_historical_basketball_games(
         "league_id": league_id,
         "season": season,
         "status": final_status,
+        "source": manifest_source_b,
         "existing_before": existing_before,
         "fixtures_received": len(games_received),
         "valid_fixtures": valid_count,
@@ -964,9 +1771,14 @@ def sync_historical_basketball_games(
         "rejection_reasons": rejection_reasons,
         "newly_stored": newly_stored,
         "already_existing_skipped": already_existing_skipped,
-        "expected_pages": expected_pages,
-        "pages_completed": pages_completed,
+        "coverage_unit": dataset_coverage_unit,
+        "expected_coverage_units": safe_exp_pages_b,
+        "completed_coverage_units": safe_pages_comp_b,
+        "provider_coverage": provider_coverage,
         "acquisition_complete": acquisition_complete,
+        "acquisition_state": acquisition_state_b,
+        "lifecycle_state": lifecycle_state_b,
+        "lifecycle_reason": lifecycle_reason_b,
         "api_requests_consumed": total_consumed,
         "historical_budget": historical_budget,
         "quota_budget_stopped": quota_budget_stopped,
@@ -1017,7 +1829,7 @@ def run_safe_preflight(seasons: list, queue_items: list) -> None:
     bb_budget = int(getattr(config, "API_BASKETBALL_HISTORICAL_DAILY_BUDGET", 50))
 
     print(f"API Request Counters Today ({today_str}):", flush=True)
-    print("  Football Historical: Direct CSV / SoccerData / football-data.org (0 API-Football calls)", flush=True)
+    print("  Football Historical: Direct CSV -> SoccerData FBref -> SoccerData MatchHistory -> SoccerData Sofascore (0 API-Football calls)", flush=True)
     print(f"  API-Basketball: {bb_reqs}/{bb_budget} requests used today", flush=True)
 
     # 6. Confirm dataset statuses for target datasets
@@ -1133,6 +1945,12 @@ def run_historical_queue(
 
     reports = []
 
+    # Per-sport quota/budget state. When a sport's acquisition budget is
+    # exhausted the remaining datasets for that sport are skipped for the rest of
+    # the run (failing safely instead of repeatedly hammering the provider), while
+    # the other sport's independent budget keeps being processed.
+    sport_quota_stopped = {"football": False, "basketball": False}
+
     print(
         f"Starting target historical acquisition queue ({len(queue_items)} datasets across seasons {seasons})...",
         flush=True,
@@ -1160,6 +1978,23 @@ def run_historical_queue(
             })
             continue
 
+        if sport_quota_stopped.get(sport):
+            print(
+                f"Queue: Skipping {sport} dataset for league {league_id} season {season}: "
+                f"the {sport} acquisition budget is exhausted for this run.",
+                flush=True,
+            )
+            reports.append({
+                "sport": sport,
+                "league_id": league_id,
+                "season": season,
+                "status": "INCOMPLETE",
+                "skipped_reason": "sport_acquisition_budget_exhausted",
+                "quota_budget_stopped": True,
+                "api_requests_consumed": 0,
+            })
+            continue
+
         print(
             f"Queue: Syncing missing data for {sport} league {league_id} season {season} (est. required requests: {cov['estimated_required_requests']})...",
             flush=True,
@@ -1180,8 +2015,10 @@ def run_historical_queue(
             )
 
         if report.get("quota_budget_stopped"):
+            sport_quota_stopped[sport] = True
             print(
-                f"Queue: API quota/budget exhausted for {sport} during league {league_id} season {season}.",
+                f"Queue: API quota/budget exhausted for {sport} during league {league_id} season {season}. "
+                f"Remaining {sport} datasets are skipped for this run; the other sport continues.",
                 flush=True,
             )
 
@@ -1408,7 +2245,7 @@ def verify_persisted_historical_datasets(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Historical Data Collector for API-Football/API-Basketball fixtures."
+        description="Historical Data Collector (football: direct CSV/SoccerData; basketball: ESPN then API-Basketball)."
     )
     parser.add_argument("--sport", choices=["football", "basketball"], default="football", help="Sport name")
     parser.add_argument("--league-id", type=int, help="League ID")
