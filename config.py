@@ -502,3 +502,54 @@ NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES = {
     2024: 1230,
     2025: 1230,
 }
+
+# Season-specific authoritative football coverage expectations.
+#
+# Keyed by (sport, league_id, season_start_year). These entries describe a
+# competition season whose actual schedule differs from the generic
+# double-round-robin expectation of N * (N - 1) fixtures with a balanced
+# N-1 home / N-1 away participation record per team.
+#
+# `expected_fixture_count` is the number of matches the competition actually
+# completed, established from authoritative season records rather than from the
+# dataset being validated. When present it replaces the generic expectation in
+# structural coverage validation, so a legitimately shortened season can be
+# verified while a partially acquired one still fails closed.
+#
+# `curtailed` marks a season whose per-team participation cannot be balanced
+# (clubs stopped with different numbers of games played); the per-team balance
+# check is replaced by the exact authoritative fixture count plus the expected
+# team-universe check, both of which remain mandatory.
+#
+# Sources:
+# - Ligue 1 2019-20: LFP terminated the season on 2020-04-28 (finalised
+#   2020-04-30) after matchday 28; 279 of the planned 380 matches were played.
+#   (RSSSF France 2019/20; 2019-20 Ligue 1 season record.)
+# - Eredivisie 2019-20: KNVB abandoned the season on 2020-04-24; 232 of the
+#   planned 306 matches were played. (RSSSF Netherlands 2019/20; 2019-20
+#   Eredivisie season record.)
+#
+# Seasons absent from this map keep the generic expectation; a season that is
+# neither generic nor recorded here fails closed rather than being assumed whole.
+FOOTBALL_SEASON_COVERAGE_EXCEPTIONS = {
+    ("football", 61, 2019): {
+        "expected_fixture_count": 279,
+        "curtailed": True,
+        "exception": "covid19_curtailed_after_matchday_28",
+        "evidence": (
+            "LFP terminated Ligue 1 2019-20 on 2020-04-28 (finalised 2020-04-30) "
+            "after matchday 28; 279 of 380 matches played. "
+            "RSSSF France 2019/20 and the 2019-20 Ligue 1 season record."
+        ),
+    },
+    ("football", 88, 2019): {
+        "expected_fixture_count": 232,
+        "curtailed": True,
+        "exception": "covid19_abandoned_after_matchday_26",
+        "evidence": (
+            "KNVB abandoned Eredivisie 2019-20 on 2020-04-24; "
+            "232 of 306 matches played. "
+            "RSSSF Netherlands 2019/20 and the 2019-20 Eredivisie season record."
+        ),
+    },
+}

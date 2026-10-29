@@ -578,6 +578,28 @@ def _get_authoritative_historical_team_ids(
     return []
 
 
+def _football_season_coverage_exception(league_id, season):
+    """
+    Return the recorded authoritative season coverage exception for a football
+    competition season, or None when no exception applies.
+
+    Exceptions (config.FOOTBALL_SEASON_COVERAGE_EXCEPTIONS) describe seasons
+    whose real schedule deviates from the generic double-round-robin shape, for
+    example the COVID-curtailed 2019-20 Ligue 1 and Eredivisie seasons. They are
+    externally documented facts, never derived from the dataset under validation.
+    """
+    try:
+        lid = int(league_id)
+        ssn = int(season)
+    except (ValueError, TypeError):
+        return None
+    if lid <= 0 or ssn <= 0:
+        return None
+    exceptions = getattr(config, "FOOTBALL_SEASON_COVERAGE_EXCEPTIONS", {}) or {}
+    entry = exceptions.get(("football", lid, ssn))
+    return entry if isinstance(entry, dict) else None
+
+
 def _validate_historical_structural_coverage(fixtures, season, provider_metadata=None, league_id=None, sport="football"):
     """
     Independently verify structural completeness of a historical fixture dataset.
@@ -668,9 +690,23 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     else:
         expected_team_count = len(expected_team_set)
 
+    # Season-specific authoritative expectation (e.g. COVID-curtailed seasons).
+    # An explicit provider-supplied expectation still wins, then the recorded
+    # authoritative season exception, then the generic double-round-robin value.
+    season_exception = _football_season_coverage_exception(league_id, season)
+    season_exception_count = (
+        season_exception.get("expected_fixture_count")
+        if isinstance(season_exception, dict)
+        else None
+    )
+    if not isinstance(season_exception_count, int) or isinstance(season_exception_count, bool) or season_exception_count <= 0:
+        season_exception_count = None
+
     exp_fix_meta = provider_metadata.get("expected_fixture_count")
     if exp_fix_meta is not None:
         expected_fixture_count = exp_fix_meta
+    elif season_exception_count is not None:
+        expected_fixture_count = season_exception_count
     elif is_double_round_robin and expected_team_count > 0:
         expected_fixture_count = expected_team_count * (expected_team_count - 1)
     else:
@@ -1135,7 +1171,7 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
         }
-    elif is_double_round_robin:
+    elif is_double_round_robin and not (season_exception or {}).get("curtailed"):
         check_teams = expected_team_set if expected_team_set else participating_teams
         for t_id in check_teams:
             counts = team_match_counts.get(t_id, {"home": 0, "away": 0, "total": 0})
