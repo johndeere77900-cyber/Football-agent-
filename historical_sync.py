@@ -1016,6 +1016,37 @@ def _expected_min_season_games(league_id, season):
     return expected
 
 
+def _basketball_game_source(game):
+    """Return the provider that produced a persisted basketball game, or None."""
+    if not isinstance(game, dict):
+        return None
+    if game.get("_storage_source"):
+        src = game.get("_storage_source")
+    else:
+        src = game.get("source")
+        if not src and isinstance(game.get("provider_provenance"), dict):
+            src = game["provider_provenance"].get("provider")
+    return src.strip() if isinstance(src, str) and src.strip() else None
+
+
+def _basketball_game_season_type(game):
+    """
+    Return the recorded competition phase of a persisted basketball game.
+
+    ESPN records the provider-native season type (preseason, regular_season,
+    postseason, all_star) on each record. Records persisted before that
+    classification existed return None, which callers treat as "not known to be
+    another phase" rather than as a regular-season claim.
+    """
+    if not isinstance(game, dict):
+        return None
+    provenance = game.get("provider_provenance") if isinstance(game.get("provider_provenance"), dict) else {}
+    for raw in (provenance.get("season_type"), game.get("season_type"), game.get("game_type")):
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip().lower().replace("-", "_").replace(" ", "_")
+    return None
+
+
 def _validate_historical_basketball_dataset(stored_games: list, league_id: int, season: int, dataset_info: dict) -> bool:
     """
     Validate persisted basketball games against basketball-specific completeness rules:
@@ -1033,6 +1064,7 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
         return False
 
     seen_game_ids = set()
+    counts_by_source = {}
     for game in stored_games:
         is_valid, reason, _ = storage.validate_historical_basketball_game(
             game, target_league_id=league_id, target_season=season, require_completed=True
@@ -1040,15 +1072,11 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
         if not is_valid:
             return False
 
-        if "_storage_source" in game:
-            src = game.get("_storage_source")
-        else:
-            src = game.get("source")
-            if not src and isinstance(game.get("provider_provenance"), dict):
-                src = game["provider_provenance"].get("provider")
+        src = _basketball_game_source(game)
 
-        if not isinstance(src, str) or not src.strip():
+        if not src:
             return False
+        counts_by_source[src] = counts_by_source.get(src, 0) + 1
 
         gid = game.get("id") or game.get("game_id")
         if gid is None or isinstance(gid, bool):
@@ -1123,13 +1151,56 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
     if not validated_provider_found:
         return False
 
+    # Per-source coverage reconciliation: every persisted record is attributed to
+    # the provider that actually produced it, and that provider's own coverage
+    # units must be complete and validated. ESPN months and API-Basketball pages
+    # never substitute for each other, so a dataset holding ESPN rows can never be
+    # described (or completed) by an API-Basketball coverage record alone.
+    for source_name, source_count in counts_by_source.items():
+        source_entry = provider_coverage.get(source_name)
+        if not isinstance(source_entry, dict):
+            return False
+        if source_entry.get("status") != ACQUISITION_STATE_VALIDATED:
+            return False
+        entry_expected = source_entry.get("expected")
+        entry_completed = source_entry.get("completed")
+        if not isinstance(entry_expected, int) or isinstance(entry_expected, bool) or entry_expected <= 0:
+            return False
+        if entry_completed != entry_expected:
+            return False
+        if source_count <= 0:
+            return False
+        if source_name == "espn_url":
+            # ESPN coverage is measured in the season's own monthly scoreboards
+            # (13 for the COVID-extended 2019-20 season), never in API pages.
+            if entry_expected != espn_basketball_provider.get_season_month_count(season):
+                return False
+            if source_entry.get("competition_verified") is False:
+                return False
+
     # A manifest that agrees with its own records is not proof that the season is
     # complete. The independently established NBA regular-season total is the
     # authority, and a season without such an expectation fails closed.
     expected_min_games = _expected_min_season_games(league_id, season)
     if expected_min_games is None:
         return False
-    if len(seen_game_ids) < expected_min_games:
+
+    # Event classification separates regular-season coverage from preseason,
+    # postseason and All-Star events, so a playoff or exhibition schedule can never
+    # substitute for missing regular-season games. Records persisted before the
+    # provider recorded a phase are counted only when they are not known to belong
+    # to another phase; anything classified otherwise is excluded from the
+    # regular-season total.
+    regular_season_games = 0
+    non_regular_season_games = 0
+    for game in stored_games:
+        phase = _basketball_game_season_type(game)
+        if phase in (None, "regular_season", "regular"):
+            regular_season_games += 1
+        else:
+            non_regular_season_games += 1
+
+    if regular_season_games < expected_min_games:
         return False
 
     return True
@@ -1422,6 +1493,25 @@ def sync_historical_basketball_games(
     cum_rejected_cnt_b = (dataset_info.get("rejected_count", 0) if not refresh else 0) + total_rejected_count
     cum_empty_cnt_b = (dataset_info.get("empty_pages_count", 0) if not refresh else 0) + total_empty_pages_count
 
+    # Which providers actually produced the persisted records, as distinct from
+    # providers that were merely attempted. The manifest source and every provider
+    # entry report this distinction, so persisted ESPN rows can never be described
+    # by an API-Basketball manifest (or the reverse).
+    persisted_by_source = {}
+    for persisted_game in storage.get_historical_basketball_games(
+        league_id, season, include_storage_source=True
+    ):
+        persisted_source = _basketball_game_source(persisted_game)
+        if persisted_source:
+            persisted_by_source[persisted_source] = persisted_by_source.get(persisted_source, 0) + 1
+
+    if len(persisted_by_source) == 1:
+        manifest_source_b = next(iter(persisted_by_source))
+    elif persisted_by_source:
+        manifest_source_b = "mixed"
+    else:
+        manifest_source_b = "unknown"
+
     # Provider-specific coverage. ESPN months and API pages are kept in separate
     # namespaces and only combined when both providers actually contributed; the
     # manifest records which unit was counted.
@@ -1434,6 +1524,13 @@ def sync_historical_basketball_games(
             "valid_empty_units": espn_valid_empty_units,
             "months_attempted": (espn_coverage or {}).get("months_attempted") if isinstance(espn_coverage, dict) else None,
             "months_failed": (espn_coverage or {}).get("months_failed") if isinstance(espn_coverage, dict) else None,
+            "competition_verified": (espn_coverage or {}).get("competition_verified") if isinstance(espn_coverage, dict) else None,
+            "events_accepted": (espn_coverage or {}).get("events_accepted") if isinstance(espn_coverage, dict) else None,
+            "events_rejected": (espn_coverage or {}).get("events_rejected") if isinstance(espn_coverage, dict) else None,
+            "rejection_reasons": (espn_coverage or {}).get("rejection_reasons") if isinstance(espn_coverage, dict) else None,
+            "attempted": True,
+            "contributed": bool(persisted_by_source.get("espn_url")),
+            "records_persisted": persisted_by_source.get("espn_url", 0),
             "status": (
                 ACQUISITION_STATE_VALIDATED if espn_dataset_validated
                 else (ACQUISITION_STATE_FAILED if espn_coverage is None else ACQUISITION_STATE_INCOMPLETE)
@@ -1445,6 +1542,9 @@ def sync_historical_basketball_games(
             "coverage_unit": "pages",
             "expected": api_expected_pages,
             "completed": api_pages_completed,
+            "attempted": True,
+            "contributed": bool(persisted_by_source.get("api_basketball")),
+            "records_persisted": persisted_by_source.get("api_basketball", 0),
             "status": (
                 ACQUISITION_STATE_VALIDATED
                 if (acquisition_complete and api_expected_pages > 0 and api_pages_completed >= api_expected_pages)
@@ -1601,6 +1701,7 @@ def sync_historical_basketball_games(
             season,
             fixture_count=final_stored_count,
             sport="basketball",
+            source=manifest_source_b,
             expected_pages=safe_exp_pages_b,
             pages_completed=safe_pages_comp_b,
             acquisition_complete=acquisition_complete,
@@ -1616,6 +1717,7 @@ def sync_historical_basketball_games(
             season,
             fixture_count=final_stored_count,
             sport="basketball",
+            source=manifest_source_b,
             expected_pages=safe_exp_pages_b,
             pages_completed=safe_pages_comp_b,
             acquisition_complete=acquisition_complete,
@@ -1633,6 +1735,7 @@ def sync_historical_basketball_games(
         "league_id": league_id,
         "season": season,
         "status": final_status,
+        "source": manifest_source_b,
         "existing_before": existing_before,
         "fixtures_received": len(games_received),
         "valid_fixtures": valid_count,

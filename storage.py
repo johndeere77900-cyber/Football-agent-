@@ -2339,6 +2339,32 @@ def get_all_historical_datasets():
         conn.close()
 
 
+def _is_missing_schema_error(exc):
+    text = str(exc).lower()
+    if psycopg is not None:
+        try:
+            if isinstance(exc, (psycopg.errors.UndefinedColumn, psycopg.errors.UndefinedTable)):
+                return True
+        except (AttributeError, TypeError):
+            pass
+    return "does not exist" in text or "undefinedcolumn" in text or "undefinedtable" in text or "no such column" in text or "no such table" in text
+
+
+_MANIFEST_SCHEMA_READY = False
+
+
+def _ensure_manifest_schema_ready():
+    """Initialize the manifest schema once per process before a status read."""
+    global _MANIFEST_SCHEMA_READY
+    if _MANIFEST_SCHEMA_READY:
+        return
+    try:
+        init_db()
+        _MANIFEST_SCHEMA_READY = True
+    except Exception:
+        pass
+
+
 def get_historical_dataset_status(league_id, season, sport="football"):
     """
     Get the dataset manifest status for a sport, league, and season.
@@ -2347,6 +2373,7 @@ def get_historical_dataset_status(league_id, season, sport="football"):
     season = _validate_positive_int(season, "season")
     sport = _validate_text(sport, "sport").lower()
 
+    _ensure_manifest_schema_ready()
     conn, db_type = _connect()
 
     try:
@@ -2455,6 +2482,36 @@ def _persisted_historical_records(sport, league_id, season):
     if sport == "basketball":
         return get_historical_basketball_games(league_id, season, include_storage_source=True)
     return get_historical_fixtures(league_id, season)
+
+
+def derive_manifest_source(sport, league_id, season):
+    """
+    Derive a dataset's manifest source from the records actually persisted.
+
+    The manifest must describe the data it covers. A caller that omits `source`
+    therefore gets the persisted provider(s) -- a single provider name, or 'mixed'
+    when several providers contributed -- instead of a legacy default constant that
+    could label ESPN-written NBA records as API-Basketball. Returns None when the
+    dataset holds no attributable records, so the caller never invents a provider.
+    """
+    records = _persisted_historical_records(sport, league_id, season)
+    sources = set()
+    for record in records if isinstance(records, list) else []:
+        if not isinstance(record, dict):
+            continue
+        if record.get("_storage_source"):
+            src = record.get("_storage_source")
+        else:
+            src = record.get("source")
+            if not src and isinstance(record.get("provider_provenance"), dict):
+                src = record["provider_provenance"].get("provider")
+        if isinstance(src, str) and src.strip():
+            sources.add(src.strip())
+    if not sources:
+        return None
+    if len(sources) == 1:
+        return next(iter(sources))
+    return "mixed"
 
 
 def _verified_empty_coverage_units(provider_coverage):
@@ -2623,8 +2680,11 @@ def mark_historical_dataset_complete(
     empty_pages_count = _validate_non_negative_int(empty_pages_count, "empty_pages_count")
     sport = _validate_text(sport, "sport").lower()
     coverage_unit = _validate_text(coverage_unit, "coverage_unit").lower() if coverage_unit else "pages"
+    # The manifest source describes the records actually persisted. A caller that
+    # omits `source` never gets a legacy provider constant that could contradict
+    # the data (for example ESPN-written NBA rows labelled api_basketball).
     if source is None:
-        source = "api_basketball" if sport == "basketball" else "api_football"
+        source = derive_manifest_source(sport, league_id, season) or "unknown"
 
     # Storage-level invariant enforcement
     if fixture_count <= 0:
@@ -2842,8 +2902,11 @@ def mark_historical_dataset_incomplete(
     empty_pages_count = _validate_non_negative_int(empty_pages_count, "empty_pages_count")
     sport = _validate_text(sport, "sport").lower()
     coverage_unit = _validate_text(coverage_unit, "coverage_unit").lower() if coverage_unit else "pages"
+    # The manifest source describes the records actually persisted. A caller that
+    # omits `source` never gets a legacy provider constant that could contradict
+    # the data (for example ESPN-written NBA rows labelled api_basketball).
     if source is None:
-        source = "api_basketball" if sport == "basketball" else "api_football"
+        source = derive_manifest_source(sport, league_id, season) or "unknown"
 
     if fixture_count is None:
         if sport == "basketball":
