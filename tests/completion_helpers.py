@@ -67,6 +67,11 @@ def mark_complete(*args, **kwargs):
     """
     Mark a dataset COMPLETE through the real guard, supplying the coverage
     evidence the acquisition path would have recorded for the persisted records.
+
+    The manifest source is derived from the records the test actually persisted
+    (never a legacy provider constant), and no provider coverage is manufactured
+    for a dataset that holds no persisted records: the real guard then fails
+    closed on its own terms.
     """
     bound = _COMPLETE_SIGNATURE.bind(*args, **kwargs)
     bound.apply_defaults()
@@ -75,15 +80,24 @@ def mark_complete(*args, **kwargs):
     sport = (arguments.get("sport") or "football").lower()
     arguments["sport"] = sport
 
+    if not arguments.get("source"):
+        arguments["source"] = storage.derive_manifest_source(
+            sport, arguments.get("league_id"), arguments.get("season")
+        ) or None
+
     if not arguments.get("provider_coverage"):
-        arguments["provider_coverage"] = provider_coverage(
-            source=arguments.get("source"),
-            sport=sport,
-            expected=arguments.get("expected_pages") or 1,
-            completed=arguments.get("pages_completed"),
-            valid_empty_units=arguments.get("empty_pages_count") or 0,
-            coverage_unit=arguments.get("coverage_unit") or "pages",
+        persisted = storage._persisted_historical_record_count(
+            sport, arguments.get("league_id"), arguments.get("season")
         )
+        if persisted > 0:
+            arguments["provider_coverage"] = provider_coverage(
+                source=arguments.get("source"),
+                sport=sport,
+                expected=arguments.get("expected_pages") or 1,
+                completed=arguments.get("pages_completed"),
+                valid_empty_units=arguments.get("empty_pages_count") or 0,
+                coverage_unit=arguments.get("coverage_unit") or "pages",
+            )
 
     return storage.mark_historical_dataset_complete(**arguments)
 
@@ -94,7 +108,15 @@ def allow_synthetic_nba_season(monkeypatch, season, games):
     set. Production keeps the published totals (config.NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES);
     a test that persists only a handful of games states its own scale explicitly
     instead of the production minimum being loosened.
+
+    Test-only: it refuses to run against a production environment so a synthetic
+    expectation can never relax the published season totals there.
     """
+    if str(getattr(config, "ENVIRONMENT", "") or "").lower() == "production":
+        raise RuntimeError(
+            "allow_synthetic_nba_season() is a test-only helper and cannot modify "
+            "NBA season expectations in a production environment."
+        )
     expected = dict(getattr(config, "NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES", {}) or {})
     expected[season] = int(games)
     monkeypatch.setattr(config, "NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES", expected, raising=False)

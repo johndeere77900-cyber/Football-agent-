@@ -54,8 +54,18 @@ NBA_SEASON_MONTH_OFFSETS_2019 = [
     (1, 7), (1, 8), (1, 9), (1, 10)
 ]
 
+# 2020-21 NBA: the season started on 2020-12-22 and the Finals ended on
+# 2021-07-20, so the competition scheduled no October or November basketball.
+# Requesting those months would manufacture coverage units for a period that never
+# existed, so the units are the months the season actually occupied (December 2020
+# through July 2021) - eight units instead of the standard nine.
+NBA_SEASON_MONTH_OFFSETS_2020 = [
+    (0, 12), (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7)
+]
+
 _SEASON_MONTH_OFFSETS_OVERRIDES = {
     2019: NBA_SEASON_MONTH_OFFSETS_2019,
+    2020: NBA_SEASON_MONTH_OFFSETS_2020,
 }
 
 # --- Authoritative competition/event classification -------------------------

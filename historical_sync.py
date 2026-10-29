@@ -1047,6 +1047,23 @@ def _basketball_game_season_type(game):
     return None
 
 
+def _basketball_season_type_counts(stored_games) -> dict:
+    """
+    Count persisted basketball games by recorded competition phase.
+
+    Reported with every basketball acquisition and verification run so that
+    regular-season, preseason, play-in, postseason and All-Star coverage are
+    visibly distinct, and records persisted before the provider recorded a phase
+    are visible as ``unclassified`` instead of being silently folded into the
+    regular-season total.
+    """
+    counts = {}
+    for game in stored_games if isinstance(stored_games, list) else []:
+        phase = _basketball_game_season_type(game) or "unclassified"
+        counts[phase] = counts.get(phase, 0) + 1
+    return counts
+
+
 def _validate_historical_basketball_dataset(stored_games: list, league_id: int, season: int, dataset_info: dict) -> bool:
     """
     Validate persisted basketball games against basketball-specific completeness rules:
@@ -1337,10 +1354,14 @@ def sync_historical_basketball_games(
         except Exception as exc:
             print(f"ESPN NBA acquisition attempt failed for season {season}: {exc}", flush=True)
 
-    # ESPN coverage is measured in the nine monthly scoreboards. A month is
-    # considered covered when its request succeeded; a successful request that
-    # returns zero events is a valid no-games result (for example early October),
-    # not a failure. Nine months are never described as a single API page.
+    # ESPN coverage is measured in the season's own monthly scoreboards (nine for a
+    # standard NBA season, thirteen for the COVID-extended 2019-20 season, eight for
+    # the late-starting 2020-21 season). A month is considered covered when its
+    # request succeeded and the payload proved NBA competition membership; a
+    # successful request that returns zero events is a valid no-games result (for
+    # example early October), not a failure. Monthly units are never described as a
+    # single API page, and a payload whose competition metadata contradicts the NBA
+    # is never accepted as covered.
     espn_coverage_complete = bool(
         espn_attempted
         and isinstance(espn_coverage, dict)
@@ -1348,6 +1369,7 @@ def sync_historical_basketball_games(
         and espn_coverage.get("months_failed") == 0
         and espn_coverage.get("months_succeeded") == espn_expected_units
         and espn_coverage.get("all_months_succeeded") is True
+        and espn_coverage.get("competition_verified") is not False
     )
 
     stored_espn_check = storage.get_historical_basketball_games(
@@ -1371,7 +1393,10 @@ def sync_historical_basketball_games(
             "expected_pages": espn_expected_units,
             "pages_completed": espn_completed_units,
             "rejected_count": espn_rejected_count,
-            "empty_pages_count": 0,
+            # A month that succeeded with no events is a verified empty unit, not a
+            # missing acquisition unit, so it is reported as such here instead of
+            # being hidden behind a zero counter.
+            "empty_pages_count": espn_valid_empty_units,
             "coverage_unit": COVERAGE_UNIT_ESPN_MONTHS,
             "provider_coverage": {
                 "espn_url": {
@@ -1661,6 +1686,7 @@ def sync_historical_basketball_games(
         "completed_coverage_units": safe_pages_comp_b,
         "expected_min_season_games": expected_min_season_games,
         "season_coverage_verified": bool(season_coverage_sufficient),
+        "season_type_counts": _basketball_season_type_counts(stored_games_all),
         "provider_coverage": provider_coverage,
     }
 
@@ -1691,7 +1717,8 @@ def sync_historical_basketball_games(
     print(
         f"[BASKETBALL] league {league_id} season {season}: coverage_unit={dataset_coverage_unit}, "
         f"coverage={safe_pages_comp_b}/{safe_exp_pages_b}, lifecycle={lifecycle_state_b} ({lifecycle_reason_b}), "
-        f"acquisition_state={acquisition_state_b}, stored={final_stored_count}",
+        f"acquisition_state={acquisition_state_b}, stored={final_stored_count}, "
+        f"season_types={basketball_coverage['season_type_counts']}",
         flush=True,
     )
 
