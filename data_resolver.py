@@ -601,7 +601,9 @@ def _classify_provider_attempt_outcome(fixtures, meta):
         return "VALID_EMPTY"
     if status in ("MALFORMED", "INVALID", "INVALID_PAYLOAD"):
         return "MALFORMED"
-    if status in ("INSUFFICIENT", "SOURCE_INSUFFICIENT"):
+    # soccerdata returns rows but cannot normalize any of them: the provider did
+    # respond, so this is insufficient/malformed data, never "no data".
+    if status in ("INSUFFICIENT", "SOURCE_INSUFFICIENT", "SOURCE_RETURNED_PARTIAL_DATA", "PARTIAL_DATA"):
         return "INSUFFICIENT"
     return "NO_DATA_FROM_PROVIDER"
 
