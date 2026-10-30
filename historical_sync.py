@@ -1048,17 +1048,56 @@ def _basketball_game_season_type(game):
     Return the recorded competition phase of a persisted basketball game.
 
     ESPN records the provider-native season type (preseason, regular_season,
-    postseason, all_star) on each record. Records persisted before that
-    classification existed return None, which callers treat as "not known to be
-    another phase" rather than as a regular-season claim.
+    postseason, all_star) on each record, and API-Basketball reports the stage of
+    the game it returned. Both are provider-native evidence recorded on the record
+    itself; neither is inferred from dates, team names or scores. A record whose
+    provider supplied no recognisable phase returns None, which callers treat as
+    unclassified rather than as a regular-season claim.
     """
     if not isinstance(game, dict):
         return None
     provenance = game.get("provider_provenance") if isinstance(game.get("provider_provenance"), dict) else {}
-    for raw in (provenance.get("season_type"), game.get("season_type"), game.get("game_type")):
-        if isinstance(raw, str) and raw.strip():
-            return raw.strip().lower().replace("-", "_").replace(" ", "_")
+    candidates = (
+        provenance.get("season_type"),
+        game.get("season_type"),
+        game.get("game_type"),
+        # API-Basketball reports a free-text stage alongside each game. Only the
+        # documented, unambiguous labels are recognised; anything else stays
+        # unclassified instead of being guessed.
+        provenance.get("stage"),
+        game.get("stage"),
+        game.get("season_stage"),
+    )
+    for raw in candidates:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        normalized = raw.strip().lower().replace("-", "_").replace(" ", "_")
+        mapped = _BASKETBALL_STAGE_LABELS.get(normalized)
+        if mapped:
+            return mapped
+        if normalized in ("regular_season", "regular", "preseason", "postseason", "play_in", "all_star"):
+            return normalized
     return None
+
+
+# Provider-native stage labels that unambiguously name a competition phase.
+# ``regular`` is the api-sports label for the regular season; playoff and
+# exhibition stages are kept distinct so they can never be counted as regular
+# season coverage. Unlisted labels stay unclassified.
+_BASKETBALL_STAGE_LABELS = {
+    "regular_season": "regular_season",
+    "regular": "regular_season",
+    "regularseason": "regular_season",
+    "preseason": "preseason",
+    "pre_season": "preseason",
+    "playoffs": "postseason",
+    "postseason": "postseason",
+    "post_season": "postseason",
+    "play_in": "play_in",
+    "playin": "play_in",
+    "all_star": "all_star",
+    "allstar": "all_star",
+}
 
 
 def _basketball_season_type_counts(stored_games) -> dict:
@@ -1129,6 +1168,25 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
     p_completed = dataset_info.get("pages_completed", 0) if isinstance(dataset_info, dict) else 0
     rej_cnt = dataset_info.get("rejected_count", 0) if isinstance(dataset_info, dict) else 0
     empty_pages_count = dataset_info.get("empty_pages_count", 0) if isinstance(dataset_info, dict) else 0
+
+    # Counters are evidence, so each must be a real integer before it participates in
+    # any completeness decision. A non-numeric value (a missing field filled with a
+    # sentinel, or a caller error) is not a zero and cannot be compared with record
+    # counts, so the dataset fails closed here instead of raising mid-validation.
+    for counter_name, counter_value in (
+        ("fixture_count", manifest_count),
+        ("expected_pages", e_pages),
+        ("pages_completed", p_completed),
+        ("rejected_count", rej_cnt),
+        ("empty_pages_count", empty_pages_count),
+    ):
+        if isinstance(counter_value, bool) or not isinstance(counter_value, int):
+            logger.warning(
+                "Basketball dataset validation rejected: %s is not an integer (%r).",
+                counter_name,
+                counter_value,
+            )
+            return False
 
     provider_coverage = dataset_info.get("provider_coverage") if isinstance(dataset_info, dict) else None
     if not isinstance(provider_coverage, dict) or not provider_coverage:
@@ -1472,8 +1530,31 @@ def sync_historical_basketball_games(
                 page_meta = basketball_api.get_league_games_page(
                     league_id, season, page=current_page, max_budget=historical_budget
                 )
-                page_games = page_meta.get("games", [])
-                page_expected = page_meta.get("expected_pages")
+                # Pagination metadata decides how many coverage units the dataset
+                # requires, so it is validated at the boundary where the provider's
+                # response first enters the acquisition loop. A missing, non-numeric
+                # or non-positive page total is a failed acquisition unit, never a
+                # completed page, and a non-list game payload is never extended into
+                # the received set.
+                page_games = page_meta.get("games") if isinstance(page_meta, dict) else None
+                page_expected = page_meta.get("expected_pages") if isinstance(page_meta, dict) else None
+                if isinstance(page_expected, bool) or not isinstance(page_expected, int) or page_expected < 1:
+                    acquisition_failed = True
+                    last_error_reason = "invalid_pagination_metadata"
+                    print(
+                        f"Basketball pagination metadata is invalid on page {current_page} "
+                        f"(expected_pages={page_expected!r}). Failing closed.",
+                        flush=True,
+                    )
+                    break
+                if not isinstance(page_games, list):
+                    acquisition_failed = True
+                    last_error_reason = "invalid_page_payload"
+                    print(
+                        f"Basketball page {current_page} did not return a game list. Failing closed.",
+                        flush=True,
+                    )
+                    break
 
                 if api_expected_pages == 0:
                     api_expected_pages = page_expected
