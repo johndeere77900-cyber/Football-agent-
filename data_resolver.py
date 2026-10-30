@@ -1725,10 +1725,16 @@ def _provider_result_is_sufficient_for_historical_acquisition(provider, fixtures
 
     Decision order:
     1. Reject explicit provider partial/incomplete metadata (e.g. is_partial=True or is_complete=False).
-    2. Validate fixture identity/season/league (empty fixtures list, current/ongoing season).
-    3. Run independent structural coverage check against returned fixture set.
-    4. Only return True when completeness is independently proven.
-    5. A provider's "is_complete=True" must NOT immediately return True.
+    2. Run independent structural coverage check against returned fixture set.
+    3. Only return True when completeness is independently proven.
+    4. A provider's "is_complete=True" must NOT immediately return True.
+
+    Competition lifecycle is never inferred from the current calendar year. A
+    season label that equals (or exceeds) this year is not evidence that the
+    season is unfinished, just as a past label is not evidence that it finished:
+    an ongoing season fails here because its acquired schedule cannot satisfy the
+    independently established structural coverage expectation, and a genuinely
+    complete season is accepted on that same evidence.
     """
     if not fixtures or not isinstance(fixtures, list) or len(fixtures) == 0:
         return False
@@ -1739,17 +1745,7 @@ def _provider_result_is_sufficient_for_historical_acquisition(provider, fixtures
     if meta.get("is_partial") is True or meta.get("is_complete") is False:
         return False
 
-    # 2. Check if requested season is current or ongoing
-    current_year = datetime.now(timezone.utc).year
-    if season is not None:
-        try:
-            s_val = int(season)
-            if s_val >= current_year:
-                return False
-        except (ValueError, TypeError):
-            pass
-
-    # 3. Independent structural coverage check
+    # 2. Independent structural coverage check
     coverage = _validate_historical_structural_coverage(
         fixtures,
         season=season,
@@ -1757,7 +1753,7 @@ def _provider_result_is_sufficient_for_historical_acquisition(provider, fixtures
         league_id=league_id,
     )
 
-    # 4. Only return True when completeness is independently proven
+    # 3. Only return True when completeness is independently proven
     return coverage.get("verified") is True
 
 

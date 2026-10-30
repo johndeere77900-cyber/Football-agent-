@@ -2121,12 +2121,14 @@ def verify_persisted_historical_datasets(
 
         issues = []
 
-        import datetime as dt_mod
-        current_year = dt_mod.datetime.now(dt_mod.timezone.utc).year
-        is_active_season = (ssn == current_year)
-
         if sp == "basketball":
             records = storage.get_historical_basketball_games(lid, ssn, include_storage_source=True)
+            # Whether an incomplete manifest describes a season still in progress is
+            # decided by the competition's own declared season window, never by
+            # comparing the season label with the current calendar year: a label that
+            # happens to equal this year proves nothing about the competition.
+            lifecycle_state, _, _ = get_competition_lifecycle(sp, lid, ssn, records)
+            is_active_season = lifecycle_state == COMPETITION_LIFECYCLE_ONGOING
             actual_count = len(records)
             seen_ids = set()
             dates = []
@@ -2181,6 +2183,12 @@ def verify_persisted_historical_datasets(
 
         else:
             records = storage.get_historical_fixtures(lid, ssn)
+            # Same rule for football: the declared competition window establishes
+            # whether the season is still running. A season whose window has not
+            # opened is not "in progress", and a season with no verifiable window is
+            # reported as a failure rather than excused by its year label.
+            lifecycle_state, _, _ = get_competition_lifecycle(sp, lid, ssn, records)
+            is_active_season = lifecycle_state == COMPETITION_LIFECYCLE_ONGOING
             actual_count = len(records)
             seen_ids = set()
             dates = []
