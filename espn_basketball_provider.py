@@ -75,9 +75,9 @@ ESPN_NBA_SPORT_ID = "40"
 ESPN_NBA_COMPETITION_ID = "46"
 ESPN_NBA_LEAGUE_UID = f"s:{ESPN_NBA_SPORT_ID}~l:{ESPN_NBA_COMPETITION_ID}"
 
-# ESPN `season.type` values. Anything outside this mapping fails closed: an event
-# whose classification is unknown is quarantined instead of being assumed to be a
-# regular-season game.
+# ESPN `season.type` values. An event whose season type is missing or outside this
+# mapping is preserved as explicitly unclassified: it is never assumed to be a
+# regular-season game, and it never counts toward regular-season coverage.
 ESPN_SEASON_TYPE_CLASSIFICATION = {
     1: "preseason",
     2: "regular_season",
@@ -221,25 +221,35 @@ def _classify_espn_event(event, competition, season, raw_event_id):
     try:
         season_type_id = int(raw_season_type)
     except (TypeError, ValueError):
-        return None, "unclassified_season_type"
+        season_type_id = None
 
     competition_type = competition.get("type") if isinstance(competition.get("type"), dict) else {}
     competition_type_id = str(competition_type.get("id") or "").strip()
     competition_type_abbr = str(competition_type.get("abbreviation") or "").strip().upper()
 
+    unclassified_reason = None
     if (
         competition_type_id in ESPN_ALLSTAR_COMPETITION_TYPE_IDS
         or competition_type_abbr in ESPN_ALLSTAR_COMPETITION_ABBREVIATIONS
     ):
         season_type = "all_star"
+    elif season_type_id is None:
+        # ESPN supplied no usable season type. The event uid already proves the game
+        # belongs to this NBA season, so the record is preserved with an explicit
+        # unclassified marker rather than discarded; an unclassified event never
+        # counts toward regular-season coverage.
+        season_type = None
+        unclassified_reason = "unclassified_season_type"
     else:
         season_type = ESPN_SEASON_TYPE_CLASSIFICATION.get(season_type_id)
         if season_type is None:
-            return None, f"unclassified_season_type_id_{season_type_id}"
+            season_type = None
+            unclassified_reason = f"unclassified_season_type_id_{season_type_id}"
 
     return {
         "season_type": season_type,
         "season_type_id": season_type_id,
+        "season_type_unclassified_reason": unclassified_reason,
         "season_slug": season_obj.get("slug") if isinstance(season_obj.get("slug"), str) else None,
         "espn_season_year": season_year,
         "competition_uid": ESPN_NBA_LEAGUE_UID,
@@ -271,6 +281,9 @@ def fetch_espn_nba_season_games(
         # quarantined by competition/season classification rather than by scores.
         "events_accepted": 0,
         "events_rejected": 0,
+        # Accepted events whose competition phase could not be established. They are
+        # preserved and reported here, never counted as regular-season coverage.
+        "events_unclassified": 0,
         "rejection_reasons": {},
         "competition_verified": True,
         "competition_uid": ESPN_NBA_LEAGUE_UID,
@@ -406,6 +419,9 @@ def fetch_espn_nba_season_games(
                 _reject(classification_reason)
                 continue
 
+            if classification.get("season_type_unclassified_reason"):
+                coverage_meta["events_unclassified"] += 1
+
             status_obj = comp.get("status", {}) if isinstance(comp.get("status"), dict) else {}
             status_type = status_obj.get("type", {}) if isinstance(status_obj.get("type"), dict) else {}
 
@@ -505,6 +521,9 @@ def fetch_espn_nba_season_games(
                     "event_uid": event_uid if isinstance((event_uid := ev.get("uid")), str) else None,
                     "season_type": classification["season_type"],
                     "season_type_id": classification["season_type_id"],
+                    "season_type_unclassified_reason": classification.get(
+                        "season_type_unclassified_reason"
+                    ),
                     "season_slug": classification["season_slug"],
                     "espn_season_year": classification["espn_season_year"],
                     "competition_type_id": classification["competition_type_id"],

@@ -1431,6 +1431,12 @@ def sync_historical_basketball_games(
                     "expected": espn_expected_units,
                     "completed": espn_completed_units,
                     "valid_empty_units": espn_valid_empty_units,
+                    # The acquisition gate above requires positively proven NBA
+                    # membership, so the proven value is carried into the coverage
+                    # evidence that persisted validation reads. Without it an
+                    # ESPN-covered season failed its own persisted revalidation
+                    # and could never be marked COMPLETE.
+                    "competition_verified": espn_coverage.get("competition_verified"),
                     "status": ACQUISITION_STATE_VALIDATED,
                 }
             },

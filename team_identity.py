@@ -13,10 +13,13 @@ Resolution Priority:
 6. Fail closed (return None) when ambiguous or unmapped.
 """
 
+import logging
 import re
 import unicodedata
 import config
 import storage
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_team_name(name: str) -> str:
@@ -311,6 +314,92 @@ def register_canonical_team_identity(
     return canonical_id
 
 
+def _bootstrap_provider_team_id(provider_team_id, league_id, norm_name):
+    """
+    Return ``(provider_team_id, synthetic)`` for one bootstrapped mapping.
+
+    A source that supplies no team id still needs a stable, competition-scoped key
+    so its resolved identity leaves database evidence. The historical
+    ``<league_id>_<normalized_name>`` convention is preserved so mappings written
+    by earlier runs keep resolving; the generated value is only ever used inside
+    that source's own provider namespace and is never treated as a real provider
+    team id.
+    """
+    if provider_team_id:
+        return provider_team_id, False
+    if league_id:
+        return f"{league_id}_{norm_name}", True
+    return norm_name, True
+
+
+def _persist_bootstrapped_identity(
+    sport,
+    canonical_id,
+    provider,
+    provider_team_id,
+    normalized_name,
+    display_name,
+    league_id,
+    synthetic,
+):
+    """
+    Record one bootstrap mapping without ever reassigning an existing identity.
+
+    Returns the canonical id when the mapping is written, or when it already holds
+    exactly this identity (which makes a repeated bootstrap idempotent). Returns
+    None when the provider namespace already binds that provider team id to a
+    different canonical team, or a generated id is bound to a different normalized
+    name: the caller then fails closed instead of overwriting a mapping or raising
+    mid-ingestion.
+    """
+    existing = storage.get_team_identity_by_provider(sport, provider, provider_team_id)
+    if existing:
+        if existing.get("canonical_id") != canonical_id:
+            logger.warning(
+                "Bootstrap identity conflict for %s/%s id %s: already mapped to %s, refusing %s",
+                sport,
+                provider,
+                provider_team_id,
+                existing.get("canonical_id"),
+                canonical_id,
+            )
+            return None
+        if synthetic:
+            existing_norm = existing.get("normalized_name") or ""
+            if existing_norm and existing_norm != normalized_name:
+                logger.warning(
+                    "Bootstrap generated id collision for %s/%s id %s: bound to %s, refusing %s",
+                    sport,
+                    provider,
+                    provider_team_id,
+                    existing_norm,
+                    normalized_name,
+                )
+                return None
+            return canonical_id
+
+    try:
+        storage.save_team_identity(
+            sport=sport,
+            canonical_id=canonical_id,
+            provider=provider,
+            provider_team_id=provider_team_id,
+            normalized_name=normalized_name,
+            display_name=display_name,
+            league_id=league_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Bootstrap identity write rejected for %s/%s id %s: %s",
+            sport,
+            provider,
+            provider_team_id,
+            exc,
+        )
+        return None
+    return canonical_id
+
+
 def bootstrap_historical_team_identity(
     raw_name: str,
     provider: str,
@@ -359,12 +448,10 @@ def bootstrap_historical_team_identity(
         # disambiguates the same club name in another league; without it an
         # alias-resolved bootstrap leaves no database evidence and the next
         # league's bootstrap silently reuses the canonical id instead of
-        # minting a league-qualified one. The synthetic provider id keeps the
-        # existing effective_p_id convention used below.
-        effective_p_id = p_team_id_str if p_team_id_str else (
-            f"{league_id}_{norm_name}" if league_id else norm_name
-        )
-        storage.save_team_identity(
+        # minting a league-qualified one. The generated provider id keeps the
+        # existing <league_id>_<name> convention used below.
+        effective_p_id, synthetic = _bootstrap_provider_team_id(p_team_id_str, league_id, norm_name)
+        return _persist_bootstrapped_identity(
             sport=sport,
             canonical_id=resolved,
             provider=provider,
@@ -372,8 +459,8 @@ def bootstrap_historical_team_identity(
             normalized_name=norm_name,
             display_name=raw_str or f"Team {effective_p_id}",
             league_id=league_id,
+            synthetic=synthetic,
         )
-        return resolved
 
     # Step 2: When existing resolution fails (unknown team), create and persist a deterministic canonical identity
     if not norm_name:
@@ -389,8 +476,8 @@ def bootstrap_historical_team_identity(
             return None
         elif len(candidate_ids) == 1:
             target_canonical = list(candidate_ids)[0]
-            effective_p_id = p_team_id_str if p_team_id_str else (f"{league_id}_{norm_name}" if league_id else norm_name)
-            storage.save_team_identity(
+            effective_p_id, synthetic = _bootstrap_provider_team_id(p_team_id_str, league_id, norm_name)
+            return _persist_bootstrapped_identity(
                 sport=sport,
                 canonical_id=target_canonical,
                 provider=provider,
@@ -398,8 +485,8 @@ def bootstrap_historical_team_identity(
                 normalized_name=norm_name,
                 display_name=raw_str,
                 league_id=league_id,
+                synthetic=synthetic,
             )
-            return target_canonical
 
     slug = sanitize_canonical_slug(raw_str)
     if not slug or slug == "unknown":
@@ -429,8 +516,8 @@ def bootstrap_historical_team_identity(
                     return None
                 break
 
-    effective_p_id = p_team_id_str if p_team_id_str else (f"{league_id}_{norm_name}" if league_id else norm_name)
-    storage.save_team_identity(
+    effective_p_id, synthetic = _bootstrap_provider_team_id(p_team_id_str, league_id, norm_name)
+    return _persist_bootstrapped_identity(
         sport=sport,
         canonical_id=target_canonical,
         provider=provider,
@@ -438,6 +525,5 @@ def bootstrap_historical_team_identity(
         normalized_name=norm_name,
         display_name=raw_str or f"Team {effective_p_id}",
         league_id=league_id,
+        synthetic=synthetic,
     )
-
-    return target_canonical
