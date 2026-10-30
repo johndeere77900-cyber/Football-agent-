@@ -1206,7 +1206,10 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
             # (13 for the COVID-extended 2019-20 season), never in API pages.
             if entry_expected != espn_basketball_provider.get_season_month_count(season):
                 return False
-            if source_entry.get("competition_verified") is False:
+            # A missing or None value is not proof of NBA membership either: the
+            # persisted validator must enforce the same positive-evidence rule as
+            # the acquisition gate in sync_historical_basketball_games().
+            if source_entry.get("competition_verified") is not True:
                 return False
 
     # A manifest that agrees with its own records is not proof that the season is

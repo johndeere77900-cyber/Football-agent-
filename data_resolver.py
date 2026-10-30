@@ -588,23 +588,29 @@ def _classify_provider_attempt_outcome(fixtures, meta):
     an access-restricted response) from being reported as "no data", which the
     completion path could otherwise read as a valid empty coverage unit.
     """
-    if fixtures:
-        return "SUCCESS"
-
     meta = meta if isinstance(meta, dict) else {}
     status = str(meta.get("status") or "").strip().upper()
+
+    # A non-empty fixture list is not proof of a successful attempt: the provider's
+    # own metadata may report a failure, a quota stop, malformed data or partial data
+    # for that same attempt. Those explicit states are decided first.
     if status in ("SOURCE_FAILED", "FAILED", "ERROR"):
         return "FAILED"
     if status in ("QUOTA_EXHAUSTED", "QUOTA_STOPPED") or meta.get("quota_exhausted") is True:
         return "QUOTA_EXHAUSTED"
-    if status in ("VALID_EMPTY", "SOURCE_EMPTY", "EMPTY"):
-        return "VALID_EMPTY"
     if status in ("MALFORMED", "INVALID", "INVALID_PAYLOAD"):
         return "MALFORMED"
-    # soccerdata returns rows but cannot normalize any of them: the provider did
-    # respond, so this is insufficient/malformed data, never "no data".
+    # soccerdata returns rows but cannot normalize all of them, or reports partial
+    # data: the attempt is insufficient even when some fixtures were returned.
     if status in ("INSUFFICIENT", "SOURCE_INSUFFICIENT", "SOURCE_RETURNED_PARTIAL_DATA", "PARTIAL_DATA"):
         return "INSUFFICIENT"
+
+    if fixtures:
+        return "SUCCESS"
+
+    # A legitimate empty result is only valid when no fixtures were returned.
+    if status in ("VALID_EMPTY", "SOURCE_EMPTY", "EMPTY"):
+        return "VALID_EMPTY"
     return "NO_DATA_FROM_PROVIDER"
 
 
