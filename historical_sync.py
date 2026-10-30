@@ -320,6 +320,13 @@ def _is_historical_provider_complete(
     if acquisition_failed:
         return False
 
+    if quota_budget_stopped:
+        # An acquisition-stage quota stop leaves acquisition unproven, even when
+        # the rows already persisted happen to satisfy the structural checks. The
+        # caller passes False when the stop occurred only during optional
+        # enrichment, so that case keeps its existing semantics.
+        return False
+
     if final_stored_count <= 0:
         return False
 
@@ -1217,10 +1224,18 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
     # regular-season total.
     regular_season_games = 0
     non_regular_season_games = 0
+    unclassified_games = 0
     for game in stored_games:
         phase = _basketball_game_season_type(game)
-        if phase in (None, "regular_season", "regular"):
+        if phase in ("regular_season", "regular"):
             regular_season_games += 1
+        elif phase in (None, "unclassified"):
+            # A record with no recorded phase could be a regular-season game, a
+            # preseason, postseason, play-in, All-Star or exhibition game. Missing
+            # classification is never proof of the regular season, so it cannot
+            # satisfy the regular-season minimum; it is kept and reported as
+            # unclassified instead of being folded into either count.
+            unclassified_games += 1
         else:
             non_regular_season_games += 1
 
@@ -1376,7 +1391,9 @@ def sync_historical_basketball_games(
         and espn_coverage.get("months_failed") == 0
         and espn_coverage.get("months_succeeded") == espn_expected_units
         and espn_coverage.get("all_months_succeeded") is True
-        and espn_coverage.get("competition_verified") is not False
+        # Competition membership must be positively proven. A missing or None
+        # value is not proof, so only an explicit True can validate ESPN coverage.
+        and espn_coverage.get("competition_verified") is True
     )
 
     stored_espn_check = storage.get_historical_basketball_games(
