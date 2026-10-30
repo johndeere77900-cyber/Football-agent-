@@ -1181,10 +1181,10 @@ def _validate_historical_basketball_dataset(stored_games: list, league_id: int, 
         ("empty_pages_count", empty_pages_count),
     ):
         if isinstance(counter_value, bool) or not isinstance(counter_value, int):
-            logger.warning(
-                "Basketball dataset validation rejected: %s is not an integer (%r).",
-                counter_name,
-                counter_value,
+            print(
+                f"Basketball dataset validation rejected: {counter_name} is not an integer "
+                f"({counter_value!r}).",
+                flush=True,
             )
             return False
 
