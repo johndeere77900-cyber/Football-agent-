@@ -4949,6 +4949,18 @@ def get_team_identities_by_normalized_name(sport, normalized_name, league_id=Non
         conn.close()
 
 
+_PROVENANCE_WRITER_SOURCES = (
+    "football_data_csv",
+    "football_data_org",
+    "soccerdata",
+    "soccerdata_fbref",
+    "soccerdata_match_history",
+    "soccerdata_sofascore",
+    "espn_url",
+    "api_basketball",
+)
+
+
 def save_historical_fixtures(fixtures, league_id, season, source="api_football", cutoff=None, require_completed=False):
     """
     Save canonical historical fixtures into persistent storage.
@@ -5013,6 +5025,15 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             rejected_count += 1
             rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
             continue
+
+        # Per-record provenance is the evidence later reconciliation and coverage
+        # reporting rely on, so a record written by a known acquisition source is
+        # never persisted without it. Only the writer's own source is recorded; a
+        # record that already names a provider keeps that attribution unchanged.
+        if isinstance(norm_item, dict) and source in _PROVENANCE_WRITER_SOURCES:
+            existing_prov = norm_item.get("provider_provenance")
+            if not isinstance(existing_prov, dict) or not str(existing_prov.get("provider") or "").strip():
+                norm_item["provider_provenance"] = {"provider": source}
 
         fid = norm_item["fixture"]["id"]
         if fid in seen_ids:

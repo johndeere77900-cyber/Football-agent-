@@ -1741,6 +1741,17 @@ def sync_historical_basketball_games(
     safe_rejected_cnt_b = cum_rejected_cnt_b
     safe_empty_cnt_b = cum_empty_cnt_b
 
+    # Completion evidence describes the coverage this acquisition is claiming, not
+    # the lifetime history of every earlier attempt. A rejected record or an empty
+    # page observed on a previous run proves nothing about the coverage being
+    # claimed now, and carrying it forward made a dataset that has since been fully
+    # re-acquired permanently unverifiable: the persisted-evidence check below read
+    # the accumulated counter, failed, and the dataset could never be promoted even
+    # though its records and current provider coverage were complete. The cumulative
+    # counters are still recorded in the INCOMPLETE manifest as progress history.
+    evidence_rejected_count = total_rejected_count
+    evidence_empty_units = espn_valid_empty_units if espn_contributed_validated_coverage else 0
+
     stored_games_all = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
     db_validation_passed = _validate_historical_basketball_dataset(
         stored_games_all,
@@ -1750,8 +1761,8 @@ def sync_historical_basketball_games(
             "fixture_count": final_stored_count,
             "expected_pages": safe_exp_pages_b,
             "pages_completed": safe_pages_comp_b,
-            "rejected_count": safe_rejected_cnt_b,
-            "empty_pages_count": safe_empty_cnt_b,
+            "rejected_count": evidence_rejected_count,
+            "empty_pages_count": evidence_empty_units,
             "coverage_unit": dataset_coverage_unit,
             "provider_coverage": provider_coverage,
         },
@@ -1846,8 +1857,8 @@ def sync_historical_basketball_games(
             expected_pages=safe_exp_pages_b,
             pages_completed=safe_pages_comp_b,
             acquisition_complete=acquisition_complete,
-            rejected_count=safe_rejected_cnt_b,
-            empty_pages_count=safe_empty_cnt_b,
+            rejected_count=evidence_rejected_count,
+            empty_pages_count=evidence_empty_units,
             coverage_unit=dataset_coverage_unit,
             provider_coverage=provider_coverage,
         )
