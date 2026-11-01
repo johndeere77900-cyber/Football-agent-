@@ -674,6 +674,12 @@ def _providers_contributed_from_records(fixtures, attempted=None):
         provider = provenance.get("provider")
         if isinstance(provider, str) and provider.strip() and provider.strip() not in non_provider_labels:
             contributed.add(provider.strip())
+        # A record enriched by another provider keeps its original `provider` but
+        # lists every contributor, so cross-provider enrichment is attributed even
+        # when it supplied no field-level provenance.
+        for contributor in provenance.get("providers") or []:
+            if isinstance(contributor, str) and contributor.strip() and contributor.strip() not in non_provider_labels:
+                contributed.add(contributor.strip())
 
         field_provenance = fixture.get("field_provenance") if isinstance(fixture.get("field_provenance"), dict) else {}
         for field_provider in field_provenance.values():
@@ -1245,23 +1251,37 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
                 "expected_fixture_count": expected_fixture_count,
             }
 
-        is_verified = (
-            valid_fixture_count > 0
-            and valid_fixture_count == expected_fixture_count
-            and (not expected_team_set or expected_team_set.issubset(participating_teams))
-        )
+        # A match total is never completion evidence on its own: the tournament
+        # participant universe must be independently established and every expected
+        # participant must appear. An empty participant set is an evidence gap, not
+        # a wildcard, and a universe inferred from the acquired fixtures is not
+        # independent verification, so that case fails closed and stays INCOMPLETE.
+        participant_universe_available = bool(expected_team_set)
+        missing_participants = expected_team_set - participating_teams
+        unexpected_participants = participating_teams - expected_team_set
+
+        if not participant_universe_available:
+            tournament_reason = "tournament_participant_universe_unavailable"
+        elif valid_fixture_count <= 0 or valid_fixture_count != expected_fixture_count:
+            tournament_reason = "tournament_coverage_incomplete"
+        elif missing_participants or unexpected_participants:
+            tournament_reason = "tournament_participant_mismatch"
+        else:
+            tournament_reason = None
+
         return {
-            "verified": is_verified,
-            "reason": None if is_verified else "tournament_coverage_incomplete",
+            "verified": tournament_reason is None,
+            "reason": tournament_reason,
             "fixture_count": valid_fixture_count,
             "distinct_fixture_count": distinct_fixture_count,
             "team_count": len(participating_teams),
             "expected_team_count": expected_team_count,
             "expected_team_ids": sorted(expected_team_set),
-            "missing_team_ids": sorted(expected_team_set - participating_teams),
-            "unexpected_team_ids": sorted(participating_teams - expected_team_set) if expected_team_set else [],
+            "missing_team_ids": sorted(missing_participants),
+            "unexpected_team_ids": sorted(unexpected_participants),
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
+            "evidence_gaps": [] if participant_universe_available else ["authoritative_participant_universe"],
         }
 
     # Manifest-vs-authority size consistency. An expected-team manifest whose size

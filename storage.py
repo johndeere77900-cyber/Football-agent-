@@ -5306,16 +5306,22 @@ def merge_historical_fixture_metadata(existing_item, incoming_item):
 
     _merge(merged, incoming_item, "")
 
-    if added:
+    if added or conflicts:
         history = merged.get("enrichment_history") if isinstance(merged.get("enrichment_history"), list) else []
-        history = history[-19:] + [
-            {
-                "at": _utc_now(),
-                "fields": sorted(set(added)),
-                "conflicts": conflicts[:10],
-            }
-        ]
-        merged["enrichment_history"] = history
+        entry = {
+            "at": _utc_now(),
+            "fields": sorted(set(added)),
+            "conflicts": conflicts[:10],
+        }
+        last_entry = history[-1] if history else None
+        already_recorded = (
+            not added
+            and isinstance(last_entry, dict)
+            and last_entry.get("fields") == entry["fields"]
+            and last_entry.get("conflicts") == entry["conflicts"]
+        )
+        if not already_recorded:
+            merged["enrichment_history"] = history[-19:] + [entry]
 
     return merged, sorted(set(added)), conflicts
 
@@ -5328,6 +5334,108 @@ def _football_persisted_value(fixture_payload, *path, default=None):
             return default
         current = current[key]
     return current
+
+
+def _football_fixture_kickoff_date(value):
+    """
+    Return the UTC calendar date of a kickoff timestamp, or None.
+
+    Canonical logical identity spans providers, so kickoff text is normalised to
+    a UTC date rather than compared as a raw string (providers disagree on the
+    separator and offset format). A time-of-day change keeps the same identity; a
+    different date does not, so a rescheduled fixture is never merged blindly.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text_value = value.strip()
+    try:
+        parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+    except ValueError:
+        return text_value[:10] if len(text_value) >= 10 and text_value[4] == "-" else None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed.date().isoformat()
+
+
+def _football_row_identity(row):
+    """
+    Return the canonical logical identity of a persisted football fixture row.
+
+    The row layout is ``(fixture_id, source, raw_json, canonical_home_id,
+    canonical_away_id, kickoff_at, ...)``. A row without both canonical ids or a
+    readable kickoff has no usable logical identity and is never identity-matched.
+    """
+    try:
+        canonical_home = row[3]
+        canonical_away = row[4]
+        kickoff_date = _football_fixture_kickoff_date(row[5])
+    except (IndexError, TypeError):
+        return None
+    if not canonical_home or not canonical_away or not kickoff_date:
+        return None
+    return (str(canonical_home), str(canonical_away), kickoff_date)
+
+
+def _football_provider_name(item, fallback_source):
+    """Provider label of a fixture record, falling back to the writer's source."""
+    provenance = item.get("provider_provenance") if isinstance(item, dict) else None
+    if isinstance(provenance, dict):
+        name = provenance.get("provider")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    fallback = str(fallback_source or "").strip()
+    return fallback or "unknown"
+
+
+def _football_apply_provider_evidence(payload, provider_name, fixture_id):
+    """
+    Attach provider attribution and provider-native ids to a fixture payload.
+
+    Returns ``(payload, changed_fields)``. Attribution is additive and never
+    rewrites the record owner:
+
+    - ``provider_provenance.provider`` is the persisted row's own provider and is
+      only filled when absent;
+    - ``provider_provenance.providers`` lists every provider that contributed to
+      the same logical fixture;
+    - ``provider_fixture_ids`` keeps each provider's own native fixture id, so a
+      cross-provider match never destroys the ids needed to re-query a source.
+    """
+    if not isinstance(payload, dict):
+        return payload, []
+
+    provider_name = str(provider_name or "").strip() or "unknown"
+    changed = []
+    payload = dict(payload)
+
+    provenance = payload.get("provider_provenance")
+    provenance = dict(provenance) if isinstance(provenance, dict) else {}
+    if not str(provenance.get("provider") or "").strip():
+        provenance["provider"] = provider_name
+        changed.append("provider_provenance.provider")
+
+    existing_list = provenance.get("providers") if isinstance(provenance.get("providers"), list) else []
+    existing_providers = [p.strip() for p in existing_list if isinstance(p, str) and p.strip()]
+    merged_providers = sorted(set(existing_providers) | {provider_name})
+    if merged_providers != existing_providers:
+        provenance["providers"] = merged_providers
+        changed.append("provider_provenance.providers")
+    if provenance:
+        payload["provider_provenance"] = provenance
+
+    native_ids = payload.get("provider_fixture_ids")
+    native_ids = dict(native_ids) if isinstance(native_ids, dict) else {}
+    try:
+        native_id = int(fixture_id)
+    except (TypeError, ValueError):
+        native_id = fixture_id
+    if native_ids.get(provider_name) != native_id:
+        native_ids[provider_name] = native_id
+        changed.append("provider_fixture_ids." + provider_name)
+    if native_ids:
+        payload["provider_fixture_ids"] = native_ids
+
+    return payload, changed
 
 
 def save_historical_fixtures(fixtures, league_id, season, source="api_football", cutoff=None, require_completed=False):
@@ -5362,6 +5470,26 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
     season = _validate_positive_int(season, "season")
 
     allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+
+    # The generic target range is not the whole documented scope: a tournament
+    # edition whose match total is independently documented (for example the FIFA
+    # World Cup 2018) is storable even when its season falls outside that range.
+    # Only documented editions of this same competition are admitted, so the
+    # allow-list is never widened in a way that accepts an arbitrary season.
+    documented_tournament_editions = set()
+    try:
+        tournament_expectations = getattr(config, "FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS", {}) or {}
+        for expectation_key in tournament_expectations.keys():
+            if not isinstance(expectation_key, tuple) or len(expectation_key) != 3:
+                continue
+            sport_key, documented_league, documented_season = expectation_key
+            if str(sport_key).strip().lower() != "football":
+                continue
+            if int(documented_league) == league_id:
+                documented_tournament_editions.add(int(documented_season))
+    except (TypeError, ValueError):
+        documented_tournament_editions = set()
+    allowed_seasons |= documented_tournament_editions
 
     if season not in allowed_seasons:
         raise ValueError(
@@ -5419,10 +5547,13 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             "inserted": 0,
             "enriched": 0,
             "already_existing": 0,
+            "conflict_only": 0,
+            "ambiguous_identity": 0,
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
             "metadata_conflicts": {},
+            "metadata_conflict_events": 0,
         }
 
     import time
@@ -5450,46 +5581,98 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
     inserted_count = 0
     enriched_count = 0
     existing_unchanged = 0
+    conflict_only_count = 0
+    ambiguous_identity_count = 0
     conflict_counts = {}
+    conflict_events = 0
 
-    read_limit = 400
-    fixture_ids = [fid for fid, _item, _ch, _ca in resolved_fixtures]
-    existing_rows = {}
     try:
-        for start in range(0, len(fixture_ids), read_limit):
-            chunk = [int(fid) for fid in fixture_ids[start:start + read_limit]]
-            if db_type == "postgres":
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT fixture_id, raw_json, canonical_home_id, canonical_away_id,
-                               kickoff_at, status_short, home_team, away_team, home_goals, away_goals
-                        FROM historical_fixtures
-                        WHERE source = %s AND fixture_id = ANY(%s)
-                        """,
-                        (source, chunk),
-                    )
-                    for row in cur.fetchall():
-                        existing_rows[int(row[0])] = row
-            else:
-                placeholders = ",".join("?" for _ in chunk)
-                rows = conn.execute(
-                    f"""
-                    SELECT fixture_id, raw_json, canonical_home_id, canonical_away_id,
+        # Canonical logical fixture identity is (canonical home team, canonical away
+        # team, UTC kickoff date). Provider-native ids differ between the approved
+        # football sources, so a `(source, fixture_id)` lookup alone can neither
+        # recognise an existing logical fixture acquired through another provider
+        # nor prevent a second row for it. One bounded read of the competition
+        # season replaces the per-provider lookup.
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT fixture_id, source, raw_json, canonical_home_id, canonical_away_id,
                            kickoff_at, status_short, home_team, away_team, home_goals, away_goals
                     FROM historical_fixtures
-                    WHERE source = ? AND fixture_id IN ({placeholders})
+                    WHERE league_id = %s AND season = %s
                     """,
-                    [source] + chunk,
-                ).fetchall()
-                for row in rows:
-                    existing_rows[int(row[0])] = row
+                    (league_id, season),
+                )
+                season_rows = cur.fetchall()
+        else:
+            season_rows = conn.execute(
+                """
+                SELECT fixture_id, source, raw_json, canonical_home_id, canonical_away_id,
+                       kickoff_at, status_short, home_team, away_team, home_goals, away_goals
+                FROM historical_fixtures
+                WHERE league_id = ? AND season = ?
+                """,
+                (league_id, season),
+            ).fetchall()
+
+        rows_by_native_id = {}
+        rows_by_identity = {}
+        for row in season_rows:
+            rows_by_native_id[(str(row[1]), int(row[0]))] = row
+            row_identity = _football_row_identity(row)
+            if row_identity is not None:
+                rows_by_identity.setdefault(row_identity, []).append(row)
+
+        resolved_plan = []
+        seen_logical_targets = {}
+        for fid, item, c_home, c_away in resolved_fixtures:
+            match_row = rows_by_native_id.get((str(source), int(fid)))
+            match_origin = "provider_native_id" if match_row is not None else None
+
+            fixture_obj = item.get("fixture") if isinstance(item.get("fixture"), dict) else {}
+            kickoff_date = _football_fixture_kickoff_date(fixture_obj.get("date"))
+            identity = (str(c_home), str(c_away), kickoff_date) if (kickoff_date and c_home and c_away) else None
+
+            if match_row is None and identity is not None:
+                candidates = rows_by_identity.get(identity) or []
+                if len(candidates) == 1:
+                    match_row = candidates[0]
+                    match_origin = "canonical_identity"
+                elif len(candidates) > 1:
+                    # Several persisted rows already describe this logical fixture.
+                    # Merging into an arbitrary one or adding another row would
+                    # deepen the duplication, so the record fails closed and the
+                    # ambiguity is reported for reconciliation.
+                    ambiguous_identity_count += 1
+                    rejection_reasons["ambiguous_logical_fixture_identity"] = (
+                        rejection_reasons.get("ambiguous_logical_fixture_identity", 0) + 1
+                    )
+                    continue
+
+            # Two incoming records for the same logical fixture (different native
+            # ids, same teams and kickoff date) are one fixture, never two rows.
+            if identity is not None:
+                if identity in seen_logical_targets:
+                    dup_count += 1
+                    continue
+                seen_logical_targets[identity] = (
+                    ("row", str(match_row[1]), int(match_row[0]))
+                    if match_row is not None
+                    else ("new", identity)
+                )
+
+            resolved_plan.append((fid, item, c_home, c_away, match_row, match_origin))
+
+        insert_targets = [
+            (fid, item, c_home, c_away)
+            for fid, item, c_home, c_away, match_row, _origin in resolved_plan
+            if match_row is None
+        ]
 
         if db_type == "postgres":
             with conn.cursor() as cur:
-                for fid, item, c_home, c_away in resolved_fixtures:
-                    if int(fid) in existing_rows:
-                        continue
+                for fid, item, c_home, c_away in insert_targets:
                     kickoff = str(item.get("fixture", {}).get("date", ""))
                     status = item.get("fixture", {}).get("status", {}).get("short", "")
                     h_id = item.get("teams", {}).get("home", {}).get("id")
@@ -5499,7 +5682,10 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
                     h_goals = item.get("goals", {}).get("home")
                     a_goals = item.get("goals", {}).get("away")
 
-                    raw_json_str = _json_dumps(item, "raw_json")
+                    insert_payload, _evidence_fields = _football_apply_provider_evidence(
+                        item, _football_provider_name(item, source), fid
+                    )
+                    raw_json_str = _json_dumps(insert_payload, "raw_json")
 
                     cur.execute(
                         """
@@ -5520,9 +5706,7 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
                     if cur.rowcount == 1:
                         inserted_count += 1
         else:
-            for fid, item, c_home, c_away in resolved_fixtures:
-                if int(fid) in existing_rows:
-                    continue
+            for fid, item, c_home, c_away in insert_targets:
                 kickoff = str(item.get("fixture", {}).get("date", ""))
                 status = item.get("fixture", {}).get("status", {}).get("short", "")
                 h_id = item.get("teams", {}).get("home", {}).get("id")
@@ -5533,7 +5717,10 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
                 h_goals = item.get("goals", {}).get("home")
                 a_goals = item.get("goals", {}).get("away")
 
-                raw_json_str = _json_dumps(item, "raw_json")
+                insert_payload, _evidence_fields = _football_apply_provider_evidence(
+                    item, _football_provider_name(item, source), fid
+                )
+                raw_json_str = _json_dumps(insert_payload, "raw_json")
 
                 cursor = conn.execute(
                     """
@@ -5553,19 +5740,22 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
                 if cursor.rowcount == 1:
                     inserted_count += 1
 
-        # Additive enrichment of fixtures that were already persisted.
+        # Additive enrichment of the persisted logical fixture, addressed by the
+        # row's own (source, fixture_id) so a record acquired through a different
+        # provider updates the existing fixture instead of creating a duplicate.
         update_sql = (
             "UPDATE historical_fixtures SET raw_json = {p}, fetched_at = {p}, "
             "canonical_home_id = {p}, canonical_away_id = {p} "
             "WHERE source = {p} AND fixture_id = {p}"
         ).format(p="%s" if db_type == "postgres" else "?")
 
-        for fid, item, c_home, c_away in resolved_fixtures:
-            row = existing_rows.get(int(fid))
-            if row is None:
+        for fid, item, c_home, c_away, match_row, _origin in resolved_plan:
+            if match_row is None:
                 continue
 
-            raw_json_existing = row[1]
+            row_fixture_id = int(match_row[0])
+            row_source = str(match_row[1])
+            raw_json_existing = match_row[2]
             existing_payload = _json_loads(raw_json_existing) if raw_json_existing else {}
             if not isinstance(existing_payload, dict):
                 existing_payload = {}
@@ -5577,15 +5767,15 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             if not isinstance(fixture_obj, dict):
                 fixture_obj = {}
                 existing_payload["fixture"] = fixture_obj
-            if row[4] and not fixture_obj.get("date"):
-                fixture_obj["date"] = row[4]
-            if row[5] and not (isinstance(fixture_obj.get("status"), dict) and fixture_obj["status"].get("short")):
-                fixture_obj["status"] = {"short": row[5]}
+            if match_row[5] and not fixture_obj.get("date"):
+                fixture_obj["date"] = match_row[5]
+            if match_row[6] and not (isinstance(fixture_obj.get("status"), dict) and fixture_obj["status"].get("short")):
+                fixture_obj["status"] = {"short": match_row[6]}
             teams_obj = existing_payload.get("teams")
             if not isinstance(teams_obj, dict):
                 teams_obj = {}
                 existing_payload["teams"] = teams_obj
-            for side, stored_name in (("home", row[6]), ("away", row[7])):
+            for side, stored_name in (("home", match_row[7]), ("away", match_row[8])):
                 side_obj = teams_obj.get(side)
                 if not isinstance(side_obj, dict):
                     side_obj = {}
@@ -5596,29 +5786,62 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             if not isinstance(goals_obj, dict):
                 goals_obj = {}
                 existing_payload["goals"] = goals_obj
-            if row[8] is not None and goals_obj.get("home") is None:
-                goals_obj["home"] = row[8]
-            if row[9] is not None and goals_obj.get("away") is None:
-                goals_obj["away"] = row[9]
+            if match_row[9] is not None and goals_obj.get("home") is None:
+                goals_obj["home"] = match_row[9]
+            if match_row[10] is not None and goals_obj.get("away") is None:
+                goals_obj["away"] = match_row[10]
 
-            merged, added_fields, conflicts = merge_historical_fixture_metadata(existing_payload, item)
+            incoming_provider = _football_provider_name(item, source)
+
+            # The record owner keeps the `provider` label; a contributing provider
+            # is recorded separately so cross-provider enrichment never rewrites
+            # the attribution of the persisted row.
+            incoming_payload = item
+            incoming_provenance = item.get("provider_provenance")
+            existing_provenance = existing_payload.get("provider_provenance")
+            existing_owner = (
+                existing_provenance.get("provider")
+                if isinstance(existing_provenance, dict) and isinstance(existing_provenance.get("provider"), str)
+                else None
+            )
+            if isinstance(incoming_provenance, dict) and existing_owner:
+                incoming_payload = dict(item)
+                provenance_copy = dict(incoming_provenance)
+                provenance_copy["provider"] = existing_owner
+                incoming_payload["provider_provenance"] = provenance_copy
+
+            merged, added_fields, conflicts = merge_historical_fixture_metadata(existing_payload, incoming_payload)
+
+            merged, evidence_fields = _football_apply_provider_evidence(merged, incoming_provider, fid)
+            applied_fields = set(added_fields) | set(evidence_fields)
 
             for conflict in conflicts:
                 field = conflict.get("field")
-                conflict_counts[field] = conflict_counts.get(field, 0) + 1
+                if field:
+                    conflict_counts[field] = conflict_counts.get(field, 0) + 1
+                    conflict_events += 1
 
-            canonical_home_value = row[2] if row[2] else (merged.get("canonical_home_id") or c_home)
-            canonical_away_value = row[3] if row[3] else (merged.get("canonical_away_id") or c_away)
+            canonical_home_value = match_row[3] if match_row[3] else (merged.get("canonical_home_id") or c_home)
+            canonical_away_value = match_row[4] if match_row[4] else (merged.get("canonical_away_id") or c_away)
 
             canonical_added = False
-            if not row[2] and c_home:
+            if not match_row[3] and c_home:
                 canonical_added = True
-            if not row[3] and c_away:
+            if not match_row[4] and c_away:
                 canonical_added = True
 
-            if not added_fields and not canonical_added:
-                existing_unchanged += 1
-                continue
+            if not applied_fields and not canonical_added:
+                # A conflict-only attempt must still leave durable, inspectable
+                # evidence even though the stored values do not change. The merge
+                # helper de-duplicates an identical repeat, so a retried conflict
+                # is persisted once and then reported as unchanged.
+                if conflicts and merged != existing_payload:
+                    conflict_only_count += 1
+                else:
+                    existing_unchanged += 1
+                    continue
+            else:
+                enriched_count += 1
 
             merged["canonical_home_id"] = canonical_home_value
             merged["canonical_away_id"] = canonical_away_value
@@ -5628,15 +5851,15 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
                 with conn.cursor() as cur:
                     cur.execute(
                         update_sql,
-                        (raw_json_str, now_str, canonical_home_value, canonical_away_value, source, fid),
+                        (raw_json_str, now_str, canonical_home_value, canonical_away_value, row_source, row_fixture_id),
                     )
             else:
                 conn.execute(
                     update_sql,
-                    (raw_json_str, now_str, canonical_home_value, canonical_away_value, source, fid),
+                    (raw_json_str, now_str, canonical_home_value, canonical_away_value, row_source, row_fixture_id),
                 )
-            enriched_count += 1
 
+        conn.commit()
         conn.commit()
 
         t_db_elapsed = time.perf_counter() - t_db_start
@@ -5646,10 +5869,13 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             "inserted": inserted_count,
             "enriched": enriched_count,
             "already_existing": existing_unchanged,
+            "conflict_only": conflict_only_count,
+            "ambiguous_identity": ambiguous_identity_count,
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
             "metadata_conflicts": conflict_counts,
+            "metadata_conflict_events": conflict_events,
             "db_write_duration": round(t_db_elapsed, 4),
         }
 
@@ -5658,6 +5884,8 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
         raise
     finally:
         conn.close()
+
+
 
 def get_historical_fixtures(league_id, season):
     """

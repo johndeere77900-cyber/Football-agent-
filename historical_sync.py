@@ -464,7 +464,11 @@ def sync_historical_fixtures(
                 "valid_fixtures": 0,
                 "duplicates_skipped": 0,
                 "newly_stored": 0,
+                "enriched": 0,
                 "already_existing_skipped": 0,
+                "already_existing": 0,
+                "conflict_only": 0,
+                "metadata_conflicts": {},
                 "api_requests_consumed": 0,
                 "quota_budget_stopped": False,
                 "final_stored_count": existing_before,
@@ -505,10 +509,16 @@ def sync_historical_fixtures(
 
     total_valid_fixtures = 0
     total_newly_stored = 0
+    total_enriched = 0
+    total_already_existing = 0
+    total_conflict_only = 0
+    total_ambiguous_identity = 0
     total_duplicates_skipped = 0
     total_rejected_count = 0
     total_empty_pages_count = 0
     all_rejection_reasons = {}
+    metadata_conflict_counts = {}
+    metadata_conflict_events = 0
 
     # DataResolver instance initialized without preflight network calls.
     # A refresh must bypass the read-first DB shortcut so acquisition really
@@ -577,9 +587,23 @@ def sync_historical_fixtures(
             )
             total_valid_fixtures += save_result.get("valid", 0)
             total_newly_stored += save_result.get("inserted", 0)
+            # Enrichment, unchanged rows and conflict-only audit evidence are
+            # reported separately from new rows, so a re-acquisition's metadata
+            # progress is never mistaken for new coverage and never double-counted
+            # across providers, pages or retries.
+            total_enriched += save_result.get("enriched", 0)
+            total_already_existing += save_result.get("already_existing", 0)
+            total_conflict_only += save_result.get("conflict_only", 0)
+            total_ambiguous_identity += save_result.get("ambiguous_identity", 0)
             total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
             total_rejected_count += save_result.get("rejected_count", 0)
             total_db_write_duration += save_result.get("db_write_duration", 0.0)
+
+            for conflict_field, conflict_count in (save_result.get("metadata_conflicts") or {}).items():
+                metadata_conflict_counts[conflict_field] = (
+                    metadata_conflict_counts.get(conflict_field, 0) + conflict_count
+                )
+            metadata_conflict_events += int(save_result.get("metadata_conflict_events") or 0)
 
             for r_reason, r_cnt in save_result.get("rejection_reasons", {}).items():
                 all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
@@ -692,7 +716,7 @@ def sync_historical_fixtures(
     duplicates_skipped = total_duplicates_skipped
     rejected_count = total_rejected_count
     rejection_reasons = all_rejection_reasons
-    already_existing_skipped = valid_fixtures_count - newly_stored
+    already_existing_skipped = total_already_existing
 
     enrichment_stored = 0
 
@@ -864,6 +888,21 @@ def sync_historical_fixtures(
         "persisted_records_by_provider": persisted_provider_counts,
         "provider_outcomes": (page_meta_val.get("provider_metadata", {}) or {}).get("provider_outcomes")
         if isinstance(page_meta_val, dict) else None,
+        # Persistence evidence recorded with the manifest: what this sync actually
+        # inserted, enriched, left unchanged, audited as a conflict or rejected.
+        "persistence": {
+            "valid": total_valid_fixtures,
+            "inserted": total_newly_stored,
+            "enriched": total_enriched,
+            "already_existing": total_already_existing,
+            "conflict_only": total_conflict_only,
+            "ambiguous_identity": total_ambiguous_identity,
+            "duplicates_skipped": total_duplicates_skipped,
+            "rejected": total_rejected_count,
+            "metadata_conflicts": metadata_conflict_counts,
+            "metadata_conflict_events": metadata_conflict_events,
+        },
+        "coverage_evidence_gaps": db_coverage.get("evidence_gaps") if isinstance(db_coverage, dict) else None,
     }
 
     print(
@@ -947,7 +986,24 @@ def sync_historical_fixtures(
         "rejected_count": cum_rejected_cnt,
         "rejection_reasons": rejection_reasons,
         "newly_stored": newly_stored,
+        "enriched": total_enriched,
+        "already_existing": total_already_existing,
         "already_existing_skipped": already_existing_skipped,
+        "conflict_only": total_conflict_only,
+        "ambiguous_identity": total_ambiguous_identity,
+        "metadata_conflicts": metadata_conflict_counts,
+        "metadata_conflict_events": metadata_conflict_events,
+        "persistence_breakdown": {
+            "valid": valid_fixtures_count,
+            "inserted": total_newly_stored,
+            "enriched": total_enriched,
+            "already_existing": total_already_existing,
+            "conflict_only": total_conflict_only,
+            "ambiguous_identity": total_ambiguous_identity,
+            "duplicates_skipped": total_duplicates_skipped,
+            "rejected": total_rejected_count,
+            "metadata_conflicts": metadata_conflict_counts,
+        },
         "expected_pages": safe_exp_pages,
         "pages_completed": safe_pages_comp,
         "coverage_unit": COVERAGE_UNIT_SINGLE_SHOT,
@@ -999,7 +1055,7 @@ def _print_sync_report(report: dict) -> None:
         )
     if report.get("provider_coverage"):
         for provider_name, prov in report["provider_coverage"].items():
-            if isinstance(prov, dict):
+            if isinstance(prov, dict) and prov.get("coverage_unit"):
                 print(
                     f"  provider {provider_name}: unit={prov.get('coverage_unit')} "
                     f"{prov.get('completed')}/{prov.get('expected')} status={prov.get('status')}"
@@ -1012,7 +1068,11 @@ def _print_sync_report(report: dict) -> None:
     if report.get("rejection_reasons"):
         print(f"Rejection reasons: {report['rejection_reasons']}")
     print(f"Newly stored fixtures: {report['newly_stored']}")
+    print(f"Enriched existing fixtures: {report.get('enriched', 0)}")
     print(f"Already-existing fixtures skipped: {report['already_existing_skipped']}")
+    print(f"Conflict-only records audited: {report.get('conflict_only', 0)}")
+    if report.get("metadata_conflicts"):
+        print(f"Metadata conflicts (existing value kept): {report['metadata_conflicts']}")
     print(f"API requests consumed: {report['api_requests_consumed']}")
     print(f"Historical Daily Budget: {report.get('historical_budget')}")
     print(f"Quota budget stopped job: {report['quota_budget_stopped']}")
@@ -1394,7 +1454,11 @@ def sync_historical_basketball_games(
                 "valid_fixtures": 0,
                 "duplicates_skipped": 0,
                 "newly_stored": 0,
+                "enriched": 0,
                 "already_existing_skipped": 0,
+                "already_existing": 0,
+                "conflict_only": 0,
+                "metadata_conflicts": {},
                 "api_requests_consumed": 0,
                 "quota_budget_stopped": False,
                 "final_stored_count": existing_before,
@@ -1423,6 +1487,8 @@ def sync_historical_basketball_games(
     total_newly_stored = 0
     total_enriched = 0
     total_already_existing = 0
+    total_conflict_only = 0
+    metadata_conflict_counts = {}
     total_duplicates_skipped = 0
     total_rejected_count = 0
     total_empty_pages_count = 0
@@ -1462,6 +1528,11 @@ def sync_historical_basketball_games(
                 # are not new records, but they are real acquisition progress.
                 total_enriched += save_res.get("enriched", 0)
                 total_already_existing += save_res.get("already_existing", 0)
+                total_conflict_only += save_res.get("conflict_only", 0)
+                for conflict_field, conflict_count in (save_res.get("metadata_conflicts") or {}).items():
+                    metadata_conflict_counts[conflict_field] = (
+                        metadata_conflict_counts.get(conflict_field, 0) + conflict_count
+                    )
                 total_duplicates_skipped += save_res.get("duplicates_skipped", 0)
                 espn_rejected_count = save_res.get("rejected_count", 0)
                 total_rejected_count += espn_rejected_count
@@ -1612,6 +1683,11 @@ def sync_historical_basketball_games(
                 total_newly_stored += save_result.get("inserted", 0)
                 total_enriched += save_result.get("enriched", 0)
                 total_already_existing += save_result.get("already_existing", 0)
+                total_conflict_only += save_result.get("conflict_only", 0)
+                for conflict_field, conflict_count in (save_result.get("metadata_conflicts") or {}).items():
+                    metadata_conflict_counts[conflict_field] = (
+                        metadata_conflict_counts.get(conflict_field, 0) + conflict_count
+                    )
                 total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
                 total_rejected_count += save_result.get("rejected_count", 0)
 
@@ -1660,7 +1736,7 @@ def sync_historical_basketball_games(
     duplicates_skipped = total_duplicates_skipped
     rejected_count = total_rejected_count
     rejection_reasons = all_rejection_reasons
-    already_existing_skipped = valid_count - newly_stored
+    already_existing_skipped = total_already_existing
 
     final_stored_count = storage.get_historical_basketball_game_count(league_id, season)
 
@@ -1934,7 +2010,10 @@ def sync_historical_basketball_games(
         # the idempotent enrichment upsert. Reported separately from new rows so a
         # re-acquisition's metadata progress is never mistaken for new coverage.
         "enriched": total_enriched,
+        "already_existing": total_already_existing,
         "already_existing_skipped": already_existing_skipped,
+        "conflict_only": total_conflict_only,
+        "metadata_conflicts": metadata_conflict_counts,
         "coverage_unit": dataset_coverage_unit,
         "expected_coverage_units": safe_exp_pages_b,
         "completed_coverage_units": safe_pages_comp_b,
