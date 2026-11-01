@@ -386,6 +386,16 @@ def sync_historical_fixtures(
     total_db_write_duration = 0.0
     allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
 
+    # A tournament edition whose match total is independently documented (for
+    # example the 2018 FIFA World Cup, 64 matches) is acquirable even though its
+    # season falls outside the generic target range. Only documented editions of
+    # this same competition are admitted, matching the storage-level season
+    # scope, so acquisition and persistence can never disagree about a season and
+    # an undocumented season is still rejected.
+    documented_editions_helper = getattr(config, "documented_football_tournament_editions", None)
+    if callable(documented_editions_helper):
+        allowed_seasons |= set(documented_editions_helper(league_id) or set())
+
     if season not in allowed_seasons:
         raise ValueError(
             f"Football historical acquisition only supports seasons "
@@ -513,6 +523,7 @@ def sync_historical_fixtures(
     total_already_existing = 0
     total_conflict_only = 0
     total_ambiguous_identity = 0
+    total_legacy_identity_overlap = 0
     total_duplicates_skipped = 0
     total_rejected_count = 0
     total_empty_pages_count = 0
@@ -595,6 +606,7 @@ def sync_historical_fixtures(
             total_already_existing += save_result.get("already_existing", 0)
             total_conflict_only += save_result.get("conflict_only", 0)
             total_ambiguous_identity += save_result.get("ambiguous_identity", 0)
+            total_legacy_identity_overlap += save_result.get("legacy_identity_overlap", 0)
             total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
             total_rejected_count += save_result.get("rejected_count", 0)
             total_db_write_duration += save_result.get("db_write_duration", 0.0)
@@ -897,6 +909,7 @@ def sync_historical_fixtures(
             "already_existing": total_already_existing,
             "conflict_only": total_conflict_only,
             "ambiguous_identity": total_ambiguous_identity,
+            "legacy_identity_overlap": total_legacy_identity_overlap,
             "duplicates_skipped": total_duplicates_skipped,
             "rejected": total_rejected_count,
             "metadata_conflicts": metadata_conflict_counts,
@@ -991,6 +1004,7 @@ def sync_historical_fixtures(
         "already_existing_skipped": already_existing_skipped,
         "conflict_only": total_conflict_only,
         "ambiguous_identity": total_ambiguous_identity,
+        "legacy_identity_overlap": total_legacy_identity_overlap,
         "metadata_conflicts": metadata_conflict_counts,
         "metadata_conflict_events": metadata_conflict_events,
         "persistence_breakdown": {
@@ -1000,6 +1014,7 @@ def sync_historical_fixtures(
             "already_existing": total_already_existing,
             "conflict_only": total_conflict_only,
             "ambiguous_identity": total_ambiguous_identity,
+            "legacy_identity_overlap": total_legacy_identity_overlap,
             "duplicates_skipped": total_duplicates_skipped,
             "rejected": total_rejected_count,
             "metadata_conflicts": metadata_conflict_counts,
@@ -2368,6 +2383,13 @@ def verify_persisted_historical_datasets(
     storage.init_db()
 
     if is_queue or (league_id is None and season is None and not seasons):
+        # The verification audit deliberately covers the full configured
+        # competition x requested-season matrix rather than only the editions a
+        # competition stages: it reports every requested dataset that has no
+        # COMPLETE manifest, including editions that never existed, so a missing
+        # dataset can never be hidden by an edition filter. Acquisition itself is
+        # edition-scoped (see run_historical_queue), and this audit is what makes
+        # the difference visible.
         target_seasons = seasons if seasons else list(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
         football_targets = [
             {"sport": "football", "league_id": lid, "season": ssn}

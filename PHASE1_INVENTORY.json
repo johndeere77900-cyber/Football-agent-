@@ -5,6 +5,10 @@
   "database_inspected": false,
   "knowledge_schema_version": 1,
   "knowledge_validation_problems": [],
+  "excluded_from_historical_fixture_acquisition": [
+    "api_football",
+    "football_data_org"
+  ],
   "status_conventions": {
     "lifecycle": [
       "EXPECTED",
@@ -78,6 +82,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "E0",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -143,6 +178,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "E0",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -208,6 +274,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "E0",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -273,6 +370,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "E0",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -338,6 +466,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "E0",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -403,6 +562,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "E0",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -468,6 +658,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "E0",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -533,6 +754,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "E0",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ENG-Premier League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -597,6 +849,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "SP1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -661,6 +944,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "SP1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -725,6 +1039,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "SP1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -789,6 +1134,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "SP1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -853,6 +1229,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "SP1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -917,6 +1324,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "SP1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -981,6 +1419,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "SP1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1045,6 +1514,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "SP1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ESP-La Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1109,6 +1609,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "I1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1173,6 +1704,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "I1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1237,6 +1799,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "I1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1301,6 +1894,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "I1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1365,6 +1989,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "I1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1429,6 +2084,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "I1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1493,6 +2179,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "I1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1557,6 +2274,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "I1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "ITA-Serie A",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1621,6 +2369,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "D1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1685,6 +2464,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "D1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1749,6 +2559,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "D1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1813,6 +2654,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "D1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1877,6 +2749,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "D1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -1941,6 +2844,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "D1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2005,6 +2939,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "D1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2069,6 +3034,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "D1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "GER-Bundesliga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2133,6 +3129,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "F1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2197,6 +3224,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "F1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2261,6 +3319,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "F1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2325,6 +3414,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "F1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2389,6 +3509,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "F1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2453,6 +3604,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "F1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2517,6 +3699,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "F1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2581,6 +3794,37 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "F1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "FRA-Ligue 1",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2646,6 +3890,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Champions League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2713,6 +3970,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Champions League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2780,6 +4050,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Champions League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2847,6 +4130,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Champions League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2914,6 +4210,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Champions League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -2981,6 +4290,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Champions League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3048,6 +4370,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Champions League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3115,6 +4450,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Champions League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3182,6 +4530,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Europa League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3249,6 +4610,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Europa League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3316,6 +4690,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Europa League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3383,6 +4770,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Europa League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3450,6 +4850,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Europa League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3517,6 +4930,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Europa League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3584,6 +5010,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Europa League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3651,6 +5090,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Europa League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3663,6 +5115,87 @@
         "Only the Sofascore route is configured; when that route is access-restricted the competition remains INCOMPLETE with the exact provider outcome recorded."
       ],
       "next_safe_action": "acquire through the approved provider order, then validate persisted coverage"
+    },
+    {
+      "sport": "football",
+      "competition": "UEFA Nations League",
+      "league_id": 5,
+      "aliases": [
+        "nations league",
+        "uefa nations league"
+      ],
+      "governing_body": "UEFA",
+      "country": "INTERNATIONAL_OR_UNKNOWN",
+      "season": 2018,
+      "edition_label": "2018/2019",
+      "format": "international",
+      "coverage_format": "international",
+      "window_start": "UNKNOWN",
+      "window_end": "UNKNOWN",
+      "window_evidence": "edition window not documented",
+      "lifecycle_state": "UNKNOWN",
+      "lifecycle_evidence": "edition window not documented; completion fails closed",
+      "expected_coverage": {
+        "type": "international",
+        "expected_fixtures": "UNKNOWN",
+        "expected_teams": "UNKNOWN",
+        "basis": null
+      },
+      "approved_provider_order": [
+        "football_data_csv",
+        "soccerdata_fbref",
+        "soccerdata_match_history",
+        "soccerdata_sofascore"
+      ],
+      "provider_support": {
+        "football_data_csv": {
+          "supported": false,
+          "code": null,
+          "reason": "no Football-Data.co.uk CSV division exists for this competition"
+        },
+        "soccerdata_fbref": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in soccerdata's FBref league mapping"
+        },
+        "soccerdata_match_history": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in the configured MatchHistory mapping"
+        },
+        "soccerdata_sofascore": {
+          "supported": true,
+          "code": "INT-Nations League",
+          "reason": null
+        }
+      },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Nations League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
+      "acquisition_state": "PENDING",
+      "persisted_records": "UNKNOWN",
+      "attempted_coverage_units": "UNKNOWN",
+      "parsed_records": "UNKNOWN",
+      "duplicates_conflicts": "UNKNOWN",
+      "unresolved_team_ids": "UNKNOWN",
+      "missing_coverage_units": "UNKNOWN",
+      "provenance_evidence": "UNKNOWN",
+      "known_blockers": [
+        "Earlier editions have no documented window in this repository, so their lifecycle fails closed with UNKNOWN instead of being assumed.",
+        "Only the Sofascore route is configured for this competition."
+      ],
+      "next_safe_action": "document the edition window from an authoritative source; acquisition stays incomplete until then"
     },
     {
       "sport": "football",
@@ -3717,6 +5250,20 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Nations League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3784,6 +5331,20 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Nations League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3851,6 +5412,20 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Nations League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3918,6 +5493,20 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Nations League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -3985,6 +5574,20 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Nations League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4052,6 +5655,20 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Nations League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4119,6 +5736,20 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Nations League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4186,6 +5817,19 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-Nations League",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4198,6 +5842,89 @@
         "Earlier editions have no documented window in this repository, so their lifecycle fails closed with UNKNOWN instead of being assumed.",
         "Only the Sofascore route is configured for this competition."
       ],
+      "next_safe_action": "acquire through the approved provider order, then validate persisted coverage"
+    },
+    {
+      "sport": "football",
+      "competition": "FIFA World Cup",
+      "league_id": 1,
+      "aliases": [
+        "world cup",
+        "fifa world cup"
+      ],
+      "governing_body": "FIFA",
+      "country": "INTERNATIONAL_OR_UNKNOWN",
+      "season": 2018,
+      "edition_label": "2018",
+      "format": "tournament",
+      "coverage_format": "tournament",
+      "window_start": "2018-06-14T00:00:00+00:00",
+      "window_end": "2018-07-15T00:00:00+00:00",
+      "window_evidence": "FIFA World Cup 2018 finals window.",
+      "lifecycle_state": "COMPLETED",
+      "lifecycle_evidence": "declared window closed 2018-07-15T00:00:00+00:00",
+      "expected_coverage": {
+        "type": "tournament",
+        "expected_fixtures": 64,
+        "expected_teams": "UNKNOWN",
+        "basis": "FIFA World Cup 2018: 32 teams, 64 matches (14 June - 15 July 2018)."
+      },
+      "approved_provider_order": [
+        "football_data_csv",
+        "soccerdata_fbref",
+        "soccerdata_match_history",
+        "soccerdata_sofascore"
+      ],
+      "provider_support": {
+        "football_data_csv": {
+          "supported": false,
+          "code": null,
+          "reason": "no Football-Data.co.uk CSV division exists for this competition"
+        },
+        "soccerdata_fbref": {
+          "supported": true,
+          "code": "INT-World Cup",
+          "reason": null
+        },
+        "soccerdata_match_history": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in the configured MatchHistory mapping"
+        },
+        "soccerdata_sofascore": {
+          "supported": true,
+          "code": "INT-World Cup",
+          "reason": null
+        }
+      },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "authoritative_participant_universe"
+      ],
+      "acquisition_state": "PENDING",
+      "persisted_records": "UNKNOWN",
+      "attempted_coverage_units": "UNKNOWN",
+      "parsed_records": "UNKNOWN",
+      "duplicates_conflicts": "UNKNOWN",
+      "unresolved_team_ids": "UNKNOWN",
+      "missing_coverage_units": "UNKNOWN",
+      "provenance_evidence": "UNKNOWN",
+      "known_blockers": [],
       "next_safe_action": "acquire through the approved provider order, then validate persisted coverage"
     },
     {
@@ -4253,6 +5980,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4317,6 +6065,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4381,6 +6150,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4415,7 +6205,7 @@
         "type": "tournament",
         "expected_fixtures": 64,
         "expected_teams": "UNKNOWN",
-        "basis": null
+        "basis": "FIFA World Cup 2022: 32 teams, 64 matches (20 November - 18 December 2022)."
       },
       "approved_provider_order": [
         "football_data_csv",
@@ -4445,6 +6235,25 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4509,6 +6318,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4573,6 +6403,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4637,6 +6488,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4701,6 +6573,26 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-World Cup",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4767,6 +6659,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4803,7 +6716,7 @@
         "type": "tournament",
         "expected_fixtures": 51,
         "expected_teams": "UNKNOWN",
-        "basis": null
+        "basis": "UEFA EURO 2020: 24 teams, 51 matches (played 11 June - 11 July 2021)."
       },
       "approved_provider_order": [
         "football_data_csv",
@@ -4833,6 +6746,25 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4899,6 +6831,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -4965,6 +6918,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5031,6 +7005,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5067,7 +7062,7 @@
         "type": "tournament",
         "expected_fixtures": 51,
         "expected_teams": "UNKNOWN",
-        "basis": null
+        "basis": "UEFA EURO 2024: 24 teams, 51 matches (14 June - 14 July 2024)."
       },
       "approved_provider_order": [
         "football_data_csv",
@@ -5097,6 +7092,25 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5163,6 +7177,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5229,6 +7264,27 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "soccerdata_fbref": {
+          "name": "SoccerData FBref",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "competition and season dependent"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "INT-European Championship",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [
+        "edition_window",
+        "expected_fixture_total",
+        "authoritative_participant_universe"
+      ],
       "acquisition_state": "NOT_APPLICABLE",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5293,6 +7349,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "N1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5357,6 +7437,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "N1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5421,6 +7525,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "N1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5485,6 +7613,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "N1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5549,6 +7701,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "N1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5613,6 +7789,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "N1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5677,6 +7877,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "N1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5741,6 +7965,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "N1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "NED-Eredivisie",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5806,6 +8054,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "P1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5871,6 +8143,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "P1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -5936,6 +8232,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "P1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6001,6 +8321,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "P1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6066,6 +8410,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "P1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6131,6 +8499,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "P1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6196,6 +8588,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "P1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6261,6 +8677,30 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "football_data_csv": {
+          "name": "Football-Data.co.uk CSV",
+          "kind": "direct_download",
+          "competition_code": "P1",
+          "url": "https://www.football-data.co.uk/mmz4281/{season_code}/{division_code}.csv",
+          "coverage": "domestic league divisions only"
+        },
+        "soccerdata_match_history": {
+          "name": "SoccerData MatchHistory",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "domestic leagues only in the configured mapping"
+        },
+        "soccerdata_sofascore": {
+          "name": "SoccerData Sofascore",
+          "kind": "library",
+          "competition_code": "POR-Primeira Liga",
+          "url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
+          "coverage": "every configured football competition"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6313,6 +8753,23 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "espn_url": {
+          "name": "ESPN NBA monthly scoreboard",
+          "kind": "direct_url",
+          "competition_code": "s:40~l:46",
+          "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+          "coverage": "NBA; one request per season month"
+        },
+        "api_basketball": {
+          "name": "API-Basketball",
+          "kind": "api",
+          "competition_code": "12",
+          "url": "https://v1.basketball.api-sports.io",
+          "coverage": "configured basketball leagues"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6367,6 +8824,23 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "espn_url": {
+          "name": "ESPN NBA monthly scoreboard",
+          "kind": "direct_url",
+          "competition_code": "s:40~l:46",
+          "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+          "coverage": "NBA; one request per season month"
+        },
+        "api_basketball": {
+          "name": "API-Basketball",
+          "kind": "api",
+          "competition_code": "12",
+          "url": "https://v1.basketball.api-sports.io",
+          "coverage": "configured basketball leagues"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6421,6 +8895,23 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "espn_url": {
+          "name": "ESPN NBA monthly scoreboard",
+          "kind": "direct_url",
+          "competition_code": "s:40~l:46",
+          "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+          "coverage": "NBA; one request per season month"
+        },
+        "api_basketball": {
+          "name": "API-Basketball",
+          "kind": "api",
+          "competition_code": "12",
+          "url": "https://v1.basketball.api-sports.io",
+          "coverage": "configured basketball leagues"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6475,6 +8966,23 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "espn_url": {
+          "name": "ESPN NBA monthly scoreboard",
+          "kind": "direct_url",
+          "competition_code": "s:40~l:46",
+          "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+          "coverage": "NBA; one request per season month"
+        },
+        "api_basketball": {
+          "name": "API-Basketball",
+          "kind": "api",
+          "competition_code": "12",
+          "url": "https://v1.basketball.api-sports.io",
+          "coverage": "configured basketball leagues"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6529,6 +9037,23 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "espn_url": {
+          "name": "ESPN NBA monthly scoreboard",
+          "kind": "direct_url",
+          "competition_code": "s:40~l:46",
+          "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+          "coverage": "NBA; one request per season month"
+        },
+        "api_basketball": {
+          "name": "API-Basketball",
+          "kind": "api",
+          "competition_code": "12",
+          "url": "https://v1.basketball.api-sports.io",
+          "coverage": "configured basketball leagues"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6583,6 +9108,23 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "espn_url": {
+          "name": "ESPN NBA monthly scoreboard",
+          "kind": "direct_url",
+          "competition_code": "s:40~l:46",
+          "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+          "coverage": "NBA; one request per season month"
+        },
+        "api_basketball": {
+          "name": "API-Basketball",
+          "kind": "api",
+          "competition_code": "12",
+          "url": "https://v1.basketball.api-sports.io",
+          "coverage": "configured basketball leagues"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6637,6 +9179,23 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "espn_url": {
+          "name": "ESPN NBA monthly scoreboard",
+          "kind": "direct_url",
+          "competition_code": "s:40~l:46",
+          "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+          "coverage": "NBA; one request per season month"
+        },
+        "api_basketball": {
+          "name": "API-Basketball",
+          "kind": "api",
+          "competition_code": "12",
+          "url": "https://v1.basketball.api-sports.io",
+          "coverage": "configured basketball leagues"
+        }
+      },
+      "evidence_gaps": [],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",
@@ -6691,6 +9250,25 @@
           "reason": null
         }
       },
+      "provider_sources": {
+        "espn_url": {
+          "name": "ESPN NBA monthly scoreboard",
+          "kind": "direct_url",
+          "competition_code": "s:40~l:46",
+          "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+          "coverage": "NBA; one request per season month"
+        },
+        "api_basketball": {
+          "name": "API-Basketball",
+          "kind": "api",
+          "competition_code": "12",
+          "url": "https://v1.basketball.api-sports.io",
+          "coverage": "configured basketball leagues"
+        }
+      },
+      "evidence_gaps": [
+        "expected_fixture_total"
+      ],
       "acquisition_state": "PENDING",
       "persisted_records": "UNKNOWN",
       "attempted_coverage_units": "UNKNOWN",

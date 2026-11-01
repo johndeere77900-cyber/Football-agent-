@@ -112,6 +112,25 @@ ENABLE_ESPN_BASKETBALL = os.environ.get("ENABLE_ESPN_BASKETBALL", "false" if ENV
 # --- Historical Seasons Target ----------------------------------------------
 TARGET_SEASONS = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
 
+# --- Approved historical football acquisition providers ---------------------
+# The only providers whose records may be reconciled as one canonical logical
+# fixture. They are listed in approved acquisition order.
+#
+# Cross-provider identity matching exists because these providers use different
+# native fixture ids for the same match. It must never widen to the legacy live
+# namespaces (`api_football`, `football_data_org`) or to the umbrella
+# `soccerdata` writer label: those rows belong to a different acquisition
+# contract, and merging them would rewrite source/provenance and destroy the
+# provider-native ids that live and historical lookups depend on. Legacy rows
+# therefore stay isolated and are only ever addressed by their exact
+# `(source, fixture_id)` key.
+FOOTBALL_APPROVED_HISTORICAL_PROVIDERS = (
+    "football_data_csv",
+    "soccerdata_fbref",
+    "soccerdata_match_history",
+    "soccerdata_sofascore",
+)
+
 # --- Canonical Team Aliases (Competition-Aware & Sport-Specific) ----------
 # Keyed by (normalized_alias, league_id) where competition context is required,
 # or string normalized_alias for uniquely named clubs across competitions.
@@ -829,6 +848,39 @@ FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS = {
         "evidence": "UEFA EURO 2024: 24 teams, 51 matches (14 June - 14 July 2024).",
     },
 }
+
+
+def documented_football_tournament_editions(league_id):
+    """
+    Return the tournament editions of one football competition that are documented.
+
+    Only editions carrying an independently established match total are returned,
+    and only for the requested competition. This is what lets a finished edition
+    outside the generic season range (for example the 2018 FIFA World Cup) be
+    acquired and inventoried, while an undocumented season of the same competition
+    - or the same calendar year in another competition - is still rejected.
+    """
+    editions = set()
+    try:
+        requested_league = int(league_id)
+    except (TypeError, ValueError):
+        return editions
+
+    expectations = FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS or {}
+    for key in expectations:
+        if not isinstance(key, tuple) or len(key) != 3:
+            continue
+        sport_key, documented_league, documented_season = key
+        if str(sport_key).strip().lower() != "football":
+            continue
+        try:
+            if int(documented_league) != requested_league:
+                continue
+            editions.add(int(documented_season))
+        except (TypeError, ValueError):
+            continue
+    return editions
+
 
 # Season-specific authoritative football coverage expectations.
 #

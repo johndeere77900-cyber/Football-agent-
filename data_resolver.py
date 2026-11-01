@@ -641,6 +641,34 @@ def _classify_provider_attempt_outcome(fixtures, meta):
     return "NO_DATA_FROM_PROVIDER"
 
 
+def _attempted_provider_label(attempted):
+    """
+    Return the acquisition label of the approved routes that produced a dataset.
+
+    ``source`` describes the acquisition route of this attempt (the direct
+    Football-Data.co.uk CSV download, the SoccerData route, or ``mixed`` when
+    both produced records). It is deliberately coarser than
+    ``providers_contributed``, which is derived from the records themselves and
+    names the individual FBref / MatchHistory / Sofascore providers. Keeping the
+    two separate means a writer label can never overwrite record-level
+    attribution, and a reconciled dataset is still described by the route that
+    actually produced it.
+
+    An attempt that returned no records never becomes the source label.
+    """
+    labels = []
+    for provider_name, produced in attempted:
+        if produced and provider_name not in labels:
+            labels.append(provider_name)
+    if not labels:
+        # No approved route produced records: the dataset has no acquisition
+        # source, and reporting a provider name here would misattribute it.
+        return "none"
+    if len(labels) > 1:
+        return "mixed"
+    return labels[0]
+
+
 def _providers_contributed_from_records(fixtures, attempted=None):
     """
     Derive which providers actually contributed to a reconciled fixture dataset.
@@ -2974,7 +3002,12 @@ class DataResolver:
                     "fixtures": combined_fixtures,
                     "expected_pages": 1,
                     "current_page": 1,
-                    "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                    "source": _attempted_provider_label((
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata", sd_fb_fixtures),
+                        ("soccerdata", sd_mh_fixtures),
+                        ("soccerdata", sd_ss_fixtures),
+                    )),
                     "provider_metadata": {
                         "competition_format": competition_format,
                         "expected_team_ids": expected_team_ids_local,
@@ -3056,7 +3089,12 @@ class DataResolver:
                     "fixtures": combined_fixtures,
                     "expected_pages": 1,
                     "current_page": 1,
-                    "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                    "source": _attempted_provider_label((
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata", sd_fb_fixtures),
+                        ("soccerdata", sd_mh_fixtures),
+                        ("soccerdata", sd_ss_fixtures),
+                    )),
                     "provider_metadata": {
                         "competition_format": competition_format,
                         "expected_team_ids": expected_team_ids_local,
@@ -3142,7 +3180,12 @@ class DataResolver:
                     "fixtures": combined_fixtures,
                     "expected_pages": 1,
                     "current_page": 1,
-                    "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                    "source": _attempted_provider_label((
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata", sd_fb_fixtures),
+                        ("soccerdata", sd_mh_fixtures),
+                        ("soccerdata", sd_ss_fixtures),
+                    )),
                     "provider_metadata": {
                         "competition_format": competition_format,
                         "expected_team_ids": expected_team_ids_local,
@@ -3228,7 +3271,12 @@ class DataResolver:
                 "fixtures": combined_fixtures,
                 "expected_pages": 1,
                 "current_page": page,
-                "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                "source": _attempted_provider_label((
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata", sd_fb_fixtures),
+                        ("soccerdata", sd_mh_fixtures),
+                        ("soccerdata", sd_ss_fixtures),
+                    )),
                 "provider_metadata": {
                     "competition_format": competition_format,
                     "expected_team_ids": expected_team_ids,
@@ -3263,7 +3311,12 @@ class DataResolver:
             ],
         )
 
-        final_source = "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "none")
+        final_source = _attempted_provider_label((
+            ("football_data_csv", csv_fixtures),
+            ("soccerdata", sd_fb_fixtures),
+            ("soccerdata", sd_mh_fixtures),
+            ("soccerdata", sd_ss_fixtures),
+        ))
 
         final_provider_metadata = {
             "competition_format": competition_format,

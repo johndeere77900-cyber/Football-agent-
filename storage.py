@@ -5231,6 +5231,35 @@ _PROVENANCE_WRITER_SOURCES = (
     "api_basketball",
 )
 
+# Retired live-provider namespaces. Records persisted under these labels are
+# never merged into an approved historical record; when one already describes the
+# same logical fixture as an approved record, that overlap is counted and
+# reported for reconciliation instead of being silently tolerated.
+_FOOTBALL_LEGACY_IDENTITY_PROVIDERS = (
+    "api_football",
+    "football_data_org",
+)
+
+# Cross-provider canonical fixture identity is reconciled only between the
+# approved historical football acquisition providers (the record's own provider
+# attribution, not the writer label of a whole page). A row owned by a legacy
+# namespace stays addressable by its exact (source, fixture_id) key but is never
+# an identity-match target, and a legacy record never identity-matches into an
+# approved historical row: that merge would rewrite provenance and discard the
+# provider-native ids live and historical lookups rely on.
+_FOOTBALL_APPROVED_IDENTITY_PROVIDERS = tuple(
+    getattr(
+        config,
+        "FOOTBALL_APPROVED_HISTORICAL_PROVIDERS",
+        (
+            "football_data_csv",
+            "soccerdata_fbref",
+            "soccerdata_match_history",
+            "soccerdata_sofascore",
+        ),
+    )
+)
+
 
 def merge_historical_fixture_metadata(existing_item, incoming_item):
     """
@@ -5376,6 +5405,46 @@ def _football_row_identity(row):
     return (str(canonical_home), str(canonical_away), kickoff_date)
 
 
+def _football_row_provider(row):
+    """
+    Provider that owns a persisted football fixture row.
+
+    The record's own ``provider_provenance.provider`` is authoritative because a
+    page may be persisted under a writer label (``mixed``, ``soccerdata``,
+    ``internal_db``) that does not identify the acquisition source. The stored
+    ``source`` column is only a fallback for rows whose payload carries no
+    provider attribution.
+    """
+    try:
+        stored_source = str(row[1] or "").strip()
+        raw_json_value = row[2]
+    except (IndexError, TypeError):
+        return ""
+
+    if isinstance(raw_json_value, (str, bytes)) and raw_json_value:
+        try:
+            payload = _json_loads(raw_json_value)
+        except Exception:  # noqa: BLE001 - attribution is evidence, never fatal
+            payload = None
+        if isinstance(payload, dict):
+            provenance = payload.get("provider_provenance")
+            if isinstance(provenance, dict):
+                name = provenance.get("provider")
+                if isinstance(name, str) and name.strip():
+                    return name.strip()
+    return stored_source
+
+
+def _football_identity_allowed(provider_name):
+    """True when a record may take part in cross-provider canonical matching."""
+    return str(provider_name or "").strip() in _FOOTBALL_APPROVED_IDENTITY_PROVIDERS
+
+
+def _football_is_legacy_provider(provider_name):
+    """True for the retired live namespaces that stay isolated by contract."""
+    return str(provider_name or "").strip() in _FOOTBALL_LEGACY_IDENTITY_PROVIDERS
+
+
 def _football_provider_name(item, fallback_source):
     """Provider label of a fixture record, falling back to the writer's source."""
     provenance = item.get("provider_provenance") if isinstance(item, dict) else None
@@ -5477,18 +5546,9 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
     # Only documented editions of this same competition are admitted, so the
     # allow-list is never widened in a way that accepts an arbitrary season.
     documented_tournament_editions = set()
-    try:
-        tournament_expectations = getattr(config, "FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS", {}) or {}
-        for expectation_key in tournament_expectations.keys():
-            if not isinstance(expectation_key, tuple) or len(expectation_key) != 3:
-                continue
-            sport_key, documented_league, documented_season = expectation_key
-            if str(sport_key).strip().lower() != "football":
-                continue
-            if int(documented_league) == league_id:
-                documented_tournament_editions.add(int(documented_season))
-    except (TypeError, ValueError):
-        documented_tournament_editions = set()
+    documented_editions_helper = getattr(config, "documented_football_tournament_editions", None)
+    if callable(documented_editions_helper):
+        documented_tournament_editions = set(documented_editions_helper(league_id) or set())
     allowed_seasons |= documented_tournament_editions
 
     if season not in allowed_seasons:
@@ -5549,6 +5609,7 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             "already_existing": 0,
             "conflict_only": 0,
             "ambiguous_identity": 0,
+            "legacy_identity_overlap": 0,
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
@@ -5583,6 +5644,7 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
     existing_unchanged = 0
     conflict_only_count = 0
     ambiguous_identity_count = 0
+    legacy_overlap_count = 0
     conflict_counts = {}
     conflict_events = 0
 
@@ -5618,11 +5680,24 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
 
         rows_by_native_id = {}
         rows_by_identity = {}
+        legacy_rows_by_identity = {}
         for row in season_rows:
             rows_by_native_id[(str(row[1]), int(row[0]))] = row
-            row_identity = _football_row_identity(row)
-            if row_identity is not None:
-                rows_by_identity.setdefault(row_identity, []).append(row)
+            row_provider = _football_row_provider(row)
+            # Only a row owned by an approved historical provider can be the
+            # target of a canonical identity match. A legacy live-provider row
+            # remains addressable by its own native id only.
+            if _football_identity_allowed(row_provider):
+                row_identity = _football_row_identity(row)
+                if row_identity is not None:
+                    rows_by_identity.setdefault(row_identity, []).append(row)
+            elif _football_is_legacy_provider(row_provider):
+                # Evidence for database reconciliation: a retired namespace row
+                # describing the same logical fixture is a cross-contract
+                # duplicate that this code path must not merge.
+                row_identity = _football_row_identity(row)
+                if row_identity is not None:
+                    legacy_rows_by_identity.setdefault(row_identity, []).append(row)
 
         resolved_plan = []
         seen_logical_targets = {}
@@ -5634,7 +5709,20 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             kickoff_date = _football_fixture_kickoff_date(fixture_obj.get("date"))
             identity = (str(c_home), str(c_away), kickoff_date) if (kickoff_date and c_home and c_away) else None
 
-            if match_row is None and identity is not None:
+            # Cross-provider matching is a contract between approved historical
+            # providers only. Any other writer (legacy api_football /
+            # football_data_org, the `soccerdata` umbrella label, `mixed`,
+            # `internal_db`, an unknown provider) falls back to exact
+            # (source, fixture_id) idempotency and never participates in a
+            # canonical identity merge.
+            identity_allowed = _football_identity_allowed(_football_provider_name(item, source))
+
+            if identity is not None and identity in legacy_rows_by_identity:
+                # Reported, never merged: the approved record is persisted under
+                # its own provider contract while the retired row stays intact.
+                legacy_overlap_count += 1
+
+            if match_row is None and identity is not None and identity_allowed:
                 candidates = rows_by_identity.get(identity) or []
                 if len(candidates) == 1:
                     match_row = candidates[0]
@@ -5652,7 +5740,7 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
 
             # Two incoming records for the same logical fixture (different native
             # ids, same teams and kickoff date) are one fixture, never two rows.
-            if identity is not None:
+            if identity is not None and identity_allowed:
                 if identity in seen_logical_targets:
                     dup_count += 1
                     continue
@@ -5871,6 +5959,7 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             "already_existing": existing_unchanged,
             "conflict_only": conflict_only_count,
             "ambiguous_identity": ambiguous_identity_count,
+            "legacy_identity_overlap": legacy_overlap_count,
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,

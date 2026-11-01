@@ -83,7 +83,10 @@ def _expected_coverage(sport, league_id, season, competition):
     knowledge_units = sports_knowledge.expected_coverage_units(sport, league_id, season)
     if knowledge_units.get("value") is not None:
         expected["expected_fixtures"] = knowledge_units["value"]
-        expected["basis"] = knowledge_units.get("evidence")
+        tournament_expectations = getattr(config, "FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS", {}) or {}
+        documented = tournament_expectations.get((sport, league_id, season))
+        documented_evidence = documented.get("evidence") if isinstance(documented, dict) else None
+        expected["basis"] = knowledge_units.get("evidence") or documented_evidence
 
     if competition.get("coverage_format") == "double_round_robin":
         try:
@@ -116,6 +119,56 @@ def _provider_support(competition):
                 "reason": declaration.get("reason"),
             }
     return support
+
+
+def _provider_sources(sport, competition):
+    """Return the concrete source/endpoint for every provider that covers a competition."""
+    registry = sports_knowledge.providers(sport)
+    coverage = competition.get("provider_coverage") if isinstance(competition.get("provider_coverage"), dict) else {}
+    sources = {}
+    for provider_name in sports_knowledge.provider_order(sport):
+        declaration = coverage.get(provider_name)
+        if not isinstance(declaration, dict) or declaration.get("supported") is not True:
+            continue
+        info = registry.get(provider_name) if isinstance(registry.get(provider_name), dict) else {}
+        sources[provider_name] = {
+            "name": info.get("name"),
+            "kind": info.get("kind"),
+            "competition_code": declaration.get("code"),
+            "url": (
+                info.get("url_pattern")
+                or info.get("documentation_url")
+                or info.get("library_url")
+                or info.get("upstream_url")
+            ),
+            "coverage": info.get("coverage"),
+        }
+    return sources
+
+
+def _evidence_gaps(sport, league_id, season, competition, record):
+    """List the evidence this repository does not hold for a competition season."""
+    gaps = []
+    if record.get("status") != "KNOWN":
+        gaps.append("edition_window")
+
+    # A double-round-robin total is derivable from the season's authoritative team
+    # count, so it is not a missing-evidence gap. Every other format needs an
+    # independently documented total; when the catalogue has none (or records an
+    # explicit null for this edition) coverage stays unverifiable.
+    if competition.get("coverage_format") != "double_round_robin":
+        expected_value = sports_knowledge.expected_coverage_units(sport, league_id, season).get("value")
+        if expected_value is None:
+            gaps.append("expected_fixture_total")
+
+    coverage_format = competition.get("coverage_format")
+    if coverage_format in ("tournament", "international", "cup"):
+        # No authoritative participant roster is recorded for any tournament,
+        # cup or international competition, so completion cannot be established
+        # from a match total alone. Reported as a gap instead of being invented.
+        gaps.append("authoritative_participant_universe")
+
+    return gaps
 
 
 def _local_database_evidence(sport, league_id, season):
@@ -164,7 +217,17 @@ def build_inventory(include_local_database=False, now_utc=None):
         for league_id in league_ids:
             competition = sports_knowledge.get_competition(sport, league_id)
             selection = sports_knowledge.select_seasons(sport, league_id, requested)
-            season_candidates = sorted(set(selection.get("supported") or []) | set(selection.get("not_applicable") or []))
+            # The inventory must list every configured competition season, not
+            # only the seasons inside the generic target range: a documented
+            # edition such as the 2018 FIFA World Cup is acquirable and storable,
+            # and an edition whose window is undocumented must be visible as an
+            # explicit gap instead of being omitted.
+            documented_editions = set(sports_knowledge.edition_years(sport, league_id) or [])
+            season_candidates = sorted(
+                set(selection.get("supported") or [])
+                | set(selection.get("not_applicable") or [])
+                | documented_editions
+            )
 
             for season in season_candidates:
                 record = sports_knowledge.edition(sport, league_id, season) if competition else {
@@ -202,6 +265,8 @@ def build_inventory(include_local_database=False, now_utc=None):
                     ),
                     "approved_provider_order": sports_knowledge.provider_order(sport),
                     "provider_support": _provider_support(competition or {}),
+                    "provider_sources": _provider_sources(sport, competition) if competition else {},
+                    "evidence_gaps": _evidence_gaps(sport, league_id, season, competition, record) if competition else ["competition_not_catalogued"],
                     "acquisition_state": ACQUISITION_UNKNOWN,
                     "persisted_records": UNKNOWN,
                     "attempted_coverage_units": UNKNOWN,
@@ -242,6 +307,9 @@ def build_inventory(include_local_database=False, now_utc=None):
         "database_inspected": database_inspected,
         "knowledge_schema_version": sports_knowledge.KNOWLEDGE_SCHEMA_VERSION,
         "knowledge_validation_problems": knowledge_problems,
+        "excluded_from_historical_fixture_acquisition": sports_knowledge.load_sport("football").get(
+            "excluded_from_historical_fixture_acquisition"
+        ),
         "status_conventions": {
             "lifecycle": [LIFECYCLE_EXPECTED, LIFECYCLE_UPCOMING, LIFECYCLE_ONGOING, LIFECYCLE_COMPLETED, LIFECYCLE_UNKNOWN, LIFECYCLE_NOT_APPLICABLE],
             "acquisition": [ACQUISITION_UNKNOWN, ACQUISITION_RUNNING, ACQUISITION_INCOMPLETE, ACQUISITION_VALIDATED, ACQUISITION_FAILED],
