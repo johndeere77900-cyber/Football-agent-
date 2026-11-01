@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+"""
+Build PHASE1_INVENTORY.json reproducibly from repository configuration.
+
+The inventory is generated from the current configuration and the versioned
+sports knowledge catalogue. It is deliberately NOT a place to record claimed
+production numbers: without a readable database every persisted-record field is
+``UNKNOWN`` and the generation source says so. When a local database is
+available, ``--local-database`` reads the real manifests and record counts into
+the inventory instead.
+
+Status vocabulary
+-----------------
+Lifecycle (does the competition season exist / is it finished?):
+    EXPECTED, UPCOMING, ONGOING, COMPLETED, UNKNOWN, NOT_APPLICABLE
+Acquisition (how far did persistence get?):
+    PENDING, RUNNING, INCOMPLETE, VALIDATED, FAILED
+
+Usage
+-----
+    python build_phase1_inventory.py                    # configuration only
+    python build_phase1_inventory.py --local-database   # + local DB evidence
+    python build_phase1_inventory.py --output PHASE1_INVENTORY.json
+"""
+
+import argparse
+import json
+from datetime import datetime, timezone
+
+import config
+import sports_knowledge
+
+INVENTORY_VERSION = 1
+
+LIFECYCLE_EXPECTED = "EXPECTED"
+LIFECYCLE_UPCOMING = "UPCOMING"
+LIFECYCLE_ONGOING = "ONGOING"
+LIFECYCLE_COMPLETED = "COMPLETED"
+LIFECYCLE_UNKNOWN = "UNKNOWN"
+LIFECYCLE_NOT_APPLICABLE = "NOT_APPLICABLE"
+
+ACQUISITION_UNKNOWN = "PENDING"
+ACQUISITION_VALIDATED = "VALIDATED"
+ACQUISITION_INCOMPLETE = "INCOMPLETE"
+ACQUISITION_FAILED = "FAILED"
+ACQUISITION_RUNNING = "RUNNING"
+
+UNKNOWN = "UNKNOWN"
+
+
+def _now_utc():
+    return datetime.now(timezone.utc)
+
+
+def _lifecycle_for_edition(record, now_utc):
+    """Return (lifecycle_state, evidence) for a catalogued edition."""
+    if record.get("exists") is False:
+        return LIFECYCLE_NOT_APPLICABLE, "competition does not stage this edition"
+    if record.get("status") != "KNOWN":
+        return LIFECYCLE_UNKNOWN, "edition window not documented; completion fails closed"
+
+    from datetime import datetime as _dt
+
+    start = _dt.fromisoformat(record["start"])
+    end = _dt.fromisoformat(record["end"])
+    if now_utc < start:
+        return LIFECYCLE_UPCOMING, f"declared window opens {record['start']}"
+    if now_utc < end:
+        return LIFECYCLE_ONGOING, f"declared window closes {record['end']}"
+    return LIFECYCLE_COMPLETED, f"declared window closed {record['end']}"
+
+
+def _expected_coverage(sport, league_id, season, competition):
+    """
+    Return the expected coverage units for a competition season.
+
+    A domestic double-round-robin total is only stated when the team count for
+    that season is independently known. Cup, international and tournament
+    formats have no fixed pair schedule, so no fixture count is invented.
+    """
+    expected = {"type": competition.get("coverage_format") or competition.get("format"), "expected_fixtures": UNKNOWN, "expected_teams": UNKNOWN, "basis": None}
+
+    knowledge_units = sports_knowledge.expected_coverage_units(sport, league_id, season)
+    if knowledge_units.get("value") is not None:
+        expected["expected_fixtures"] = knowledge_units["value"]
+        expected["basis"] = knowledge_units.get("evidence")
+
+    if competition.get("coverage_format") == "double_round_robin":
+        try:
+            import data_resolver
+
+            team_count = data_resolver.get_expected_league_team_count(league_id, season)
+        except Exception:
+            team_count = None
+        if team_count:
+            expected["expected_teams"] = team_count
+            expected["expected_fixtures"] = team_count * (team_count - 1)
+            expected["basis"] = "double round robin: teams * (teams - 1)"
+        exceptions = getattr(config, "FOOTBALL_SEASON_COVERAGE_EXCEPTIONS", {}) or {}
+        exception = exceptions.get((sport, league_id, season))
+        if isinstance(exception, dict) and isinstance(exception.get("expected_fixture_count"), int):
+            expected["expected_fixtures"] = exception["expected_fixture_count"]
+            expected["basis"] = exception.get("evidence") or "documented season exception"
+
+    return expected
+
+
+def _provider_support(competition):
+    coverage = competition.get("provider_coverage") if isinstance(competition.get("provider_coverage"), dict) else {}
+    support = {}
+    for provider_name, declaration in coverage.items():
+        if isinstance(declaration, dict):
+            support[provider_name] = {
+                "supported": declaration.get("supported") is True,
+                "code": declaration.get("code"),
+                "reason": declaration.get("reason"),
+            }
+    return support
+
+
+def _local_database_evidence(sport, league_id, season):
+    """Read a local database manifest/record count, or report it unavailable."""
+    try:
+        import storage
+
+        manifest = storage.get_historical_dataset_status(league_id, season, sport=sport)
+        if sport == "basketball":
+            records = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
+        else:
+            records = storage.get_historical_fixtures(league_id, season)
+        return {
+            "source": "local_database",
+            "manifest_status": manifest.get("status") or UNKNOWN,
+            "persisted_records": len(records) if isinstance(records, list) else UNKNOWN,
+            "expected_coverage_units": manifest.get("expected_pages", UNKNOWN),
+            "completed_coverage_units": manifest.get("pages_completed", UNKNOWN),
+            "coverage_unit": manifest.get("coverage_unit"),
+            "error_reason": manifest.get("error_reason"),
+            "provider_coverage": manifest.get("provider_coverage"),
+        }
+    except Exception as exc:  # noqa: BLE001 - evidence is optional and must not fail generation
+        return {
+            "source": "local_database",
+            "manifest_status": UNKNOWN,
+            "persisted_records": UNKNOWN,
+            "error": f"database evidence unavailable: {exc}",
+        }
+
+
+def build_inventory(include_local_database=False, now_utc=None):
+    """Build the inventory dictionary from the current repository configuration."""
+    now_utc = now_utc or _now_utc()
+    knowledge_problems = sports_knowledge.validate()
+
+    targets = []
+    for sport in sports_knowledge.SPORT_FILES:
+        if sport == "football":
+            league_ids = list(getattr(config, "ALLOWED_LEAGUE_IDS", []))
+        else:
+            league_ids = list(getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", []))
+
+        requested = list(getattr(config, "TARGET_SEASONS", []))
+
+        for league_id in league_ids:
+            competition = sports_knowledge.get_competition(sport, league_id)
+            selection = sports_knowledge.select_seasons(sport, league_id, requested)
+            season_candidates = sorted(set(selection.get("supported") or []) | set(selection.get("not_applicable") or []))
+
+            for season in season_candidates:
+                record = sports_knowledge.edition(sport, league_id, season) if competition else {
+                    "exists": None,
+                    "status": LIFECYCLE_UNKNOWN,
+                }
+                if competition:
+                    lifecycle, lifecycle_evidence = _lifecycle_for_edition(record, now_utc)
+                else:
+                    lifecycle, lifecycle_evidence = (
+                        LIFECYCLE_UNKNOWN,
+                        "competition is not catalogued; no lifecycle can be established",
+                    )
+
+                target = {
+                    "sport": sport,
+                    "competition": (competition or {}).get("name") or UNKNOWN,
+                    "league_id": league_id,
+                    "aliases": (competition or {}).get("aliases") or [],
+                    "governing_body": (competition or {}).get("governing_body") or UNKNOWN,
+                    "country": ((competition or {}).get("country") if competition else None) or "INTERNATIONAL_OR_UNKNOWN",
+                    "season": season,
+                    "edition_label": record.get("label") if competition else UNKNOWN,
+                    "format": (competition or {}).get("format") or UNKNOWN,
+                    "coverage_format": (competition or {}).get("coverage_format") or UNKNOWN,
+                    "window_start": record.get("start") if record.get("status") == "KNOWN" else UNKNOWN,
+                    "window_end": record.get("end") if record.get("status") == "KNOWN" else UNKNOWN,
+                    "window_evidence": record.get("evidence") if record.get("status") == "KNOWN" else "edition window not documented",
+                    "lifecycle_state": lifecycle,
+                    "lifecycle_evidence": lifecycle_evidence,
+                    "expected_coverage": (
+                        _expected_coverage(sport, league_id, season, competition)
+                        if competition
+                        else {"type": UNKNOWN, "expected_fixtures": UNKNOWN, "expected_teams": UNKNOWN, "basis": None}
+                    ),
+                    "approved_provider_order": sports_knowledge.provider_order(sport),
+                    "provider_support": _provider_support(competition or {}),
+                    "acquisition_state": ACQUISITION_UNKNOWN,
+                    "persisted_records": UNKNOWN,
+                    "attempted_coverage_units": UNKNOWN,
+                    "parsed_records": UNKNOWN,
+                    "duplicates_conflicts": UNKNOWN,
+                    "unresolved_team_ids": UNKNOWN,
+                    "missing_coverage_units": UNKNOWN,
+                    "provenance_evidence": UNKNOWN,
+                    "known_blockers": (competition or {}).get("known_blockers") or [],
+                    "next_safe_action": None,
+                }
+
+                if lifecycle == LIFECYCLE_NOT_APPLICABLE:
+                    target["acquisition_state"] = LIFECYCLE_NOT_APPLICABLE
+                    target["next_safe_action"] = "none; the competition does not stage this edition"
+                elif competition is None:
+                    target["next_safe_action"] = "add a catalogued competition entry before acquiring"
+                elif record.get("status") != "KNOWN":
+                    target["next_safe_action"] = "document the edition window from an authoritative source; acquisition stays incomplete until then"
+                else:
+                    target["next_safe_action"] = "acquire through the approved provider order, then validate persisted coverage"
+
+                if include_local_database and competition is not None:
+                    evidence = _local_database_evidence(sport, league_id, season)
+                    target["acquisition_state"] = evidence.get("manifest_status") or UNKNOWN
+                    target["persisted_records"] = evidence.get("persisted_records", UNKNOWN)
+                    target["attempted_coverage_units"] = evidence.get("completed_coverage_units", UNKNOWN)
+                    target["expected_coverage_units"] = evidence.get("expected_coverage_units", UNKNOWN)
+                    target["provenance_evidence"] = evidence
+
+                targets.append(target)
+
+    database_inspected = bool(include_local_database)
+    return {
+        "inventory_version": INVENTORY_VERSION,
+        "generated_by": "build_phase1_inventory.py",
+        "generation_source": "repository_configuration_and_sports_knowledge",
+        "database_inspected": database_inspected,
+        "knowledge_schema_version": sports_knowledge.KNOWLEDGE_SCHEMA_VERSION,
+        "knowledge_validation_problems": knowledge_problems,
+        "status_conventions": {
+            "lifecycle": [LIFECYCLE_EXPECTED, LIFECYCLE_UPCOMING, LIFECYCLE_ONGOING, LIFECYCLE_COMPLETED, LIFECYCLE_UNKNOWN, LIFECYCLE_NOT_APPLICABLE],
+            "acquisition": [ACQUISITION_UNKNOWN, ACQUISITION_RUNNING, ACQUISITION_INCOMPLETE, ACQUISITION_VALIDATED, ACQUISITION_FAILED],
+            "unknown_policy": (
+                "UNKNOWN means repository evidence is unavailable. It is never a zero, never a success and "
+                "never a substitute for a database readback. Persisted counts are only recorded when a "
+                "database was actually read."
+            ),
+        },
+        "targets": targets,
+    }
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Build the reproducible Phase 1 inventory from repository configuration.")
+    parser.add_argument("--output", default="PHASE1_INVENTORY.json", help="Output path (default: PHASE1_INVENTORY.json)")
+    parser.add_argument(
+        "--local-database",
+        action="store_true",
+        help="Also read a local SQLite/PostgreSQL database for persisted-record evidence (never claims a production readback).",
+    )
+    args = parser.parse_args(argv)
+
+    inventory = build_inventory(include_local_database=args.local_database)
+
+    with open(args.output, "w", encoding="utf-8") as handle:
+        json.dump(inventory, handle, indent=2, sort_keys=False)
+        handle.write("\n")
+
+    not_applicable = sum(1 for t in inventory["targets"] if t["lifecycle_state"] == LIFECYCLE_NOT_APPLICABLE)
+    print(
+        f"Wrote {args.output}: {len(inventory['targets'])} competition-season targets "
+        f"({not_applicable} NOT_APPLICABLE), {len(inventory['knowledge_validation_problems'])} knowledge validation problem(s), "
+        f"database_inspected={inventory['database_inspected']}."
+    )
+    return 0 if not inventory["knowledge_validation_problems"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

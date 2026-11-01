@@ -1542,9 +1542,202 @@ def validate_historical_basketball_game(item, target_league_id=None, target_seas
     return True, "valid", normalized
 
 
+def _basketball_missing_value(value):
+    """
+    Return True when a persisted value is absent or an explicit unknown.
+
+    An explicit unknown (empty string, "unknown", "unclassified") is treated as
+    missing so a later verified provider value can fill it. Any other value is a
+    real fact and is never treated as missing.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == "" or value.strip().lower() in {"unknown", "unclassified", "null", "none"}
+    return False
+
+
+def _basketball_points(side_obj):
+    """Return the points total from either ``{"total": n}`` or a bare value."""
+    if isinstance(side_obj, dict):
+        return side_obj.get("total")
+    return side_obj
+
+
+def _basketball_row_values(item):
+    """Extract the persisted column values from a game payload (raw or merged)."""
+    status_obj = item.get("status") if isinstance(item.get("status"), dict) else {}
+    teams = item.get("teams") if isinstance(item.get("teams"), dict) else {}
+    home = teams.get("home") if isinstance(teams.get("home"), dict) else {}
+    away = teams.get("away") if isinstance(teams.get("away"), dict) else {}
+    scores = item.get("scores") if isinstance(item.get("scores"), dict) else {}
+
+    status_short = status_obj.get("short")
+    home_name = home.get("name")
+    away_name = away.get("name")
+
+    return {
+        "game_date": str(item.get("date", "")),
+        "status_short": status_short if isinstance(status_short, str) else "",
+        "home_team_id": home.get("id"),
+        "away_team_id": away.get("id"),
+        "home_team": home_name if isinstance(home_name, str) else "",
+        "away_team": away_name if isinstance(away_name, str) else "",
+        "home_points": _basketball_points(scores.get("home")),
+        "away_points": _basketball_points(scores.get("away")),
+        "raw_json": _json_dumps(item, "raw_json"),
+    }
+
+
+def _basketball_provenance_payload(item):
+    """Collect the provider-native metadata a record carries on itself."""
+    provenance = item.get("provider_provenance") if isinstance(item.get("provider_provenance"), dict) else {}
+    payload = dict(provenance)
+    for key in ("season_type", "season_type_id", "season_slug", "stage", "game_type", "season_stage"):
+        if key not in payload and item.get(key) is not None:
+            payload[key] = item.get(key)
+    return payload
+
+
+def merge_historical_basketball_game_metadata(existing_item, incoming_item):
+    """
+    Merge verified provider metadata into an already persisted basketball game.
+
+    Returns ``(merged_item, added_fields, conflicts)``.
+
+    This is the enrichment rule for an existing ``(source, game_id)`` row and is
+    deliberately conservative and idempotent:
+
+    - game id, source, league, season, date and already valid scores are
+      preserved and never rewritten by a re-acquisition;
+    - a field is added only when it is missing (or an explicit unknown) on the
+      persisted row, so a verified value is never replaced by a null,
+      unclassified or merely different value;
+    - a conflicting incoming value is recorded as a diagnostic and discarded;
+    - provider provenance is merged key by key, so an unclassified phase can be
+      upgraded to a verified one and never the reverse;
+    - every applied enrichment is appended to ``enrichment_history`` so the
+      change keeps an auditable provenance trail.
+    """
+    import copy
+
+    existing_item = existing_item if isinstance(existing_item, dict) else {}
+    incoming_item = incoming_item if isinstance(incoming_item, dict) else {}
+
+    merged = copy.deepcopy(existing_item)
+    added = []
+    conflicts = []
+
+    def _note_conflict(field, kept, discarded):
+        conflicts.append({"field": field, "kept": kept, "discarded": discarded})
+
+    # Identity/date: the persisted row's date is authoritative once present.
+    if _basketball_missing_value(merged.get("date")) and not _basketball_missing_value(incoming_item.get("date")):
+        merged["date"] = incoming_item.get("date")
+        added.append("date")
+    elif (
+        not _basketball_missing_value(merged.get("date"))
+        and not _basketball_missing_value(incoming_item.get("date"))
+        and str(merged.get("date")) != str(incoming_item.get("date"))
+    ):
+        _note_conflict("date", merged.get("date"), incoming_item.get("date"))
+
+    # Teams: fill missing ids/names, never rewrite an established one.
+    incoming_teams = incoming_item.get("teams") if isinstance(incoming_item.get("teams"), dict) else {}
+    if not isinstance(merged.get("teams"), dict):
+        merged["teams"] = {}
+    for side in ("home", "away"):
+        incoming_side = incoming_teams.get(side) if isinstance(incoming_teams.get(side), dict) else {}
+        if not isinstance(merged["teams"].get(side), dict):
+            merged["teams"][side] = {}
+        existing_side = merged["teams"][side]
+        for field in ("id", "name"):
+            existing_value = existing_side.get(field)
+            incoming_value = incoming_side.get(field)
+            if _basketball_missing_value(existing_value) and not _basketball_missing_value(incoming_value):
+                existing_side[field] = incoming_value
+                added.append(f"teams.{side}.{field}")
+            elif (
+                not _basketball_missing_value(existing_value)
+                and not _basketball_missing_value(incoming_value)
+                and existing_value != incoming_value
+            ):
+                _note_conflict(f"teams.{side}.{field}", existing_value, incoming_value)
+
+    # Scores: fill a missing total; a differing established score is a conflict.
+    incoming_scores = incoming_item.get("scores") if isinstance(incoming_item.get("scores"), dict) else {}
+    if not isinstance(merged.get("scores"), dict):
+        merged["scores"] = {}
+    for side in ("home", "away"):
+        existing_total = _basketball_points(merged["scores"].get(side))
+        incoming_total = _basketball_points(incoming_scores.get(side))
+        if _basketball_missing_value(existing_total) and not _basketball_missing_value(incoming_total):
+            existing_side = merged["scores"].get(side)
+            if isinstance(existing_side, dict):
+                existing_side["total"] = incoming_total
+            elif existing_side is None:
+                merged["scores"][side] = {"total": incoming_total}
+            else:
+                merged["scores"][side] = {"total": incoming_total}
+            added.append(f"scores.{side}.total")
+        elif (
+            not _basketball_missing_value(existing_total)
+            and not _basketball_missing_value(incoming_total)
+            and existing_total != incoming_total
+        ):
+            _note_conflict(f"scores.{side}.total", existing_total, incoming_total)
+
+    # Status: only a missing/short status is filled in.
+    incoming_status = incoming_item.get("status") if isinstance(incoming_item.get("status"), dict) else {}
+    if not isinstance(merged.get("status"), dict):
+        merged["status"] = {}
+    if _basketball_missing_value(merged["status"].get("short")) and not _basketball_missing_value(incoming_status.get("short")):
+        merged["status"]["short"] = incoming_status.get("short")
+        added.append("status.short")
+    if _basketball_missing_value(merged["status"].get("long")) and not _basketball_missing_value(incoming_status.get("long")):
+        merged["status"]["long"] = incoming_status.get("long")
+        added.append("status.long")
+
+    # Provider provenance: key-by-key, missing/unclassified upgraded only.
+    incoming_provenance = _basketball_provenance_payload(incoming_item)
+    if incoming_provenance:
+        merged_provenance = merged.get("provider_provenance") if isinstance(merged.get("provider_provenance"), dict) else {}
+        merged_provenance = dict(merged_provenance)
+        for key, incoming_value in incoming_provenance.items():
+            existing_value = merged_provenance.get(key)
+            if _basketball_missing_value(existing_value) and not _basketball_missing_value(incoming_value):
+                merged_provenance[key] = incoming_value
+                added.append(f"provider_provenance.{key}")
+            elif (
+                not _basketball_missing_value(existing_value)
+                and not _basketball_missing_value(incoming_value)
+                and existing_value != incoming_value
+            ):
+                _note_conflict(f"provider_provenance.{key}", existing_value, incoming_value)
+        if merged_provenance:
+            merged["provider_provenance"] = merged_provenance
+
+    if added:
+        history = merged.get("enrichment_history") if isinstance(merged.get("enrichment_history"), list) else []
+        history = history[-19:] + [
+            {
+                "at": _utc_now(),
+                "fields": sorted(set(added)),
+                "conflicts": conflicts[:10],
+            }
+        ]
+        merged["enrichment_history"] = history
+
+    return merged, sorted(set(added)), conflicts
+
+
 def save_historical_basketball_games(games, league_id, season, source="api_basketball", cutoff=None, require_completed=False):
     """
-    Save historical API-Basketball games into persistent storage.
+    Save historical basketball games into persistent storage.
+
+    Idempotent by ``(source, game_id)``: a game that already exists is enriched
+    (missing verified provider metadata is added, valid date/scores are kept)
+    instead of being discarded by a conflict-ignoring insert.
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
@@ -1580,97 +1773,140 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
             "total": len(games),
             "valid": 0,
             "inserted": 0,
+            "enriched": 0,
+            "already_existing": 0,
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
+            "metadata_conflicts": {},
         }
 
     conn, db_type = _connect()
     now_str = _utc_now()
     inserted_count = 0
+    enriched_count = 0
+    existing_unchanged = 0
+    conflict_counts = {}
+
+    placeholder = "%s" if db_type == "postgres" else "?"
+    select_sql = (
+        "SELECT raw_json FROM historical_basketball_games "
+        f"WHERE source = {placeholder} AND game_id = {placeholder}"
+    )
+    update_sql = (
+        "UPDATE historical_basketball_games SET "
+        f"game_date = {placeholder}, status_short = {placeholder}, "
+        f"home_team_id = {placeholder}, away_team_id = {placeholder}, "
+        f"home_team = {placeholder}, away_team = {placeholder}, "
+        f"home_points = {placeholder}, away_points = {placeholder}, "
+        f"raw_json = {placeholder}, fetched_at = {placeholder} "
+        f"WHERE source = {placeholder} AND game_id = {placeholder}"
+    )
 
     try:
-        if db_type == "postgres":
-            with conn.cursor() as cur:
-                for gid, item in valid_games:
-                    gdate = str(item.get("date", ""))
-                    status = item.get("status", {}).get("short", "") if isinstance(item.get("status"), dict) else ""
-                    teams = item.get("teams", {})
-                    h_id = teams.get("home", {}).get("id")
-                    a_id = teams.get("away", {}).get("id")
-                    h_name = teams.get("home", {}).get("name", "")
-                    a_name = teams.get("away", {}).get("name", "")
-                    scores = item.get("scores", {})
-                    home_score = scores.get("home") if isinstance(scores, dict) else None
-                    away_score = scores.get("away") if isinstance(scores, dict) else None
-                    h_pts = home_score.get("total") if isinstance(home_score, dict) else home_score
-                    a_pts = away_score.get("total") if isinstance(away_score, dict) else away_score
+        for gid, item in valid_games:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute(select_sql, (source, gid))
+                    row = cur.fetchone()
+            else:
+                row = conn.execute(select_sql, (source, gid)).fetchone()
 
-                    raw_json_str = _json_dumps(item, "raw_json")
-
-                    cur.execute(
+            if row is None:
+                values = _basketball_row_values(item)
+                if db_type == "postgres":
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO historical_basketball_games (
+                                game_id, league_id, season, game_date, status_short,
+                                home_team_id, away_team_id, home_team, away_team,
+                                home_points, away_points, raw_json, source, fetched_at
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (source, game_id) DO NOTHING
+                            """,
+                            (
+                                gid, league_id, season, values["game_date"], values["status_short"],
+                                values["home_team_id"], values["away_team_id"], values["home_team"], values["away_team"],
+                                values["home_points"], values["away_points"], values["raw_json"], source, now_str,
+                            ),
+                        )
+                        did_insert = cur.rowcount == 1
+                else:
+                    cursor = conn.execute(
                         """
-                        INSERT INTO historical_basketball_games (
+                        INSERT OR IGNORE INTO historical_basketball_games (
                             game_id, league_id, season, game_date, status_short,
                             home_team_id, away_team_id, home_team, away_team,
                             home_points, away_points, raw_json, source, fetched_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (source, game_id) DO NOTHING
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            gid, league_id, season, gdate, status,
-                            h_id, a_id, h_name, a_name,
-                            h_pts, a_pts, raw_json_str, source, now_str,
+                            gid, league_id, season, values["game_date"], values["status_short"],
+                            values["home_team_id"], values["away_team_id"], values["home_team"], values["away_team"],
+                            values["home_points"], values["away_points"], values["raw_json"], source, now_str,
                         ),
                     )
-                    if cur.rowcount == 1:
-                        inserted_count += 1
-            conn.commit()
+                    did_insert = cursor.rowcount == 1
 
-        else:
-            for gid, item in valid_games:
-                gdate = str(item.get("date", ""))
-                status = item.get("status", {}).get("short", "") if isinstance(item.get("status"), dict) else ""
-                teams = item.get("teams", {})
-                h_id = teams.get("home", {}).get("id")
-                a_id = teams.get("away", {}).get("id")
-                h_name = teams.get("home", {}).get("name", "")
-                a_name = teams.get("away", {}).get("name", "")
-                scores = item.get("scores", {})
-                home_score = scores.get("home") if isinstance(scores, dict) else None
-                away_score = scores.get("away") if isinstance(scores, dict) else None
-                h_pts = home_score.get("total") if isinstance(home_score, dict) else home_score
-                a_pts = away_score.get("total") if isinstance(away_score, dict) else away_score
-
-                raw_json_str = _json_dumps(item, "raw_json")
-
-                cursor = conn.execute(
-                    """
-                    INSERT OR IGNORE INTO historical_basketball_games (
-                        game_id, league_id, season, game_date, status_short,
-                        home_team_id, away_team_id, home_team, away_team,
-                        home_points, away_points, raw_json, source, fetched_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        gid, league_id, season, gdate, status,
-                        h_id, a_id, h_name, a_name,
-                        h_pts, a_pts, raw_json_str, source, now_str,
-                    ),
-                )
-                if cursor.rowcount == 1:
+                if did_insert:
                     inserted_count += 1
-            conn.commit()
+                    continue
+
+                # A concurrent writer created the row between the read and the
+                # insert: re-read it and treat it as an enrichment target instead
+                # of losing the verified metadata.
+                if db_type == "postgres":
+                    with conn.cursor() as cur:
+                        cur.execute(select_sql, (source, gid))
+                        row = cur.fetchone()
+                else:
+                    row = conn.execute(select_sql, (source, gid)).fetchone()
+                if row is None:
+                    existing_unchanged += 1
+                    continue
+
+            existing_payload = _json_loads(row[0]) if row and row[0] else {}
+            merged, added_fields, conflicts = merge_historical_basketball_game_metadata(existing_payload, item)
+
+            for conflict in conflicts:
+                field = conflict.get("field")
+                conflict_counts[field] = conflict_counts.get(field, 0) + 1
+
+            if not added_fields:
+                existing_unchanged += 1
+                continue
+
+            values = _basketball_row_values(merged)
+            update_params = (
+                values["game_date"], values["status_short"],
+                values["home_team_id"], values["away_team_id"],
+                values["home_team"], values["away_team"],
+                values["home_points"], values["away_points"],
+                values["raw_json"], now_str,
+                source, gid,
+            )
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute(update_sql, update_params)
+            else:
+                conn.execute(update_sql, update_params)
+            enriched_count += 1
+
+        conn.commit()
 
         return {
             "total": len(games),
             "valid": len(valid_games),
             "inserted": inserted_count,
+            "enriched": enriched_count,
+            "already_existing": existing_unchanged,
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
+            "metadata_conflicts": conflict_counts,
         }
 
     except Exception:
@@ -1678,7 +1914,6 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
         raise
     finally:
         conn.close()
-
 
 def save_prediction_snapshot(
     fixture_id,

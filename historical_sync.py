@@ -1394,6 +1394,8 @@ def sync_historical_basketball_games(
     games_received = []
     total_valid_games = 0
     total_newly_stored = 0
+    total_enriched = 0
+    total_already_existing = 0
     total_duplicates_skipped = 0
     total_rejected_count = 0
     total_empty_pages_count = 0
@@ -1429,6 +1431,10 @@ def sync_historical_basketball_games(
                 )
                 total_valid_games += save_res.get("valid", 0)
                 total_newly_stored += save_res.get("inserted", 0)
+                # Existing rows whose missing verified metadata was applied. They
+                # are not new records, but they are real acquisition progress.
+                total_enriched += save_res.get("enriched", 0)
+                total_already_existing += save_res.get("already_existing", 0)
                 total_duplicates_skipped += save_res.get("duplicates_skipped", 0)
                 espn_rejected_count = save_res.get("rejected_count", 0)
                 total_rejected_count += espn_rejected_count
@@ -1577,6 +1583,8 @@ def sync_historical_basketball_games(
                 )
                 total_valid_games += save_result.get("valid", 0)
                 total_newly_stored += save_result.get("inserted", 0)
+                total_enriched += save_result.get("enriched", 0)
+                total_already_existing += save_result.get("already_existing", 0)
                 total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
                 total_rejected_count += save_result.get("rejected_count", 0)
 
@@ -1895,6 +1903,10 @@ def sync_historical_basketball_games(
         "rejected_count": cum_rejected_cnt_b,
         "rejection_reasons": rejection_reasons,
         "newly_stored": newly_stored,
+        # Rows that already existed and had verified provider metadata applied by
+        # the idempotent enrichment upsert. Reported separately from new rows so a
+        # re-acquisition's metadata progress is never mistaken for new coverage.
+        "enriched": total_enriched,
         "already_existing_skipped": already_existing_skipped,
         "coverage_unit": dataset_coverage_unit,
         "expected_coverage_units": safe_exp_pages_b,
@@ -2025,6 +2037,44 @@ def check_acquisition_coverage(league_id: int, season: int, sport: str = "footba
     }
 
 
+def _competition_edition_selection(sport, league_id, requested_seasons):
+    """
+    Restrict one competition's requested seasons to the editions it stages.
+
+    Domestic leagues and the continental club cups are staged every year, but the
+    international tournaments are quadrennial and the UEFA Nations League is
+    biennial. Applying a blanket annual season list to every configured
+    competition would both attempt seasons that never existed and hide real
+    coverage gaps behind fake ``NOT_APPLICABLE`` ones.
+
+    Returns a dict with ``supported`` (seasons to acquire), ``not_applicable``
+    (requested seasons the competition never staged) and ``unknown`` (editions
+    whose lifecycle window is not documented, which are still acquired because a
+    season exists and its completion simply fails closed). When the edition
+    catalog is unavailable the requested seasons are returned unchanged, so a
+    catalog problem can never silently drop acquisitions.
+    """
+    requested = [s for s in (requested_seasons or []) if isinstance(s, int) and not isinstance(s, bool)]
+    try:
+        import sports_knowledge
+
+        selection = sports_knowledge.select_seasons(sport, league_id, requested)
+    except Exception as exc:  # pragma: no cover - defensive: catalog is repository data
+        print(
+            f"Competition edition catalog unavailable for {sport} league {league_id} ({exc}); "
+            f"using the requested seasons unchanged.",
+            flush=True,
+        )
+        return {
+            "supported": requested,
+            "not_applicable": [],
+            "unknown": [],
+            "catalog_available": False,
+        }
+
+    return selection
+
+
 def run_historical_queue(
     seasons: list = None,
     season: int = None,
@@ -2044,16 +2094,55 @@ def run_historical_queue(
 
     seasons = target_seasons
 
+    # Competition-specific season/edition selection. A season a competition never
+    # staged is reported as skipped (NOT_APPLICABLE), never attempted and never
+    # silently dropped from the run.
+    supported_seasons_by_competition = {"football": {}, "basketball": {}}
+    edition_selection = {"skipped": [], "unknown_windows": []}
+    for sport_name, league_ids in (
+        ("football", config.ALLOWED_LEAGUE_IDS),
+        ("basketball", config.ALLOWED_BASKETBALL_LEAGUE_IDS),
+    ):
+        for lid in league_ids:
+            selection = _competition_edition_selection(sport_name, lid, seasons)
+            supported_seasons_by_competition[sport_name][lid] = set(selection.get("supported") or [])
+            for skipped_season in selection.get("not_applicable") or []:
+                edition_selection["skipped"].append(
+                    {
+                        "sport": sport_name,
+                        "league_id": lid,
+                        "season": skipped_season,
+                        "reason": "unsupported_season_edition",
+                    }
+                )
+            for unknown_season in selection.get("unknown") or []:
+                edition_selection["unknown_windows"].append(
+                    {"sport": sport_name, "league_id": lid, "season": unknown_season}
+                )
+
     all_football_items = [
         {"sport": "football", "league_id": lid, "season": ssn}
         for ssn in seasons
         for lid in config.ALLOWED_LEAGUE_IDS
+        if ssn in supported_seasons_by_competition["football"].get(lid, set())
     ]
     all_basketball_items = [
         {"sport": "basketball", "league_id": lid, "season": ssn}
         for ssn in seasons
         for lid in config.ALLOWED_BASKETBALL_LEAGUE_IDS
+        if ssn in supported_seasons_by_competition["basketball"].get(lid, set())
     ]
+
+    if edition_selection["skipped"]:
+        skipped_descriptions = ", ".join(
+            f"{item['sport']}:{item['league_id']}/{item['season']}"
+            for item in edition_selection["skipped"]
+        )
+        print(
+            f"Queue: {len(edition_selection['skipped'])} competition-season target(s) are "
+            f"NOT_APPLICABLE (the competition does not stage that edition): {skipped_descriptions}",
+            flush=True,
+        )
 
     queue_items = []
     i, j = 0, 0
@@ -2153,6 +2242,7 @@ def run_historical_queue(
     return {
         "target_seasons": seasons,
         "processed_count": len(reports),
+        "edition_selection": edition_selection,
         "reports": reports,
     }
 

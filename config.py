@@ -665,8 +665,13 @@ COMPETITION_SEASON_WINDOWS = {
     # European club cups (qualifying begins in July)
     ("football", 2): {"start": (0, 7, 1), "end": (1, 6, 30), "format": "cup"},
     ("football", 3): {"start": (0, 7, 1), "end": (1, 6, 30), "format": "cup"},
-    # International competitions
-    ("football", 5): {"start": (0, 8, 1), "end": (1, 7, 31), "format": "international"},
+    # International competitions.
+    # The UEFA Nations League is NOT an annual competition: its editions are
+    # biennial (2018-19, 2020-21, 2022-23, 2024-25, 2026-27) and each edition's
+    # league phase occupies different months, so a generic annual window would
+    # judge every edition against the wrong dates. Editions are declared in
+    # COMPETITION_SEASON_WINDOW_OVERRIDES only where a boundary is documented;
+    # everything else fails closed with lifecycle UNKNOWN.
     ("football", 1): {"start": (0, 6, 1), "end": (0, 7, 31), "format": "tournament"},
     ("football", 4): {"start": (0, 6, 1), "end": (0, 7, 31), "format": "tournament"},
     # NBA regular season and playoffs
@@ -705,6 +710,56 @@ COMPETITION_SEASON_WINDOW_OVERRIDES = {
         "format": "league",
         "exception": "late_start_and_covid_schedule_changes",
     },
+    # FIFA World Cup: the finals tournament is quadrennial and its window is not
+    # derivable from a generic summer boundary (2022 was played in November and
+    # December). Only editions whose dates are documented are declared.
+    # 2018: 14 June - 15 July 2018 (FIFA).
+    # 2022: 20 November - 18 December 2022 (FIFA).
+    # 2026: 11 June - 19 July 2026 (FIFA).
+    ("football", 1, 2018): {
+        "start": (0, 6, 14),
+        "end": (0, 7, 15),
+        "format": "tournament",
+        "exception": "world_cup_finals_window",
+    },
+    ("football", 1, 2022): {
+        "start": (0, 11, 20),
+        "end": (0, 12, 18),
+        "format": "tournament",
+        "exception": "world_cup_finals_window",
+    },
+    ("football", 1, 2026): {
+        "start": (0, 6, 11),
+        "end": (0, 7, 19),
+        "format": "tournament",
+        "exception": "world_cup_finals_window",
+    },
+    # UEFA European Championship: Euro 2020 was played 11 June - 11 July 2021
+    # (postponed by COVID-19), so the season labelled 2020 is judged against the
+    # window it was actually played in. Euro 2024 ran 14 June - 14 July 2024.
+    ("football", 4, 2020): {
+        "start": (1, 6, 11),
+        "end": (1, 7, 11),
+        "format": "tournament",
+        "exception": "euro_2020_played_in_2021",
+    },
+    ("football", 4, 2024): {
+        "start": (0, 6, 14),
+        "end": (0, 7, 14),
+        "format": "tournament",
+        "exception": "euro_2024_finals_window",
+    },
+    # UEFA Nations League 2026-27: league phase 24 September - 17 November 2026,
+    # League A quarter-finals and promotion/relegation play-offs 25-30 March 2027
+    # (UEFA). The June 2027 finals window is not declared here because it is not
+    # verified in this repository, so the window ends at the last confirmed date
+    # and any later fixture fails closed instead of being assumed complete.
+    ("football", 5, 2026): {
+        "start": (0, 9, 24),
+        "end": (1, 3, 31),
+        "format": "international",
+        "exception": "nations_league_2026_27_league_phase_and_playoffs",
+    },
 }
 
 # Independently established expected NBA coverage: the published number of
@@ -719,6 +774,13 @@ COMPETITION_SEASON_WINDOW_OVERRIDES = {
 # dataset holds AT LEAST this many persisted games. A season absent from this map
 # has no independently established expectation and therefore fails closed: its
 # stored record count is never treated as its own evidence of completeness.
+#
+# 2026 is deliberately absent. The 2026-27 NBA season is in progress (it began in
+# October 2026) and its final regular-season game total is not established, so no
+# expectation can be asserted for it; copying 1230 from a previous season would
+# be an unverified assumption and would let an ongoing season be judged complete.
+# The entry is added only once the season's schedule total is independently
+# documented.
 NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES = {
     2019: 1059,
     2020: 1080,

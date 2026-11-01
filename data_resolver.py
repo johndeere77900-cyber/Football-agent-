@@ -614,6 +614,53 @@ def _classify_provider_attempt_outcome(fixtures, meta):
     return "NO_DATA_FROM_PROVIDER"
 
 
+def _providers_contributed_from_records(fixtures, attempted=None):
+    """
+    Derive which providers actually contributed to a reconciled fixture dataset.
+
+    Contributors are read from the records themselves instead of a
+    hand-maintained per-branch list: a reconciled record names every provider
+    that supplied a field in ``reconciliation_metadata.providers_used`` and
+    ``field_provenance``, and an unreconciled record names its single provider.
+    This is what keeps SoccerData FBref (or MatchHistory/Sofascore) attributed
+    when it only filled gaps in rows produced by an earlier provider.
+
+    ``attempted`` is an optional ordered list of ``(provider_name, records)``
+    pairs used only as a fallback when the records carry no provenance at all
+    (for example legacy rows); it never drops a provider that is named by a
+    record. Providers that only describe reconciliation itself (``mixed``,
+    ``reconciled``, ``unknown``) are never reported as contributors.
+    """
+    non_provider_labels = {"mixed", "reconciled", "unknown", "internal_db"}
+    contributed = set()
+
+    for fixture in fixtures if isinstance(fixtures, list) else []:
+        if not isinstance(fixture, dict):
+            continue
+
+        reconciliation = fixture.get("reconciliation_metadata") if isinstance(fixture.get("reconciliation_metadata"), dict) else {}
+        for provider in reconciliation.get("providers_used") or []:
+            if isinstance(provider, str) and provider.strip() and provider.strip() not in non_provider_labels:
+                contributed.add(provider.strip())
+
+        provenance = fixture.get("provider_provenance") if isinstance(fixture.get("provider_provenance"), dict) else {}
+        provider = provenance.get("provider")
+        if isinstance(provider, str) and provider.strip() and provider.strip() not in non_provider_labels:
+            contributed.add(provider.strip())
+
+        field_provenance = fixture.get("field_provenance") if isinstance(fixture.get("field_provenance"), dict) else {}
+        for field_provider in field_provenance.values():
+            if isinstance(field_provider, str) and field_provider.strip() and field_provider.strip() not in non_provider_labels:
+                contributed.add(field_provider.strip())
+
+    if not contributed and attempted:
+        for provider_name, produced in attempted:
+            if isinstance(provider_name, str) and provider_name.strip() and produced:
+                contributed.add(provider_name.strip())
+
+    return sorted(contributed)
+
+
 def _football_season_coverage_exception(league_id, season):
     """
     Return the recorded authoritative season coverage exception for a football
@@ -2833,12 +2880,13 @@ class DataResolver:
             )
 
             if fb_coverage["verified"] is True:
-                contribs = [
-                    p for p, count in [
-                        ("football_data_csv", len(csv_fixtures)),
-                        ("soccerdata_fbref", len(sd_fb_fixtures)),
-                    ] if count > 0
-                ]
+                contribs = _providers_contributed_from_records(
+                    combined_fixtures,
+                    attempted=[
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata_fbref", sd_fb_fixtures),
+                    ],
+                )
                 return {
                     "fixtures": combined_fixtures,
                     "expected_pages": 1,
@@ -2913,12 +2961,14 @@ class DataResolver:
             )
 
             if mh_coverage["verified"] is True:
-                contribs = [
-                    p for p, count in [
-                        ("football_data_csv", len(csv_fixtures)),
-                        ("soccerdata_match_history", len(sd_mh_fixtures)),
-                    ] if count > 0
-                ]
+                contribs = _providers_contributed_from_records(
+                    combined_fixtures,
+                    attempted=[
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata_fbref", sd_fb_fixtures),
+                        ("soccerdata_match_history", sd_mh_fixtures),
+                    ],
+                )
                 return {
                     "fixtures": combined_fixtures,
                     "expected_pages": 1,
@@ -2996,13 +3046,15 @@ class DataResolver:
             )
 
             if primary_route_coverage["verified"] is True:
-                contribs = [
-                    p for p, count in [
-                        ("football_data_csv", len(csv_fixtures)),
-                        ("soccerdata_match_history", len(sd_mh_fixtures)),
-                        ("soccerdata_sofascore", len(sd_ss_fixtures)),
-                    ] if count > 0
-                ]
+                contribs = _providers_contributed_from_records(
+                    combined_fixtures,
+                    attempted=[
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata_fbref", sd_fb_fixtures),
+                        ("soccerdata_match_history", sd_mh_fixtures),
+                        ("soccerdata_sofascore", sd_ss_fixtures),
+                    ],
+                )
                 return {
                     "fixtures": combined_fixtures,
                     "expected_pages": 1,
@@ -3075,14 +3127,15 @@ class DataResolver:
         )
 
         if sec_coverage["verified"] is True:
-            contribs = [
-                p for p, count in [
-                    ("football_data_csv", len(csv_fixtures)),
-                    ("soccerdata_fbref", len(sd_fb_fixtures)),
-                    ("soccerdata_match_history", len(sd_mh_fixtures)),
-                    ("soccerdata_sofascore", len(sd_ss_fixtures)),
-                ] if count > 0
-            ]
+            contribs = _providers_contributed_from_records(
+                combined_fixtures,
+                attempted=[
+                    ("football_data_csv", csv_fixtures),
+                    ("soccerdata_fbref", sd_fb_fixtures),
+                    ("soccerdata_match_history", sd_mh_fixtures),
+                    ("soccerdata_sofascore", sd_ss_fixtures),
+                ],
+            )
             return {
                 "fixtures": combined_fixtures,
                 "expected_pages": 1,
@@ -3112,14 +3165,15 @@ class DataResolver:
             league_id=league_id,
         )
 
-        contribs = [
-            p for p, count in [
-                ("football_data_csv", len(csv_fixtures)),
-                ("soccerdata_fbref", len(sd_fb_fixtures)),
-                ("soccerdata_match_history", len(sd_mh_fixtures)),
-                ("soccerdata_sofascore", len(sd_ss_fixtures)),
-            ] if count > 0
-        ]
+        contribs = _providers_contributed_from_records(
+            combined_fixtures,
+            attempted=[
+                ("football_data_csv", csv_fixtures),
+                ("soccerdata_fbref", sd_fb_fixtures),
+                ("soccerdata_match_history", sd_mh_fixtures),
+                ("soccerdata_sofascore", sd_ss_fixtures),
+            ],
+        )
 
         final_source = "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "none")
 
