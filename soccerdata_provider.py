@@ -263,7 +263,19 @@ def _normalize_fbref_row(row, league_id=None, season=None):
         "provider_provenance": {
             "provider": "soccerdata_fbref",
             "provider_type": "primary",
+            # The native FBref game id, when FBref supplied one. It is a string
+            # (a hex hash), so it cannot be used as the integer storage identity.
             "provider_fixture_id": provider_fixture_id,
+            "provider_fixture_id_is_native": provider_fixture_id is not None,
+            # ``fixture.id`` above is NOT a FBref id: it is an internal,
+            # process-stable surrogate derived from the provider namespace,
+            # league, season, date and both team names. Recording that explicitly
+            # keeps the surrogate identifiable as internal and source-scoped
+            # instead of being read as provider-native identity. The derivation
+            # is unchanged so already-persisted FBref identities keep matching
+            # idempotently.
+            "fixture_id_is_surrogate": True,
+            "fixture_id_scheme": "sha256(provider,league,season,date,home_team,away_team)[:8]",
             "provider_team_ids": {
                 "home": home_id,
                 "away": away_id,

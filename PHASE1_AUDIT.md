@@ -370,3 +370,114 @@ Everything below was confirmed in the live source and verified again after the c
 - **Neon readback.** Still required for persisted phase coverage, league-12 manifests, empty
   `expected_team_ids_json` and the manifest/`error_reason` state for competitions 2/3/5
   (section 10). No database was accessed, queried or modified by this sweep.
+
+## 14. Full sweep (Part 5) — CI #214 diagnosis, ESPN competition evidence, FBref surrogate identity, mapping verification
+
+### 14.1 CI #214 was an interrupted run, not a result
+
+Run [#214](https://github.com/johndeere77900-cyber/Football-agent-/actions/runs/41347216655)
+(`3eb451a`) hit the runner's shutdown signal at roughly 89% and exited with code 143. **No pytest
+summary was produced**, so neither a pass count nor a failure count can be quoted from it. Nine
+failing node IDs were observed before the interruption; the tests after them were never run.
+
+### 14.2 Baseline comparison, reproduced independently
+
+`.venv/bin/python -m pytest -q` on the three files that contain every observed node (branch
+`3eb451a`), then the identical command in a clean worktree of unmodified `main` (`1644762`, no PR
+commits):
+
+| Tree | Result |
+|---|---|
+| Branch `3eb451a` | **9 failed, 15 passed** |
+| `main` `1644762` (clean worktree) | **9 failed, 15 passed**, same node IDs |
+
+Identical node IDs, identical assertion messages, identical raising lines (only the storage
+line number differs, as expected from the branch's added code). **None of the nine is a
+regression introduced by PR #54.** This conclusion rests on these two runs, not on any earlier
+report.
+
+Observed nodes and messages:
+
+- `test_historical_workflow_verification.py::test_verify_persisted_historical_datasets_football_and_basketball_pass`
+  — `ValueError: Cannot mark dataset COMPLETE: the persisted dataset failed validation
+  (persisted_basketball_dataset_invalid)`.
+- `test_p0_p1_integrity_repair.py::test_A_to_G_pagination_failure_persistence_and_resumption`,
+  `::test_later_page_quota_interruption_and_resume_basketball_fallback`,
+  `::test_api_exception_checkpoint_and_resume_basketball_fallback`
+  — `AssertionError: assert 'INCOMPLETE' == 'COMPLETE'`.
+- `test_p0_p1_integrity_repair.py::test_espn_full_month_coverage_completes_basketball_dataset`
+  — `Expected 'get_league_games_page' to not have been called. Called 1 times.`
+- `test_p0_p1_integrity_repair.py::test_storage_level_complete_invariant_enforcement`,
+  `::test_U_to_Y_backtest_persistence_status_and_errors`,
+  `test_phase3_production_integration.py::test_basketball_backtest_database_first_e2e`,
+  `::test_basketball_backtest_actual_calibration_order`
+  — the same `persisted_basketball_dataset_invalid` rejection.
+
+### 14.3 Root causes
+
+Two families, both in the test fixtures rather than the production logic:
+
+1. **Eight nodes — synthetic basketball records carry no provider-native phase.**
+   `sample_basketball_game()` in `test_p0_p1_integrity_repair.py` (repeated inline in
+   `test_historical_workflow_verification.py` and `test_phase3_production_integration.py`) has no
+   `stage`, `season_type` or `provider_provenance`, and the mocked pages bypass
+   `basketball_api.get_league_games_page()`, so the rows persist as `unclassified`.
+   `_validate_historical_basketball_dataset()` counts only records with recorded
+   `regular_season` phase against the independently established season total, so it refuses to
+   promote them — which is the required behaviour (missing phase is never regular season). The
+   sync then reports `INCOMPLETE` with
+   `reason=persisted_dataset_invalid` and `season_types={'unclassified': N}`.
+2. **One node — ESPN mock coverage omits positive competition evidence.**
+   `espn_full_coverage_patch()` returns coverage metadata without `competition_verified`, and the
+   acquisition gate requires an explicit `True`, so ESPN coverage is not validated and the
+   documented API-Basketball fallback runs. Also the required behaviour (missing
+   `competition_verified` is not proof of NBA membership).
+
+**No test was changed.** Resolving these nodes requires the fixtures to carry the evidence the
+production contract demands — a provider-native phase on every synthetic game (`stage:
+"Regular Season"` or `provider_provenance.season_type`) and `competition_verified: True` plus
+`monthly_details` in the mocked ESPN metadata. Manufacturing that evidence inside production
+code, or relaxing the validator, is explicitly out of scope, so the incompatibility is reported
+rather than engineered around.
+
+### 14.4 Corrections implemented in this sweep
+
+1. **ESPN aggregation claimed NBA membership without payload evidence**
+   (`espn_basketball_provider.py`). `coverage_meta["competition_verified"]` was set to
+   `months_failed == 0`, so a season whose months succeeded while returning no verifiable
+   league metadata could assert NBA membership — an inference from request success, not from
+   the payload. It is now derived from the monthly payloads: no failed month, every month
+   succeeded, and at least one month whose own payload was positively verified. A new
+   `months_competition_verified` counter records how many months proved membership. Months that
+   legitimately hold no events contribute no evidence and neither establish nor break the claim.
+   The change is strictly stricter and affects only the ESPN acquisition metadata.
+2. **FBref surrogate identity was indistinguishable from a native id**
+   (`soccerdata_provider.py`). `_normalize_fbref_row()` always writes a 32-bit SHA-256 digest
+   into `fixture.id`, which is the storage identity, even when FBref supplied a native game id;
+   nothing marked it internal. Provenance now records `fixture_id_is_surrogate: true`,
+   `fixture_id_scheme`, and `provider_fixture_id_is_native`, while the native id stays in
+   `provider_fixture_id`. The digest derivation is unchanged, so already-persisted FBref
+   identities keep matching idempotently and valid native ids are preserved.
+
+### 14.5 Competition mapping verification (leagues 2, 3, 5)
+
+Verified against the wheel CI actually installs, `soccerdata 2026.43.0` (downloaded with
+`pip download --no-deps`, not installed). `soccerdata/_config.py::LEAGUE_DICT` defines FBref
+entries for `INT-World Cup` (`FIFA World Cup`), `INT-European Championship` and
+`INT-Women's World Cup` only — there is **no** `INT-Champions League`, `INT-Europa League` or
+`INT-Nations League` entry — and `MatchHistory` maps only football-data.co.uk domestic codes
+(`E0`, `SP1`, `I1`, `D1`, `F1`, `N1`, `P1`). No FBref or MatchHistory mapping for leagues 2/3/5
+can therefore be added without inventing an adapter key, so none was added. Sofascore remains
+the only configured historical route for UCL/UEL/Nations League, exactly as
+`PHASE1_INVENTORY.json` records (`provider_sources` for those competitions lists only
+`soccerdata_sofascore`).
+
+### 14.6 Inventory reconciliation
+
+Re-derived from `PHASE1_INVENTORY.json` in this sweep: 106 targets (98 football, 8 basketball),
+lifecycle states 75 `COMPLETED` / 16 `NOT_APPLICABLE` / 11 `ONGOING` / 4 `UNKNOWN`,
+`knowledge_validation_problems: []`, `database_inspected: false`, evidence gaps 42
+`authoritative_participant_universe`, 39 `expected_fixture_total`, 20 `edition_window`. The
+provider-source claims above and the per-target `evidence_gaps` match the code; no target claims
+completion from a provider response, and persisted counts remain `UNKNOWN` because no database
+was read.

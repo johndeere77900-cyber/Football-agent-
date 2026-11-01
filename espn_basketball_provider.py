@@ -578,7 +578,26 @@ def fetch_espn_nba_season_games(
         )
         normalized_games.extend(month_games)
 
-    coverage_meta["competition_verified"] = coverage_meta["months_failed"] == 0
+    # Season-level competition membership is only ever claimed from payload
+    # evidence. A month that succeeded with events but whose league metadata was
+    # absent does not prove NBA membership, so `months_failed == 0` on its own is
+    # not evidence: the season claim requires at least one month whose own payload
+    # was positively verified, together with every month succeeding and none
+    # failing. Months that legitimately hold no events contribute no evidence but
+    # do not contradict it, so they neither establish nor break the claim.
+    verified_months = sum(
+        1
+        for detail in coverage_meta["monthly_details"]
+        if isinstance(detail, dict)
+        and detail.get("status") == "SUCCESS"
+        and detail.get("competition_verified") is True
+    )
+    coverage_meta["months_competition_verified"] = verified_months
+    coverage_meta["competition_verified"] = bool(
+        coverage_meta["months_failed"] == 0
+        and coverage_meta["months_succeeded"] == len(months)
+        and verified_months > 0
+    )
     coverage_meta["all_months_succeeded"] = (
         coverage_meta["months_attempted"] == len(months)
         and coverage_meta["months_failed"] == 0
