@@ -224,3 +224,32 @@ These cannot be answered from the repository and were not guessed:
    `raw_json` league object, which the enrichment path would leave untouched by design?
 6. Are there rows in `historical_basketball_games` whose `source` value is not one of
    `espn_url` / `api_basketball` (they would never be attributed to a validated provider)?
+
+---
+
+## 11. Part 2 — additional confirmed blockers fixed
+
+These were confirmed in the live source during Part 2 and are now fixed on the same branch.
+
+| # | File / function | Confirmed faulty behaviour | Correction |
+|---|---|---|---|
+| M | `storage.py::save_historical_fixtures` | PostgreSQL `ON CONFLICT (source, fixture_id) DO NOTHING` and SQLite `INSERT OR IGNORE`: an already persisted fixture was discarded, so a later richer acquisition (merged CSV+FBref statistics, `field_provenance`, `reconciliation_metadata`, resolved canonical team ids) could never be applied to it | New `merge_historical_fixture_metadata()` plus an enrichment pass: existing rows are enriched additively (missing statistics/field provenance/reconciliation evidence filled, missing canonical ids filled), while kickoff, completed status, teams, goals and identity columns are never rewritten. Conflicts are recorded, applied enrichments append to `enrichment_history`, and `enriched`/`already_existing`/`metadata_conflicts` are returned. PostgreSQL and SQLite share the same merge function and UPDATE statement |
+| N | `storage.py::_fetch_existing_basketball_raw_json` | The Part 1 enrichment upsert read one row per game (an N+1 pattern across a season) | One bounded pre-read per page (chunked, 400 ids) feeds the same merge; round trips are now a small fixed number per page regardless of page size. Idempotency and composite identity are unchanged |
+| O | `data_resolver.py::_classify_provider_attempt_outcome` | Only `FAILED / QUOTA_EXHAUSTED / MALFORMED / INSUFFICIENT / SUCCESS / VALID_EMPTY / NO_DATA_FROM_PROVIDER` existed, so an HTTP 403, a 429, a timeout, an unsupported endpoint or a parser failure all collapsed into one `FAILED` bucket; `secondary_access_denied` was hard-coded `False` | Outcomes now honour provider-native evidence (`error_category`, `http_status`) and add `ACCESS_DENIED`, `UNSUPPORTED`, `RATE_LIMITED`, `TIMEOUT`, `NETWORK_ERROR`, `PARSER_ERROR`. A failed provider still never blocks the next approved fallback, none of these is ever `VALID_EMPTY`, and `secondary_access_denied` is derived from the observed outcomes. The football report lists `access_denied_providers` |
+| P | `historical_sync.py::sync_historical_fixtures` | Manifest `providers_contributed` and the report came only from the current attempt's provider payload, so persisted rows acquired by an earlier provider were attributed incorrectly | Contributors and `persisted_records_by_provider` are now derived from the persisted fixture provenance (record-level evidence), with the attempt's own list used only when stored records carry no provenance at all |
+| Q | `data_resolver.py::_validate_historical_structural_coverage` + `config.FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS` | Cup / international / tournament formats were correctly never judged with the double-round-robin expectation, but no documented alternative existed, so even fully acquired finals tournaments stayed unverifiable | Format-aware validation now uses a documented match total when one exists (FIFA World Cup 2018 and 2022: 64 matches; UEFA EURO 2020 and 2024: 51 matches), requiring an exact match with resolved canonical identities. Editions without a documented total (UCL, UEL, Nations League, World Cup 2026) remain unverifiable and therefore INCOMPLETE. `sports_knowledge.validate()` cross-checks these totals against the catalogue |
+
+### Deliberately deferred (reported, not guessed)
+
+- **UCL / UEL / Nations League coverage.** No documented match total exists for a league-phase + knockout edition, so they stay unverifiable rather than receiving an invented count. Closing the gap needs a verified, licensed additional source and an edition-specific evidence set.
+- **World Cup 2018 persistence boundary.** `storage.save_historical_fixtures()` still accepts only `config.TARGET_SEASONS` (2019-2026), so the catalogued 2018 edition cannot be stored. Widening that contract is a separate, explicit decision.
+- **NBA 2026 expectation.** Still absent by design: the 2026-27 season is in progress and its final regular-season total is not established.
+- **Team identity architecture.** `team_identity.resolve_canonical_team_id()` already fails closed (no name-derived canonical ids unless an explicit bootstrap path registers them, ambiguity and provider/name conflicts return `None`, provider ids are resolved across namespaces and ambiguity fails closed). No verified defect was found, so it was not rewritten.
+
+### Part 2 verification actually performed
+
+- `python -m py_compile` on `storage.py`, `data_resolver.py`, `historical_sync.py`, `config.py`, `sports_knowledge.py`, `build_phase1_inventory.py`.
+- `sports_knowledge.validate()`: no problems.
+- Local SQLite smoke run: first save inserts; a richer re-save reports `enriched: 1` and merges statistics while preserving goals and kickoff; the third identical save reports `already_existing: 1` (idempotent); a regressive re-save with a different score and nulled statistics keeps the stored goals and statistics and reports `goals.home`/`goals.away` conflicts.
+- `_football_tournament_coverage_expectation(1, 2022) == 64`; `_football_tournament_coverage_expectation(2, 2022) is None` (UCL stays unverifiable).
+- Existing checks run narrowly for diagnosis: `tests/test_storage.py`, `tests/test_historical_queue.py`, `tests/test_direct_csv_and_resiliency.py`, `tests/test_zero_network_and_provider_order.py`, `tests/test_multi_source_football.py`. The full suite was not run and is left to the user's review.

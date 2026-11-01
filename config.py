@@ -791,6 +791,45 @@ NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES = {
     2025: 1230,
 }
 
+# Documented match totals for cup / international / tournament editions.
+#
+# Single-elimination cups, two-legged ties, group stages, knockout rounds and
+# international finals tournaments have no fixed pair schedule, so the domestic
+# double-round-robin expectation (N * (N - 1) fixtures with a balanced home/away
+# record per team) must never be applied to them.
+#
+# An edition is listed here only when its completed match total is independently
+# documented:
+# - FIFA World Cup 2018: 32 teams, 64 matches (14 June - 15 July 2018).
+# - FIFA World Cup 2022: 32 teams, 64 matches (20 November - 18 December 2022).
+# - UEFA EURO 2020: 24 teams, 51 matches (played 11 June - 11 July 2021).
+# - UEFA EURO 2024: 24 teams, 51 matches (14 June - 14 July 2024).
+#
+# Editions whose format or total is not documented here (for example the UEFA
+# Champions League, the UEFA Europa League and the Nations League, whose league
+# phase and knockout rounds vary by edition) remain deliberately absent: their
+# coverage stays UNKNOWN and therefore INCOMPLETE instead of receiving an
+# invented expected count. The 2026 World Cup is also absent because its 104-match
+# total is not asserted in this repository.
+FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS = {
+    ("football", 1, 2018): {
+        "expected_fixture_count": 64,
+        "evidence": "FIFA World Cup 2018: 32 teams, 64 matches (14 June - 15 July 2018).",
+    },
+    ("football", 1, 2022): {
+        "expected_fixture_count": 64,
+        "evidence": "FIFA World Cup 2022: 32 teams, 64 matches (20 November - 18 December 2022).",
+    },
+    ("football", 4, 2020): {
+        "expected_fixture_count": 51,
+        "evidence": "UEFA EURO 2020: 24 teams, 51 matches (played 11 June - 11 July 2021).",
+    },
+    ("football", 4, 2024): {
+        "expected_fixture_count": 51,
+        "evidence": "UEFA EURO 2024: 24 teams, 51 matches (14 June - 14 July 2024).",
+    },
+}
+
 # Season-specific authoritative football coverage expectations.
 #
 # Keyed by (sport, league_id, season_start_year). These entries describe a

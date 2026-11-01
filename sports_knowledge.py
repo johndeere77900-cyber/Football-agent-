@@ -550,4 +550,17 @@ def validate():
                     f"basketball season {season_int}: config declares {runtime_value} but the catalogue has no entry"
                 )
 
+    # Documented cup/tournament match totals must agree between the catalogue and
+    # the runtime configuration that coverage validation reads. A disagreement
+    # would let coverage be judged against a number the catalogue does not support.
+    runtime_tournament = getattr(config, "FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS", {}) or {}
+    for (sport_key, league_id, season_year), entry in runtime_tournament.items():
+        runtime_value = entry.get("expected_fixture_count") if isinstance(entry, dict) else None
+        catalogued = expected_coverage_units(sport_key, league_id, season_year)
+        if catalogued.get("value") is None or catalogued.get("value") != runtime_value:
+            problems.append(
+                f"{sport_key} league {league_id} season {season_year}: config expects {runtime_value!r} "
+                f"fixtures but the catalogue records {catalogued.get('value')!r}"
+            )
+
     return problems

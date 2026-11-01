@@ -591,6 +591,33 @@ def _classify_provider_attempt_outcome(fixtures, meta):
     meta = meta if isinstance(meta, dict) else {}
     status = str(meta.get("status") or "").strip().upper()
 
+    # Provider-native failure categories are recorded by the adapters themselves
+    # (HTTP status and error class). They are honoured before the generic status
+    # buckets so an access restriction, a rate limit, a timeout, an unsupported
+    # endpoint or a parser error stays distinguishable from a real empty result.
+    error_category = str(meta.get("error_category") or "").strip().lower()
+    http_status = meta.get("http_status")
+    if isinstance(http_status, bool):
+        http_status = None
+    try:
+        http_status = int(http_status) if http_status is not None else None
+    except (TypeError, ValueError):
+        http_status = None
+
+    if error_category == "access_restricted" or http_status in (401, 403):
+        return "ACCESS_DENIED"
+    if error_category in ("unsupported_coverage", "provider_config_unavailable") or http_status == 404:
+        return "UNSUPPORTED"
+    if error_category == "rate_limited" or http_status == 429:
+        return "RATE_LIMITED"
+    if error_category == "network_error":
+        error_text = str(meta.get("error") or "").lower()
+        if "timeout" in error_text or "timed out" in error_text:
+            return "TIMEOUT"
+        return "NETWORK_ERROR"
+    if error_category == "parsing_error":
+        return "PARSER_ERROR"
+
     # A non-empty fixture list is not proof of a successful attempt: the provider's
     # own metadata may report a failure, a quota stop, malformed data or partial data
     # for that same attempt. Those explicit states are decided first.
@@ -681,6 +708,31 @@ def _football_season_coverage_exception(league_id, season):
     exceptions = getattr(config, "FOOTBALL_SEASON_COVERAGE_EXCEPTIONS", {}) or {}
     entry = exceptions.get(("football", lid, ssn))
     return entry if isinstance(entry, dict) else None
+
+
+def _football_tournament_coverage_expectation(league_id, season):
+    """
+    Return the documented match total for a cup/tournament edition, or None.
+
+    Single-elimination, group-stage and international editions have no fixed pair
+    schedule, so a double-round-robin expectation must never be applied to them.
+    Only editions whose match total is independently documented are listed; any
+    other cup or tournament edition remains unverifiable (fail closed) instead of
+    receiving an invented expected count.
+    """
+    try:
+        lid = int(league_id)
+        ssn = int(season)
+    except (TypeError, ValueError):
+        return None
+    expectations = getattr(config, "FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS", {}) or {}
+    entry = expectations.get(("football", lid, ssn))
+    if not isinstance(entry, dict):
+        return None
+    expected = entry.get("expected_fixture_count")
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected <= 0:
+        return None
+    return expected
 
 
 def _validate_historical_structural_coverage(fixtures, season, provider_metadata=None, league_id=None, sport="football"):
@@ -1161,6 +1213,17 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     if not is_double_round_robin:
         # Non-double-round-robin (tournament, cup, international)
+        #
+        # These formats have no fixed pair schedule, so the double-round-robin
+        # expectation is never applied. An expected match total is only used when
+        # it is independently documented for that edition; otherwise coverage stays
+        # unverifiable and the dataset stays INCOMPLETE.
+        if expected_fixture_count is None:
+            documented_expected = _football_tournament_coverage_expectation(league_id, season)
+            if documented_expected is not None:
+                expected_fixture_count = documented_expected
+                provider_metadata = dict(provider_metadata)
+                provider_metadata["has_authoritative_evidence"] = True
         has_authoritative_evidence = (
             provider_metadata.get("has_authoritative_evidence") is True
             and isinstance(expected_fixture_count, int)
@@ -3098,7 +3161,12 @@ class DataResolver:
 
         secondary_failed = False
         secondary_quota_exhausted = False
-        secondary_access_denied = False
+        # Access denial is derived from the provider outcomes actually observed in
+        # this attempt, so a 403 is reported as an access restriction instead of a
+        # generic failure (and never as an empty page).
+        secondary_access_denied = any(
+            outcome == "ACCESS_DENIED" for outcome in provider_outcomes.values()
+        )
 
         stored_db_fixtures = storage.get_historical_fixtures(league_id, season) if (league_id and season) else []
         all_accumulated_fixtures = list(combined_fixtures)

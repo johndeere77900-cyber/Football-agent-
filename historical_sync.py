@@ -836,11 +836,32 @@ def sync_historical_fixtures(
     )
     acquisition_complete = is_fully_complete
 
+    # Attribution must describe the persisted dataset, not just this attempt's
+    # provider payload: rows acquired by an earlier provider are part of the same
+    # dataset, and a manifest contributor list taken only from the current page
+    # would misdescribe it. Record-level provenance is the authority; the attempt's
+    # own list is used only when the persisted records carry no provenance at all.
+    persisted_provider_counts = {}
+    for stored_fixture in stored_fixtures_all:
+        if not isinstance(stored_fixture, dict):
+            continue
+        prov_obj = stored_fixture.get("provider_provenance") if isinstance(stored_fixture.get("provider_provenance"), dict) else {}
+        provider_name = stored_fixture.get("source") or prov_obj.get("provider")
+        if isinstance(provider_name, str) and provider_name.strip():
+            key_name = provider_name.strip()
+            persisted_provider_counts[key_name] = persisted_provider_counts.get(key_name, 0) + 1
+
+    persisted_contributors = data_resolver._providers_contributed_from_records(stored_fixtures_all)
+    attempted_contributors = (
+        (page_meta_val.get("provider_metadata", {}) or {}).get("providers_contributed")
+        if isinstance(page_meta_val, dict) else None
+    )
+
     provider_coverage_football = {
         "coverage_unit": COVERAGE_UNIT_SINGLE_SHOT,
         "status": acquisition_state,
-        "providers_contributed": (page_meta_val.get("provider_metadata", {}) or {}).get("providers_contributed")
-        if isinstance(page_meta_val, dict) else None,
+        "providers_contributed": persisted_contributors or attempted_contributors,
+        "persisted_records_by_provider": persisted_provider_counts,
         "provider_outcomes": (page_meta_val.get("provider_metadata", {}) or {}).get("provider_outcomes")
         if isinstance(page_meta_val, dict) else None,
     }
@@ -910,6 +931,12 @@ def sync_historical_fixtures(
         "status": final_status,
         "source": manifest_source,
         "providers_contributed": provider_coverage_football.get("providers_contributed"),
+        "persisted_records_by_provider": persisted_provider_counts,
+        "access_denied_providers": sorted(
+            provider_name
+            for provider_name, outcome in (provider_coverage_football.get("provider_outcomes") or {}).items()
+            if outcome == "ACCESS_DENIED"
+        ),
         "provider_outcomes": provider_coverage_football.get("provider_outcomes"),
         "provider_coverage": provider_coverage_football,
         "incomplete_reason": None if is_fully_complete else last_error_reason,
