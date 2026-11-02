@@ -52,6 +52,23 @@ def _now_utc():
     return datetime.now(timezone.utc)
 
 
+def _knowledge_gap_summary():
+    """Summarise the full knowledge report without duplicating it in the inventory."""
+    rows = sports_knowledge.knowledge_gap_report()
+    evidence = {}
+    participants = {}
+    for row in rows:
+        evidence[row["evidence_status"]] = evidence.get(row["evidence_status"], 0) + 1
+        participants[row["participant_status"]] = participants.get(row["participant_status"], 0) + 1
+    return {
+        "horizon": sports_knowledge.KNOWLEDGE_FUTURE_HORIZON,
+        "editions_evaluated": len(rows),
+        "by_evidence_status": dict(sorted(evidence.items())),
+        "by_participant_status": dict(sorted(participants.items())),
+        "report_function": "sports_knowledge.knowledge_gap_report()",
+    }
+
+
 def _lifecycle_for_edition(record, now_utc):
     """Return (lifecycle_state, evidence) for a catalogued edition."""
     if record.get("exists") is False:
@@ -89,16 +106,20 @@ def _expected_coverage(sport, league_id, season, competition):
         expected["basis"] = knowledge_units.get("evidence") or documented_evidence
 
     if competition.get("coverage_format") == "double_round_robin":
-        try:
-            import data_resolver
-
-            team_count = data_resolver.get_expected_league_team_count(league_id, season)
-        except Exception:
-            team_count = None
-        if team_count:
+        participants = sports_knowledge.edition_participants(sport, league_id, season)
+        if participants:
+            team_count = len(participants)
             expected["expected_teams"] = team_count
             expected["expected_fixtures"] = team_count * (team_count - 1)
-            expected["basis"] = "double round robin: teams * (teams - 1)"
+            expected["basis"] = "knowledge catalogue: verified participants * (participants - 1)"
+        else:
+            # A generic configured team count is not evidence for a historical
+            # season. Promoted/relegated clubs can change the roster, so an
+            # unverified season stays UNKNOWN instead of inheriting a current
+            # season's arithmetic.
+            expected["expected_teams"] = UNKNOWN
+            expected["expected_fixtures"] = UNKNOWN
+            expected["basis"] = "authoritative participant roster unavailable"
         exceptions = getattr(config, "FOOTBALL_SEASON_COVERAGE_EXCEPTIONS", {}) or {}
         exception = exceptions.get((sport, league_id, season))
         if isinstance(exception, dict) and isinstance(exception.get("expected_fixture_count"), int):
@@ -161,12 +182,13 @@ def _evidence_gaps(sport, league_id, season, competition, record):
         if expected_value is None:
             gaps.append("expected_fixture_total")
 
-    coverage_format = competition.get("coverage_format")
-    if coverage_format in ("tournament", "international", "cup"):
-        # No authoritative participant roster is recorded for any tournament,
-        # cup or international competition, so completion cannot be established
-        # from a match total alone. Reported as a gap instead of being invented.
+    if not sports_knowledge.edition_participants(sport, league_id, season):
+        # Completion cannot be established from a match total or a configured
+        # team count alone. The catalogue must carry a verified roster for every
+        # format; absence is reported, never replaced by acquired fixtures.
         gaps.append("authoritative_participant_universe")
+    if record.get("is_future"):
+        gaps.append("future_edition_details_not_refreshed")
 
     return gaps
 
@@ -222,7 +244,15 @@ def build_inventory(include_local_database=False, now_utc=None):
             # edition such as the 2018 FIFA World Cup is acquirable and storable,
             # and an edition whose window is undocumented must be visible as an
             # explicit gap instead of being omitted.
-            documented_editions = set(sports_knowledge.edition_years(sport, league_id) or [])
+            documented_editions = set(
+                sports_knowledge.edition_years(
+                    sport,
+                    league_id,
+                    include_future=True,
+                    future_to=sports_knowledge.KNOWLEDGE_FUTURE_HORIZON,
+                )
+                or []
+            )
             season_candidates = sorted(
                 set(selection.get("supported") or [])
                 | set(selection.get("not_applicable") or [])
@@ -253,6 +283,28 @@ def build_inventory(include_local_database=False, now_utc=None):
                     "edition_label": record.get("label") if competition else UNKNOWN,
                     "format": (competition or {}).get("format") or UNKNOWN,
                     "coverage_format": (competition or {}).get("coverage_format") or UNKNOWN,
+                    "format_details": record.get("format_details") or UNKNOWN,
+                    "stages": record.get("stages") or [],
+                    "fixture_total": record.get("fixture_total") if record.get("fixture_total") is not None else UNKNOWN,
+                    "is_future": bool(record.get("is_future")),
+                    "evidence_status": record.get("evidence_status") or sports_knowledge.EVIDENCE_UNKNOWN,
+                    "knowledge_evidence_gaps": record.get("evidence_gaps") or [],
+                    "participant_status": record.get("participant_status") or UNKNOWN,
+                    "participants": [
+                        {"name": p.get("name"), "canonical_id": p.get("canonical_id")}
+                        for p in (record.get("participants") or [])
+                        if isinstance(p, dict)
+                    ],
+                    "expected_participant_count": (
+                        len(record.get("participants") or [])
+                        if record.get("participant_status") == sports_knowledge.PARTICIPANT_STATUS_VERIFIED
+                        else UNKNOWN
+                    ),
+                    "participant_evidence": record.get("participant_evidence") or UNKNOWN,
+                    "promoted": record.get("promoted") or [],
+                    "relegated": record.get("relegated") or [],
+                    "renames": record.get("renames") or [],
+                    "coverage_requirements": record.get("coverage_requirements") or {},
                     "window_start": record.get("start") if record.get("status") == "KNOWN" else UNKNOWN,
                     "window_end": record.get("end") if record.get("status") == "KNOWN" else UNKNOWN,
                     "window_evidence": record.get("evidence") if record.get("status") == "KNOWN" else "edition window not documented",
@@ -284,8 +336,18 @@ def build_inventory(include_local_database=False, now_utc=None):
                     target["next_safe_action"] = "none; the competition does not stage this edition"
                 elif competition is None:
                     target["next_safe_action"] = "add a catalogued competition entry before acquiring"
+                elif record.get("is_future"):
+                    target["next_safe_action"] = "refresh future edition facts before acquisition; provisional evidence never completes a season"
                 elif record.get("status") != "KNOWN":
                     target["next_safe_action"] = "document the edition window from an authoritative source; acquisition stays incomplete until then"
+                elif "authoritative_participant_universe" in target["evidence_gaps"]:
+                    target["next_safe_action"] = (
+                        "record a verified edition participant roster and aliases before treating acquisition as complete"
+                    )
+                elif "expected_fixture_total" in target["evidence_gaps"]:
+                    target["next_safe_action"] = (
+                        "record a documented format-specific coverage total before treating acquisition as complete"
+                    )
                 else:
                     target["next_safe_action"] = "acquire through the approved provider order, then validate persisted coverage"
 
@@ -320,6 +382,8 @@ def build_inventory(include_local_database=False, now_utc=None):
             ),
         },
         "targets": targets,
+        "knowledge_future_horizon": sports_knowledge.KNOWLEDGE_FUTURE_HORIZON,
+        "knowledge_gap_summary": _knowledge_gap_summary(),
     }
 
 

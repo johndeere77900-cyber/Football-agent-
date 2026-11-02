@@ -102,11 +102,31 @@ def strip_national_team_words(name: str) -> str:
 
 
 def _get_sport_alias_map(sport: str) -> dict:
-    """Select the sport-aware canonical team alias map from config."""
+    """
+    Select the sport-aware canonical team alias map from config.
+
+    Verified historical aliases from the sports knowledge catalogue are merged
+    with competition context. Config entries win on a key collision, preserving
+    every explicitly managed alias and its canonical target.
+    """
     s_clean = str(sport).strip().lower() if sport else "football"
     if s_clean == "basketball":
-        return getattr(config, "BASKETBALL_CANONICAL_TEAM_ALIASES", {})
-    return getattr(config, "FOOTBALL_CANONICAL_TEAM_ALIASES", getattr(config, "CANONICAL_TEAM_ALIASES", {}))
+        aliases = dict(getattr(config, "BASKETBALL_CANONICAL_TEAM_ALIASES", {}) or {})
+    else:
+        aliases = dict(
+            getattr(config, "FOOTBALL_CANONICAL_TEAM_ALIASES", getattr(config, "CANONICAL_TEAM_ALIASES", {})) or {}
+        )
+
+    try:
+        import sports_knowledge
+
+        for key, target in sports_knowledge.participant_alias_entries(s_clean).items():
+            aliases.setdefault(key, target)
+    except Exception:
+        # A missing/corrupt optional edition file must not make historical
+        # identity resolution unavailable; the config aliases remain usable.
+        pass
+    return aliases
 
 
 def resolve_canonical_team_id(

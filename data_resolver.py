@@ -528,8 +528,91 @@ def _validate_and_canonicalize_team_manifest(raw_team_ids, league_id, sport="foo
     return sorted(canonical_set, key=lambda x: str(x))
 
 
+def _knowledge_historical_team_ids(league_id, season, sport="football"):
+    """
+    Resolve a verified edition participant roster from the knowledge catalogue.
+
+    Catalogue participants are names plus repository canonical keys, not provider
+    ids. Every participant must resolve to one canonical id; a partial or
+    ambiguous roster is rejected. When local identity mappings exist, every
+    catalogue id must already be registered there. This keeps the catalogue from
+    silently creating identities that no persisted mapping supports.
+    """
+    try:
+        import sports_knowledge
+
+        record = sports_knowledge.edition(sport, league_id, season)
+        if record.get("participant_status") != sports_knowledge.PARTICIPANT_STATUS_VERIFIED:
+            return []
+        participants = record.get("participants") or []
+        if not participants:
+            return []
+
+        expected_count = (record.get("coverage_requirements") or {}).get("expected_participant_count")
+        if isinstance(expected_count, int) and expected_count != len(participants):
+            logger.warning(
+                "Knowledge participant count mismatch for %s league %s season %s: %s != %s",
+                sport, league_id, season, expected_count, len(participants),
+            )
+            return []
+
+        import team_identity
+
+        resolution_provider = "football_data_csv" if sport == "football" else "api_basketball"
+        canonical_ids = []
+        for participant in participants:
+            if not isinstance(participant, dict):
+                return []
+            canonical_id = str(participant.get("canonical_id") or "").strip()
+            if not canonical_id:
+                canonical_id = team_identity.resolve_canonical_team_id(
+                    raw_name=participant.get("name"),
+                    provider=resolution_provider,
+                    provider_team_id=None,
+                    league_id=league_id,
+                    sport=sport,
+                    auto_register=False,
+                )
+            if not canonical_id or not canonical_id.startswith(f"{sport}_team_"):
+                logger.warning(
+                    "Knowledge participant unresolved for %s league %s season %s: %r",
+                    sport, league_id, season, participant.get("name"),
+                )
+                return []
+            canonical_ids.append(canonical_id)
+
+        if len(set(canonical_ids)) != len(canonical_ids):
+            logger.warning(
+                "Knowledge participant identity collision for %s league %s season %s",
+                sport, league_id, season,
+            )
+            return []
+
+        try:
+            import storage
+
+            registered_ids = set(storage.get_team_identities_by_league(sport, league_id))
+        except Exception:
+            registered_ids = set()
+        if registered_ids and not set(canonical_ids).issubset(registered_ids):
+            missing = sorted(set(canonical_ids) - registered_ids)
+            logger.warning(
+                "Knowledge participant ids not registered for %s league %s season %s: %s",
+                sport, league_id, season, missing,
+            )
+            return []
+
+        return sorted(set(canonical_ids))
+    except Exception as exc:
+        logger.warning(
+            "Knowledge participant resolution unavailable for %s league %s season %s: %s",
+            sport, league_id, season, exc,
+        )
+        return []
+
+
 def _get_authoritative_historical_team_ids(
-    league_id, season, max_budget=None, allow_network=False, provider_metadata=None, provider=None, *args, **kwargs
+    league_id, season, max_budget=None, allow_network=False, provider_metadata=None, provider=None, sport=None, *args, **kwargs
 ):
     """
     Return the authoritative canonical competition team IDs for structural validation.
@@ -539,8 +622,14 @@ def _get_authoritative_historical_team_ids(
     If ANY expected team fails resolution, or if partial results are produced, returns [].
 
     Priority:
-    1. Provider metadata if supplied (read-first without external calls)
-    2. Stored DB manifest metadata
+    1. Verified edition-specific participant roster in the knowledge catalogue
+       when the provider did not declare its own universe
+    2. Provider metadata if supplied (read-first without external calls)
+    3. Stored DB manifest metadata
+
+    A provider-declared universe is a competing claim, not an empty slot. If it
+    is unusable, the function fails closed rather than silently substituting the
+    catalogue roster.
 
     Returns:
         list[str|int] of verified canonical team IDs, or [] when unavailable/incomplete.
@@ -548,9 +637,21 @@ def _get_authoritative_historical_team_ids(
     import team_identity
     import storage
 
-    sport = "football"
+    sport = str(sport or "football").strip().lower()
     if isinstance(provider_metadata, dict):
-        sport = provider_metadata.get("sport") or "football"
+        sport = provider_metadata.get("sport") or sport
+
+    # An explicit provider universe is a claim about this edition. If it is
+    # malformed or conflicts with the catalogue, do not silently replace it with
+    # a different roster: the caller must see a fail-closed result. The catalogue
+    # is used whenever no provider universe was declared at all.
+    provider_declared_universe = (
+        isinstance(provider_metadata, dict) and "expected_team_ids" in provider_metadata
+    )
+    if not provider_declared_universe:
+        catalogue_ids = _knowledge_historical_team_ids(league_id, season, sport=sport)
+        if catalogue_ids:
+            return catalogue_ids
 
     if isinstance(provider_metadata, dict) and provider_metadata.get("expected_team_ids"):
         exp_ids = provider_metadata["expected_team_ids"]
@@ -809,13 +910,31 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         expected_team_ids = _validate_and_canonicalize_team_manifest(expected_team_ids, league_id, sport=sport)
 
     if not expected_team_ids and is_double_round_robin:
+        # Domestic leagues continue to use the full provider/manifest/knowledge
+        # resolver. The cup path below consults the knowledge catalogue directly
+        # so an unknown competition format keeps its existing fail-closed result
+        # instead of triggering provider identity registration as a side effect.
         expected_team_ids = _get_authoritative_historical_team_ids(
             league_id,
             season,
             max_budget=provider_metadata.get("max_budget"),
             allow_network=provider_metadata.get("allow_network", False),
             provider_metadata=provider_metadata,
+            provider=provider_metadata.get("provider"),
+            sport=sport,
         )
+    elif not expected_team_ids:
+        try:
+            import sports_knowledge
+
+            catalogue_ids = _knowledge_historical_team_ids(league_id, season, sport=sport)
+            if catalogue_ids:
+                expected_team_ids = catalogue_ids
+        except Exception as exc:
+            logger.warning(
+                "Knowledge participant lookup unavailable for %s league %s season %s: %s",
+                sport, league_id, season, exc,
+            )
 
     canonical_expected_set = set()
     all_resolved = True
@@ -883,7 +1002,17 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     elif is_double_round_robin and expected_team_count > 0:
         expected_fixture_count = expected_team_count * (expected_team_count - 1)
     else:
-        expected_fixture_count = None
+        # A non-league edition may have an independently documented total in
+        # the knowledge catalogue (for example a World Cup or EURO). Never use
+        # a catalogue total to override an explicit provider/config count.
+        try:
+            import sports_knowledge
+
+            knowledge_expectation = sports_knowledge.expected_coverage_units(sport, league_id, season)
+            knowledge_total = knowledge_expectation.get("value")
+            expected_fixture_count = knowledge_total if isinstance(knowledge_total, int) and knowledge_total > 0 else None
+        except Exception:
+            expected_fixture_count = None
 
     expected_matches_per_team = 2 * (expected_team_count - 1) if is_double_round_robin else None
     expected_home_away_per_team = expected_team_count - 1 if is_double_round_robin else None
@@ -2818,6 +2947,39 @@ class DataResolver:
             else "unknown"
         )
 
+        # Knowledge-driven provider selection: approved order is unchanged, but
+        # a provider the catalogue marks unsupported for this competition is
+        # never attempted. The route is reported with the outcome so an
+        # unsupported provider is distinguishable from an exhausted one.
+        try:
+            import sports_knowledge
+
+            knowledge_route = sports_knowledge.provider_route("football", league_id, season)
+        except Exception as route_exc:
+            logger.warning(
+                "Knowledge provider route unavailable for league %s season %s: %s",
+                league_id, season, route_exc,
+            )
+            knowledge_route = {
+                "approved_order": [
+                    "football_data_csv",
+                    "soccerdata_fbref",
+                    "soccerdata_match_history",
+                    "soccerdata_sofascore",
+                ],
+                "eligible_providers": [
+                    "football_data_csv",
+                    "soccerdata_fbref",
+                    "soccerdata_match_history",
+                    "soccerdata_sofascore",
+                ],
+                "unsupported_providers": {},
+                "edition_evidence_status": "UNKNOWN",
+                "completion_allowed": False,
+                "blockers": ["knowledge_provider_route_unavailable"],
+            }
+        eligible_providers = set(knowledge_route.get("eligible_providers") or [])
+
         import storage
 
         # 1. Read-first persistence: Reuse stored DB fixtures when dataset status is COMPLETE and verified
@@ -2847,6 +3009,7 @@ class DataResolver:
                             "source": "internal_db",
                             "provider_metadata": {
                                 "competition_format": competition_format,
+                                "knowledge_provider_route": knowledge_route,
                                 "expected_team_ids": expected_team_ids_db,
                                 "is_complete": True,
                                 "is_partial": False,
@@ -2876,7 +3039,7 @@ class DataResolver:
         if page == 1:
             # 2a. Direct CSV - Attempt direct downloadable CSV BEFORE network-dependent team-universe discovery
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
-            if rem_time > 0:
+            if rem_time > 0 and "football_data_csv" in eligible_providers:
                 attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
                 t_csv_start = time.perf_counter()
                 try:
@@ -2926,6 +3089,7 @@ class DataResolver:
                     "source": "football_data_csv",
                     "provider_metadata": {
                         "competition_format": competition_format,
+                        "knowledge_provider_route": knowledge_route,
                         "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
@@ -2942,7 +3106,7 @@ class DataResolver:
             # 2b. SoccerData FBref
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_fb_code = LEAGUE_TO_SD_FBREF_CODE.get(league_id)
-            if sd_fb_code and rem_time > 0:
+            if sd_fb_code and rem_time > 0 and "soccerdata_fbref" in eligible_providers:
                 attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
                 t_fb_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData FBref fetch starting for league_id={league_id}, season={season}, sd_code={sd_fb_code}")
@@ -3021,6 +3185,7 @@ class DataResolver:
                     )),
                     "provider_metadata": {
                         "competition_format": competition_format,
+                        "knowledge_provider_route": knowledge_route,
                         "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
@@ -3038,7 +3203,7 @@ class DataResolver:
             # 2c. SoccerData MatchHistory
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
-            if sd_mh_code and rem_time > 0:
+            if sd_mh_code and rem_time > 0 and "soccerdata_match_history" in eligible_providers:
                 attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
                 t_mh_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData MatchHistory fetch starting for league_id={league_id}, season={season}, sd_code={sd_mh_code}")
@@ -3115,6 +3280,7 @@ class DataResolver:
                     )),
                     "provider_metadata": {
                         "competition_format": competition_format,
+                        "knowledge_provider_route": knowledge_route,
                         "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
@@ -3133,7 +3299,7 @@ class DataResolver:
             # 2d. SoccerData Sofascore
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
-            if sd_ss_code and rem_time > 0:
+            if sd_ss_code and rem_time > 0 and "soccerdata_sofascore" in eligible_providers:
                 attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
                 t_ss_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData Sofascore fetch starting for league_id={league_id}, season={season}, sd_code={sd_ss_code}")
@@ -3212,6 +3378,7 @@ class DataResolver:
                     )),
                     "provider_metadata": {
                         "competition_format": competition_format,
+                        "knowledge_provider_route": knowledge_route,
                         "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
@@ -3303,6 +3470,7 @@ class DataResolver:
                     )),
                 "provider_metadata": {
                     "competition_format": competition_format,
+                    "knowledge_provider_route": knowledge_route,
                     "expected_team_ids": expected_team_ids,
                     "is_complete": True,
                     "is_partial": False,
@@ -3344,6 +3512,7 @@ class DataResolver:
 
         final_provider_metadata = {
             "competition_format": competition_format,
+            "knowledge_provider_route": knowledge_route,
             "expected_team_ids": expected_team_ids,
             "is_complete": final_coverage["verified"],
             "is_partial": not final_coverage["verified"],

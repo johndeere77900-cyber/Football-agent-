@@ -1541,6 +1541,25 @@ def predict_fixture(
                 )
             )
 
+    # Knowledge context is provenance, never a prediction input. It records
+    # whether the competition edition and participant universe are confirmed,
+    # provisional or unknown, and whether the resolved canonical clubs belong to
+    # a verified roster when the catalogue has one.
+    try:
+        import sports_knowledge
+
+        prediction["sports_knowledge_context"] = sports_knowledge.prediction_context(
+            "football",
+            league["id"],
+            league["season"],
+            team_ids=[c_home_id, c_away_id],
+        )
+    except Exception:
+        prediction["sports_knowledge_context"] = {
+            "source": "sports_knowledge",
+            "evidence_status": sports_knowledge.EVIDENCE_UNKNOWN if "sports_knowledge" in locals() else "UNKNOWN",
+        }
+
     if not isinstance(markets, dict):
         raise ValueError(
             "Prediction markets are invalid."

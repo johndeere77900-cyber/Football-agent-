@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "sport": "football",
   "curated_at": "2026-11-01T00:00:00+00:00",
   "description": "Curated football competition knowledge: identity, aliases, season/edition calendars, format, expected coverage shape and approved provider coverage. Facts carry a source URL, retrieval timestamp and confidence. Hypotheses are research notes and never drive acquisition or completion.",

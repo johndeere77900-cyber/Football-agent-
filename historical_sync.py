@@ -238,7 +238,20 @@ def get_competition_lifecycle(
         "coverage_reason": coverage.get("reason") if isinstance(coverage, dict) else None,
         "season_window": None,
         "observed_last_match_date": None,
+        "knowledge_evidence_status": None,
+        "knowledge_evidence_gaps": [],
+        "knowledge_participant_status": None,
     }
+
+    try:
+        import sports_knowledge
+
+        knowledge_record = sports_knowledge.edition(sport, league_id, season)
+        evidence["knowledge_evidence_status"] = knowledge_record.get("evidence_status")
+        evidence["knowledge_evidence_gaps"] = knowledge_record.get("evidence_gaps") or []
+        evidence["knowledge_participant_status"] = knowledge_record.get("participant_status")
+    except Exception:
+        knowledge_record = None
 
     window = _competition_season_window(sport, league_id, season)
     if window is None:
@@ -276,6 +289,17 @@ def get_competition_lifecycle(
         return (
             COMPETITION_LIFECYCLE_ONGOING,
             f"active_season_in_progress_until_{end_utc.strftime('%Y-%m-%d')}",
+            evidence,
+        )
+
+    # Structural coverage alone is not completion evidence. The edition's
+    # participant universe, format expectation and dates must be confirmed by
+    # the knowledge catalogue; provisional/unknown evidence fails closed.
+    if knowledge_record is not None and knowledge_record.get("evidence_status") != "CONFIRMED":
+        knowledge_status = str(knowledge_record.get("evidence_status") or "UNKNOWN").lower()
+        return (
+            COMPETITION_LIFECYCLE_UNKNOWN,
+            f"knowledge_evidence_{knowledge_status}",
             evidence,
         )
 

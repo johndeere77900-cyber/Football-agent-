@@ -771,3 +771,63 @@ identities, unavailable phase evidence and no action.
 **Verification:** full suite **719 passed, 0 failed (91.21 s)**. No production Neon row, schema or
 mapping was modified. Production reconciliation, authoritative tournament participant universes
 and the five-hour run cause remain external-evidence blockers.
+
+## 20. Comprehensive edition knowledge, provider routing and completion gating
+
+### 20.1 Edition-level catalogue
+
+`sports_knowledge/` now has a version-2 edition layer (`football_editions.json`,
+`basketball_editions.json`) loaded beside the existing competition catalogues. Each recorded
+edition carries its own participants and canonical ids, competition-context aliases, format and
+stages, fixture/coverage expectation, promotion/relegation context, source URL, retrieval date,
+confidence and explicit evidence gaps. Participant lists are never inferred from acquired
+fixtures or from a current-season roster.
+
+Verified participants are present for:
+
+- Premier League 2019/20 through 2025/26 (seven edition-specific rosters);
+- La Liga 2019/20, 2023/24 and 2024/25;
+- Serie A, Bundesliga, Ligue 1, Eredivisie and Primeira Liga 2023/24 and 2024/25;
+- FIFA World Cup 2018 and 2022;
+- UEFA EURO 2020 and 2024;
+- NBA 2019/20 through 2026/27, with phase-specific coverage expectations.
+
+The remaining configured seasons have no fabricated roster. `sports_knowledge.knowledge_gap_report()`
+covers every configured competition from 2019 through the 2030 horizon and reports each missing
+window, participant universe or format expectation explicitly. The generated inventory summarises
+this as 31 CONFIRMED, 99 PROVISIONAL, 4 UNKNOWN and 24 NOT_APPLICABLE edition evaluations.
+
+### 20.2 Operational integration
+
+- Team identity: catalogue participant aliases are merged into the sport/competition alias map;
+  config aliases retain precedence. Every alias remains scoped by league id.
+- Expected universes: `_get_authoritative_historical_team_ids()` checks a verified edition roster
+  before provider metadata or a persisted manifest. A provider-declared universe is treated as a
+  competing claim and is never silently replaced; unresolved or unregistered catalogue ids fail
+  closed.
+- Structural validation: cup, international and tournament formats now consume verified catalogue
+  participants; a match total alone cannot prove completion.
+- Coverage expectation: edition fixture totals and NBA regular-season totals feed the acquisition
+  expectation. Unverified editions stay UNKNOWN rather than inheriting today’s team count.
+- Provider routing: `provider_route()` filters the approved order by the competition’s declared
+  provider support. Unsupported providers are skipped and the route, blockers and evidence status
+  are attached to acquisition diagnostics.
+- Completion: `get_competition_lifecycle()` now requires CONFIRMED knowledge evidence in addition
+  to verified structural coverage. PROVISIONAL and UNKNOWN editions cannot become COMPLETE.
+- Prediction context: football and basketball predictions attach read-only
+  `sports_knowledge_context` with edition evidence status, coverage expectations, gaps and verified
+  roster membership. It never changes probabilities.
+- Refreshability: `refresh_source()` updates source retrieval metadata without rewriting edition
+  facts; future annual editions and explicitly cadenced international editions are enumerated
+  through 2030 as provisional.
+
+### 20.3 Verification and remaining evidence work
+
+Full suite: **730 passed, 0 failed (109.84 s)**. `sports_knowledge.validate()` reports no problems;
+the regenerated inventory has 150 targets, 16 NOT_APPLICABLE and 0 knowledge problems; NBA 2026/27
+correctly remains PROVISIONAL because no final regular-season total is asserted.
+
+No Neon database was read or modified. Remaining authoritative evidence gaps are the unverified
+historical rosters/coverage totals reported by the knowledge report, especially UCL, UEL, Nations
+League and the non-verified domestic seasons. Those gaps are reported, not guessed.
+

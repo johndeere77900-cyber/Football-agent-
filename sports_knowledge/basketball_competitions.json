@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "sport": "basketball",
   "curated_at": "2026-11-01T00:00:00+00:00",
   "description": "Curated basketball competition knowledge. Football and basketball are the two schemas this foundation completes; other sports are added later as additional catalogues behind the same loader.",
