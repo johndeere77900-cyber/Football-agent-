@@ -165,6 +165,15 @@ def _api_key():
     return key.strip()
 
 
+def is_configured():
+    """True when a usable basketball credential exists (dedicated or shared)."""
+    try:
+        _api_key()
+        return True
+    except ValueError:
+        return False
+
+
 def _base_url():
     """Return the configured Basketball API base URL."""
     base_url = getattr(

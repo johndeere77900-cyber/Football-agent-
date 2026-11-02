@@ -708,3 +708,66 @@ integrity-repair, phase-1 reliability and workflow-verification suites. The repo
 locally as CLI commands and as the seeded harness described above. CI has not been waited on.
 The five-hour runtime remains unattributed, Run 42 remains unverified, and production manifest,
 phase-recovery and team-universe counts still require ChatGPT's Neon inspection.
+
+## 19. Persistence bottleneck, identity reconciliation and interruption safety
+
+### 19.1 Fixture persistence batch path
+
+`storage.save_historical_fixtures()` previously called
+`team_identity.bootstrap_historical_team_identity()` twice per fixture, and each bootstrap
+performed several identity reads/writes. The save path now resolves each distinct
+(provider, provider-id/name, competition) team once per batch, then batches fixture inserts and
+metadata updates with `executemany`, preserving `ON CONFLICT` semantics and the existing
+source-scoped identity, canonical id, raw JSON, provenance, validation and ambiguity rules.
+
+Measured on 380 real Football-Data.co.uk fixtures in a temporary SQLite database:
+
+- 760 team appearances resolved through **20 distinct identity resolutions and 740 cache
+  hits** (previously 760 bootstrap calls);
+- one batched insert for 380 rows (0 updates on the first run);
+- identity resolution 0.0658 s, insert 0.0017 s, commit 0.0038 s, total persistence 0.0814 s;
+- repeat run: 380 already existing, 0 inserts, 20 resolutions / 740 hits, no duplicate rows.
+
+The result exposes `identity_resolution_duration`, `insert_duration`, `update_duration`,
+`commit_duration`, total persistence, records processed, identity calls/cache hits and
+insert/update batch counts. No identity validation was weakened.
+
+### 19.2 Credential and phase contracts
+
+`basketball_api.is_configured()` reports whether a dedicated `API_BASKETBALL_KEY` or the
+existing shared API-Football key is available. When the provider client rejects a missing
+credential, the sync records `api_basketball_unavailable_missing_credential`, stage
+`credentials`, and consumes zero quota instead of reporting a generic provider failure. Direct
+harness: unavailable=False, one fallback attempt, zero HTTP requests, zero quota consumed.
+ESPN remains primary and the fallback order is unchanged. ESPN season type `4` is explicitly
+classified as All-Star alongside the existing preseason/regular/postseason/play-in mapping.
+
+### 19.3 Team identity aliases and conflict report
+
+Configured aliases now cover Nottingham Forest / Nott'm Forest, AZ Alkmaar / AZ, Go Ahead
+Eagles / Go Ahead, Fortuna Sittard / For Sittard, NEC Nijmegen / Nijmegen, FC Volendam /
+Volendam, RKC Waalwijk / Waalwijk and Sparta Rotterdam / Sparta. A direct harness resolved each
+full and short name to the same non-null canonical id. The new read-only
+`build_identity_conflict_report()` (CLI: `--report-team-identity-conflicts`) groups persisted
+mappings by normalized name and competition, lists divergent canonical ids and only proposes a
+target where the configured alias map names one. A seeded two-mapping conflict was reported with
+a proposal; no production mapping was changed.
+
+### 19.4 Queue interruption, checkpoints and workflow evidence
+
+A SIGINT/SIGTERM handler stops new targets, lets the current target's transaction finish, writes
+a checkpoint and marks the run interrupted. Runtime harness (two queued targets, SIGTERM during
+the first): exactly one target processed, checkpoint present, report `interrupted=true`,
+`in_progress_target` recorded, and `main.py --historical-queue` returned **130**. The run report
+now carries the run id, last completed target, in-progress target and interrupt signal. The
+workflow adds job/step timeouts and always-upload of `data/historical_runs/` diagnostics; YAML
+parsed successfully.
+
+Both report commands expose a recommended recovery action. The football report proposes
+expected-team-universe resolution, missing-coverage acquisition, lifecycle verification or
+diagnostic inspection; the NBA report distinguishes ESPN enrichment, reacquisition of unmatched
+identities, unavailable phase evidence and no action.
+
+**Verification:** full suite **719 passed, 0 failed (91.21 s)**. No production Neon row, schema or
+mapping was modified. Production reconciliation, authoritative tournament participant universes
+and the five-hour run cause remain external-evidence blockers.

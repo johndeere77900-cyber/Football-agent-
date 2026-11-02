@@ -527,3 +527,105 @@ def bootstrap_historical_team_identity(
         league_id=league_id,
         synthetic=synthetic,
     )
+
+
+def build_identity_conflict_report(sport="football"):
+    """
+    Report conflicting persisted identity mappings and a proposed reconciliation.
+
+    Read-only. It never reassigns a provider mapping or edits a canonical id. A
+    proposal is only offered when the configured alias map names a canonical
+    target; otherwise the conflict is reported without a guessed resolution.
+    """
+    import json
+    import os
+    from collections import Counter
+    from datetime import datetime, timezone
+
+    sport = str(sport or "football").strip().lower()
+    rows = storage.list_team_identities(sport)
+    by_name = {}
+    by_canonical = {}
+    provider_counts = Counter()
+    for row in rows:
+        provider_counts[row.get("provider") or "unknown"] += 1
+        name_key = (row.get("normalized_name") or "", row.get("league_id"))
+        by_name.setdefault(name_key, set()).add(row.get("canonical_id"))
+        by_canonical.setdefault(row.get("canonical_id"), set()).add(row.get("normalized_name") or "")
+
+    alias_map = _get_sport_alias_map(sport)
+    conflicts = []
+    for (normalized_name, league_id), canonical_ids in sorted(
+        by_name.items(), key=lambda item: (str(item[0][0]), str(item[0][1]))
+    ):
+        if len(canonical_ids) <= 1:
+            continue
+        proposal = None
+        if league_id is not None:
+            alias_target = alias_map.get((normalized_name, league_id))
+            if alias_target:
+                proposal = f"{sport}_team_{sanitize_canonical_slug(alias_target)}"
+        conflicts.append({
+            "normalized_name": normalized_name,
+            "league_id": league_id,
+            "canonical_ids": sorted(cid for cid in canonical_ids if cid),
+            "proposed_canonical_id": proposal,
+            "proposed_action": (
+                "review_and_consolidate_to_proposed_id" if proposal
+                else "manual_review_no_configured_alias"
+            ),
+        })
+
+    variants = [
+        {
+            "canonical_id": canonical_id,
+            "normalized_names": sorted(name for name in names if name),
+        }
+        for canonical_id, names in by_canonical.items()
+        if canonical_id and len({name for name in names if name}) > 1
+    ]
+
+    report = {
+        "report_type": "team_identity_conflicts",
+        "sport": sport,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mutated": False,
+        "mapping_count": len(rows),
+        "provider_counts": dict(provider_counts),
+        "conflicting_name_groups": conflicts,
+        "conflicting_name_group_count": len(conflicts),
+        "canonical_id_name_variants": sorted(variants, key=lambda item: item["canonical_id"]),
+        "limitations": (
+            "Read-only. Production mapping consolidation is a separate review and "
+            "is not performed by this repository."
+        ),
+    }
+    try:
+        report_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "historical_runs"
+        )
+        os.makedirs(report_dir, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        path = os.path.join(report_dir, f"team_identity_conflicts_{timestamp}.json")
+        with open(path, "w", encoding="utf-8") as report_file:
+            json.dump(report, report_file, indent=2, sort_keys=True, default=str)
+        report["report_path"] = path
+    except OSError as exc:
+        report["report_path"] = None
+        report["report_error"] = str(exc)
+
+    print("\n=== TEAM IDENTITY CONFLICT REPORT ===", flush=True)
+    print(
+        f"  mappings={len(rows)} conflicting_name_groups={len(conflicts)} "
+        f"canonical_variants={len(variants)}",
+        flush=True,
+    )
+    for conflict in conflicts[:50]:
+        print(
+            f"  {conflict['normalized_name']!r} league={conflict['league_id']} -> "
+            f"{conflict['canonical_ids']} proposed={conflict['proposed_canonical_id']}",
+            flush=True,
+        )
+    if report.get("report_path"):
+        print(f"  report: {report['report_path']}", flush=True)
+    return report

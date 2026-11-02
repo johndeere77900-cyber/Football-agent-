@@ -34,6 +34,7 @@ Key invariants:
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 import uuid
@@ -438,6 +439,14 @@ def sync_historical_fixtures(
     t_sync_start = time.perf_counter()
     total_db_write_duration = 0.0
     db_write_calls = 0
+    total_identity_resolution_duration = 0.0
+    total_identity_resolution_calls = 0
+    total_identity_cache_hits = 0
+    total_insert_statements = 0
+    total_update_statements = 0
+    total_insert_duration = 0.0
+    total_update_duration = 0.0
+    total_commit_duration = 0.0
     allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
 
     # A tournament edition whose match total is independently documented (for
@@ -665,6 +674,18 @@ def sync_historical_fixtures(
             total_rejected_count += save_result.get("rejected_count", 0)
             total_db_write_duration += save_result.get("db_write_duration", 0.0)
             db_write_calls += 1
+            total_identity_resolution_duration += float(
+                save_result.get("identity_resolution_duration") or 0.0
+            )
+            total_identity_resolution_calls += int(
+                save_result.get("identity_resolution_calls") or 0
+            )
+            total_identity_cache_hits += int(save_result.get("identity_cache_hits") or 0)
+            total_insert_statements += int(save_result.get("insert_statements") or 0)
+            total_update_statements += int(save_result.get("update_statements") or 0)
+            total_insert_duration += float(save_result.get("insert_duration") or 0.0)
+            total_update_duration += float(save_result.get("update_duration") or 0.0)
+            total_commit_duration += float(save_result.get("commit_duration") or 0.0)
 
             for conflict_field, conflict_count in (save_result.get("metadata_conflicts") or {}).items():
                 metadata_conflict_counts[conflict_field] = (
@@ -1091,6 +1112,14 @@ def sync_historical_fixtures(
         "total_sync_duration": round(total_sync_elapsed, 3),
         "db_write_duration": round(total_db_write_duration, 3),
         "db_write_calls": db_write_calls,
+        "identity_resolution_duration": round(total_identity_resolution_duration, 3),
+        "identity_resolution_calls": total_identity_resolution_calls,
+        "identity_cache_hits": total_identity_cache_hits,
+        "insert_statements": total_insert_statements,
+        "update_statements": total_update_statements,
+        "insert_duration": round(total_insert_duration, 3),
+        "update_duration": round(total_update_duration, 3),
+        "commit_duration": round(total_commit_duration, 3),
     }
 
     _print_sync_report(report)
@@ -1828,8 +1857,20 @@ def sync_historical_basketball_games(
                 break
             except Exception as exc:
                 acquisition_failed = True
-                last_error_reason = "api_error_during_acquisition"
-                last_error_stage = "provider_request"
+                credential_error = (
+                    not basketball_api.is_configured()
+                    and isinstance(exc, ValueError)
+                    and "not configured" in str(exc).lower()
+                )
+                if credential_error:
+                    # The provider client validates credentials before any HTTP
+                    # call, so this is a configuration outcome, not an empty or
+                    # failed competition. It is reported as UNAVAILABLE.
+                    last_error_reason = "api_basketball_unavailable_missing_credential"
+                    last_error_stage = "credentials"
+                else:
+                    last_error_reason = "api_error_during_acquisition"
+                    last_error_stage = "provider_request"
                 last_error_detail = f"{type(exc).__name__}: {exc}"[:300]
                 print(f"API acquisition error during basketball games fetch on page {current_page}: {exc}", flush=True)
                 break
@@ -2141,6 +2182,7 @@ def sync_historical_basketball_games(
         "lifecycle_reason": lifecycle_reason_b,
         "api_requests_consumed": total_consumed,
         "historical_budget": historical_budget,
+        "api_basketball_available": basketball_api.is_configured(),
         "quota_budget_stopped": quota_budget_stopped,
         "error_reason": last_error_reason,
         "error_detail": last_error_detail,
@@ -2459,6 +2501,15 @@ def build_basketball_phase_recovery_report(seasons=None, league_id=None, fetch_e
             else:
                 stats["matched_without_phase"] += 1
 
+        if stats["enrichable"]:
+            stats["recommended_recovery_action"] = "run_espn_first_sync_to_enrich_matches"
+        elif stats["requires_reacquisition"]:
+            stats["recommended_recovery_action"] = "reacquire_unmatched_records_from_their_source"
+        elif stats["espn_unclassified"]:
+            stats["recommended_recovery_action"] = "provider_phase_evidence_unavailable"
+        else:
+            stats["recommended_recovery_action"] = "none"
+
         stats["fresh_not_persisted"] = len(set(fresh_by_id) - persisted_espn_ids)
         stats["unmatched_examples"] = unmatched_examples
         stats["conflict_examples"] = conflict_examples
@@ -2655,6 +2706,19 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
         else:
             blocker = manifest.get("error_reason") or "manifest_not_complete_despite_valid_coverage"
 
+        if blocker is None:
+            recovery_action = "none"
+        elif blocker == "expected_team_universe_unavailable":
+            recovery_action = "resolve_authoritative_expected_team_universe"
+        elif blocker == "no_persisted_records":
+            recovery_action = "acquire_dataset"
+        elif str(blocker).startswith("structural_coverage_failed"):
+            recovery_action = "acquire_missing_coverage_or_fix_provider_mapping"
+        elif str(blocker).startswith("lifecycle_"):
+            recovery_action = "wait_for_season_completion_or_verify_lifecycle"
+        else:
+            recovery_action = "inspect_manifest_and_provider_diagnostics"
+
         results.append({
             "league_id": lid,
             "season": ssn,
@@ -2683,6 +2747,7 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
             "lifecycle_state": lifecycle_state,
             "lifecycle_reason": lifecycle_reason,
             "exact_blocker": blocker,
+            "recommended_recovery_action": recovery_action,
             "error_reason": manifest.get("error_reason"),
             "updated_at": manifest.get("updated_at"),
         })
@@ -2720,6 +2785,22 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
     return summary
 
 
+def _write_queue_checkpoint(acquisition_run_id, payload):
+    """Persist a resumable checkpoint after every completed target (best effort)."""
+    try:
+        report_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "historical_runs"
+        )
+        os.makedirs(report_dir, exist_ok=True)
+        path = os.path.join(report_dir, f"{acquisition_run_id}.checkpoint.json")
+        with open(path, "w", encoding="utf-8") as checkpoint_file:
+            json.dump(payload, checkpoint_file, indent=2, sort_keys=True, default=str)
+        return path
+    except OSError as exc:
+        print(f"Queue checkpoint could not be written: {exc}", flush=True)
+        return None
+
+
 def run_historical_queue(
     seasons: list = None,
     season: int = None,
@@ -2737,6 +2818,33 @@ def run_historical_queue(
     acquisition_run_id = (
         f"acq-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     )
+
+    # SIGINT/SIGTERM are deferred until the current target's transaction has
+    # committed. No new target starts after the signal, and the run remains an
+    # interrupted (nonzero) outcome rather than being reported as complete.
+    interrupted = {"requested": False, "signal": None, "current_target": None}
+    in_progress_target = None
+    last_completed_target = None
+
+    def _queue_signal_handler(signum, _frame):
+        interrupted["requested"] = True
+        interrupted["signal"] = signal.Signals(signum).name
+        interrupted["current_target"] = in_progress_target
+        print(
+            f"Queue: {interrupted['signal']} received; finishing the current target "
+            f"transaction and starting no new work.",
+            flush=True,
+        )
+
+    previous_signal_handlers = {}
+    for _signal_name in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous_signal_handlers[_signal_name] = signal.signal(
+                _signal_name, _queue_signal_handler
+            )
+        except (ValueError, OSError):
+            # Signal handlers can only be installed in the main thread.
+            pass
 
     if seasons is not None and isinstance(seasons, (list, tuple)) and seasons:
         target_seasons = list(seasons)
@@ -2832,6 +2940,8 @@ def run_historical_queue(
     queue_started_perf = time.perf_counter()
 
     for item in queue_items:
+        if interrupted["requested"]:
+            break
         sport = item["sport"]
         league_id = item["league_id"]
         season = item["season"]
@@ -2898,6 +3008,19 @@ def run_historical_queue(
             })
             continue
 
+        in_progress_target = {
+            "sport": sport, "league_id": league_id, "season": season,
+        }
+        _write_queue_checkpoint(acquisition_run_id, {
+            "acquisition_run_id": acquisition_run_id,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "interrupted": interrupted["requested"],
+            "last_completed_target": last_completed_target,
+            "in_progress_target": in_progress_target,
+            "completed_target_count": len(target_timings),
+            "total_targets": len(queue_items),
+            "target_timings": target_timings,
+        })
         print(
             f"Queue: Syncing missing data for {sport} league {league_id} season {season} (est. required requests: {cov['estimated_required_requests']})...",
             flush=True,
@@ -2941,7 +3064,33 @@ def run_historical_queue(
             "api_requests_consumed": report.get("api_requests_consumed", 0),
             "final_stored_count": report.get("final_stored_count", 0),
             "skipped_reason": report.get("skipped_reason"),
+        "identity_resolution_seconds": round(
+            float(report.get("identity_resolution_duration") or 0.0), 3
+        ),
         })
+
+        last_completed_target = {
+            "sport": sport, "league_id": league_id, "season": season,
+            "status": report.get("status"),
+        }
+        in_progress_target = None
+        _write_queue_checkpoint(acquisition_run_id, {
+            "acquisition_run_id": acquisition_run_id,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "interrupted": interrupted["requested"],
+            "last_completed_target": last_completed_target,
+            "in_progress_target": None,
+            "completed_target_count": len(target_timings),
+            "total_targets": len(queue_items),
+            "target_timings": target_timings,
+        })
+        if interrupted["requested"]:
+            print(
+                f"Queue: stopping after safely completing {sport} league {league_id} "
+                f"season {season}; the run is interrupted.",
+                flush=True,
+            )
+            break
 
     # Attach the run id to every target record, not only the run summary, so a
     # single target's evidence can be traced to the run that produced it.
@@ -2999,14 +3148,27 @@ def run_historical_queue(
                 ("coverage_check", "coverage_check_seconds"),
                 ("acquisition", "acquisition_seconds"),
                 ("persistence", "persistence_seconds"),
+                ("identity_resolution", "identity_resolution_seconds"),
             )
         ],
         key=lambda operation: operation["seconds"],
         reverse=True,
     )[:10]
 
+    for _signal_name, _previous_handler in previous_signal_handlers.items():
+        try:
+            signal.signal(_signal_name, _previous_handler)
+        except (ValueError, OSError):
+            pass
+
     run_report = {
         "report_type": "historical_acquisition_run",
+        "interrupted": interrupted["requested"],
+        "interrupt_signal": interrupted["signal"],
+        "last_completed_target": last_completed_target,
+        "in_progress_target": (
+            interrupted["current_target"] if interrupted["requested"] else None
+        ),
         "acquisition_run_id": acquisition_run_id,
         "target_seasons": seasons,
         "processed_count": len(reports),

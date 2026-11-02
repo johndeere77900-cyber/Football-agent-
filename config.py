@@ -338,6 +338,24 @@ FOOTBALL_CANONICAL_TEAM_ALIASES = {
     ("sporting cp", 94): "sporting cp",
     ("sporting lisbon", 94): "sporting cp",
 
+    # Eredivisie clubs that providers abbreviate differently. These aliases
+    # resolve before a new canonical id is minted; they never reassign an
+    # existing provider mapping, which is reported for manual reconciliation.
+    ("az alkmaar", 88): "az alkmaar",
+    ("az", 88): "az alkmaar",
+    ("go ahead eagles", 88): "go ahead eagles",
+    ("go ahead", 88): "go ahead eagles",
+    ("fortuna sittard", 88): "fortuna sittard",
+    ("for sittard", 88): "fortuna sittard",
+    ("nec nijmegen", 88): "nec nijmegen",
+    ("nijmegen", 88): "nec nijmegen",
+    ("fc volendam", 88): "volendam",
+    ("volendam", 88): "volendam",
+    ("rkc waalwijk", 88): "rkc waalwijk",
+    ("waalwijk", 88): "rkc waalwijk",
+    ("sparta rotterdam", 88): "sparta rotterdam",
+    ("sparta", 88): "sparta rotterdam",
+
     # Generic Test Fixtures (League 39 & 2026 test fixtures)
     ("home fc", 39): "39_home_fc",
     ("away fc", 39): "39_away_fc",

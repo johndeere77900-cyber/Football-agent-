@@ -82,6 +82,7 @@ ESPN_SEASON_TYPE_CLASSIFICATION = {
     1: "preseason",
     2: "regular_season",
     3: "postseason",
+    4: "all_star",
     5: "play_in",
 }
 

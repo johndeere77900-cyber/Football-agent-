@@ -2859,6 +2859,12 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--report-team-identity-conflicts",
+        action="store_true",
+        help="Report conflicting team identity mappings and proposed reconciliation (read-only).",
+    )
+
+    parser.add_argument(
         "--backtest-history",
         action="store_true",
         help="Show past backtest runs.",
@@ -3007,6 +3013,13 @@ def main():
             )
             return 0
 
+        if args.report_team_identity_conflicts:
+            storage.init_db()
+            import team_identity
+
+            team_identity.build_identity_conflict_report(sport=args.sport or "football")
+            return 0
+
         if args.report_nba_phase_recovery:
             storage.init_db()
             historical_sync.build_basketball_phase_recovery_report(
@@ -3038,6 +3051,14 @@ def main():
                 with_enrichment=args.with_enrichment,
                 refresh=args.refresh,
             )
+
+            if isinstance(summary, dict) and summary.get("interrupted"):
+                print(
+                    f"Historical queue was interrupted ({summary.get('interrupt_signal')}); "
+                    "committed records and checkpoints were preserved.",
+                    file=sys.stderr,
+                )
+                return 130
 
             reports = summary.get("reports", []) if isinstance(summary, dict) else []
             incomplete_count = sum(
