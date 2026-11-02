@@ -34,6 +34,7 @@ Key invariants:
 import argparse
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import data_resolver
@@ -2330,13 +2331,22 @@ def run_historical_queue(
         flush=True,
     )
 
+    # Per-target timing evidence. Without it a multi-hour run cannot be explained:
+    # the queue reports how much time each dataset spent in the coverage-check
+    # (database) phase versus actual acquisition, plus the slowest targets.
+    target_timings = []
+    queue_started_at = datetime.now(timezone.utc).isoformat()
+    queue_started_perf = time.perf_counter()
+
     for item in queue_items:
         sport = item["sport"]
         league_id = item["league_id"]
         season = item["season"]
+        t_target_start = time.perf_counter()
 
         # Check coverage before making requests
         cov = check_acquisition_coverage(league_id, season, sport=sport)
+        coverage_check_seconds = time.perf_counter() - t_target_start
         if cov["already_complete"] and not refresh:
             print(
                 f"Queue: Skipping COMPLETE {sport} dataset for league {league_id} season {season} (0 API requests required).",
@@ -2348,6 +2358,17 @@ def run_historical_queue(
                 "season": season,
                 "status": "COMPLETE",
                 "skipped_reason": "Dataset already COMPLETE",
+                "api_requests_consumed": 0,
+            })
+            target_timings.append({
+                "sport": sport,
+                "league_id": league_id,
+                "season": season,
+                "status": "COMPLETE",
+                "skipped_reason": "Dataset already COMPLETE",
+                "duration_seconds": round(time.perf_counter() - t_target_start, 3),
+                "coverage_check_seconds": round(coverage_check_seconds, 3),
+                "acquisition_seconds": 0.0,
                 "api_requests_consumed": 0,
             })
             continue
@@ -2365,6 +2386,17 @@ def run_historical_queue(
                 "status": "INCOMPLETE",
                 "skipped_reason": "sport_acquisition_budget_exhausted",
                 "quota_budget_stopped": True,
+                "api_requests_consumed": 0,
+            })
+            target_timings.append({
+                "sport": sport,
+                "league_id": league_id,
+                "season": season,
+                "status": "INCOMPLETE",
+                "skipped_reason": "sport_acquisition_budget_exhausted",
+                "duration_seconds": round(time.perf_counter() - t_target_start, 3),
+                "coverage_check_seconds": round(coverage_check_seconds, 3),
+                "acquisition_seconds": 0.0,
                 "api_requests_consumed": 0,
             })
             continue
@@ -2396,14 +2428,52 @@ def run_historical_queue(
                 flush=True,
             )
 
+        target_duration = time.perf_counter() - t_target_start
+        report["duration_seconds"] = round(target_duration, 3)
         reports.append(report)
+        target_timings.append({
+            "sport": sport,
+            "league_id": league_id,
+            "season": season,
+            "status": report.get("status"),
+            "duration_seconds": round(target_duration, 3),
+            "coverage_check_seconds": round(coverage_check_seconds, 3),
+            "acquisition_seconds": round(max(0.0, target_duration - coverage_check_seconds), 3),
+            "api_requests_consumed": report.get("api_requests_consumed", 0),
+            "final_stored_count": report.get("final_stored_count", 0),
+        })
+
+    total_duration_seconds = time.perf_counter() - queue_started_perf
+    slowest_targets = sorted(
+        target_timings, key=lambda timing: timing.get("duration_seconds", 0.0), reverse=True
+    )[:10]
+    queue_finished_at = datetime.now(timezone.utc).isoformat()
 
     print(f"Historical queue run complete. Processed {len(reports)} dataset(s).", flush=True)
+    print(
+        f"Historical queue timing: total {total_duration_seconds:.2f}s "
+        f"({total_duration_seconds / 60.0:.2f} min) for {len(target_timings)} target(s).",
+        flush=True,
+    )
+    for timing in slowest_targets:
+        print(
+            f"  slowest target: {timing['sport']} league {timing['league_id']} season {timing['season']} "
+            f"took {timing['duration_seconds']:.2f}s (coverage-check {timing['coverage_check_seconds']:.2f}s, "
+            f"acquisition {timing['acquisition_seconds']:.2f}s, status={timing['status']}, "
+            f"stored={timing.get('final_stored_count', 0)})",
+            flush=True,
+        )
+
     return {
         "target_seasons": seasons,
         "processed_count": len(reports),
         "edition_selection": edition_selection,
         "reports": reports,
+        "started_at": queue_started_at,
+        "finished_at": queue_finished_at,
+        "total_duration_seconds": round(total_duration_seconds, 3),
+        "target_timings": target_timings,
+        "slowest_targets": slowest_targets,
     }
 
 

@@ -565,3 +565,57 @@ plus the canonical tuple before any repair; no code path merges or deletes rows.
    actually contributed validated coverage.
 4. Football manifests with `secondary_provider_returned_no_fixtures`: capture the provider-level
    error text, which the acquisition report now prints, and the exact competition/season.
+
+## 16. Acquisition reliability and runtime investigation
+
+### 16.1 Run identification
+
+The referenced "run 42" is still **unverified**. There is no acquisition-run identifier in the
+repository: manifests are keyed by `(sport, league_id, season)`, `api_request_counts` records
+provider requests, and `operation_requests` is unrelated; GitHub run numbers and season labels are
+different namespaces. Mapping 42 requires the workflow run URL or its start timestamp.
+
+### 16.2 Real end-to-end traces (live providers, isolated SQLite)
+
+Football, league 39 / 2024, direct CSV provider: **380 fixtures received, 380 valid, 380
+persisted**, source `football_data_csv`, total 4.97 s including 1.5 s of deliberately instrumented
+SoccerData stubs. The dataset stayed INCOMPLETE in this clean database because no authoritative
+team universe exists there, so structural coverage cannot verify; that is the documented guard,
+not fixture loss. In a populated database the same CSV result returns after the CSV stage.
+
+NBA, season 2024, live ESPN: **1,397 games received and persisted**, phases recorded as 1,231
+regular season, 73 preseason, 84 postseason, 6 play-in and 3 All-Star; ESPN coverage VALIDATED
+and dataset COMPLETE in **3.39 s with zero API-Basketball requests**. This proves the current
+normalizer persists provider-native phase for real payloads. The production database's 9,361
+rows without `raw_json.provider_provenance.season_type` are therefore historical rows written
+before that classification was recorded, not a current-pipeline failure. A fresh ESPN run
+enriches rows with the same `(espn_url, event_id)`; other source/id pairs need re-acquisition.
+
+### 16.3 Runtime breakdown
+
+The queue processes targets sequentially (`historical_sync.run_historical_queue`). Measured
+healthy targets are seconds: 4.97 s for a 380-fixture CSV season (including deliberate stubs) and
+3.39 s for a 1,397-game ESPN season. The only hard upper bound visible in code is the shared
+primary-provider deadline of 60 s per football target, so a queue of ~96 football targets plus
+eight basketball seasons cannot reach five hours from provider work alone unless targets are
+spending their full deadline or the database round trips are slow. The five-hour duration is
+therefore **not attributed** without the run's logs; the likely candidates that remain are
+Neon round-trip latency during per-row persistence, targets exhausting the 60 s SoccerData
+budget, and runs executed with `--with-enrichment` (API-Football calls per missing fixture).
+
+To make this measurable, `run_historical_queue` now records `started_at`, `finished_at`,
+`total_duration_seconds`, a per-target `target_timings` list
+(`duration_seconds`, `coverage_check_seconds`, `acquisition_seconds`, `status`,
+`final_stored_count`) and the ten `slowest_targets`, and prints a timing summary. Verified with a
+12-target harness: all 12 timings recorded and the summary printed. No acquisition behaviour,
+provider order, quota accounting or validation changed.
+
+### 16.4 Neon checks required (ChatGPT)
+
+1. For the reported five-hour run: the workflow run URL/start time, the dataset that was running
+   when elapsed, and whether `--with-enrichment` was set.
+2. Confirm how many of the 9,361 phase-less basketball rows match an existing
+   `(espn_url, event_id)` that a re-run would enrich.
+3. Manifests whose `error_reason` is `secondary_provider_returned_no_fixtures`: capture the
+   provider-level error printed by the sync (the report now carries `error_detail` for the
+   basketball route; the football route still needs resolver error propagation).
