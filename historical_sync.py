@@ -371,6 +371,42 @@ def _is_historical_provider_complete(
     return True
 
 
+def _football_provider_diagnostics(page_meta):
+    """
+    Build a per-provider failure record from the resolver's attempt metadata.
+
+    ``provider_outcomes`` classifies each attempt (ACCESS_DENIED, UNSUPPORTED,
+    RATE_LIMITED, TIMEOUT, NETWORK_ERROR, PARSER_ERROR, FAILED, VALID_EMPTY, ...),
+    but the category alone does not explain a failure. This keeps the provider's
+    own status, HTTP status and error text on the manifest so a future
+    ``secondary_provider_returned_no_fixtures`` case can be explained without the
+    original run logs. Error text is truncated and never contains credentials.
+    """
+    meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else None
+    if not isinstance(meta, dict):
+        return None
+    outcomes = meta.get("provider_outcomes") if isinstance(meta.get("provider_outcomes"), dict) else {}
+    diagnostics = {}
+    for provider in (
+        "football_data_csv",
+        "soccerdata_fbref",
+        "soccerdata_match_history",
+        "soccerdata_sofascore",
+    ):
+        entry = meta.get(provider) if isinstance(meta.get(provider), dict) else {}
+        raw = entry.get("raw_metadata") if isinstance(entry.get("raw_metadata"), dict) else {}
+        error_text = raw.get("error")
+        diagnostics[provider] = {
+            "outcome": outcomes.get(provider),
+            "fixtures": entry.get("count"),
+            "status": raw.get("status"),
+            "error_category": raw.get("error_category"),
+            "http_status": raw.get("http_status"),
+            "error": str(error_text)[:300] if error_text else None,
+        }
+    return diagnostics
+
+
 def sync_historical_fixtures(
     league_id: int,
     season: int,
@@ -901,6 +937,7 @@ def sync_historical_fixtures(
         "persisted_records_by_provider": persisted_provider_counts,
         "provider_outcomes": (page_meta_val.get("provider_metadata", {}) or {}).get("provider_outcomes")
         if isinstance(page_meta_val, dict) else None,
+        "provider_diagnostics": _football_provider_diagnostics(page_meta_val),
         # Persistence evidence recorded with the manifest: what this sync actually
         # inserted, enriched, left unchanged, audited as a conflict or rejected.
         "persistence": {
@@ -991,6 +1028,7 @@ def sync_historical_fixtures(
             if outcome == "ACCESS_DENIED"
         ),
         "provider_outcomes": provider_coverage_football.get("provider_outcomes"),
+        "provider_diagnostics": provider_coverage_football.get("provider_diagnostics"),
         "provider_coverage": provider_coverage_football,
         "incomplete_reason": None if is_fully_complete else last_error_reason,
         "existing_before": existing_before,

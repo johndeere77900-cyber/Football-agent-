@@ -619,3 +619,37 @@ provider order, quota accounting or validation changed.
 3. Manifests whose `error_reason` is `secondary_provider_returned_no_fixtures`: capture the
    provider-level error printed by the sync (the report now carries `error_detail` for the
    basketball route; the football route still needs resolver error propagation).
+
+## 17. Football failure diagnostics and NBA phase recovery
+
+### 17.1 Football provider failure evidence
+
+`secondary_provider_returned_no_fixtures` was the only persisted explanation of a football
+failure. `historical_sync._football_provider_diagnostics()` now records, per approved provider,
+the classified outcome, fixture count, provider status, `error_category`, HTTP status and the
+truncated provider error. Verified with a runtime harness against league 39 / 2024: CSV failure,
+FBref `ACCESS_DENIED` (403), MatchHistory `TIMEOUT` (read timed out) and Sofascore
+`PARSER_ERROR` (invalid JSON) were each classified distinctly and the same structure was read
+back from the persisted manifest `provider_coverage_json`. The generic manifest `error_reason`
+is unchanged for compatibility; the diagnostics explain it.
+
+### 17.2 NBA phase recovery
+
+A phase-less legacy row was created with a real ESPN event identity (`source=espn_url`,
+`game_id=401704627`) and the current pipeline was re-run. Result: 1,397 fetched, 1,397 stored,
+1,397 unique ids (no duplicate), the legacy row's phase went from unclassified to
+`regular_season` (`season_type_id=2`), provider provenance stayed `espn_url`, and one row was
+reported as enriched. Records without a matching ESPN event identity cannot be enriched this way
+and require reacquisition; unknown phase is still never treated as regular season.
+
+### 17.3 Reconciliation and remaining gaps
+
+Configured football targets now enumerate as: 39/140/135/78/61 CSV+FBref+MatchHistory+Sofascore;
+88/94 CSV+MatchHistory+Sofascore; 2/3/5 Sofascore only; 1 FBref+Sofascore; 4 Sofascore (documented
+total 51). Independent fixture totals remain unknown for all but league 4 and NBA, so those
+datasets stay evidence-limited and INCOMPLETE rather than being asserted complete. UCL/UEL/Nations
+and tournament participant universes remain the material gaps.
+
+The five-hour runtime is still unattributed: the instrumented queue is committed, but no
+production queue run with Neon latency was available to Freebuff, and a local run cannot
+reproduce it. The exit criterion therefore remains open.
