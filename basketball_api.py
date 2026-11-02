@@ -137,20 +137,29 @@ def _validate_params(params):
 
 def _api_key():
     """
-    Return the configured API-Sports key.
+    Return the configured API-Sports basketball key.
 
-    The project intentionally uses the same API-Sports key for the
-    football and basketball APIs.
+    API-Sports keys are per product. The historical acquisition workflow exports
+    the basketball credential as ``API_BASKETBALL_KEY``, while deployments that
+    use one shared API-Sports key keep working through the football-key fallback.
+    A missing key is a configuration error, never an empty provider result.
     """
     key = getattr(
         config,
-        "API_FOOTBALL_KEY",
+        "API_BASKETBALL_KEY",
         None,
     )
 
     if not isinstance(key, str) or not key.strip():
+        key = getattr(
+            config,
+            "API_FOOTBALL_KEY",
+            None,
+        )
+
+    if not isinstance(key, str) or not key.strip():
         raise ValueError(
-            "API_FOOTBALL_KEY is not configured."
+            "API_BASKETBALL_KEY (or API_FOOTBALL_KEY) is not configured."
         )
 
     return key.strip()
@@ -506,6 +515,12 @@ def _get(endpoint, params, max_budget=None, request_type="historical", global_li
     backoff = RETRY_BACKOFF_SECONDS
     last_exception = None
 
+    # Authentication/configuration is validated before any quota is reserved. A
+    # request that can never be attempted must not consume the daily credit
+    # ledger: doing so made an unconfigured key look like eight failed historical
+    # requests while no HTTP call was ever made.
+    request_headers = _headers()
+
     # Filter out unsupported 'page' parameter for API-Basketball /games requests
     http_params = dict(params)
     if endpoint.rstrip("/") == "games" and "page" in http_params:
@@ -517,7 +532,7 @@ def _get(endpoint, params, max_budget=None, request_type="historical", global_li
         try:
             response = requests.get(
                 url,
-                headers=_headers(),
+                headers=request_headers,
                 params=http_params,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )

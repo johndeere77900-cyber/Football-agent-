@@ -87,6 +87,10 @@ def sample_basketball_game(gid, date="2024-11-10T20:00:00+00:00", status="FT", h
         "date": date,
         "status": {"short": status},
         "league": {"id": league_id, "season": 2024, "name": "NBA"},
+        # API-Basketball reports the provider-native competition stage on every
+        # game object; "Regular Season" is the documented api-sports value. The
+        # phase is provider evidence, never inferred from the date or the league.
+        "stage": "Regular Season",
         "teams": {
             "home": {"id": 1, "name": "Lakers"},
             "away": {"id": 2, "name": "Celtics"},
@@ -116,15 +120,45 @@ def espn_no_coverage_patch():
     return patch("espn_basketball_provider.fetch_espn_nba_season_games", return_value=([], meta))
 
 
-def espn_full_coverage_patch(games):
-    """ESPN primary fully covers all nine monthly scoreboards."""
-    months = espn_basketball_provider.NBA_SEASON_MONTH_COUNT
+def espn_full_coverage_patch(games, season=2024):
+    """ESPN primary fully covers the season's own monthly scoreboards.
+
+    The metadata mirrors what ``fetch_espn_nba_season_games`` returns for a
+    complete season: one detail entry per season-specific month (13 for 2019-20,
+    8 for 2020-21, 9 otherwise), each recorded as SUCCESS, plus positive NBA
+    competition evidence. Successful HTTP requests alone are not competition
+    evidence, so ``competition_verified`` and the verified-month count are
+    explicit, exactly as the production aggregator computes them.
+    """
+    offsets = espn_basketball_provider.get_season_month_offsets(season)
+    months = len(offsets)
+    monthly_details = []
+    for index, (year_offset, month) in enumerate(offsets):
+        month_games = len(games) if index == 0 else 0
+        monthly_details.append(
+            {
+                "month": f"{int(season) + year_offset}{month:02d}",
+                "status": "SUCCESS",
+                "event_count": month_games,
+                "events_accepted": month_games,
+                "events_rejected": 0,
+                "competition_verified": True,
+                "rejection_reasons": None,
+            }
+        )
     meta = {
         "months_attempted": months,
         "months_succeeded": months,
         "months_failed": 0,
         "all_months_succeeded": True,
-        "monthly_details": [{"month": "202411", "status": "SUCCESS", "event_count": len(games)}],
+        "monthly_details": monthly_details,
+        "events_accepted": len(games),
+        "events_rejected": 0,
+        "events_unclassified": 0,
+        "rejection_reasons": {},
+        "competition_verified": True,
+        "competition_uid": espn_basketball_provider.ESPN_NBA_LEAGUE_UID,
+        "months_competition_verified": months,
     }
     return patch("espn_basketball_provider.fetch_espn_nba_season_games", return_value=(games, meta))
 
@@ -699,6 +733,20 @@ def test_espn_full_month_coverage_completes_basketball_dataset(isolated_db, monk
         sample_basketball_game(8303, league_id=12),
         sample_basketball_game(8304, league_id=12),
     ]
+    for game in espn_games:
+        # ESPN's normalizer records the provider-native season type (2 =
+        # regular season) in provider_provenance; the synthetic ESPN records
+        # carry the same evidence instead of relying on the API-Basketball stage.
+        game.pop("stage", None)
+        game["provider_provenance"] = {
+            "provider": "espn_url",
+            "provider_type": "primary_url",
+            "provider_game_id": game["id"],
+            "competition_uid": espn_basketball_provider.ESPN_NBA_LEAGUE_UID,
+            "season_type": "regular_season",
+            "season_type_id": 2,
+            "season_slug": "regular-season",
+        }
 
     with espn_full_coverage_patch(espn_games), \
          patch("basketball_api.get_league_games_page") as mock_api_http:

@@ -1175,6 +1175,13 @@ def _basketball_game_season_type(game):
             continue
         normalized = raw.strip().lower().replace("-", "_").replace(" ", "_")
         mapped = _BASKETBALL_STAGE_LABELS.get(normalized)
+        if not mapped and " - " in raw:
+            # API-Sports basketball reports stage labels in the form
+            # "<competition> - <stage>" (for example "NBA - Regular Season").
+            # Only the documented stage suffix is recognised; an unknown suffix
+            # still returns None instead of being guessed.
+            suffix = raw.strip().rsplit(" - ", 1)[-1].strip().lower().replace("-", "_").replace(" ", "_")
+            mapped = _BASKETBALL_STAGE_LABELS.get(suffix)
         if mapped:
             return mapped
         if normalized in ("regular_season", "regular", "preseason", "postseason", "play_in", "all_star"):
@@ -1496,6 +1503,12 @@ def sync_historical_basketball_games(
     quota_budget_stopped = False
     acquisition_failed = False
     last_error_reason = None
+    # Structured failure diagnostics. The manifest's error_reason is a stable
+    # machine-readable class; the exact exception and the stage that raised it are
+    # preserved in provider_coverage so a failed request can be explained without
+    # a database-side log search.
+    last_error_detail = None
+    last_error_stage = None
 
     games_received = []
     total_valid_games = 0
@@ -1524,6 +1537,7 @@ def sync_historical_basketball_games(
     espn_rejected_count = 0
     espn_valid_empty_units = 0
     espn_dataset_validated = False
+    espn_failure_detail = None
 
     if league_id == NBA_LEAGUE_ID and getattr(config, "ENABLE_ESPN_BASKETBALL", True):
         espn_attempted = True
@@ -1554,6 +1568,7 @@ def sync_historical_basketball_games(
                 for r_reason, r_cnt in save_res.get("rejection_reasons", {}).items():
                     all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
         except Exception as exc:
+            espn_failure_detail = f"{type(exc).__name__}: {exc}"[:300]
             print(f"ESPN NBA acquisition attempt failed for season {season}: {exc}", flush=True)
 
     # ESPN coverage is measured in the season's own monthly scoreboards (nine for a
@@ -1660,6 +1675,8 @@ def sync_historical_basketball_games(
                 if isinstance(page_expected, bool) or not isinstance(page_expected, int) or page_expected < 1:
                     acquisition_failed = True
                     last_error_reason = "invalid_pagination_metadata"
+                    last_error_stage = "pagination_metadata"
+                    last_error_detail = f"expected_pages={page_expected!r}"[:300]
                     print(
                         f"Basketball pagination metadata is invalid on page {current_page} "
                         f"(expected_pages={page_expected!r}). Failing closed.",
@@ -1669,6 +1686,8 @@ def sync_historical_basketball_games(
                 if not isinstance(page_games, list):
                     acquisition_failed = True
                     last_error_reason = "invalid_page_payload"
+                    last_error_stage = "page_payload"
+                    last_error_detail = f"games type={type(page_games).__name__}"[:300]
                     print(
                         f"Basketball page {current_page} did not return a game list. Failing closed.",
                         flush=True,
@@ -1680,6 +1699,8 @@ def sync_historical_basketball_games(
                 elif page_expected != api_expected_pages:
                     acquisition_failed = True
                     last_error_reason = "pagination_metadata_mismatch"
+                    last_error_stage = "pagination_metadata"
+                    last_error_detail = f"expected {api_expected_pages}, provider reported {page_expected}"[:300]
                     print(
                         f"Basketball pagination error: Total pages changed during sync ({api_expected_pages} -> {page_expected}). Failing closed.",
                         flush=True,
@@ -1735,11 +1756,15 @@ def sync_historical_basketball_games(
             except basketball_api.APIBasketballQuotaExhaustedError as exc:
                 quota_budget_stopped = True
                 last_error_reason = "quota_budget_exhausted_during_acquisition"
+                last_error_stage = "quota_reservation"
+                last_error_detail = f"{type(exc).__name__}: {exc}"[:300]
                 print(f"API Quota exhausted during basketball games fetch on page {current_page}: {exc}", flush=True)
                 break
             except Exception as exc:
                 acquisition_failed = True
                 last_error_reason = "api_error_during_acquisition"
+                last_error_stage = "provider_request"
+                last_error_detail = f"{type(exc).__name__}: {exc}"[:300]
                 print(f"API acquisition error during basketball games fetch on page {current_page}: {exc}", flush=True)
                 break
 
@@ -1793,6 +1818,7 @@ def sync_historical_basketball_games(
             "events_accepted": (espn_coverage or {}).get("events_accepted") if isinstance(espn_coverage, dict) else None,
             "events_rejected": (espn_coverage or {}).get("events_rejected") if isinstance(espn_coverage, dict) else None,
             "rejection_reasons": (espn_coverage or {}).get("rejection_reasons") if isinstance(espn_coverage, dict) else None,
+            "error": espn_failure_detail,
             "attempted": True,
             "contributed": bool(persisted_by_source.get("espn_url")),
             "records_persisted": persisted_by_source.get("espn_url", 0),
@@ -1815,6 +1841,8 @@ def sync_historical_basketball_games(
                 if (acquisition_complete and api_expected_pages > 0 and api_pages_completed >= api_expected_pages)
                 else (ACQUISITION_STATE_FAILED if acquisition_failed else ACQUISITION_STATE_INCOMPLETE)
             ),
+            "error": last_error_detail,
+            "failure_stage": last_error_stage,
         }
 
     # The dataset's coverage unit describes the acquisition route that is actually
@@ -1876,7 +1904,15 @@ def sync_historical_basketball_games(
     # though its records and current provider coverage were complete. The cumulative
     # counters are still recorded in the INCOMPLETE manifest as progress history.
     evidence_rejected_count = total_rejected_count
-    evidence_empty_units = espn_valid_empty_units if espn_contributed_validated_coverage else 0
+    # Empty coverage evidence must describe every unit the claimed route actually
+    # used. API-Basketball pages have no legitimate-empty notion (a page inside
+    # the provider's own page range returning nothing is an acquisition gap), so
+    # those empty pages are carried into the completion evidence instead of being
+    # dropped: previously an empty middle page was invisible to the guard and the
+    # dataset could be promoted to COMPLETE with missing games.
+    evidence_empty_units = total_empty_pages_count
+    if espn_contributed_validated_coverage:
+        evidence_empty_units += espn_valid_empty_units
 
     stored_games_all = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
     db_validation_passed = _validate_historical_basketball_dataset(
@@ -2040,6 +2076,9 @@ def sync_historical_basketball_games(
         "api_requests_consumed": total_consumed,
         "historical_budget": historical_budget,
         "quota_budget_stopped": quota_budget_stopped,
+        "error_reason": last_error_reason,
+        "error_detail": last_error_detail,
+        "failure_stage": last_error_stage,
         "final_stored_count": final_stored_count,
     }
 

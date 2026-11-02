@@ -8,6 +8,11 @@ import os
 # Credentials must be supplied through the runtime environment.
 # GitHub Actions is responsible for validating required credentials.
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
+# API-Sports issues one key per sport. The historical acquisition workflow exposes
+# the basketball key as API_BASKETBALL_KEY, so the basketball adapter must read it
+# rather than requiring the football key to be present. The football key remains a
+# supported fallback for deployments that use a single shared API-Sports key.
+API_BASKETBALL_KEY = os.environ.get("API_BASKETBALL_KEY") or os.environ.get("API_FOOTBALL_KEY")
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
 
 # --- API endpoints ----------------------------------------------------------

@@ -481,3 +481,87 @@ lifecycle states 75 `COMPLETED` / 16 `NOT_APPLICABLE` / 11 `ONGOING` / 4 `UNKNOW
 provider-source claims above and the per-target `evidence_gaps` match the code; no target claims
 completion from a provider response, and persisted counts remain `UNKNOWN` because no database
 was read.
+
+## 15. Whole-system sweep — CI #215, acquisition fallback and completion evidence
+
+### 15.1 CI #215 reproduction and the local/CI difference
+
+CI #215 (`41364653920`, head `643cce1`) reports 710 passed / 9 failed. A first local run
+reported 696 passed / 23 failed. The difference was environmental, not behavioural: the local
+virtualenv had no `psycopg`, so `migrate_sqlite_to_neon.psycopg` was `None` and every migration
+test raised `AttributeError: None has no attribute 'connect'` (2 in
+`test_migrate_sqlite_to_neon_integrity`, 12 in `test_neon_persistence_b2`). Installing
+`psycopg[binary]` exactly as `requirements.txt` specifies reproduced CI: **710 passed /
+9 failed**, with the same nine node IDs and messages. Both environments run Python 3.12.3 and
+collect 719 tests. No suite content, ordering or environment variable differed.
+
+### 15.2 The nine CI nodes and the provider contract
+
+Eight nodes persisted synthetic basketball games with no provider-native phase. API-Basketball
+reports the stage of every game (`stage: "Regular Season"`, `Playoffs`, `Preseason`, ...); the
+repository already modelled that contract in `tests/test_basketball_backtest.py`. The synthetic
+API-Basketball fixtures now carry `stage: "Regular Season"`, so they represent the real payload
+and are classified as regular season by the existing production path. The ESPN fixture now
+carries `provider_provenance.season_type = regular_season` and a coverage helper that emits one
+`monthly_details` entry per season-specific month (13 for 2019-20, 8 for 2020-21, 9 otherwise)
+with positive NBA competition evidence, matching `fetch_espn_nba_season_games()`. The completion
+validator and every assertion were left strict; no phase is inferred from dates or league.
+
+### 15.3 Root cause of the failed API-Basketball fallback (requests 646-653)
+
+`historical.yml` exports the basketball credential as `API_BASKETBALL_KEY`, but `config.py`
+only read `API_FOOTBALL_KEY` and `basketball_api._api_key()` consumed a quota unit **before**
+`_headers()` validated the credential. Each of the eight NBA seasons therefore recorded one
+`api_basketball` request while no HTTP call was made, produced zero pages and zero records, and
+was stored as `FAILED` with the uninformative `api_error_during_acquisition`. That matches the
+observed 646-653 request rows and the eight failed manifests exactly. Corrections: resolve
+`API_BASKETBALL_KEY` first with a compatible `API_FOOTBALL_KEY` fallback, validate credentials
+before reserving quota, and persist the exception type/message and failure stage in
+`provider_coverage` (`error`, `failure_stage`). Runtime proof: a missing key now raises
+`ValueError` with zero requests consumed.
+
+### 15.4 Empty API-Basketball page could be promoted to COMPLETE
+
+`evidence_empty_units` counted only ESPN's legitimate empty months. An API-Basketball page inside
+the provider's own page range that returned no games was dropped from the completion evidence,
+so the dataset could be marked COMPLETE with missing games. Empty API pages are now carried into
+the completion evidence; the existing strict guard then refuses completion, as the empty-middle-
+page regression test requires.
+
+### 15.5 Decorated API-Sports stage labels
+
+API-Sports may label a stage as `"NBA - Regular Season"`. The normalizer now recognises the
+documented stage suffix after `" - "` while unknown suffixes still return unclassified. Verified:
+`Regular Season`, `NBA - Regular Season` -> `regular_season`; `Playoffs` -> `postseason`;
+`NBA - Cup Final` -> `None`.
+
+### 15.6 Run 42
+
+No repository or runtime record defines a historical acquisition run identifier. The manifests,
+`api_request_counts` and `operation_requests` expose provider request IDs, not acquisition runs;
+GitHub Actions run numbers and dataset seasons are different namespaces. Run 42 is therefore
+**not identifiable** from available evidence; the exact workflow run URL or acquisition start
+timestamp is required. The latest confirmed activity (requests 646-653, 2026-11-01 18:44-19:30
+UTC) is explained in 15.3.
+
+### 15.7 Football overlap counts
+
+The 342 previously reported groups and the 1,696 / 754 candidate groups are not the same query.
+The larger counts group by league + canonical teams + kickoff date across all sources, including
+rows that are not the same logical fixture; the smaller count was restricted. Neither authorises
+a merge. ChatGPT should run the definitions side by side and compare on exact `(source, fixture_id)`
+plus the canonical tuple before any repair; no code path merges or deletes rows.
+
+### 15.8 Neon items for ChatGPT (read-only evidence required)
+
+1. For requests 646-653, confirm `api_request_counts` rows and that no `historical_basketball_games`
+   row was written for those seasons by `api_basketball`.
+2. Persisted NBA rows whose `raw_json.provider_provenance.season_type` is absent: a fresh ESPN run
+   now enriches existing `(espn_url, event_id)` rows with `season_type`; rows acquired under a
+   different source/ID need a re-acquisition, never an inferred phase.
+3. Manifests whose generic `expected_pages`/`coverage_unit` disagree with
+   `provider_coverage_json` (for example 9/9 pages alongside 13 ESPN months): record the manifest
+   `updated_at` and the run that wrote it. The current code writes the unit of the route that
+   actually contributed validated coverage.
+4. Football manifests with `secondary_provider_returned_no_fixtures`: capture the provider-level
+   error text, which the acquisition report now prints, and the exact competition/season.
