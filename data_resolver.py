@@ -2878,6 +2878,7 @@ class DataResolver:
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             if rem_time > 0:
                 attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
+                t_csv_start = time.perf_counter()
                 try:
                     csv_fixtures = _fetch_direct_csv_league_fixtures(
                         league_id, season, timeout=attempt_timeout, max_budget=max_budget
@@ -2889,6 +2890,9 @@ class DataResolver:
                         "source": "football_data_csv",
                     }
                     logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
+                csv_meta.setdefault(
+                    "duration_seconds", round(time.perf_counter() - t_csv_start, 3)
+                )
 
             if completed_only and csv_fixtures:
                 csv_fixtures = [
@@ -2952,12 +2956,19 @@ class DataResolver:
                     # successful ones, so a failure and its category stay visible in
                     # the dataset diagnostics instead of being dropped.
                     sd_fb_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
+                    sd_fb_meta.setdefault("duration_seconds", round(t_fb_elapsed, 3))
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_fb_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
                     else:
                         sd_fb_meta.setdefault("status", sd_status)
                 except Exception as sd_exc:
                     t_fb_elapsed = time.perf_counter() - t_fb_start
+                    sd_fb_meta = {
+                        "status": "SOURCE_FAILED",
+                        "error": str(sd_exc),
+                        "source": "soccerdata_fbref",
+                        "duration_seconds": round(t_fb_elapsed, 3),
+                    }
                     logger.warning(f"[TIMING FAILED] DataResolver FBref primary route failed for league_id={league_id}, season={season}, elapsed={t_fb_elapsed:.2f}s: {sd_exc}")
             elif sd_fb_code and rem_time <= 0:
                 logger.warning(f"Skipping SoccerData FBref for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")
@@ -3044,12 +3055,19 @@ class DataResolver:
                     t_mh_elapsed = time.perf_counter() - t_mh_start
                     logger.info(f"[TIMING COMPLETE] SoccerData MatchHistory fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_mh_elapsed:.2f}s")
                     sd_mh_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
+                    sd_mh_meta.setdefault("duration_seconds", round(t_mh_elapsed, 3))
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_mh_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
                     else:
                         sd_mh_meta.setdefault("status", sd_status)
                 except Exception as sd_exc:
                     t_mh_elapsed = time.perf_counter() - t_mh_start
+                    sd_mh_meta = {
+                        "status": "SOURCE_FAILED",
+                        "error": str(sd_exc),
+                        "source": "soccerdata_match_history",
+                        "duration_seconds": round(t_mh_elapsed, 3),
+                    }
                     logger.warning(f"[TIMING FAILED] DataResolver MatchHistory primary route failed for league_id={league_id}, season={season}, elapsed={t_mh_elapsed:.2f}s: {sd_exc}")
             elif sd_mh_code and rem_time <= 0:
                 logger.warning(f"Skipping SoccerData MatchHistory for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")
@@ -3132,6 +3150,7 @@ class DataResolver:
                     t_ss_elapsed = time.perf_counter() - t_ss_start
                     logger.info(f"[TIMING COMPLETE] SoccerData Sofascore fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_ss_elapsed:.2f}s")
                     sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
+                    sd_ss_meta.setdefault("duration_seconds", round(t_ss_elapsed, 3))
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_ss_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
                     else:
@@ -3139,7 +3158,12 @@ class DataResolver:
                             sd_ss_meta["status"] = sd_status
                 except Exception as sd_exc:
                     t_ss_elapsed = time.perf_counter() - t_ss_start
-                    sd_ss_meta = {"status": "SOURCE_FAILED", "error": str(sd_exc)}
+                    sd_ss_meta = {
+                        "status": "SOURCE_FAILED",
+                        "error": str(sd_exc),
+                        "source": "soccerdata_sofascore",
+                        "duration_seconds": round(t_ss_elapsed, 3),
+                    }
                     logger.warning(f"[TIMING FAILED] DataResolver Sofascore primary route failed for league_id={league_id}, season={season}, elapsed={t_ss_elapsed:.2f}s: {sd_exc}")
             elif sd_ss_code and rem_time <= 0:
                 logger.warning(f"Skipping SoccerData Sofascore for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")

@@ -653,3 +653,58 @@ and tournament participant universes remain the material gaps.
 The five-hour runtime is still unattributed: the instrumented queue is committed, but no
 production queue run with Neon latency was available to Freebuff, and a local run cannot
 reproduce it. The exit criterion therefore remains open.
+
+## 18. Run traceability, reconciliation reports and attempt timings
+
+### 18.1 Traceable acquisition runs
+
+`run_historical_queue` now creates a unique acquisition run id
+(`acq-<UTC timestamp>-<8 hex>`), prints it at queue start, attaches it to every target report and
+timing record, and writes a machine-readable run report to
+`data/historical_runs/<run_id>.json`. The report records start/finish, total and per-target
+duration, coverage-check and acquisition seconds, persistence seconds, database write calls,
+API requests consumed by sport, skipped targets, slowest targets and slowest operations. This id
+is a new namespace: it does not identify the historical Run 42, which still has no recorded
+acquisition id.
+
+Football provider attempts now carry `duration_seconds` in their resolver metadata (success,
+failure and timeout paths) and `_football_provider_diagnostics()` includes it alongside
+outcome, status, error category, HTTP status and truncated error. The diagnostics are now built
+for successful early-return acquisitions as well as exhausted ones; providers that were never
+reached are marked `NOT_ATTEMPTED` instead of leaving a misleading null.
+
+### 18.2 NBA phase recovery report
+
+`build_basketball_phase_recovery_report()` (CLI: `--report-nba-phase-recovery`) performs a
+read-only exact `(source, event_id)` comparison between persisted NBA records and a fresh ESPN
+season acquisition. It reports persisted/ESPN classified and unclassified records, exact
+matches, records safely enrichable from a provider-native phase, matches that still carry no
+phase, records requiring reacquisition because their identity is absent from the fresh payload,
+phase conflicts, provider rejections and fresh events not yet persisted. It writes nothing and
+does not infer a phase from dates. Runtime harness (local SQLite, live ESPN 2024): 1,397 fresh
+events; one legacy phase-less ESPN row was reported as 1 exact match and 1 enrichable, with 0
+conflicts and 0 reacquisition requirements. Empty-database run additionally showed 1,397 fresh
+events and 6 provider-rejected events. The production 9,361-row comparison still requires a
+Neon read; no recovery percentage is claimed here.
+
+### 18.3 Football manifest reconciliation report
+
+`build_football_manifest_reconciliation()` (CLI: `--report-football-reconciliation`) lists every
+persisted football manifest and reconciles it against stored records: manifest versus stored
+count, valid distinct identities, duplicates, logical duplicates across sources, source
+breakdown, invalid records and reasons, expected/observed/missing canonical teams, date range,
+provider outcomes and diagnostics, expected fixture total where independently documented,
+structural coverage, lifecycle and the exact remaining blocker. It is read-only and reports an
+absent expected-team universe instead of treating it as zero missing teams. Runtime harness
+(league 39/2024, 380 real CSV fixtures, manually marked INCOMPLETE): 380 stored, 380 valid
+distinct, 0 duplicates, source `football_data_csv`, date range 2024-08-16 to 2025-05-25, and the
+exact blocker `expected_team_universe_unavailable`. Running it against Neon is required to
+produce the per-target production table for all 96 manifests; that access is not available here.
+
+### 18.4 Verification and limitations
+
+Targeted historical tests: 77 passed, 0 failed (16.36 s) across the queue, sync, completion,
+integrity-repair, phase-1 reliability and workflow-verification suites. The reports were run
+locally as CLI commands and as the seeded harness described above. CI has not been waited on.
+The five-hour runtime remains unattributed, Run 42 remains unverified, and production manifest,
+phase-recovery and team-universe counts still require ChatGPT's Neon inspection.

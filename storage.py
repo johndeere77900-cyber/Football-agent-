@@ -2741,6 +2741,53 @@ def get_historical_dataset_status(league_id, season, sport="football"):
         conn.close()
 
 
+def list_historical_datasets(sport=None):
+    """List persisted historical dataset manifests in stable order (read-only)."""
+    _ensure_manifest_schema_ready()
+    sport_filter = _validate_text(sport, "sport").lower() if sport else None
+    conn, db_type = _connect()
+    try:
+        where = ""
+        params = ()
+        if sport_filter:
+            where = " WHERE sport = %s" if db_type == "postgres" else " WHERE sport = ?"
+            params = (sport_filter,)
+        sql = (
+            "SELECT sport, league_id, season, status, fixture_count, expected_pages, "
+            "pages_completed, acquisition_complete, enrichment_status, rejected_count, "
+            "empty_pages_count, completed_at, updated_at, source, error_reason, "
+            "expected_team_ids_json, coverage_unit, provider_coverage_json "
+            "FROM historical_datasets" + where + " ORDER BY sport, league_id, season"
+        )
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall() or []
+        else:
+            rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    manifests = []
+    for row in rows:
+        coverage = row[17]
+        if not isinstance(coverage, dict):
+            coverage = _json_loads(coverage) if coverage else None
+        teams = row[15]
+        if not isinstance(teams, (list, dict)):
+            teams = _json_loads(teams) if teams else None
+        manifests.append({
+            "sport": row[0], "league_id": row[1], "season": row[2], "status": row[3],
+            "fixture_count": row[4], "expected_pages": row[5] or 0,
+            "pages_completed": row[6] or 0, "acquisition_complete": bool(row[7]),
+            "enrichment_status": row[8] or "NONE", "rejected_count": row[9] or 0,
+            "empty_pages_count": row[10] or 0, "completed_at": row[11],
+            "updated_at": row[12], "source": row[13], "error_reason": row[14],
+            "expected_team_ids": teams, "coverage_unit": row[16] or "pages",
+            "provider_coverage": coverage,
+        })
+    return manifests
+
+
 def _persisted_historical_record_count(sport, league_id, season):
     """Return the record count the database actually holds for a dataset."""
     if sport == "basketball":

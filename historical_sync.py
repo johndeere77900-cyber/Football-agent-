@@ -32,9 +32,11 @@ Key invariants:
 """
 
 import argparse
+import json
 import os
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import data_resolver
@@ -373,14 +375,17 @@ def _is_historical_provider_complete(
 
 def _football_provider_diagnostics(page_meta):
     """
-    Build a per-provider failure record from the resolver's attempt metadata.
+    Build a per-provider evidence record from the resolver's attempt metadata.
 
     ``provider_outcomes`` classifies each attempt (ACCESS_DENIED, UNSUPPORTED,
     RATE_LIMITED, TIMEOUT, NETWORK_ERROR, PARSER_ERROR, FAILED, VALID_EMPTY, ...),
     but the category alone does not explain a failure. This keeps the provider's
-    own status, HTTP status and error text on the manifest so a future
-    ``secondary_provider_returned_no_fixtures`` case can be explained without the
-    original run logs. Error text is truncated and never contains credentials.
+    own status, HTTP status, attempt duration and error text on the manifest so a
+    future ``secondary_provider_returned_no_fixtures`` case can be explained
+    without the original run logs. It is generated for successful attempts too:
+    a verified early-return still records the providers it skipped and the
+    duration of the ones it used. Error text is truncated and never contains
+    credentials.
     """
     meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else None
     if not isinstance(meta, dict):
@@ -396,9 +401,20 @@ def _football_provider_diagnostics(page_meta):
         entry = meta.get(provider) if isinstance(meta.get(provider), dict) else {}
         raw = entry.get("raw_metadata") if isinstance(entry.get("raw_metadata"), dict) else {}
         error_text = raw.get("error")
+        outcomes_entry = outcomes.get(provider)
+        outcome = (
+            outcomes_entry.get("outcome")
+            if isinstance(outcomes_entry, dict)
+            else outcomes_entry
+        )
+        if outcome is None and not entry and not raw:
+            # The provider was never reached in this attempt. Reported explicitly
+            # instead of leaving a null that could be mistaken for a failure.
+            outcome = "NOT_ATTEMPTED"
         diagnostics[provider] = {
-            "outcome": outcomes.get(provider),
+            "outcome": outcome,
             "fixtures": entry.get("count"),
+            "duration_seconds": raw.get("duration_seconds"),
             "status": raw.get("status"),
             "error_category": raw.get("error_category"),
             "http_status": raw.get("http_status"),
@@ -421,6 +437,7 @@ def sync_historical_fixtures(
     import time
     t_sync_start = time.perf_counter()
     total_db_write_duration = 0.0
+    db_write_calls = 0
     allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
 
     # A tournament edition whose match total is independently documented (for
@@ -647,6 +664,7 @@ def sync_historical_fixtures(
             total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
             total_rejected_count += save_result.get("rejected_count", 0)
             total_db_write_duration += save_result.get("db_write_duration", 0.0)
+            db_write_calls += 1
 
             for conflict_field, conflict_count in (save_result.get("metadata_conflicts") or {}).items():
                 metadata_conflict_counts[conflict_field] = (
@@ -1072,6 +1090,7 @@ def sync_historical_fixtures(
         "enrichment_stored": enrichment_stored,
         "total_sync_duration": round(total_sync_elapsed, 3),
         "db_write_duration": round(total_db_write_duration, 3),
+        "db_write_calls": db_write_calls,
     }
 
     _print_sync_report(report)
@@ -1550,6 +1569,8 @@ def sync_historical_basketball_games(
     last_error_stage = None
 
     games_received = []
+    total_db_write_duration_b = 0.0
+    db_write_calls_b = 0
     total_valid_games = 0
     total_newly_stored = 0
     total_enriched = 0
@@ -1587,9 +1608,12 @@ def sync_historical_basketball_games(
                 espn_completed_units = int(coverage_meta.get("months_succeeded") or 0)
             if espn_games:
                 games_received.extend(espn_games)
+                t_db_write = time.perf_counter()
                 save_res = storage.save_historical_basketball_games(
                     espn_games, league_id, season, source="espn_url", require_completed=True
                 )
+                total_db_write_duration_b += time.perf_counter() - t_db_write
+                db_write_calls_b += 1
                 total_valid_games += save_res.get("valid", 0)
                 total_newly_stored += save_res.get("inserted", 0)
                 # Existing rows whose missing verified metadata was applied. They
@@ -1751,9 +1775,12 @@ def sync_historical_basketball_games(
 
                 games_received.extend(page_games)
 
+                t_db_write = time.perf_counter()
                 save_result = storage.save_historical_basketball_games(
                     page_games, league_id, season, require_completed=True
                 )
+                total_db_write_duration_b += time.perf_counter() - t_db_write
+                db_write_calls_b += 1
                 total_valid_games += save_result.get("valid", 0)
                 total_newly_stored += save_result.get("inserted", 0)
                 total_enriched += save_result.get("enriched", 0)
@@ -2119,6 +2146,8 @@ def sync_historical_basketball_games(
         "error_detail": last_error_detail,
         "failure_stage": last_error_stage,
         "final_stored_count": final_stored_count,
+        "db_write_duration": round(total_db_write_duration_b, 3),
+        "db_write_calls": db_write_calls_b,
     }
 
     _print_sync_report(report)
@@ -2274,6 +2303,423 @@ def _competition_edition_selection(sport, league_id, requested_seasons):
     return selection
 
 
+def _write_historical_report(report, prefix):
+    """Write a machine-readable report under data/historical_runs; return its path."""
+    try:
+        report_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "historical_runs"
+        )
+        os.makedirs(report_dir, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        path = os.path.join(report_dir, f"{prefix}_{timestamp}.json")
+        with open(path, "w", encoding="utf-8") as report_file:
+            json.dump(report, report_file, indent=2, sort_keys=True, default=str)
+        return path
+    except OSError as exc:
+        print(f"Report could not be written: {exc}", flush=True)
+        return None
+
+
+def _basketball_game_event_id(game):
+    """Return the provider-native positive event id stored on a basketball game."""
+    if not isinstance(game, dict):
+        return None
+    raw = game.get("id")
+    if raw is None:
+        raw = game.get("game_id")
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def build_basketball_phase_recovery_report(seasons=None, league_id=None, fetch_espn=True) -> dict:
+    """
+    Compare persisted basketball identities against fresh ESPN identities (read-only).
+
+    The comparison is exact on the persisted ``(source, event_id)`` identity. A
+    record is reported as enrichable only when the same ESPN event id is present in
+    the fresh acquisition AND that event carries a provider-native phase. A record
+    whose identity is absent from the fresh payload requires reacquisition; it is
+    never reported as recoverable. No record is written here: enrichment is applied
+    by the normal ESPN-first sync, which preserves ids, scores, dates and
+    provenance.
+    """
+    import espn_basketball_provider
+
+    storage.init_db()
+    if league_id is None:
+        allowed = getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", [])
+        league_id = allowed[0] if allowed else 12
+    target_league = int(league_id)
+    target_seasons = list(seasons) if seasons else list(
+        getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026])
+    )
+
+    season_reports = []
+    totals = {
+        key: 0
+        for key in (
+            "persisted_records", "persisted_identities", "duplicate_identities",
+            "espn_records", "espn_classified", "espn_unclassified", "non_espn_records",
+            "matched_identities", "enrichable", "matched_without_phase",
+            "requires_reacquisition", "conflicting", "fresh_espn_events",
+            "fresh_not_persisted", "reacquired", "rejected_by_provider",
+        )
+    }
+
+    for season in target_seasons:
+        ssn = int(season)
+        stored = storage.get_historical_basketball_games(
+            target_league, ssn, include_storage_source=True
+        )
+        stored_list = stored if isinstance(stored, list) else []
+        persisted = {}
+        duplicate_identities = 0
+        for game in stored_list:
+            key = (_basketball_game_source(game), _basketball_game_event_id(game))
+            if key in persisted:
+                duplicate_identities += 1
+                continue
+            persisted[key] = game
+
+        fresh_games, coverage = [], {}
+        espn_attempted = False
+        if fetch_espn and target_league == NBA_LEAGUE_ID and getattr(config, "ENABLE_ESPN_BASKETBALL", True):
+            espn_attempted = True
+            try:
+                fresh_games, coverage = espn_basketball_provider.fetch_espn_nba_season_games(
+                    target_league, ssn
+                )
+            except Exception as exc:  # noqa: BLE001 - report must not fail on a provider error
+                fresh_games = []
+                coverage = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+
+        fresh_by_id = {}
+        for game in fresh_games if isinstance(fresh_games, list) else []:
+            event_id = _basketball_game_event_id(game)
+            if event_id is not None:
+                fresh_by_id[event_id] = game
+
+        stats = {
+            "persisted_records": len(stored_list),
+            "persisted_identities": len(persisted),
+            "duplicate_identities": duplicate_identities,
+            "espn_records": 0,
+            "espn_classified": 0,
+            "espn_unclassified": 0,
+            "non_espn_records": 0,
+            "matched_identities": 0,
+            "enrichable": 0,
+            "matched_without_phase": 0,
+            "requires_reacquisition": 0,
+            "conflicting": 0,
+            "fresh_espn_events": len(fresh_by_id),
+            "fresh_not_persisted": 0,
+            "reacquired": 0,
+            "rejected_by_provider": int((coverage or {}).get("events_rejected") or 0),
+        }
+        unmatched_examples = []
+        conflict_examples = []
+        persisted_espn_ids = set()
+
+        for (source, event_id), game in persisted.items():
+            phase = _basketball_game_season_type(game)
+            if source != "espn_url":
+                stats["non_espn_records"] += 1
+                continue
+            stats["espn_records"] += 1
+            persisted_espn_ids.add(event_id)
+            fresh_game = fresh_by_id.get(event_id)
+            if phase:
+                stats["espn_classified"] += 1
+                if fresh_game is not None:
+                    fresh_phase = _basketball_game_season_type(fresh_game)
+                    if fresh_phase and fresh_phase != phase:
+                        stats["conflicting"] += 1
+                        if len(conflict_examples) < 20:
+                            conflict_examples.append({
+                                "event_id": event_id,
+                                "persisted_phase": phase,
+                                "fresh_phase": fresh_phase,
+                            })
+                continue
+            stats["espn_unclassified"] += 1
+            if fresh_game is None:
+                stats["requires_reacquisition"] += 1
+                if len(unmatched_examples) < 20:
+                    unmatched_examples.append(event_id)
+                continue
+            stats["matched_identities"] += 1
+            if _basketball_game_season_type(fresh_game):
+                stats["enrichable"] += 1
+            else:
+                stats["matched_without_phase"] += 1
+
+        stats["fresh_not_persisted"] = len(set(fresh_by_id) - persisted_espn_ids)
+        stats["unmatched_examples"] = unmatched_examples
+        stats["conflict_examples"] = conflict_examples
+        stats["espn_attempted"] = espn_attempted
+        stats["espn_coverage"] = {
+            "months_attempted": (coverage or {}).get("months_attempted"),
+            "months_succeeded": (coverage or {}).get("months_succeeded"),
+            "months_failed": (coverage or {}).get("months_failed"),
+            "competition_verified": (coverage or {}).get("competition_verified"),
+            "error": (coverage or {}).get("error"),
+        }
+        season_reports.append({"league_id": target_league, "season": ssn, **stats})
+        for key in totals:
+            totals[key] += int(stats.get(key) or 0)
+
+    report = {
+        "report_type": "basketball_phase_recovery",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "league_id": target_league,
+        "mutated": False,
+        "method": (
+            "Exact persisted (source, event_id) comparison against a fresh ESPN season "
+            "acquisition. Phase evidence is the provider-native season_type/season_type_id; "
+            "it is never inferred from dates."
+        ),
+        "seasons": season_reports,
+        "totals": totals,
+        "limitations": (
+            "Read-only. The normal ESPN-first sync applies enrichable metadata. "
+            "Records whose identity is absent from the fresh ESPN payload require "
+            "reacquisition from their own source and are not counted as recoverable."
+        ),
+    }
+    report["report_path"] = _write_historical_report(report, "nba_phase_recovery")
+
+    print("\n=== NBA PHASE RECOVERY REPORT ===", flush=True)
+    for season_report in season_reports:
+        print(
+            f"  {season_report['league_id']}/{season_report['season']}: "
+            f"persisted={season_report['persisted_records']} "
+            f"espn={season_report['espn_records']} "
+            f"classified={season_report['espn_classified']} "
+            f"enrichable={season_report['enrichable']} "
+            f"matched_without_phase={season_report['matched_without_phase']} "
+            f"requires_reacquisition={season_report['requires_reacquisition']} "
+            f"conflicting={season_report['conflicting']}",
+            flush=True,
+        )
+    print(f"  totals: {totals}", flush=True)
+    if report.get("report_path"):
+        print(f"  report: {report['report_path']}", flush=True)
+    return report
+
+
+def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dict:
+    """
+    Reconcile every persisted football manifest against its actual stored records.
+
+    Reports manifest status/count, stored and valid distinct counts, source
+    breakdown, duplicates, expected versus observed canonical teams, date range,
+    provider diagnostics and the exact remaining blocker. Read-only: no manifest,
+    record or status is changed.
+    """
+    from collections import Counter
+
+    import sports_knowledge
+
+    storage.init_db()
+    manifests = storage.list_historical_datasets("football")
+    league_filter = {int(value) for value in league_ids} if league_ids else None
+    season_filter = {int(value) for value in seasons} if seasons else None
+
+    results = []
+    for manifest in manifests:
+        lid = int(manifest["league_id"])
+        ssn = int(manifest["season"])
+        if league_filter and lid not in league_filter:
+            continue
+        if season_filter and ssn not in season_filter:
+            continue
+
+        fixtures = storage.get_historical_fixtures(lid, ssn)
+        fixture_list = fixtures if isinstance(fixtures, list) else []
+        source_counts = Counter()
+        invalid_reasons = Counter()
+        seen = set()
+        duplicate_count = 0
+        logical_duplicates = 0
+        fixture_sources = {}
+        observed_teams = set()
+        dates = []
+
+        for fixture in fixture_list:
+            if not isinstance(fixture, dict):
+                invalid_reasons["record_not_object"] += 1
+                continue
+            fixture_obj = fixture.get("fixture") if isinstance(fixture.get("fixture"), dict) else {}
+            fid_raw = fixture_obj.get("id")
+            source = (
+                fixture.get("source")
+                or (fixture.get("provider_provenance") or {}).get("provider")
+                or "unknown"
+            )
+            source_counts[source] += 1
+            key = (source, fid_raw)
+            if key in seen:
+                duplicate_count += 1
+            seen.add(key)
+            fixture_sources.setdefault(fid_raw, set()).add(source)
+
+            kickoff = fixture_obj.get("date")
+            if isinstance(kickoff, str) and kickoff:
+                dates.append(kickoff[:10])
+
+            teams = fixture.get("teams") if isinstance(fixture.get("teams"), dict) else {}
+            for side in ("home", "away"):
+                team = teams.get(side) if isinstance(teams.get(side), dict) else {}
+                team_id = fixture.get(f"canonical_{side}_id") or team.get("id")
+                if team_id is not None:
+                    observed_teams.add(str(team_id))
+
+            try:
+                is_valid, reason, _ = storage.validate_historical_fixture(
+                    fixture,
+                    target_league_id=lid,
+                    target_season=ssn,
+                    require_completed=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - report the failure, do not abort the audit
+                is_valid, reason = False, f"validation_error:{type(exc).__name__}"
+            if not is_valid:
+                invalid_reasons[str(reason or "invalid")] += 1
+
+        logical_duplicates = sum(
+            1 for sources in fixture_sources.values() if len(sources) > 1
+        )
+
+        expected = manifest.get("expected_team_ids")
+        expected_source = "manifest"
+        if not expected:
+            expected_source = "authoritative_lookup"
+            try:
+                expected = data_resolver._get_authoritative_historical_team_ids(
+                    lid, ssn, allow_network=False
+                )
+            except Exception:  # noqa: BLE001 - absence is reported, not fatal
+                expected = []
+        if not expected:
+            expected_source = "unavailable"
+        expected_teams = {str(team_id) for team_id in expected} if expected else set()
+        missing_teams = sorted(expected_teams - observed_teams)
+        unexpected_teams = sorted(observed_teams - expected_teams) if expected_teams else []
+
+        coverage = data_resolver._validate_historical_structural_coverage(
+            fixture_list,
+            season=ssn,
+            provider_metadata={"allow_network": False},
+            league_id=lid,
+        )
+        lifecycle_state, lifecycle_reason, _ = get_competition_lifecycle(
+            "football", lid, ssn, fixture_list, coverage=coverage
+        )
+
+        provider_coverage = (
+            manifest.get("provider_coverage")
+            if isinstance(manifest.get("provider_coverage"), dict)
+            else {}
+        )
+        diagnostics = provider_coverage.get("provider_diagnostics")
+        diagnostics_present = isinstance(diagnostics, dict) and any(
+            isinstance(value, dict) for value in diagnostics.values()
+        )
+
+        try:
+            units = sports_knowledge.expected_coverage_units("football", lid, ssn)
+        except Exception:  # noqa: BLE001 - an unknown expectation stays unknown
+            units = {}
+        expected_fixture_total = units.get("value") if isinstance(units, dict) else None
+
+        manifest_status = manifest.get("status") or "INCOMPLETE"
+        if manifest_status == "COMPLETE":
+            blocker = None
+        elif not fixture_list:
+            blocker = manifest.get("error_reason") or "no_persisted_records"
+        elif not expected_teams:
+            blocker = "expected_team_universe_unavailable"
+        elif coverage.get("verified") is not True:
+            blocker = (
+                f"structural_coverage_failed:{coverage.get('reason')}"
+                if coverage.get("reason") else "structural_coverage_failed"
+            )
+        elif lifecycle_state != COMPETITION_LIFECYCLE_COMPLETED:
+            blocker = f"lifecycle_{lifecycle_state.lower()}_{lifecycle_reason}"
+        else:
+            blocker = manifest.get("error_reason") or "manifest_not_complete_despite_valid_coverage"
+
+        results.append({
+            "league_id": lid,
+            "season": ssn,
+            "manifest_status": manifest_status,
+            "manifest_fixture_count": manifest.get("fixture_count"),
+            "stored_count": len(fixture_list),
+            "valid_count": len(fixture_list) - sum(invalid_reasons.values()),
+            "valid_distinct_count": len(seen) - duplicate_count - sum(invalid_reasons.values()),
+            "duplicate_count": duplicate_count,
+            "logical_duplicate_fixture_ids": logical_duplicates,
+            "source_breakdown": dict(source_counts),
+            "invalid_count": sum(invalid_reasons.values()),
+            "invalid_reasons": dict(invalid_reasons),
+            "expected_team_source": expected_source,
+            "expected_team_count": len(expected_teams),
+            "observed_team_count": len(observed_teams),
+            "missing_team_count": len(missing_teams),
+            "missing_teams": missing_teams,
+            "unexpected_teams": unexpected_teams,
+            "date_range": {"start": min(dates), "end": max(dates)} if dates else None,
+            "provider_outcomes": provider_coverage.get("provider_outcomes"),
+            "provider_diagnostics": diagnostics,
+            "provider_diagnostics_present": diagnostics_present,
+            "expected_fixture_total": expected_fixture_total,
+            "coverage": coverage,
+            "lifecycle_state": lifecycle_state,
+            "lifecycle_reason": lifecycle_reason,
+            "exact_blocker": blocker,
+            "error_reason": manifest.get("error_reason"),
+            "updated_at": manifest.get("updated_at"),
+        })
+
+    summary = {
+        "report_type": "football_manifest_reconciliation",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mutated": False,
+        "manifest_count": len(results),
+        "status_counts": dict(Counter(item["manifest_status"] for item in results)),
+        "blocker_counts": dict(Counter(
+            item["exact_blocker"] or "none" for item in results
+        )),
+        "targets": results,
+    }
+    summary["report_path"] = _write_historical_report(
+        summary, "football_manifest_reconciliation"
+    )
+
+    print("\n=== FOOTBALL MANIFEST RECONCILIATION ===", flush=True)
+    for item in results:
+        print(
+            f"  [{item['manifest_status']}] {item['league_id']}/{item['season']}: "
+            f"stored={item['stored_count']} valid_distinct={item['valid_distinct_count']} "
+            f"duplicates={item['duplicate_count']} "
+            f"expected_teams={item['expected_team_count']} "
+            f"missing_teams={item['missing_team_count']} "
+            f"diagnostics={'yes' if item['provider_diagnostics_present'] else 'no'} "
+            f"blocker={item['exact_blocker']}",
+            flush=True,
+        )
+    print(f"  manifests={len(results)} statuses={summary['status_counts']}", flush=True)
+    if summary.get("report_path"):
+        print(f"  report: {summary['report_path']}", flush=True)
+    return summary
+
+
 def run_historical_queue(
     seasons: list = None,
     season: int = None,
@@ -2284,6 +2730,14 @@ def run_historical_queue(
     Run historical data acquisition queue sequentially across target 5 seasons
     and configured leagues. Checks coverage before acquiring missing data.
     """
+    # A unique acquisition run identifier. GitHub Actions run numbers, provider
+    # request ids, season labels and acquisition runs are separate namespaces, so
+    # every future run is traceable by this id in its own logs/report without
+    # claiming an identity for a historical run whose id was never recorded.
+    acquisition_run_id = (
+        f"acq-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+    )
+
     if seasons is not None and isinstance(seasons, (list, tuple)) and seasons:
         target_seasons = list(seasons)
     elif season is not None:
@@ -2365,7 +2819,8 @@ def run_historical_queue(
     sport_quota_stopped = {"football": False, "basketball": False}
 
     print(
-        f"Starting target historical acquisition queue ({len(queue_items)} datasets across seasons {seasons})...",
+        f"Starting target historical acquisition queue ({len(queue_items)} datasets across seasons {seasons}) "
+        f"[acquisition run {acquisition_run_id}]...",
         flush=True,
     )
 
@@ -2407,6 +2862,8 @@ def run_historical_queue(
                 "duration_seconds": round(time.perf_counter() - t_target_start, 3),
                 "coverage_check_seconds": round(coverage_check_seconds, 3),
                 "acquisition_seconds": 0.0,
+                "persistence_seconds": 0.0,
+                "db_write_calls": 0,
                 "api_requests_consumed": 0,
             })
             continue
@@ -2435,6 +2892,8 @@ def run_historical_queue(
                 "duration_seconds": round(time.perf_counter() - t_target_start, 3),
                 "coverage_check_seconds": round(coverage_check_seconds, 3),
                 "acquisition_seconds": 0.0,
+                "persistence_seconds": 0.0,
+                "db_write_calls": 0,
                 "api_requests_consumed": 0,
             })
             continue
@@ -2477,9 +2936,20 @@ def run_historical_queue(
             "duration_seconds": round(target_duration, 3),
             "coverage_check_seconds": round(coverage_check_seconds, 3),
             "acquisition_seconds": round(max(0.0, target_duration - coverage_check_seconds), 3),
+            "persistence_seconds": round(float(report.get("db_write_duration") or 0.0), 3),
+            "db_write_calls": int(report.get("db_write_calls") or 0),
             "api_requests_consumed": report.get("api_requests_consumed", 0),
             "final_stored_count": report.get("final_stored_count", 0),
+            "skipped_reason": report.get("skipped_reason"),
         })
+
+    # Attach the run id to every target record, not only the run summary, so a
+    # single target's evidence can be traced to the run that produced it.
+    for timing_record in target_timings:
+        timing_record["acquisition_run_id"] = acquisition_run_id
+    for report_record in reports:
+        if isinstance(report_record, dict):
+            report_record["acquisition_run_id"] = acquisition_run_id
 
     total_duration_seconds = time.perf_counter() - queue_started_perf
     slowest_targets = sorted(
@@ -2502,7 +2972,42 @@ def run_historical_queue(
             flush=True,
         )
 
-    return {
+    total_api_requests_consumed = sum(
+        int(timing_record.get("api_requests_consumed") or 0)
+        for timing_record in target_timings
+    )
+    quota_consumed_by_sport = {}
+    for timing_record in target_timings:
+        sport_name = timing_record.get("sport")
+        quota_consumed_by_sport[sport_name] = (
+            quota_consumed_by_sport.get(sport_name, 0)
+            + int(timing_record.get("api_requests_consumed") or 0)
+        )
+    targets_skipped = [
+        timing_record for timing_record in target_timings
+        if timing_record.get("skipped_reason")
+    ]
+    slowest_operations = sorted(
+        [
+            {
+                "target": f"{timing_record.get('sport')}:{timing_record.get('league_id')}/{timing_record.get('season')}",
+                "operation": operation,
+                "seconds": round(float(timing_record.get(operation_key) or 0.0), 3),
+            }
+            for timing_record in target_timings
+            for operation, operation_key in (
+                ("coverage_check", "coverage_check_seconds"),
+                ("acquisition", "acquisition_seconds"),
+                ("persistence", "persistence_seconds"),
+            )
+        ],
+        key=lambda operation: operation["seconds"],
+        reverse=True,
+    )[:10]
+
+    run_report = {
+        "report_type": "historical_acquisition_run",
+        "acquisition_run_id": acquisition_run_id,
         "target_seasons": seasons,
         "processed_count": len(reports),
         "edition_selection": edition_selection,
@@ -2512,7 +3017,27 @@ def run_historical_queue(
         "total_duration_seconds": round(total_duration_seconds, 3),
         "target_timings": target_timings,
         "slowest_targets": slowest_targets,
+        "slowest_operations": slowest_operations,
+        "total_api_requests_consumed": total_api_requests_consumed,
+        "quota_consumed_by_sport": quota_consumed_by_sport,
+        "targets_skipped": targets_skipped,
+        "targets_skipped_count": len(targets_skipped),
     }
+    report_path = None
+    try:
+        run_report_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "historical_runs"
+        )
+        os.makedirs(run_report_dir, exist_ok=True)
+        report_path = os.path.join(run_report_dir, f"{acquisition_run_id}.json")
+        with open(report_path, "w", encoding="utf-8") as report_file:
+            json.dump(run_report, report_file, indent=2, sort_keys=True, default=str)
+        print(f"Historical queue run report written: {report_path}", flush=True)
+    except OSError as exc:
+        print(f"Historical queue run report could not be written: {exc}", flush=True)
+    run_report["report_path"] = report_path
+
+    return run_report
 
 
 def verify_persisted_historical_datasets(

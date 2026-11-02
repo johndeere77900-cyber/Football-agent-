@@ -2847,6 +2847,18 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--report-nba-phase-recovery",
+        action="store_true",
+        help="Compare persisted NBA identities with fresh ESPN identities (read-only).",
+    )
+
+    parser.add_argument(
+        "--report-football-reconciliation",
+        action="store_true",
+        help="Reconcile every persisted football manifest with its stored records (read-only).",
+    )
+
+    parser.add_argument(
         "--backtest-history",
         action="store_true",
         help="Show past backtest runs.",
@@ -2986,6 +2998,22 @@ def main():
 
         if args.season is not None and getattr(args, "seasons", None) is not None:
             raise ValueError("Cannot specify both --season and --seasons together.")
+
+        if args.report_football_reconciliation:
+            storage.init_db()
+            historical_sync.build_football_manifest_reconciliation(
+                league_ids=[args.league] if args.league else None,
+                seasons=getattr(args, "seasons", None) or ([args.season] if args.season else None),
+            )
+            return 0
+
+        if args.report_nba_phase_recovery:
+            storage.init_db()
+            historical_sync.build_basketball_phase_recovery_report(
+                league_id=args.league,
+                seasons=getattr(args, "seasons", None) or ([args.season] if args.season else None),
+            )
+            return 0
 
         if args.verify_historical_datasets:
             storage.init_db()
