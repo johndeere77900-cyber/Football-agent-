@@ -1068,3 +1068,125 @@ SQL/migrations, manifest changes and data repair.
   remain external investigations.
 - UCL/UEL/Nations League/domestic participant universes and documented totals
   remain unavailable; no totals were invented.
+
+---
+
+## 14. Acquisition integrity update (2026-11-03) — providers, source cohort, route
+
+Branch: `feature/historical-football-acquisition-integrity`
+Base: `main` at `7dc9fe83101c876898a5174cf3125fc536d73ada`
+
+This section supersedes the earlier four-provider route described in sections 1-13;
+the earlier sections are retained as the audit trail for that branch.
+
+### 14.1 Runtime route
+
+`config.FOOTBALL_APPROVED_HISTORICAL_PROVIDERS` and
+`sports_knowledge/football_competitions.json::approved_historical_acquisition_order`
+now contain exactly:
+
+`openfootball_json -> openfootball_txt -> openfootball_internationals -> openligadb -> football_data_csv -> soccerdata_fbref -> soccerdata_match_history`
+
+`DataResolver.get_league_fixtures_page()` calls those providers in that order,
+after checking competition/edition eligibility through
+`sports_knowledge.provider_route()`. Sofascore is not in the automatic route.
+Its catalogue entry remains diagnostic-only. If the knowledge route cannot be
+loaded or disagrees with `config`, the route fails closed with
+`knowledge_provider_route_unavailable` / `knowledge_provider_order_mismatch`.
+
+### 14.2 New adapters
+
+- `openfootball_provider.py` implements OpenFootball JSON, Football.TXT club
+  competitions and men's senior internationals. It preserves exact source URLs,
+  repositories, source commits where available, requested season, retrieval
+  time, native/derived ids and source facts. JSON/TXT fixtures without native
+  ids use deterministic indexed SHA-256 ids; OpenLigaDB keeps its native
+  `matchID`.
+- `openligadb_provider.py` discovers the exact season shortcut through
+  `getavailableleagues/{season}`, caches discovery per acquisition run, paces
+  requests to 60/minute, selects the full-time result row, preserves
+  `matchIsFinished`, goals and result types, and uses UTC timestamps.
+- Date-only sources are stored as technical midnight UTC with
+  `date_precision="date"`, `kickoff_time_known`, local time where available and
+  `timezone_known=false`. No UTC kickoff is inferred.
+- Unscored/future fixtures are not marked completed. UCL JSON 2024 has 189 rows
+  but only 188 completed because the final is unscored in that file.
+
+### 14.3 Verified direct coverage
+
+OpenFootball JSON (2019-20, 2024-25, 2026-27 exact files checked):
+
+| Competition | 2019 | 2024 | 2026 |
+|---|---:|---:|---:|
+| Premier League | 380 | 380 | 45 |
+| La Liga | 380 | 370 | 64 |
+| Serie A | 380 | 370 | 50 |
+| Bundesliga | 306 | 306 | 33 |
+| Ligue 1 | 279 | 306 | 41 |
+| Eredivisie | 232 | 306 | 62 |
+| Primeira Liga | 306 | 306 | 58 |
+| Champions League JSON | 119 | 188 completed of 189 | 404, not enabled |
+
+Ligue 1 2019-20 (279) and Eredivisie 2019-20 (232) are legitimate curtailed
+seasons and validate as complete against their authoritative roster and recorded
+season exception. La Liga/Serie A 2024-25 files contain 370 of 380 rows, so they
+do not complete from JSON alone and correctly fall through to the next eligible source (Football-Data CSV for La Liga; Football.TXT then CSV for Serie A).
+The 2026-27 files are in progress and do not validate as complete.
+
+OpenFootball Football.TXT 2024-25: Champions League 189, Europa League 189,
+Premier League 380, Serie A 380. Diagnostic-only exact files: Conference League
+153, EFL Cup 93, FA Cup 123, Coppa Italia 45, Copa Libertadores 155,
+Brasileiro 380. The last six are not stored because no authoritative competition
+id is configured.
+
+OpenFootball internationals: Nations League 2024 158 matches / 54 teams, EURO
+2024 51 / 24, EURO 2020 51 / 24, World Cup 2022 64 / 32. EURO and World Cup
+validate as complete against catalogue participant universes and documented
+totals. Nations League remains unverified because its edition participant/format
+evidence is not in the catalogue; it returns fixtures with `is_complete=false`.
+UCL/UEL remain `completion_allowed=false` for lack of an authoritative edition
+participant universe, even though the source files contain the expected 189
+matches.
+
+OpenLigaDB Bundesliga 2024-25: exact shortcut `bl1`, 306 native-id fixtures,
+halftime and fulltime rows preserved, validates as complete. Season discovery is
+cached per run.
+
+### 14.4 Storage and integrity
+
+`get_historical_fixtures()` / `get_historical_fixture_count()` accept optional
+`sources=`; `sources=None` still returns/counts every physical row. Approved
+cohort reads accept `mixed` writer rows only when record-level provenance names
+an approved provider. Direct SQLite verification: 306 approved Bundesliga rows
+validate while 2 legacy `api_football` rows remain physically present; the
+all-source caller sees 308 and the approved cohort sees 306. Native fixture ids
+are unchanged by the filter. `save_historical_fixtures()` now resolves identity
+from the record's own provider, not the `mixed` writer label, and rejects
+unapproved record provenance in a `mixed` batch.
+
+Bundesliga 2024-25 stage exclusion: the two SV Elversberg relegation-playoff
+fixtures are excluded from regular-season coverage (306 + 2 excluded) without
+deleting or rewriting them.
+
+### 14.5 Provider outcomes and retries
+
+`_classify_provider_attempt_outcome()` now distinguishes `PROVIDER_UNAVAILABLE`
+(configuration/credential missing), `UNSUPPORTED_COVERAGE`, `ACCESS_DENIED`,
+`RATE_LIMITED`, `TIMEOUT`, `NETWORK_ERROR` and `PARSER_ERROR`, preserving the
+provider error and HTTP status. `soccerdata_provider._attempt_timeout_budget()`
+divides the remaining shared deadline across remaining attempts: a 15-second,
+two-attempt budget allocates 7.5s + 7.5s rather than 15s + 0s.
+
+### 14.6 Remaining gaps
+
+- No authoritative participant universe is configured for UCL, UEL, Nations
+  League 2024, Conference League, FA Cup, EFL Cup, Coppa Italia, Libertadores or
+  Brasileirao. No totals or participants were invented; those datasets fail
+  closed for completion until official edition rosters and totals are recorded.
+- OpenFootball JSON 2024-25 La Liga/Serie A and all 2026-27 domestic files are
+  incomplete by source and do not complete on their own.
+- OpenFootball JSON UCL 2026 is a 404 and remains disabled; TXT enables only the
+  exact 2019 and 2024 files that were checked.
+- No API-Football historical provider, alias, fallback, credential requirement or
+  legacy-record merge was added.
+- No production Neon access, migration, deletion or record rewrite was performed.

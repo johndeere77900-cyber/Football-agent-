@@ -130,11 +130,33 @@ TARGET_SEASONS = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
 # therefore stay isolated and are only ever addressed by their exact
 # `(source, fixture_id)` key.
 FOOTBALL_APPROVED_HISTORICAL_PROVIDERS = (
+    "openfootball_json",
+    "openfootball_txt",
+    "openfootball_internationals",
+    "openligadb",
     "football_data_csv",
     "soccerdata_fbref",
     "soccerdata_match_history",
-    "soccerdata_sofascore",
 )
+
+# Writer/provenance namespaces that belong to the approved historical football
+# acquisition cohort. Legacy `api_football`, `football_data_org` and the old
+# umbrella `soccerdata` label remain physically present but are excluded from
+# acquisition validation and physical-cohort counts.
+FOOTBALL_APPROVED_HISTORICAL_SOURCES = FOOTBALL_APPROVED_HISTORICAL_PROVIDERS
+
+# Verified stage exclusions for championships whose legacy fixture data includes
+# matches that are not part of the regular-season cohort. They are excluded from
+# regular-season coverage only; the persisted records are never deleted or
+# rewritten. Bundesliga 2024-25 has two relegation-playoff fixtures involving
+# SV Elversberg.
+FOOTBALL_NON_REGULAR_STAGE_EXCLUSIONS = {
+    ("football", 78, 2024): {
+        "stage": "relegation_playoff",
+        "team_name_tokens": ("elversberg",),
+        "reason": "two verified relegation-playoff fixtures are outside the 18-team, 306-match regular season",
+    },
+}
 
 # --- Canonical Team Aliases (Competition-Aware & Sport-Specific) ----------
 # Keyed by (normalized_alias, league_id) where competition context is required,
@@ -751,6 +773,52 @@ COMPETITION_SEASON_WINDOW_OVERRIDES = {
         "end": (1, 7, 31),
         "format": "league",
         "exception": "late_start_and_covid_schedule_changes",
+    },
+    # 2019-20 domestic seasons affected by the COVID-19 suspension. These are
+    # exact, externally documented boundaries rather than generic May/June
+    # arithmetic. Ligue 1 and Eredivisie were curtailed; their verified fixture
+    # totals remain in FOOTBALL_SEASON_COVERAGE_EXCEPTIONS below.
+    ("football", 39, 2019): {
+        "start": (0, 8, 9),
+        "end": (1, 7, 26),
+        "format": "double_round_robin",
+        "exception": "covid19_extended_season_window",
+    },
+    ("football", 140, 2019): {
+        "start": (0, 8, 16),
+        "end": (1, 7, 19),
+        "format": "double_round_robin",
+        "exception": "covid19_extended_season_window",
+    },
+    ("football", 135, 2019): {
+        "start": (0, 8, 24),
+        "end": (1, 8, 2),
+        "format": "double_round_robin",
+        "exception": "covid19_extended_season_window",
+    },
+    ("football", 78, 2019): {
+        "start": (0, 8, 16),
+        "end": (1, 6, 27),
+        "format": "double_round_robin",
+        "exception": "covid19_extended_season_window",
+    },
+    ("football", 61, 2019): {
+        "start": (0, 8, 9),
+        "end": (1, 4, 30),
+        "format": "double_round_robin",
+        "exception": "covid19_curtailed_season_window",
+    },
+    ("football", 88, 2019): {
+        "start": (0, 8, 2),
+        "end": (1, 4, 24),
+        "format": "double_round_robin",
+        "exception": "covid19_abandoned_season_window",
+    },
+    ("football", 94, 2019): {
+        "start": (0, 8, 9),
+        "end": (1, 7, 26),
+        "format": "double_round_robin",
+        "exception": "covid19_extended_season_window",
     },
     # FIFA World Cup: the finals tournament is quadrennial and its window is not
     # derivable from a generic summer boundary (2022 was played in November and

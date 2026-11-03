@@ -786,10 +786,25 @@ def provider_route(sport, league_id, season):
     unsupported = {}
     for provider in order:
         declaration = coverage.get(provider)
-        if isinstance(declaration, dict) and declaration.get("supported") is True:
-            eligible.append(provider)
-        else:
+        if not isinstance(declaration, dict) or declaration.get("supported") is not True:
             unsupported[provider] = declaration.get("reason") if isinstance(declaration, dict) else "not_declared"
+            continue
+        edition_seasons = declaration.get("edition_seasons")
+        if isinstance(edition_seasons, (list, tuple, set)):
+            normalized = set()
+            for value in edition_seasons:
+                try:
+                    normalized.add(int(value))
+                except (TypeError, ValueError):
+                    continue
+            try:
+                requested = int(season)
+            except (TypeError, ValueError):
+                requested = None
+            if requested is None or requested not in normalized:
+                unsupported[provider] = "verified_edition_unavailable"
+                continue
+        eligible.append(provider)
     record = edition(key, league_id, season)
     gaps = record.get("evidence_gaps") or []
     return {

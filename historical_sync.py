@@ -370,11 +370,14 @@ def _is_historical_provider_complete(
 
     prov = page_source.strip().lower()
     supported_providers = {
+        "openfootball_json",
+        "openfootball_txt",
+        "openfootball_internationals",
+        "openligadb",
         "football_data_csv",
         "soccerdata",
         "soccerdata_fbref",
         "soccerdata_match_history",
-        "soccerdata_sofascore",
         "mixed",
     }
     if prov not in supported_providers:
@@ -383,6 +386,13 @@ def _is_historical_provider_complete(
     prov_meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else {}
     if not isinstance(prov_meta, dict):
         prov_meta = {}
+
+    # Edition evidence is part of the completion decision. A missing route or an
+    # unverified participant/format/window fact must fail closed, not be treated
+    # as a successful empty or complete edition.
+    route = prov_meta.get("knowledge_provider_route")
+    if not isinstance(route, dict) or route.get("completion_allowed") is not True:
+        return False
 
     if prov_meta.get("is_partial") is True or prov_meta.get("is_complete") is False:
         return False
@@ -580,18 +590,28 @@ def sync_historical_fixtures(
         )
 
     if historical_budget is None:
-        # Football historical fixture acquisition itself is API-key free (direct
-        # Football-Data.co.uk CSV and SoccerData). The only API budget this path
-        # can consume is the optional API-Football statistical-enrichment
-        # backfill, which is bounded by the API-Football historical daily budget.
+        # Football historical fixture acquisition itself is API-key free
+        # (OpenFootball, OpenLigaDB, Football-Data.co.uk CSV and SoccerData). The
+        # only API budget this path can consume is the optional API-Football
+        # statistical-enrichment backfill, which is bounded by its own budget.
         historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
 
     dataset_info = storage.get_historical_dataset_status(league_id, season)
     current_status = dataset_info["status"]
-    existing_before = dataset_info["fixture_count"] or storage.get_historical_fixture_count(league_id, season)
+    approved_sources = tuple(
+        getattr(config, "FOOTBALL_APPROVED_HISTORICAL_SOURCES", ())
+    )
+    existing_before = storage.get_historical_fixture_count(
+        league_id, season, sources=approved_sources
+    )
 
-    # Revalidate persisted fixture integrity and coverage before early return
-    stored_fixtures = storage.get_historical_fixtures(league_id, season, include_reconciliation_candidates=True)
+    # Revalidate only the approved physical cohort; legacy rows stay present but
+    # outside the new acquisition contract.
+    stored_fixtures = storage.get_historical_fixtures(
+        league_id, season,
+        include_reconciliation_candidates=True,
+        sources=approved_sources,
+    )
     if stored_fixtures and not refresh:
         exp_team_ids = data_resolver._get_authoritative_historical_team_ids(
             league_id, season, max_budget=historical_budget, allow_network=False
@@ -615,7 +635,25 @@ def sync_historical_fixtures(
         reval_lifecycle, reval_lifecycle_reason, _ = get_competition_lifecycle(
             "football", league_id, season, stored_fixtures, coverage=reval_coverage
         )
-        if reval_coverage.get("verified") is True and reval_lifecycle == COMPETITION_LIFECYCLE_COMPLETED:
+        route_completion_allowed = False
+        try:
+            import sports_knowledge
+
+            route_completion_allowed = (
+                sports_knowledge.provider_route("football", league_id, season).get("completion_allowed")
+                is True
+            )
+        except Exception as route_exc:
+            print(
+                f"Knowledge provider route unavailable during revalidation for league {league_id} season {season}: {route_exc}",
+                flush=True,
+            )
+
+        if (
+            reval_coverage.get("verified") is True
+            and reval_lifecycle == COMPETITION_LIFECYCLE_COMPLETED
+            and route_completion_allowed
+        ):
             storage.mark_historical_dataset_complete(
                 league_id,
                 season,
@@ -672,9 +710,10 @@ def sync_historical_fixtures(
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Approved football historical providers (in order): direct CSV, SoccerData
-    # FBref, SoccerData MatchHistory, SoccerData Sofascore. API-Football and
-    # football-data.org are not used on this path.
+    # Approved football historical providers (in order): OpenFootball JSON,
+    # OpenFootball TXT, OpenFootball internationals, OpenLigaDB, Football-Data
+    # CSV, SoccerData FBref, SoccerData MatchHistory. Sofascore is not attempted
+    # automatically. API-Football and football-data.org are not used on this path.
 
     quota_budget_stopped = False
     acquisition_failed = False
@@ -803,7 +842,9 @@ def sync_historical_fixtures(
                 all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
 
             pages_completed = current_page
-            current_stored_count = storage.get_historical_fixture_count(league_id, season)
+            current_stored_count = storage.get_historical_fixture_count(
+                league_id, season, sources=approved_sources
+            )
 
             # Update progress in manifest immediately
             safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
@@ -874,7 +915,11 @@ def sync_historical_fixtures(
         safe_rejected_cnt = cum_rejected_cnt
         safe_empty_cnt = cum_empty_cnt
 
-    stored_fixtures_all = storage.get_historical_fixtures(league_id, season, include_reconciliation_candidates=True)
+    stored_fixtures_all = storage.get_historical_fixtures(
+        league_id, season,
+        include_reconciliation_candidates=True,
+        sources=approved_sources,
+    )
     db_coverage_pre = data_resolver._validate_historical_structural_coverage(
         stored_fixtures_all,
         season=season,
@@ -965,7 +1010,9 @@ def sync_historical_fixtures(
 
     total_consumed = 0
 
-    final_stored_count = storage.get_historical_fixture_count(league_id, season)
+    final_stored_count = storage.get_historical_fixture_count(
+        league_id, season, sources=approved_sources
+    )
 
     # Determine enrichment status
     all_stored_fixtures = storage.get_historical_fixtures(league_id, season, include_reconciliation_candidates=True)
@@ -1000,8 +1047,13 @@ def sync_historical_fixtures(
     else:
         enrichment_status = dataset_info.get("enrichment_status") or "NONE"
 
-    # Determine exact source semantics and re-read persisted fixtures for final structural validation
-    stored_fixtures_all = storage.get_historical_fixtures(league_id, season, include_reconciliation_candidates=True)
+    # Determine exact source semantics and re-read the approved cohort for final
+    # structural validation. Legacy records remain physically present.
+    stored_fixtures_all = storage.get_historical_fixtures(
+        league_id, season,
+        include_reconciliation_candidates=True,
+        sources=approved_sources,
+    )
 
     sources_found = set()
     for f in stored_fixtures_all:
@@ -1149,7 +1201,12 @@ def sync_historical_fixtures(
         elif not last_error_reason:
             if isinstance(db_coverage, dict) and db_coverage.get("verified") is not True:
                 last_error_reason = f"structural_coverage_failed_{db_coverage.get('reason')}"
-            elif page_source_val not in ("football_data_csv", "soccerdata_fbref", "soccerdata_match_history", "soccerdata_sofascore", "mixed"):
+            elif page_source_val not in (
+                "openfootball_json", "openfootball_txt",
+                "openfootball_internationals", "openligadb",
+                "football_data_csv", "soccerdata_fbref",
+                "soccerdata_match_history", "mixed",
+            ):
                 last_error_reason = "provider_coverage_incomplete"
             else:
                 last_error_reason = "acquisition_incomplete"

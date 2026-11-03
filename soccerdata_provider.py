@@ -621,6 +621,13 @@ def _normalize_sofascore_row(row, league_id=None, season=None):
     }
 
 
+def _attempt_timeout_budget(remaining, attempt, max_retries):
+    """Reserve part of the remaining deadline for every remaining retry."""
+    attempts_left = max(1, int(max_retries) - int(attempt) + 1)
+    remaining = max(0.0, float(remaining))
+    return max(0.05, remaining / attempts_left)
+
+
 def get_fbref_games(league_code, season, timeout_seconds=DEFAULT_SOCCERDATA_TIMEOUT, league_id=None, max_retries=2):
     """
     Retrieve matches for league_code (e.g., 'ENG-Premier League', 'ESP-La Liga') and season via SoccerData FBref.
@@ -694,7 +701,7 @@ except Exception as exc:
             logger.warning(f"SoccerData FBref deadline expired before attempt {attempt}/{max_retries}")
             return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_fbref"}
 
-        attempt_timeout = min(remaining, timeout_seconds)
+        attempt_timeout = _attempt_timeout_budget(remaining, attempt, max_retries)
 
         try:
             proc = subprocess.run(
@@ -761,7 +768,7 @@ except Exception as exc:
 
                 logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData FBref subprocess failed: {last_error}")
         except subprocess.TimeoutExpired as exc:
-            last_error = f"Subprocess timed out after {timeout_seconds}s"
+            last_error = f"Subprocess timed out after {attempt_timeout:.2f}s"
             logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData FBref timeout: {last_error}")
         except Exception as exc:
             last_error = f"Subprocess execution error: {exc}"
@@ -905,7 +912,7 @@ except Exception as exc:
             logger.warning(f"SoccerData MatchHistory deadline expired before attempt {attempt}/{max_retries}")
             return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_match_history"}
 
-        attempt_timeout = min(remaining, timeout_seconds)
+        attempt_timeout = _attempt_timeout_budget(remaining, attempt, max_retries)
 
         try:
             proc = subprocess.run(
@@ -972,7 +979,7 @@ except Exception as exc:
 
                 logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory subprocess failed: {last_error}")
         except subprocess.TimeoutExpired as exc:
-            last_error = f"Subprocess timed out after {timeout_seconds}s"
+            last_error = f"Subprocess timed out after {attempt_timeout:.2f}s"
             logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData MatchHistory timeout: {last_error}")
         except Exception as exc:
             last_error = f"Subprocess execution error: {exc}"
@@ -1440,7 +1447,7 @@ except Exception as exc:
             logger.warning(f"SoccerData Sofascore deadline expired before attempt {attempt}/{max_retries}")
             return "SOURCE_FAILED", [], {"status": "SOURCE_FAILED", "error": last_error, "source": "soccerdata_sofascore"}
 
-        attempt_timeout = min(remaining, timeout_seconds)
+        attempt_timeout = _attempt_timeout_budget(remaining, attempt, max_retries)
 
         try:
             proc = subprocess.run(
@@ -1517,7 +1524,7 @@ except Exception as exc:
 
                 logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore subprocess failed: {last_error}")
         except subprocess.TimeoutExpired as exc:
-            last_error = f"Subprocess timed out after {timeout_seconds}s"
+            last_error = f"Subprocess timed out after {attempt_timeout:.2f}s"
             logger.warning(f"Attempt {attempt}/{max_retries} - SoccerData Sofascore timeout: {last_error}")
         except Exception as exc:
             last_error = f"Subprocess execution error: {exc}"

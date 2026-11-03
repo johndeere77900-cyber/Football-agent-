@@ -7,8 +7,10 @@ This document describes the unified historical data and backtest architecture fo
 The historical acquisition and backtesting pipeline is decoupled from live prediction execution to ensure point-in-time integrity and protect API quota:
 
 ```
-    Football:  Direct Football-Data.co.uk CSV
-               -> SoccerData FBref -> SoccerData MatchHistory -> SoccerData Sofascore
+    Football:  OpenFootball JSON -> OpenFootball Football.TXT
+               -> OpenFootball internationals -> OpenLigaDB
+               -> Football-Data.co.uk CSV -> SoccerData FBref
+               -> SoccerData MatchHistory
     Basketball: ESPN URL scoreboards (monthly acquisition units)
                -> API-Basketball (fallback)
                 ↓
@@ -25,7 +27,25 @@ The historical acquisition and backtesting pipeline is decoupled from live predi
     prediction / reconstruction / market evaluation & experiment persistence
 ```
 
-API-Football and football-data.org are **not** historical football fixture acquisition providers. Their clients and normalizers are retained because live prediction, live fixture retrieval, team form/statistics, standings recovery and grading still use them; those live call sites are intentionally unchanged.
+API-Football and football-data.org are **not** historical football fixture acquisition providers. Their clients and normalizers are retained because live prediction, live fixture retrieval, team form/statistics, standings recovery and grading still use them; those live call sites are intentionally unchanged. API-Football has no historical acquisition alias, fallback, credential requirement or record merge.
+
+### Approved football historical sources
+
+| Provider | Source | Enabled coverage |
+|---|---|---|
+| `openfootball_json` | `raw.githubusercontent.com/openfootball/football.json` | Exact checked league-season files for Premier League, La Liga, Serie A, Bundesliga, Ligue 1, Eredivisie and Primeira Liga; Champions League 2019 and 2024 only |
+| `openfootball_txt` | OpenFootball `champions-league`, `england`, `italy`, `south-america` repositories | Champions League 2019/2024, Europa League 2024, Premier League and Serie A; Conference League, EFL Cup, FA Cup, Coppa Italia, Libertadores and Brasileirao are parsed for diagnostics only because no authoritative competition id exists |
+| `openfootball_internationals` | OpenFootball `internationals` repository | FIFA World Cup 2022, UEFA EURO 2020/2024, UEFA Nations League 2018-2025 |
+| `openligadb` | `https://api.openligadb.de` | Bundesliga only, after exact `getavailableleagues/{season}` discovery |
+| `football_data_csv` | `football-data.co.uk` | Existing configured domestic divisions |
+| `soccerdata_fbref` | SoccerData / FBref | Existing configured competitions |
+| `soccerdata_match_history` | SoccerData MatchHistory | Existing configured domestic competitions |
+
+OpenFootball is CC0. OpenFootball JSON uses deterministic indexed SHA-256 fixture ids because the source has no native match ids; Football.TXT uses the same deterministic scheme; OpenLigaDB preserves its native `matchID`. Date-only source evidence is stored as technical midnight UTC with `date_precision="date"`, `kickoff_time_known` and timezone-unknown flags, so a midnight placeholder is never presented as an actual UTC kickoff.
+
+OpenFootball limitations: men's senior internationals only; full-time results include extra time but not penalty-shootout scores; shootout evidence identifies the winner, not a shootout score; abandoned/annulled/awarded status is not reliably available; stage/round attribution is incomplete. International match results alone do not prove a complete tournament schedule. OpenFootball does not provide universal competition or season coverage, and a non-empty response is never treated as completion evidence.
+
+Source-scoped storage validation reads only the approved cohort via `sources=`, so legacy `api_football` / `football_data_org` rows remain physically present but cannot satisfy or inflate approved coverage. A `mixed` writer row is admitted only when its record-level `provider_provenance.provider` is itself approved.
 
 ## Invariants & Rules
 
@@ -35,7 +55,8 @@ API-Football and football-data.org are **not** historical football fixture acqui
 
 2. **HISTORICAL ACQUISITION ROUTES**:
    - Step 1 (Read-first persistence): Reuse a stored DB dataset when its manifest is `COMPLETE` **and** the persisted records independently pass structural coverage validation on a revalidation run, with no external calls.
-   - Step 2 (Approved football route): Direct Football-Data.co.uk CSV -> SoccerData FBref -> SoccerData MatchHistory -> SoccerData Sofascore. Acquisition stops at the first source that supplies independently validated, sufficient coverage and continues to the next approved source when a source fails or its data is structurally insufficient.
+   - Step 2 (Approved football route): `config.FOOTBALL_APPROVED_HISTORICAL_PROVIDERS` is the exact runtime order - OpenFootball JSON -> OpenFootball Football.TXT -> OpenFootball internationals -> OpenLigaDB -> Football-Data.co.uk CSV -> SoccerData FBref -> SoccerData MatchHistory. The resolver reads the same order from `sports_knowledge.provider_route()` and filters by competition and edition eligibility. Acquisition stops at the first source that supplies independently validated, sufficient coverage and continues to the next eligible source when a source fails or its data is structurally insufficient.
+   - Sofascore is diagnostic-only and is never attempted automatically. Its metadata remains in the knowledge catalogue for controlled health checks.
    - Step 3 (Approved basketball route): ESPN URL scoreboards (primary, one independent coverage unit per NBA season month) -> API-Basketball (fallback, coverage tracked from its own response pagination).
    - A successful HTTP request, a non-empty response, or the exhaustion of every approved provider never establishes complete historical coverage on its own.
 

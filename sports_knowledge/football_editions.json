@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "sport": "football",
-  "curated_at": "2026-11-02T00:00:00+00:00",
+  "curated_at": "2026-11-03T00:00:00+00:00",
   "description": "Verified edition-level participant universes, formats, stages and promotion/relegation context. Missing editions are intentionally absent; absence means UNKNOWN, not an empty roster.",
   "sources": {
     "premier_league_tables": {
@@ -1137,7 +1137,10 @@
         "fixture_total": 380,
         "participants": [
           {
-            "name": "Alavés"
+            "name": "Alavés",
+            "aliases": [
+              "Deportivo Alavés"
+            ]
           },
           {
             "name": "Athletic Bilbao",
@@ -1151,18 +1154,23 @@
             "name": "Atlético Madrid",
             "aliases": [
               "Atletico de Madrid",
-              "Ath Madrid"
+              "Ath Madrid",
+              "Club Atlético de Madrid"
             ],
             "canonical_id": "football_team_atletico_madrid"
           },
           {
-            "name": "Barcelona"
+            "name": "Barcelona",
+            "aliases": [
+              "FC Barcelona"
+            ]
           },
           {
             "name": "Celta Vigo",
             "aliases": [
               "Celta de Vigo",
-              "Celta"
+              "Celta",
+              "RC Celta de Vigo"
             ],
             "canonical_id": "football_team_celta_vigo"
           },
@@ -1170,57 +1178,96 @@
             "name": "Espanyol",
             "aliases": [
               "Espanyol de Barcelona",
-              "Espanol"
+              "Espanol",
+              "RCD Espanyol de Barcelona"
             ]
           },
           {
-            "name": "Getafe"
+            "name": "Getafe",
+            "aliases": [
+              "Getafe CF"
+            ]
           },
           {
-            "name": "Girona"
+            "name": "Girona",
+            "aliases": [
+              "Girona FC"
+            ]
           },
           {
-            "name": "Las Palmas"
+            "name": "Las Palmas",
+            "aliases": [
+              "UD Las Palmas"
+            ]
           },
           {
-            "name": "Leganés"
+            "name": "Leganés",
+            "aliases": [
+              "CD Leganés"
+            ]
           },
           {
-            "name": "Mallorca"
+            "name": "Mallorca",
+            "aliases": [
+              "RCD Mallorca"
+            ]
           },
           {
-            "name": "Osasuna"
+            "name": "Osasuna",
+            "aliases": [
+              "CA Osasuna"
+            ]
           },
           {
-            "name": "Rayo Vallecano"
+            "name": "Rayo Vallecano",
+            "aliases": [
+              "Rayo Vallecano de Madrid"
+            ]
           },
           {
             "name": "Real Betis",
             "aliases": [
-              "Betis"
+              "Betis",
+              "Real Betis Balompié"
             ],
             "canonical_id": "football_team_real_betis"
           },
           {
-            "name": "Real Madrid"
+            "name": "Real Madrid",
+            "aliases": [
+              "Real Madrid CF"
+            ]
           },
           {
             "name": "Real Sociedad",
             "aliases": [
-              "Sociedad"
+              "Sociedad",
+              "Real Sociedad de Fútbol"
             ]
           },
           {
-            "name": "Sevilla"
+            "name": "Sevilla",
+            "aliases": [
+              "Sevilla FC"
+            ]
           },
           {
-            "name": "Valencia"
+            "name": "Valencia",
+            "aliases": [
+              "Valencia CF"
+            ]
           },
           {
-            "name": "Valladolid"
+            "name": "Valladolid",
+            "aliases": [
+              "Real Valladolid CF"
+            ]
           },
           {
-            "name": "Villarreal"
+            "name": "Villarreal",
+            "aliases": [
+              "Villarreal CF"
+            ]
           }
         ],
         "participant_evidence": {
@@ -1398,7 +1445,7 @@
             "aliases": [
               "Verona"
             ],
-            "canonical_id": "football_team_hellas_verona"
+            "canonical_id": "football_team_verona"
           },
           {
             "name": "Inter Milan",
@@ -1480,49 +1527,81 @@
         "fixture_total": 380,
         "participants": [
           {
-            "name": "Atalanta"
+            "name": "Atalanta",
+            "aliases": [
+              "Atalanta BC"
+            ]
           },
           {
-            "name": "Bologna"
+            "name": "Bologna",
+            "aliases": [
+              "Bologna FC 1909"
+            ]
           },
           {
-            "name": "Cagliari"
+            "name": "Cagliari",
+            "aliases": [
+              "Cagliari Calcio"
+            ]
           },
           {
-            "name": "Como"
+            "name": "Como",
+            "aliases": [
+              "Como 1907"
+            ]
           },
           {
-            "name": "Empoli"
+            "name": "Empoli",
+            "aliases": [
+              "Empoli FC"
+            ]
           },
           {
-            "name": "Fiorentina"
+            "name": "Fiorentina",
+            "aliases": [
+              "ACF Fiorentina"
+            ]
           },
           {
-            "name": "Genoa"
+            "name": "Genoa",
+            "aliases": [
+              "Genoa CFC"
+            ]
           },
           {
             "name": "Hellas Verona",
             "aliases": [
-              "Verona"
+              "Verona",
+              "Hellas Verona FC"
             ],
-            "canonical_id": "football_team_hellas_verona"
+            "canonical_id": "football_team_verona"
           },
           {
             "name": "Inter Milan",
             "aliases": [
               "Inter",
-              "Internazionale"
+              "Internazionale",
+              "FC Internazionale Milano"
             ],
             "canonical_id": "football_team_inter_milan"
           },
           {
-            "name": "Juventus"
+            "name": "Juventus",
+            "aliases": [
+              "Juventus FC"
+            ]
           },
           {
-            "name": "Lazio"
+            "name": "Lazio",
+            "aliases": [
+              "SS Lazio"
+            ]
           },
           {
-            "name": "Lecce"
+            "name": "Lecce",
+            "aliases": [
+              "US Lecce"
+            ]
           },
           {
             "name": "AC Milan",
@@ -1532,25 +1611,46 @@
             "canonical_id": "football_team_ac_milan"
           },
           {
-            "name": "Monza"
+            "name": "Monza",
+            "aliases": [
+              "AC Monza"
+            ]
           },
           {
-            "name": "Napoli"
+            "name": "Napoli",
+            "aliases": [
+              "SSC Napoli"
+            ]
           },
           {
-            "name": "Parma"
+            "name": "Parma",
+            "aliases": [
+              "Parma Calcio 1913"
+            ]
           },
           {
-            "name": "Roma"
+            "name": "Roma",
+            "aliases": [
+              "AS Roma"
+            ]
           },
           {
-            "name": "Torino"
+            "name": "Torino",
+            "aliases": [
+              "Torino FC"
+            ]
           },
           {
-            "name": "Udinese"
+            "name": "Udinese",
+            "aliases": [
+              "Udinese Calcio"
+            ]
           },
           {
-            "name": "Venezia"
+            "name": "Venezia",
+            "aliases": [
+              "Venezia FC"
+            ]
           }
         ],
         "participant_evidence": {
@@ -1701,12 +1801,16 @@
         "fixture_total": 306,
         "participants": [
           {
-            "name": "Augsburg"
+            "name": "Augsburg",
+            "aliases": [
+              "FC Augsburg"
+            ]
           },
           {
             "name": "Bayer Leverkusen",
             "aliases": [
-              "Leverkusen"
+              "Leverkusen",
+              "Bayer 04 Leverkusen"
             ],
             "canonical_id": "football_team_bayer_leverkusen"
           },
@@ -1719,7 +1823,11 @@
             "canonical_id": "football_team_bayern_munich"
           },
           {
-            "name": "Bochum"
+            "name": "Bochum",
+            "aliases": [
+              "VfL Bochum 1848",
+              "VfL Bochum"
+            ]
           },
           {
             "name": "Borussia Dortmund",
@@ -1743,37 +1851,65 @@
             "canonical_id": "football_team_eintracht_frankfurt"
           },
           {
-            "name": "Freiburg"
+            "name": "Freiburg",
+            "aliases": [
+              "SC Freiburg"
+            ]
           },
           {
-            "name": "Heidenheim"
+            "name": "Heidenheim",
+            "aliases": [
+              "1. FC Heidenheim 1846"
+            ]
           },
           {
-            "name": "Hoffenheim"
+            "name": "Hoffenheim",
+            "aliases": [
+              "TSG 1899 Hoffenheim",
+              "TSG Hoffenheim"
+            ]
           },
           {
             "name": "Holstein Kiel"
           },
           {
-            "name": "Mainz"
+            "name": "Mainz",
+            "aliases": [
+              "1. FSV Mainz 05"
+            ]
           },
           {
             "name": "RB Leipzig"
           },
           {
-            "name": "St. Pauli"
+            "name": "St. Pauli",
+            "aliases": [
+              "FC St. Pauli 1910"
+            ]
           },
           {
-            "name": "Stuttgart"
+            "name": "Stuttgart",
+            "aliases": [
+              "VfB Stuttgart"
+            ]
           },
           {
-            "name": "Union Berlin"
+            "name": "Union Berlin",
+            "aliases": [
+              "1. FC Union Berlin"
+            ]
           },
           {
-            "name": "Werder Bremen"
+            "name": "Werder Bremen",
+            "aliases": [
+              "SV Werder Bremen"
+            ]
           },
           {
-            "name": "Wolfsburg"
+            "name": "Wolfsburg",
+            "aliases": [
+              "VfL Wolfsburg"
+            ]
           }
         ],
         "participant_evidence": {
@@ -1912,22 +2048,40 @@
         "fixture_total": 306,
         "participants": [
           {
-            "name": "Angers"
+            "name": "Angers",
+            "aliases": [
+              "Angers SCO"
+            ]
           },
           {
-            "name": "Auxerre"
+            "name": "Auxerre",
+            "aliases": [
+              "AJ Auxerre"
+            ]
           },
           {
-            "name": "Brest"
+            "name": "Brest",
+            "aliases": [
+              "Stade Brestois 29"
+            ]
           },
           {
-            "name": "Le Havre"
+            "name": "Le Havre",
+            "aliases": [
+              "Le Havre AC"
+            ]
           },
           {
-            "name": "Lens"
+            "name": "Lens",
+            "aliases": [
+              "Racing Club de Lens"
+            ]
           },
           {
-            "name": "Lille"
+            "name": "Lille",
+            "aliases": [
+              "Lille OSC"
+            ]
           },
           {
             "name": "Lyon",
@@ -1945,45 +2099,69 @@
           {
             "name": "Monaco",
             "aliases": [
-              "AS Monaco"
+              "AS Monaco",
+              "AS Monaco FC"
             ]
           },
           {
-            "name": "Montpellier"
+            "name": "Montpellier",
+            "aliases": [
+              "Montpellier HSC"
+            ]
           },
           {
-            "name": "Nantes"
+            "name": "Nantes",
+            "aliases": [
+              "FC Nantes"
+            ]
           },
           {
-            "name": "Nice"
+            "name": "Nice",
+            "aliases": [
+              "OGC Nice"
+            ]
           },
           {
             "name": "Paris Saint-Germain",
             "aliases": [
               "Paris SG",
-              "PSG"
+              "PSG",
+              "Paris Saint-Germain FC"
             ],
             "canonical_id": "football_team_paris_saint_germain"
           },
           {
-            "name": "Reims"
+            "name": "Reims",
+            "aliases": [
+              "Stade de Reims"
+            ]
           },
           {
-            "name": "Rennes"
+            "name": "Rennes",
+            "aliases": [
+              "Stade Rennais FC 1901"
+            ]
           },
           {
             "name": "Saint-Étienne",
             "aliases": [
               "St Etienne",
-              "Saint Etienne"
+              "Saint Etienne",
+              "AS Saint-Étienne"
             ],
             "canonical_id": "football_team_st_etienne"
           },
           {
-            "name": "Strasbourg"
+            "name": "Strasbourg",
+            "aliases": [
+              "RC Strasbourg Alsace"
+            ]
           },
           {
-            "name": "Toulouse"
+            "name": "Toulouse",
+            "aliases": [
+              "Toulouse FC"
+            ]
           }
         ],
         "participant_evidence": {
@@ -2007,6 +2185,113 @@
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
         }
+      },
+      "2019": {
+        "format_details": "20 clubs; season terminated after matchday 28; 279 of 380 matches played",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season (curtailed)",
+            "fixture_count": 279
+          }
+        ],
+        "fixture_total": 279,
+        "participants": [
+          {
+            "name": "Paris Saint-Germain",
+            "canonical_id": "football_team_paris_saint_germain"
+          },
+          {
+            "name": "Olympique Marseille",
+            "canonical_id": "football_team_marseille"
+          },
+          {
+            "name": "Stade Rennais",
+            "canonical_id": "football_team_rennes"
+          },
+          {
+            "name": "Lille OSC",
+            "canonical_id": "football_team_lille"
+          },
+          {
+            "name": "OGC Nice",
+            "canonical_id": "football_team_nice"
+          },
+          {
+            "name": "Stade de Reims",
+            "canonical_id": "football_team_reims"
+          },
+          {
+            "name": "Olympique Lyonnais",
+            "canonical_id": "football_team_lyon"
+          },
+          {
+            "name": "Montpellier HSC",
+            "canonical_id": "football_team_montpellier"
+          },
+          {
+            "name": "AS Monaco",
+            "canonical_id": "football_team_monaco"
+          },
+          {
+            "name": "RC Strasbourg",
+            "canonical_id": "football_team_strasbourg"
+          },
+          {
+            "name": "Angers SCO",
+            "canonical_id": "football_team_angers"
+          },
+          {
+            "name": "Girondins Bordeaux",
+            "canonical_id": "football_team_bordeaux"
+          },
+          {
+            "name": "FC Nantes",
+            "canonical_id": "football_team_nantes"
+          },
+          {
+            "name": "Stade Brestois 29",
+            "canonical_id": "football_team_brest"
+          },
+          {
+            "name": "FC Metz",
+            "canonical_id": "football_team_metz"
+          },
+          {
+            "name": "Dijon FCO",
+            "canonical_id": "football_team_dijon"
+          },
+          {
+            "name": "AS Saint-Étienne",
+            "canonical_id": "football_team_st_etienne"
+          },
+          {
+            "name": "Nîmes Olympique",
+            "canonical_id": "football_team_nimes"
+          },
+          {
+            "name": "Amiens SC",
+            "canonical_id": "football_team_amiens"
+          },
+          {
+            "name": "Toulouse FC",
+            "canonical_id": "football_team_toulouse"
+          }
+        ],
+        "participant_evidence": {
+          "source": "ligue1_standings",
+          "statement": "Final 2019-20 Ligue 1 club list from the official standings; the season was terminated after matchday 28 with 279 matches played."
+        },
+        "promoted": [],
+        "relegated": [],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 279,
+          "scope": "all_played_regular_season_matches",
+          "requires_all_stages": true
+        },
+        "edition_notes": "COVID-19 curtailed season. LFP terminated the season on 2020-04-28 (finalised 2020-04-30)."
       }
     },
     "88": {
@@ -2056,7 +2341,8 @@
             "name": "Heerenveen"
           },
           {
-            "name": "Heracles Almelo"
+            "name": "Heracles Almelo",
+            "canonical_id": "football_team_heracles"
           },
           {
             "name": "NEC Nijmegen",
@@ -2140,10 +2426,16 @@
         "fixture_total": 306,
         "participants": [
           {
-            "name": "Ajax"
+            "name": "Ajax",
+            "aliases": [
+              "AFC Ajax"
+            ]
           },
           {
-            "name": "Almere City"
+            "name": "Almere City",
+            "aliases": [
+              "Almere City FC"
+            ]
           },
           {
             "name": "AZ Alkmaar",
@@ -2153,7 +2445,10 @@
             "canonical_id": "football_team_az_alkmaar"
           },
           {
-            "name": "Feyenoord"
+            "name": "Feyenoord",
+            "aliases": [
+              "Feyenoord Rotterdam"
+            ]
           },
           {
             "name": "Fortuna Sittard",
@@ -2168,13 +2463,20 @@
             ]
           },
           {
-            "name": "Groningen"
+            "name": "Groningen",
+            "aliases": [
+              "FC Groningen"
+            ]
           },
           {
-            "name": "Heerenveen"
+            "name": "Heerenveen",
+            "aliases": [
+              "SC Heerenveen"
+            ]
           },
           {
-            "name": "Heracles Almelo"
+            "name": "Heracles Almelo",
+            "canonical_id": "football_team_heracles"
           },
           {
             "name": "NAC Breda"
@@ -2183,7 +2485,8 @@
             "name": "NEC Nijmegen",
             "aliases": [
               "Nijmegen",
-              "N.E.C."
+              "N.E.C.",
+              "NEC"
             ],
             "canonical_id": "football_team_nijmegen"
           },
@@ -2211,13 +2514,22 @@
             ]
           },
           {
-            "name": "Twente"
+            "name": "Twente",
+            "aliases": [
+              "FC Twente '65"
+            ]
           },
           {
-            "name": "Utrecht"
+            "name": "Utrecht",
+            "aliases": [
+              "FC Utrecht"
+            ]
           },
           {
-            "name": "Willem II"
+            "name": "Willem II",
+            "aliases": [
+              "Willem II Tilburg"
+            ]
           }
         ],
         "participant_evidence": {
@@ -2241,6 +2553,105 @@
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
         }
+      },
+      "2019": {
+        "format_details": "18 clubs; season abandoned after matchday 26; 232 of 306 matches played",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season (abandoned)",
+            "fixture_count": 232
+          }
+        ],
+        "fixture_total": 232,
+        "participants": [
+          {
+            "name": "AFC Ajax",
+            "canonical_id": "football_team_ajax"
+          },
+          {
+            "name": "AZ Alkmaar",
+            "canonical_id": "football_team_az_alkmaar"
+          },
+          {
+            "name": "Feyenoord",
+            "canonical_id": "football_team_feyenoord"
+          },
+          {
+            "name": "PSV Eindhoven",
+            "canonical_id": "football_team_psv"
+          },
+          {
+            "name": "Willem II",
+            "canonical_id": "football_team_willem_ii"
+          },
+          {
+            "name": "FC Utrecht",
+            "canonical_id": "football_team_utrecht"
+          },
+          {
+            "name": "Vitesse",
+            "canonical_id": "football_team_vitesse"
+          },
+          {
+            "name": "Heracles Almelo",
+            "canonical_id": "football_team_heracles"
+          },
+          {
+            "name": "FC Groningen",
+            "canonical_id": "football_team_groningen"
+          },
+          {
+            "name": "sc Heerenveen",
+            "canonical_id": "football_team_heerenveen"
+          },
+          {
+            "name": "Sparta Rotterdam",
+            "canonical_id": "football_team_sparta_rotterdam"
+          },
+          {
+            "name": "FC Twente",
+            "canonical_id": "football_team_twente"
+          },
+          {
+            "name": "FC Emmen",
+            "canonical_id": "football_team_emmen"
+          },
+          {
+            "name": "VVV-Venlo",
+            "canonical_id": "football_team_vvv_venlo"
+          },
+          {
+            "name": "Fortuna Sittard",
+            "canonical_id": "football_team_fortuna_sittard"
+          },
+          {
+            "name": "RKC Waalwijk",
+            "canonical_id": "football_team_waalwijk"
+          },
+          {
+            "name": "PEC Zwolle",
+            "canonical_id": "football_team_zwolle"
+          },
+          {
+            "name": "ADO Den Haag",
+            "canonical_id": "football_team_den_haag"
+          }
+        ],
+        "participant_evidence": {
+          "source": "eredivisie_standings",
+          "statement": "Final 2019-20 Eredivisie club list from the official standings; the KNVB abandoned the season on 2020-04-24 with 232 matches played."
+        },
+        "promoted": [],
+        "relegated": [],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 18,
+          "expected_fixture_count": 232,
+          "scope": "all_played_regular_season_matches",
+          "requires_all_stages": true
+        },
+        "edition_notes": "COVID-19 abandoned season. No champion was awarded; 232 of 306 matches were played."
       }
     },
     "94": {
@@ -2358,62 +2769,106 @@
         "fixture_total": 306,
         "participants": [
           {
-            "name": "Arouca"
+            "name": "Arouca",
+            "aliases": [
+              "FC Arouca"
+            ]
           },
           {
             "name": "AVS"
           },
           {
-            "name": "Benfica"
+            "name": "Benfica",
+            "aliases": [
+              "Sport Lisboa e Benfica"
+            ]
           },
           {
-            "name": "Boavista"
+            "name": "Boavista",
+            "aliases": [
+              "Boavista FC"
+            ]
           },
           {
             "name": "Braga",
             "aliases": [
-              "Sp Braga"
+              "Sp Braga",
+              "Sporting Clube de Braga"
             ],
             "canonical_id": "football_team_sp_braga"
           },
           {
-            "name": "Casa Pia"
+            "name": "Casa Pia",
+            "aliases": [
+              "Casa Pia AC"
+            ]
           },
           {
-            "name": "Estoril"
+            "name": "Estoril",
+            "aliases": [
+              "GD Estoril Praia"
+            ]
           },
           {
-            "name": "Estrela Amadora"
+            "name": "Estrela Amadora",
+            "aliases": [
+              "CF Estrela da Amadora"
+            ]
           },
           {
-            "name": "Famalicão"
+            "name": "Famalicão",
+            "aliases": [
+              "FC Famalicão"
+            ]
           },
           {
-            "name": "Farense"
+            "name": "Farense",
+            "aliases": [
+              "SC Farense"
+            ]
           },
           {
-            "name": "Gil Vicente"
+            "name": "Gil Vicente",
+            "aliases": [
+              "Gil Vicente FC"
+            ]
           },
           {
-            "name": "Moreirense"
+            "name": "Moreirense",
+            "aliases": [
+              "Moreirense FC"
+            ]
           },
           {
-            "name": "Nacional"
+            "name": "Nacional",
+            "aliases": [
+              "CD Nacional"
+            ]
           },
           {
-            "name": "Porto"
+            "name": "Porto",
+            "aliases": [
+              "FC Porto"
+            ]
           },
           {
-            "name": "Rio Ave"
+            "name": "Rio Ave",
+            "aliases": [
+              "Rio Ave FC"
+            ]
           },
           {
-            "name": "Santa Clara"
+            "name": "Santa Clara",
+            "aliases": [
+              "CD Santa Clara"
+            ]
           },
           {
             "name": "Sporting CP",
             "aliases": [
               "Sporting Lisbon",
-              "Sp Lisbon"
+              "Sp Lisbon",
+              "Sporting Clube de Portugal"
             ],
             "canonical_id": "football_team_sporting_cp"
           },
@@ -2421,7 +2876,8 @@
             "name": "Vitória de Guimarães",
             "aliases": [
               "Guimaraes",
-              "Vitoria de Guimaraes"
+              "Vitoria de Guimaraes",
+              "Vitória Guimarães"
             ],
             "canonical_id": "football_team_guimaraes"
           }
