@@ -476,6 +476,22 @@ def init_db():
                         raw_json JSONB NOT NULL,
                         fetched_at TEXT NOT NULL,
                         source TEXT NOT NULL DEFAULT 'api_football',
+                        home_shots DOUBLE PRECISION,
+                        away_shots DOUBLE PRECISION,
+                        home_shots_on_target DOUBLE PRECISION,
+                        away_shots_on_target DOUBLE PRECISION,
+                        home_corners DOUBLE PRECISION,
+                        away_corners DOUBLE PRECISION,
+                        home_yellow_cards DOUBLE PRECISION,
+                        away_yellow_cards DOUBLE PRECISION,
+                        home_red_cards DOUBLE PRECISION,
+                        away_red_cards DOUBLE PRECISION,
+                        home_possession DOUBLE PRECISION,
+                        away_possession DOUBLE PRECISION,
+                        home_xg DOUBLE PRECISION,
+                        away_xg DOUBLE PRECISION,
+                        field_mask TEXT,
+                        provider_version TEXT,
                         PRIMARY KEY (source, fixture_id)
                     )
                     """
@@ -497,6 +513,27 @@ def init_db():
                     END $$;
                     """
                 )
+                for column_name, column_type in (
+                    ("home_shots", "DOUBLE PRECISION"),
+                    ("away_shots", "DOUBLE PRECISION"),
+                    ("home_shots_on_target", "DOUBLE PRECISION"),
+                    ("away_shots_on_target", "DOUBLE PRECISION"),
+                    ("home_corners", "DOUBLE PRECISION"),
+                    ("away_corners", "DOUBLE PRECISION"),
+                    ("home_yellow_cards", "DOUBLE PRECISION"),
+                    ("away_yellow_cards", "DOUBLE PRECISION"),
+                    ("home_red_cards", "DOUBLE PRECISION"),
+                    ("away_red_cards", "DOUBLE PRECISION"),
+                    ("home_possession", "DOUBLE PRECISION"),
+                    ("away_possession", "DOUBLE PRECISION"),
+                    ("home_xg", "DOUBLE PRECISION"),
+                    ("away_xg", "DOUBLE PRECISION"),
+                    ("field_mask", "TEXT"),
+                    ("provider_version", "TEXT"),
+                ):
+                    cur.execute(
+                        f"ALTER TABLE historical_fixture_enrichment ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+                    )
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS historical_datasets (
@@ -986,10 +1023,38 @@ def init_db():
                     raw_json TEXT NOT NULL,
                     fetched_at TEXT NOT NULL,
                     source TEXT NOT NULL DEFAULT 'api_football',
+                    home_shots REAL,
+                    away_shots REAL,
+                    home_shots_on_target REAL,
+                    away_shots_on_target REAL,
+                    home_corners REAL,
+                    away_corners REAL,
+                    home_yellow_cards REAL,
+                    away_yellow_cards REAL,
+                    home_red_cards REAL,
+                    away_red_cards REAL,
+                    home_possession REAL,
+                    away_possession REAL,
+                    home_xg REAL,
+                    away_xg REAL,
+                    field_mask TEXT,
+                    provider_version TEXT,
                     PRIMARY KEY (source, fixture_id)
                 )
                 """
             )
+
+            for column_name, column_type in (
+                ("home_shots", "REAL"), ("away_shots", "REAL"),
+                ("home_shots_on_target", "REAL"), ("away_shots_on_target", "REAL"),
+                ("home_corners", "REAL"), ("away_corners", "REAL"),
+                ("home_yellow_cards", "REAL"), ("away_yellow_cards", "REAL"),
+                ("home_red_cards", "REAL"), ("away_red_cards", "REAL"),
+                ("home_possession", "REAL"), ("away_possession", "REAL"),
+                ("home_xg", "REAL"), ("away_xg", "REAL"),
+                ("field_mask", "TEXT"), ("provider_version", "TEXT"),
+            ):
+                _ensure_column_sqlite(conn, "historical_fixture_enrichment", column_name, column_type)
 
             hfe_info = conn.execute("PRAGMA table_info(historical_fixture_enrichment)").fetchall()
             hfe_pk_cols = [row[1] for row in hfe_info if row[5] > 0]
@@ -1003,6 +1068,14 @@ def init_db():
                             raw_json TEXT NOT NULL,
                             fetched_at TEXT NOT NULL,
                             source TEXT NOT NULL DEFAULT 'api_football',
+                            home_shots REAL, away_shots REAL,
+                            home_shots_on_target REAL, away_shots_on_target REAL,
+                            home_corners REAL, away_corners REAL,
+                            home_yellow_cards REAL, away_yellow_cards REAL,
+                            home_red_cards REAL, away_red_cards REAL,
+                            home_possession REAL, away_possession REAL,
+                            home_xg REAL, away_xg REAL,
+                            field_mask TEXT, provider_version TEXT,
                             PRIMARY KEY (source, fixture_id)
                         )
                         """
@@ -1336,10 +1409,20 @@ def get_missing_enrichment_fields(fixture_ids, required_fields=None):
     return missing_map
 
 
-def get_team_historical_fixtures(canonical_team_id, cutoff=None, limit=30, league_id=None):
+def get_team_historical_fixtures(
+    canonical_team_id,
+    cutoff=None,
+    limit=30,
+    league_id=None,
+    include_reconciliation_candidates=False,
+):
     """
     Retrieve stored historical fixtures for a team by canonical_team_id across all competitions or specific league.
     Returns chronological list of reconstructed fixture dicts.
+
+    Annotated legacy duplicate candidates are excluded by default, before LIMIT is
+    applied, so retained evidence cannot displace genuine team history. Opt in only
+    for physical inventory or reconciliation.
     """
     if not canonical_team_id:
         return []
@@ -1357,6 +1440,9 @@ def get_team_historical_fixtures(canonical_team_id, cutoff=None, limit=30, leagu
         if league_id:
             where_clauses.append("league_id = %s")
             query_params.append(league_id)
+
+        if not include_reconciliation_candidates:
+            where_clauses.append(_historical_duplicate_candidate_predicate(db_type))
 
         where_str = " AND ".join(where_clauses)
 
@@ -1542,9 +1628,242 @@ def validate_historical_basketball_game(item, target_league_id=None, target_seas
     return True, "valid", normalized
 
 
+def _basketball_missing_value(value):
+    """
+    Return True when a persisted value is absent or an explicit unknown.
+
+    An explicit unknown (empty string, "unknown", "unclassified") is treated as
+    missing so a later verified provider value can fill it. Any other value is a
+    real fact and is never treated as missing.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == "" or value.strip().lower() in {"unknown", "unclassified", "null", "none"}
+    return False
+
+
+def _basketball_points(side_obj):
+    """Return the points total from either ``{"total": n}`` or a bare value."""
+    if isinstance(side_obj, dict):
+        return side_obj.get("total")
+    return side_obj
+
+
+def _basketball_row_values(item):
+    """Extract the persisted column values from a game payload (raw or merged)."""
+    status_obj = item.get("status") if isinstance(item.get("status"), dict) else {}
+    teams = item.get("teams") if isinstance(item.get("teams"), dict) else {}
+    home = teams.get("home") if isinstance(teams.get("home"), dict) else {}
+    away = teams.get("away") if isinstance(teams.get("away"), dict) else {}
+    scores = item.get("scores") if isinstance(item.get("scores"), dict) else {}
+
+    status_short = status_obj.get("short")
+    home_name = home.get("name")
+    away_name = away.get("name")
+
+    return {
+        "game_date": str(item.get("date", "")),
+        "status_short": status_short if isinstance(status_short, str) else "",
+        "home_team_id": home.get("id"),
+        "away_team_id": away.get("id"),
+        "home_team": home_name if isinstance(home_name, str) else "",
+        "away_team": away_name if isinstance(away_name, str) else "",
+        "home_points": _basketball_points(scores.get("home")),
+        "away_points": _basketball_points(scores.get("away")),
+        "raw_json": _json_dumps(item, "raw_json"),
+    }
+
+
+def _basketball_provenance_payload(item):
+    """Collect the provider-native metadata a record carries on itself."""
+    provenance = item.get("provider_provenance") if isinstance(item.get("provider_provenance"), dict) else {}
+    payload = dict(provenance)
+    for key in ("season_type", "season_type_id", "season_slug", "stage", "game_type", "season_stage"):
+        if key not in payload and item.get(key) is not None:
+            payload[key] = item.get(key)
+    return payload
+
+
+def merge_historical_basketball_game_metadata(existing_item, incoming_item):
+    """
+    Merge verified provider metadata into an already persisted basketball game.
+
+    Returns ``(merged_item, added_fields, conflicts)``.
+
+    This is the enrichment rule for an existing ``(source, game_id)`` row and is
+    deliberately conservative and idempotent:
+
+    - game id, source, league, season, date and already valid scores are
+      preserved and never rewritten by a re-acquisition;
+    - a field is added only when it is missing (or an explicit unknown) on the
+      persisted row, so a verified value is never replaced by a null,
+      unclassified or merely different value;
+    - a conflicting incoming value is recorded as a diagnostic and discarded;
+    - provider provenance is merged key by key, so an unclassified phase can be
+      upgraded to a verified one and never the reverse;
+    - every applied enrichment is appended to ``enrichment_history`` so the
+      change keeps an auditable provenance trail.
+    """
+    import copy
+
+    existing_item = existing_item if isinstance(existing_item, dict) else {}
+    incoming_item = incoming_item if isinstance(incoming_item, dict) else {}
+
+    merged = copy.deepcopy(existing_item)
+    added = []
+    conflicts = []
+
+    def _note_conflict(field, kept, discarded):
+        conflicts.append({"field": field, "kept": kept, "discarded": discarded})
+
+    # Identity/date: the persisted row's date is authoritative once present.
+    if _basketball_missing_value(merged.get("date")) and not _basketball_missing_value(incoming_item.get("date")):
+        merged["date"] = incoming_item.get("date")
+        added.append("date")
+    elif (
+        not _basketball_missing_value(merged.get("date"))
+        and not _basketball_missing_value(incoming_item.get("date"))
+        and str(merged.get("date")) != str(incoming_item.get("date"))
+    ):
+        _note_conflict("date", merged.get("date"), incoming_item.get("date"))
+
+    # Teams: fill missing ids/names, never rewrite an established one.
+    incoming_teams = incoming_item.get("teams") if isinstance(incoming_item.get("teams"), dict) else {}
+    if not isinstance(merged.get("teams"), dict):
+        merged["teams"] = {}
+    for side in ("home", "away"):
+        incoming_side = incoming_teams.get(side) if isinstance(incoming_teams.get(side), dict) else {}
+        if not isinstance(merged["teams"].get(side), dict):
+            merged["teams"][side] = {}
+        existing_side = merged["teams"][side]
+        for field in ("id", "name"):
+            existing_value = existing_side.get(field)
+            incoming_value = incoming_side.get(field)
+            if _basketball_missing_value(existing_value) and not _basketball_missing_value(incoming_value):
+                existing_side[field] = incoming_value
+                added.append(f"teams.{side}.{field}")
+            elif (
+                not _basketball_missing_value(existing_value)
+                and not _basketball_missing_value(incoming_value)
+                and existing_value != incoming_value
+            ):
+                _note_conflict(f"teams.{side}.{field}", existing_value, incoming_value)
+
+    # Scores: fill a missing total; a differing established score is a conflict.
+    incoming_scores = incoming_item.get("scores") if isinstance(incoming_item.get("scores"), dict) else {}
+    if not isinstance(merged.get("scores"), dict):
+        merged["scores"] = {}
+    for side in ("home", "away"):
+        existing_total = _basketball_points(merged["scores"].get(side))
+        incoming_total = _basketball_points(incoming_scores.get(side))
+        if _basketball_missing_value(existing_total) and not _basketball_missing_value(incoming_total):
+            existing_side = merged["scores"].get(side)
+            if isinstance(existing_side, dict):
+                existing_side["total"] = incoming_total
+            elif existing_side is None:
+                merged["scores"][side] = {"total": incoming_total}
+            else:
+                merged["scores"][side] = {"total": incoming_total}
+            added.append(f"scores.{side}.total")
+        elif (
+            not _basketball_missing_value(existing_total)
+            and not _basketball_missing_value(incoming_total)
+            and existing_total != incoming_total
+        ):
+            _note_conflict(f"scores.{side}.total", existing_total, incoming_total)
+
+    # Status: only a missing/short status is filled in.
+    incoming_status = incoming_item.get("status") if isinstance(incoming_item.get("status"), dict) else {}
+    if not isinstance(merged.get("status"), dict):
+        merged["status"] = {}
+    if _basketball_missing_value(merged["status"].get("short")) and not _basketball_missing_value(incoming_status.get("short")):
+        merged["status"]["short"] = incoming_status.get("short")
+        added.append("status.short")
+    if _basketball_missing_value(merged["status"].get("long")) and not _basketball_missing_value(incoming_status.get("long")):
+        merged["status"]["long"] = incoming_status.get("long")
+        added.append("status.long")
+
+    # Provider provenance: key-by-key, missing/unclassified upgraded only.
+    incoming_provenance = _basketball_provenance_payload(incoming_item)
+    if incoming_provenance:
+        merged_provenance = merged.get("provider_provenance") if isinstance(merged.get("provider_provenance"), dict) else {}
+        merged_provenance = dict(merged_provenance)
+        for key, incoming_value in incoming_provenance.items():
+            existing_value = merged_provenance.get(key)
+            if _basketball_missing_value(existing_value) and not _basketball_missing_value(incoming_value):
+                merged_provenance[key] = incoming_value
+                added.append(f"provider_provenance.{key}")
+            elif (
+                not _basketball_missing_value(existing_value)
+                and not _basketball_missing_value(incoming_value)
+                and existing_value != incoming_value
+            ):
+                _note_conflict(f"provider_provenance.{key}", existing_value, incoming_value)
+        if merged_provenance:
+            merged["provider_provenance"] = merged_provenance
+
+    if added:
+        history = merged.get("enrichment_history") if isinstance(merged.get("enrichment_history"), list) else []
+        history = history[-19:] + [
+            {
+                "at": _utc_now(),
+                "fields": sorted(set(added)),
+                "conflicts": conflicts[:10],
+            }
+        ]
+        merged["enrichment_history"] = history
+
+    return merged, sorted(set(added)), conflicts
+
+
+def _fetch_existing_basketball_raw_json(conn, db_type, source, game_ids, chunk_size=400):
+    """
+    Return {game_id: raw_json} for the games of one page that already exist.
+
+    One bounded read per chunk replaces one SELECT per game, so enrichment stays
+    a fixed number of round trips for a page of any size. The composite
+    (source, game_id) identity is preserved exactly.
+    """
+    existing = {}
+    ordered_ids = [int(gid) for gid in game_ids]
+    for start in range(0, len(ordered_ids), chunk_size):
+        chunk = ordered_ids[start:start + chunk_size]
+        if not chunk:
+            continue
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT game_id, raw_json FROM historical_basketball_games "
+                    "WHERE source = %s AND game_id = ANY(%s)",
+                    (source, chunk),
+                )
+                for row_gid, row_raw in cur.fetchall():
+                    existing[int(row_gid)] = row_raw
+        else:
+            placeholders = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"SELECT game_id, raw_json FROM historical_basketball_games "
+                f"WHERE source = ? AND game_id IN ({placeholders})",
+                [source] + chunk,
+            ).fetchall()
+            for row_gid, row_raw in rows:
+                existing[int(row_gid)] = row_raw
+    return existing
+
+
 def save_historical_basketball_games(games, league_id, season, source="api_basketball", cutoff=None, require_completed=False):
     """
-    Save historical API-Basketball games into persistent storage.
+    Save historical basketball games into persistent storage.
+
+    Idempotent by ``(source, game_id)``: a game that already exists is enriched
+    (missing verified provider metadata is added, valid date/scores are kept)
+    instead of being discarded by a conflict-ignoring insert.
+
+    Inserts and metadata updates are each one batched statement per call. A page
+    of 1,400 ESPN games therefore costs a fixed number of round trips rather than
+    one per game; the caller can recover a season's phase metadata without
+    turning the database connection into the bottleneck.
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
@@ -1580,35 +1899,80 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
             "total": len(games),
             "valid": 0,
             "inserted": 0,
+            "enriched": 0,
+            "already_existing": 0,
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
+            "metadata_conflicts": {},
         }
 
     conn, db_type = _connect()
     now_str = _utc_now()
     inserted_count = 0
+    enriched_count = 0
+    existing_unchanged = 0
+    conflict_counts = {}
+
+    placeholder = "%s" if db_type == "postgres" else "?"
+    update_sql = (
+        "UPDATE historical_basketball_games SET "
+        f"game_date = {placeholder}, status_short = {placeholder}, "
+        f"home_team_id = {placeholder}, away_team_id = {placeholder}, "
+        f"home_team = {placeholder}, away_team = {placeholder}, "
+        f"home_points = {placeholder}, away_points = {placeholder}, "
+        f"raw_json = {placeholder}, fetched_at = {placeholder} "
+        f"WHERE source = {placeholder} AND game_id = {placeholder}"
+    )
 
     try:
-        if db_type == "postgres":
-            with conn.cursor() as cur:
-                for gid, item in valid_games:
-                    gdate = str(item.get("date", ""))
-                    status = item.get("status", {}).get("short", "") if isinstance(item.get("status"), dict) else ""
-                    teams = item.get("teams", {})
-                    h_id = teams.get("home", {}).get("id")
-                    a_id = teams.get("away", {}).get("id")
-                    h_name = teams.get("home", {}).get("name", "")
-                    a_name = teams.get("away", {}).get("name", "")
-                    scores = item.get("scores", {})
-                    home_score = scores.get("home") if isinstance(scores, dict) else None
-                    away_score = scores.get("away") if isinstance(scores, dict) else None
-                    h_pts = home_score.get("total") if isinstance(home_score, dict) else home_score
-                    a_pts = away_score.get("total") if isinstance(away_score, dict) else away_score
+        # One bounded read for the whole page. The batch write below uses the
+        # same pre-read to decide insert versus additive metadata enrichment.
+        existing_raw_json = _fetch_existing_basketball_raw_json(
+            conn, db_type, source, [gid for gid, _item in valid_games]
+        )
 
-                    raw_json_str = _json_dumps(item, "raw_json")
+        insert_rows = []
+        update_rows = []
+        for gid, item in valid_games:
+            if gid not in existing_raw_json:
+                values = _basketball_row_values(item)
+                insert_rows.append((
+                    gid, league_id, season, values["game_date"], values["status_short"],
+                    values["home_team_id"], values["away_team_id"], values["home_team"], values["away_team"],
+                    values["home_points"], values["away_points"], values["raw_json"], source, now_str,
+                ))
+                continue
 
-                    cur.execute(
+            raw_json_existing = existing_raw_json.get(gid)
+            existing_payload = _json_loads(raw_json_existing) if raw_json_existing else {}
+            if not isinstance(existing_payload, dict):
+                existing_payload = {}
+            merged, added_fields, conflicts = merge_historical_basketball_game_metadata(existing_payload, item)
+
+            for conflict in conflicts:
+                field = conflict.get("field")
+                if field:
+                    conflict_counts[field] = conflict_counts.get(field, 0) + 1
+
+            if not added_fields:
+                existing_unchanged += 1
+                continue
+
+            values = _basketball_row_values(merged)
+            update_rows.append((
+                values["game_date"], values["status_short"],
+                values["home_team_id"], values["away_team_id"],
+                values["home_team"], values["away_team"],
+                values["home_points"], values["away_points"],
+                values["raw_json"], now_str,
+                source, gid,
+            ))
+
+        if insert_rows:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.executemany(
                         """
                         INSERT INTO historical_basketball_games (
                             game_id, league_id, season, game_date, status_short,
@@ -1618,34 +1982,11 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (source, game_id) DO NOTHING
                         """,
-                        (
-                            gid, league_id, season, gdate, status,
-                            h_id, a_id, h_name, a_name,
-                            h_pts, a_pts, raw_json_str, source, now_str,
-                        ),
+                        insert_rows,
                     )
-                    if cur.rowcount == 1:
-                        inserted_count += 1
-            conn.commit()
-
-        else:
-            for gid, item in valid_games:
-                gdate = str(item.get("date", ""))
-                status = item.get("status", {}).get("short", "") if isinstance(item.get("status"), dict) else ""
-                teams = item.get("teams", {})
-                h_id = teams.get("home", {}).get("id")
-                a_id = teams.get("away", {}).get("id")
-                h_name = teams.get("home", {}).get("name", "")
-                a_name = teams.get("away", {}).get("name", "")
-                scores = item.get("scores", {})
-                home_score = scores.get("home") if isinstance(scores, dict) else None
-                away_score = scores.get("away") if isinstance(scores, dict) else None
-                h_pts = home_score.get("total") if isinstance(home_score, dict) else home_score
-                a_pts = away_score.get("total") if isinstance(away_score, dict) else away_score
-
-                raw_json_str = _json_dumps(item, "raw_json")
-
-                cursor = conn.execute(
+                    inserted_count += max(int(cur.rowcount or 0), 0)
+            else:
+                cursor = conn.executemany(
                     """
                     INSERT OR IGNORE INTO historical_basketball_games (
                         game_id, league_id, season, game_date, status_short,
@@ -1654,23 +1995,30 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        gid, league_id, season, gdate, status,
-                        h_id, a_id, h_name, a_name,
-                        h_pts, a_pts, raw_json_str, source, now_str,
-                    ),
+                    insert_rows,
                 )
-                if cursor.rowcount == 1:
-                    inserted_count += 1
-            conn.commit()
+                inserted_count += max(int(cursor.rowcount or 0), 0)
+
+        if update_rows:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.executemany(update_sql, update_rows)
+            else:
+                conn.executemany(update_sql, update_rows)
+            enriched_count += len(update_rows)
+
+        conn.commit()
 
         return {
             "total": len(games),
             "valid": len(valid_games),
             "inserted": inserted_count,
+            "enriched": enriched_count,
+            "already_existing": existing_unchanged,
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
+            "metadata_conflicts": conflict_counts,
         }
 
     except Exception:
@@ -2470,6 +2818,53 @@ def get_historical_dataset_status(league_id, season, sport="football"):
         conn.close()
 
 
+def list_historical_datasets(sport=None):
+    """List persisted historical dataset manifests in stable order (read-only)."""
+    _ensure_manifest_schema_ready()
+    sport_filter = _validate_text(sport, "sport").lower() if sport else None
+    conn, db_type = _connect()
+    try:
+        where = ""
+        params = ()
+        if sport_filter:
+            where = " WHERE sport = %s" if db_type == "postgres" else " WHERE sport = ?"
+            params = (sport_filter,)
+        sql = (
+            "SELECT sport, league_id, season, status, fixture_count, expected_pages, "
+            "pages_completed, acquisition_complete, enrichment_status, rejected_count, "
+            "empty_pages_count, completed_at, updated_at, source, error_reason, "
+            "expected_team_ids_json, coverage_unit, provider_coverage_json "
+            "FROM historical_datasets" + where + " ORDER BY sport, league_id, season"
+        )
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall() or []
+        else:
+            rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    manifests = []
+    for row in rows:
+        coverage = row[17]
+        if not isinstance(coverage, dict):
+            coverage = _json_loads(coverage) if coverage else None
+        teams = row[15]
+        if not isinstance(teams, (list, dict)):
+            teams = _json_loads(teams) if teams else None
+        manifests.append({
+            "sport": row[0], "league_id": row[1], "season": row[2], "status": row[3],
+            "fixture_count": row[4], "expected_pages": row[5] or 0,
+            "pages_completed": row[6] or 0, "acquisition_complete": bool(row[7]),
+            "enrichment_status": row[8] or "NONE", "rejected_count": row[9] or 0,
+            "empty_pages_count": row[10] or 0, "completed_at": row[11],
+            "updated_at": row[12], "source": row[13], "error_reason": row[14],
+            "expected_team_ids": teams, "coverage_unit": row[16] or "pages",
+            "provider_coverage": coverage,
+        })
+    return manifests
+
+
 def _persisted_historical_record_count(sport, league_id, season):
     """Return the record count the database actually holds for a dataset."""
     if sport == "basketball":
@@ -2481,7 +2876,9 @@ def _persisted_historical_records(sport, league_id, season):
     """Return the persisted records for a dataset (the database is the source of truth)."""
     if sport == "basketball":
         return get_historical_basketball_games(league_id, season, include_storage_source=True)
-    return get_historical_fixtures(league_id, season)
+    return get_historical_fixtures(
+        league_id, season, include_reconciliation_candidates=True
+    )
 
 
 def derive_manifest_source(sport, league_id, season):
@@ -4664,6 +5061,38 @@ def validate_historical_fixture(item, target_league_id=None, target_season=None,
     return True, "valid", normalized
 
 
+def list_team_identities(sport=None):
+    """List persisted team identity mappings in stable order (read-only)."""
+    sport_filter = _validate_text(sport, "sport").lower() if sport else None
+    conn, db_type = _connect()
+    try:
+        sql = (
+            "SELECT sport, canonical_id, provider, provider_team_id, "
+            "normalized_name, display_name, league_id FROM team_identities"
+        )
+        params = ()
+        if sport_filter:
+            sql += " WHERE sport = %s" if db_type == "postgres" else " WHERE sport = ?"
+            params = (sport_filter,)
+        sql += " ORDER BY sport, normalized_name, provider, provider_team_id"
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall() or []
+        else:
+            rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "sport": row[0], "canonical_id": row[1], "provider": row[2],
+            "provider_team_id": row[3], "normalized_name": row[4],
+            "display_name": row[5], "league_id": row[6],
+        }
+        for row in rows
+    ]
+
+
 def save_team_identity(
     sport,
     canonical_id,
@@ -4960,6 +5389,281 @@ _PROVENANCE_WRITER_SOURCES = (
     "api_basketball",
 )
 
+# Retired live-provider namespaces. Records persisted under these labels are
+# never merged into an approved historical record; when one already describes the
+# same logical fixture as an approved record, that overlap is counted and
+# reported for reconciliation instead of being silently tolerated.
+_FOOTBALL_LEGACY_IDENTITY_PROVIDERS = (
+    "api_football",
+    "football_data_org",
+)
+
+# Cross-provider canonical fixture identity is reconciled only between the
+# approved historical football acquisition providers (the record's own provider
+# attribution, not the writer label of a whole page). A row owned by a legacy
+# namespace stays addressable by its exact (source, fixture_id) key but is never
+# an identity-match target, and a legacy record never identity-matches into an
+# approved historical row: that merge would rewrite provenance and discard the
+# provider-native ids live and historical lookups rely on.
+_FOOTBALL_APPROVED_IDENTITY_PROVIDERS = tuple(
+    getattr(
+        config,
+        "FOOTBALL_APPROVED_HISTORICAL_PROVIDERS",
+        (
+            "football_data_csv",
+            "soccerdata_fbref",
+            "soccerdata_match_history",
+            "soccerdata_sofascore",
+        ),
+    )
+)
+
+
+def merge_historical_fixture_metadata(existing_item, incoming_item):
+    """
+    Merge verified provider metadata into an already persisted football fixture.
+
+    Returns ``(merged_item, added_fields, conflicts)``.
+
+    The rule is the same one used for basketball: a re-acquisition enriches a
+    stored fixture instead of being discarded, and it can only ever add evidence.
+
+    - ``fixture.id``, ``fixture.date``, a completed ``fixture.status.short``,
+      league identity, team ids/names and the final score are never rewritten;
+    - a field is written only when the persisted row has no value (or an explicit
+      unknown), so a verified value is never replaced by a null, an unclassified
+      value or a merely different one;
+    - differing values are recorded as conflicts and the persisted value is kept;
+    - ``provider_provenance`` and ``field_provenance`` are merged key by key so
+      field-level attribution accumulates across providers;
+    - each applied enrichment appends to ``enrichment_history`` for auditability.
+    """
+    import copy
+
+    existing_item = existing_item if isinstance(existing_item, dict) else {}
+    incoming_item = incoming_item if isinstance(incoming_item, dict) else {}
+
+    merged = copy.deepcopy(existing_item)
+    added = []
+    conflicts = []
+
+    def _conflict(path, kept, discarded):
+        conflicts.append({"field": path, "kept": kept, "discarded": discarded})
+
+    def _unknown(value):
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return value.strip() == "" or value.strip().lower() in {"unknown", "unclassified", "null", "none"}
+        if isinstance(value, (list, tuple, dict)):
+            return len(value) == 0
+        return False
+
+    def _merge(existing_obj, incoming_obj, path):
+        for key, incoming_value in incoming_obj.items():
+            field_path = f"{path}.{key}" if path else str(key)
+            if key not in existing_obj:
+                if not _unknown(incoming_value):
+                    existing_obj[key] = copy.deepcopy(incoming_value)
+                    added.append(field_path)
+                continue
+
+            existing_value = existing_obj[key]
+
+            if isinstance(existing_value, dict) and isinstance(incoming_value, dict):
+                _merge(existing_value, incoming_value, field_path)
+                continue
+
+            if _unknown(existing_value) and not _unknown(incoming_value):
+                existing_obj[key] = copy.deepcopy(incoming_value)
+                added.append(field_path)
+                continue
+
+            if _unknown(incoming_value):
+                # A null/unknown incoming value never overwrites a real one.
+                continue
+
+            if isinstance(existing_value, list) and isinstance(incoming_value, list):
+                if existing_value != incoming_value:
+                    _conflict(field_path, existing_value, incoming_value)
+                continue
+
+            if existing_value != incoming_value:
+                _conflict(field_path, existing_value, incoming_value)
+
+    _merge(merged, incoming_item, "")
+
+    if added or conflicts:
+        history = merged.get("enrichment_history") if isinstance(merged.get("enrichment_history"), list) else []
+        entry = {
+            "at": _utc_now(),
+            "fields": sorted(set(added)),
+            "conflicts": conflicts[:10],
+        }
+        last_entry = history[-1] if history else None
+        already_recorded = (
+            not added
+            and isinstance(last_entry, dict)
+            and last_entry.get("fields") == entry["fields"]
+            and last_entry.get("conflicts") == entry["conflicts"]
+        )
+        if not already_recorded:
+            merged["enrichment_history"] = history[-19:] + [entry]
+
+    return merged, sorted(set(added)), conflicts
+
+
+def _football_persisted_value(fixture_payload, *path, default=None):
+    """Read a nested value from a persisted fixture payload without raising."""
+    current = fixture_payload
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return default
+        current = current[key]
+    return current
+
+
+def _football_fixture_kickoff_date(value):
+    """
+    Return the UTC calendar date of a kickoff timestamp, or None.
+
+    Canonical logical identity spans providers, so kickoff text is normalised to
+    a UTC date rather than compared as a raw string (providers disagree on the
+    separator and offset format). A time-of-day change keeps the same identity; a
+    different date does not, so a rescheduled fixture is never merged blindly.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text_value = value.strip()
+    try:
+        parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+    except ValueError:
+        return text_value[:10] if len(text_value) >= 10 and text_value[4] == "-" else None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed.date().isoformat()
+
+
+def _football_row_identity(row):
+    """
+    Return the canonical logical identity of a persisted football fixture row.
+
+    The row layout is ``(fixture_id, source, raw_json, canonical_home_id,
+    canonical_away_id, kickoff_at, ...)``. A row without both canonical ids or a
+    readable kickoff has no usable logical identity and is never identity-matched.
+    """
+    try:
+        canonical_home = row[3]
+        canonical_away = row[4]
+        kickoff_date = _football_fixture_kickoff_date(row[5])
+    except (IndexError, TypeError):
+        return None
+    if not canonical_home or not canonical_away or not kickoff_date:
+        return None
+    return (str(canonical_home), str(canonical_away), kickoff_date)
+
+
+def _football_row_provider(row):
+    """
+    Provider that owns a persisted football fixture row.
+
+    The record's own ``provider_provenance.provider`` is authoritative because a
+    page may be persisted under a writer label (``mixed``, ``soccerdata``,
+    ``internal_db``) that does not identify the acquisition source. The stored
+    ``source`` column is only a fallback for rows whose payload carries no
+    provider attribution.
+    """
+    try:
+        stored_source = str(row[1] or "").strip()
+        raw_json_value = row[2]
+    except (IndexError, TypeError):
+        return ""
+
+    if isinstance(raw_json_value, (str, bytes)) and raw_json_value:
+        try:
+            payload = _json_loads(raw_json_value)
+        except Exception:  # noqa: BLE001 - attribution is evidence, never fatal
+            payload = None
+        if isinstance(payload, dict):
+            provenance = payload.get("provider_provenance")
+            if isinstance(provenance, dict):
+                name = provenance.get("provider")
+                if isinstance(name, str) and name.strip():
+                    return name.strip()
+    return stored_source
+
+
+def _football_identity_allowed(provider_name):
+    """True when a record may take part in cross-provider canonical matching."""
+    return str(provider_name or "").strip() in _FOOTBALL_APPROVED_IDENTITY_PROVIDERS
+
+
+def _football_is_legacy_provider(provider_name):
+    """True for the retired live namespaces that stay isolated by contract."""
+    return str(provider_name or "").strip() in _FOOTBALL_LEGACY_IDENTITY_PROVIDERS
+
+
+def _football_provider_name(item, fallback_source):
+    """Provider label of a fixture record, falling back to the writer's source."""
+    provenance = item.get("provider_provenance") if isinstance(item, dict) else None
+    if isinstance(provenance, dict):
+        name = provenance.get("provider")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    fallback = str(fallback_source or "").strip()
+    return fallback or "unknown"
+
+
+def _football_apply_provider_evidence(payload, provider_name, fixture_id):
+    """
+    Attach provider attribution and provider-native ids to a fixture payload.
+
+    Returns ``(payload, changed_fields)``. Attribution is additive and never
+    rewrites the record owner:
+
+    - ``provider_provenance.provider`` is the persisted row's own provider and is
+      only filled when absent;
+    - ``provider_provenance.providers`` lists every provider that contributed to
+      the same logical fixture;
+    - ``provider_fixture_ids`` keeps each provider's own native fixture id, so a
+      cross-provider match never destroys the ids needed to re-query a source.
+    """
+    if not isinstance(payload, dict):
+        return payload, []
+
+    provider_name = str(provider_name or "").strip() or "unknown"
+    changed = []
+    payload = dict(payload)
+
+    provenance = payload.get("provider_provenance")
+    provenance = dict(provenance) if isinstance(provenance, dict) else {}
+    if not str(provenance.get("provider") or "").strip():
+        provenance["provider"] = provider_name
+        changed.append("provider_provenance.provider")
+
+    existing_list = provenance.get("providers") if isinstance(provenance.get("providers"), list) else []
+    existing_providers = [p.strip() for p in existing_list if isinstance(p, str) and p.strip()]
+    merged_providers = sorted(set(existing_providers) | {provider_name})
+    if merged_providers != existing_providers:
+        provenance["providers"] = merged_providers
+        changed.append("provider_provenance.providers")
+    if provenance:
+        payload["provider_provenance"] = provenance
+
+    native_ids = payload.get("provider_fixture_ids")
+    native_ids = dict(native_ids) if isinstance(native_ids, dict) else {}
+    try:
+        native_id = int(fixture_id)
+    except (TypeError, ValueError):
+        native_id = fixture_id
+    if native_ids.get(provider_name) != native_id:
+        native_ids[provider_name] = native_id
+        changed.append("provider_fixture_ids." + provider_name)
+    if native_ids:
+        payload["provider_fixture_ids"] = native_ids
+
+    return payload, changed
+
 
 def save_historical_fixtures(fixtures, league_id, season, source="api_football", cutoff=None, require_completed=False):
     """
@@ -4968,22 +5672,22 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
     Fixtures are keyed by their canonical identity (home/away canonical teams,
     competition, season and kickoff), so records from the approved football
     sources (direct Football-Data.co.uk CSV, SoccerData FBref/MatchHistory/
-    Sofascore) and from basketball sources (ESPN scoreboards, API-Basketball)
-    deduplicate against each other even when their provider-native IDs differ.
-    Per-record `provider_provenance` is preserved; the `source` argument only
-    describes the writer, never overwriting record-level attribution. Legacy
-    provenance labels (including `api_football`) remain readable for stored
+    Sofascore) deduplicate against each other even when their provider-native IDs
+    differ. Per-record `provider_provenance` is preserved; the `source` argument
+    only describes the writer, never overwriting record-level attribution.
+    Legacy provenance labels (including `api_football`) remain readable for stored
     historical records.
 
-    Idempotent: skips fixtures that already exist in the database (ON CONFLICT DO NOTHING).
-    Returns dict: {
-        "total": total_input,
-        "valid": valid_count,
-        "inserted": inserted_count,
-        "duplicates_skipped": dup_count,
-        "rejected_count": rejected_count,
-        "rejection_reasons": rejection_reasons_dict,
-    }
+    Idempotent and additive: a fixture that already exists is enriched with the
+    metadata the new attempt actually verified (missing statistics, field-level
+    provenance, reconciliation evidence and missing canonical team ids) instead of
+    being discarded. A completed result, the kickoff and the stored identity are
+    never rewritten, and a verified value is never replaced by a null or a
+    conflicting one (conflicts are reported).
+
+    Returns dict with ``total``, ``valid``, ``inserted``, ``enriched``,
+    ``already_existing``, ``duplicates_skipped``, ``rejected_count``,
+    ``rejection_reasons``, ``metadata_conflicts`` and ``db_write_duration``.
     """
     # Frozen football historical storage scope.
     # Historical football persistence is intentionally limited to 2019-2026 and configured leagues.
@@ -4993,6 +5697,17 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
     season = _validate_positive_int(season, "season")
 
     allowed_seasons = set(getattr(config, "TARGET_SEASONS", [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]))
+
+    # The generic target range is not the whole documented scope: a tournament
+    # edition whose match total is independently documented (for example the FIFA
+    # World Cup 2018) is storable even when its season falls outside that range.
+    # Only documented editions of this same competition are admitted, so the
+    # allow-list is never widened in a way that accepts an arbitrary season.
+    documented_tournament_editions = set()
+    documented_editions_helper = getattr(config, "documented_football_tournament_editions", None)
+    if callable(documented_editions_helper):
+        documented_tournament_editions = set(documented_editions_helper(league_id) or set())
+    allowed_seasons |= documented_tournament_editions
 
     if season not in allowed_seasons:
         raise ValueError(
@@ -5048,13 +5763,65 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             "total": len(fixtures),
             "valid": 0,
             "inserted": 0,
+            "enriched": 0,
+            "already_existing": 0,
+            "conflict_only": 0,
+            "ambiguous_identity": 0,
+            "legacy_identity_overlap": 0,
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
+            "metadata_conflicts": {},
+            "metadata_conflict_events": 0,
+            "identity_resolution_duration": 0.0,
+            "insert_duration": 0.0,
+            "update_duration": 0.0,
+            "commit_duration": 0.0,
+            "db_write_duration": 0.0,
+            "records_processed": 0,
+            "identity_resolution_calls": 0,
+            "identity_cache_hits": 0,
+            "distinct_team_identities": 0,
+            "insert_statements": 0,
+            "insert_batches": 0,
+            "update_statements": 0,
+            "update_batches": 0,
+            "season_read_queries": 0,
         }
 
     import time
     t_db_start = time.perf_counter()
+
+    # Identity resolution is batch-scoped. The bootstrap used to perform several
+    # database reads/writes for every team of every fixture, so a 380-fixture page
+    # repeated the same club resolution hundreds of times. Each distinct
+    # (provider, provider id/name, competition) is resolved once and reused; the
+    # cache never crosses a save call, so a later batch still observes mappings
+    # committed by an earlier one.
+    identity_cache = {}
+    identity_cache_hits = 0
+    identity_resolution_calls = 0
+    t_identity_start = time.perf_counter()
+
+    def _resolve_team_identity(team_name, team_id):
+        nonlocal identity_cache_hits, identity_resolution_calls
+        provider_key = str(source).strip().lower()
+        provider_team_key = str(team_id).strip() if team_id is not None else ""
+        cache_key = (
+            provider_key,
+            provider_team_key,
+            team_identity.normalize_team_name(team_name) if isinstance(team_name, str) else "",
+            league_id,
+        )
+        if cache_key in identity_cache:
+            identity_cache_hits += 1
+            return identity_cache[cache_key]
+        identity_resolution_calls += 1
+        canonical_id = team_identity.bootstrap_historical_team_identity(
+            team_name, source, team_id, league_id=league_id
+        )
+        identity_cache[cache_key] = canonical_id
+        return canonical_id
 
     resolved_fixtures = []
     for fid, item in valid_fixtures:
@@ -5062,8 +5829,8 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
         a_id = item.get("teams", {}).get("away", {}).get("id")
         h_name = item.get("teams", {}).get("home", {}).get("name", "")
         a_name = item.get("teams", {}).get("away", {}).get("name", "")
-        c_home = team_identity.bootstrap_historical_team_identity(h_name, source, h_id, league_id=league_id)
-        c_away = team_identity.bootstrap_historical_team_identity(a_name, source, a_id, league_id=league_id)
+        c_home = _resolve_team_identity(h_name, h_id)
+        c_away = _resolve_team_identity(a_name, a_id)
 
         if not c_home or not c_away:
             rejected_count += 1
@@ -5073,26 +5840,158 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
 
         resolved_fixtures.append((fid, item, c_home, c_away))
 
+    identity_resolution_duration = time.perf_counter() - t_identity_start
+
     conn, db_type = _connect()
     now_str = _utc_now()
     inserted_count = 0
+    enriched_count = 0
+    existing_unchanged = 0
+    conflict_only_count = 0
+    ambiguous_identity_count = 0
+    legacy_overlap_count = 0
+    conflict_counts = {}
+    conflict_events = 0
 
     try:
+        # Canonical logical fixture identity is (canonical home team, canonical away
+        # team, UTC kickoff date). Provider-native ids differ between the approved
+        # football sources, so a `(source, fixture_id)` lookup alone can neither
+        # recognise an existing logical fixture acquired through another provider
+        # nor prevent a second row for it. One bounded read of the competition
+        # season replaces the per-provider lookup.
         if db_type == "postgres":
             with conn.cursor() as cur:
-                for fid, item, c_home, c_away in resolved_fixtures:
-                    kickoff = str(item.get("fixture", {}).get("date", ""))
-                    status = item.get("fixture", {}).get("status", {}).get("short", "")
-                    h_id = item.get("teams", {}).get("home", {}).get("id")
-                    a_id = item.get("teams", {}).get("away", {}).get("id")
-                    h_name = item.get("teams", {}).get("home", {}).get("name", "")
-                    a_name = item.get("teams", {}).get("away", {}).get("name", "")
-                    h_goals = item.get("goals", {}).get("home")
-                    a_goals = item.get("goals", {}).get("away")
+                cur.execute(
+                    """
+                    SELECT fixture_id, source, raw_json, canonical_home_id, canonical_away_id,
+                           kickoff_at, status_short, home_team, away_team, home_goals, away_goals
+                    FROM historical_fixtures
+                    WHERE league_id = %s AND season = %s
+                    """,
+                    (league_id, season),
+                )
+                season_rows = cur.fetchall()
+        else:
+            season_rows = conn.execute(
+                """
+                SELECT fixture_id, source, raw_json, canonical_home_id, canonical_away_id,
+                       kickoff_at, status_short, home_team, away_team, home_goals, away_goals
+                FROM historical_fixtures
+                WHERE league_id = ? AND season = ?
+                """,
+                (league_id, season),
+            ).fetchall()
 
-                    raw_json_str = _json_dumps(item, "raw_json")
+        rows_by_native_id = {}
+        rows_by_identity = {}
+        legacy_rows_by_identity = {}
+        for row in season_rows:
+            rows_by_native_id[(str(row[1]), int(row[0]))] = row
+            row_provider = _football_row_provider(row)
+            # Only a row owned by an approved historical provider can be the
+            # target of a canonical identity match. A legacy live-provider row
+            # remains addressable by its own native id only.
+            if _football_identity_allowed(row_provider):
+                row_identity = _football_row_identity(row)
+                if row_identity is not None:
+                    rows_by_identity.setdefault(row_identity, []).append(row)
+            elif _football_is_legacy_provider(row_provider):
+                # Evidence for database reconciliation: a retired namespace row
+                # describing the same logical fixture is a cross-contract
+                # duplicate that this code path must not merge.
+                row_identity = _football_row_identity(row)
+                if row_identity is not None:
+                    legacy_rows_by_identity.setdefault(row_identity, []).append(row)
 
-                    cur.execute(
+        resolved_plan = []
+        seen_logical_targets = {}
+        for fid, item, c_home, c_away in resolved_fixtures:
+            match_row = rows_by_native_id.get((str(source), int(fid)))
+            match_origin = "provider_native_id" if match_row is not None else None
+
+            fixture_obj = item.get("fixture") if isinstance(item.get("fixture"), dict) else {}
+            kickoff_date = _football_fixture_kickoff_date(fixture_obj.get("date"))
+            identity = (str(c_home), str(c_away), kickoff_date) if (kickoff_date and c_home and c_away) else None
+
+            # Cross-provider matching is a contract between approved historical
+            # providers only. Any other writer (legacy api_football /
+            # football_data_org, the `soccerdata` umbrella label, `mixed`,
+            # `internal_db`, an unknown provider) falls back to exact
+            # (source, fixture_id) idempotency and never participates in a
+            # canonical identity merge.
+            identity_allowed = _football_identity_allowed(_football_provider_name(item, source))
+
+            if identity is not None and identity in legacy_rows_by_identity:
+                # Reported, never merged: the approved record is persisted under
+                # its own provider contract while the retired row stays intact.
+                legacy_overlap_count += 1
+
+            if match_row is None and identity is not None and identity_allowed:
+                candidates = rows_by_identity.get(identity) or []
+                if len(candidates) == 1:
+                    match_row = candidates[0]
+                    match_origin = "canonical_identity"
+                elif len(candidates) > 1:
+                    # Several persisted rows already describe this logical fixture.
+                    # Merging into an arbitrary one or adding another row would
+                    # deepen the duplication, so the record fails closed and the
+                    # ambiguity is reported for reconciliation.
+                    ambiguous_identity_count += 1
+                    rejection_reasons["ambiguous_logical_fixture_identity"] = (
+                        rejection_reasons.get("ambiguous_logical_fixture_identity", 0) + 1
+                    )
+                    continue
+
+            # Two incoming records for the same logical fixture (different native
+            # ids, same teams and kickoff date) are one fixture, never two rows.
+            if identity is not None and identity_allowed:
+                if identity in seen_logical_targets:
+                    dup_count += 1
+                    continue
+                seen_logical_targets[identity] = (
+                    ("row", str(match_row[1]), int(match_row[0]))
+                    if match_row is not None
+                    else ("new", identity)
+                )
+
+            resolved_plan.append((fid, item, c_home, c_away, match_row, match_origin))
+
+        insert_targets = [
+            (fid, item, c_home, c_away)
+            for fid, item, c_home, c_away, match_row, _origin in resolved_plan
+            if match_row is None
+        ]
+
+        insert_rows = []
+        for fid, item, c_home, c_away in insert_targets:
+            kickoff = str(item.get("fixture", {}).get("date", ""))
+            status = item.get("fixture", {}).get("status", {}).get("short", "")
+            h_id = item.get("teams", {}).get("home", {}).get("id")
+            a_id = item.get("teams", {}).get("away", {}).get("id")
+            h_name = item.get("teams", {}).get("home", {}).get("name", "")
+            a_name = item.get("teams", {}).get("away", {}).get("name", "")
+            h_goals = item.get("goals", {}).get("home")
+            a_goals = item.get("goals", {}).get("away")
+
+            insert_payload, _evidence_fields = _football_apply_provider_evidence(
+                item, _football_provider_name(item, source), fid
+            )
+            raw_json_str = _json_dumps(insert_payload, "raw_json")
+            insert_rows.append((
+                fid, source, league_id, season, kickoff, status,
+                h_id, a_id, c_home, c_away, h_name, a_name,
+                h_goals, a_goals, raw_json_str, now_str,
+            ))
+
+        t_insert_start = time.perf_counter()
+        insert_statements = len(insert_rows)
+        insert_batches = 0
+        if insert_rows:
+            insert_batches = 1
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.executemany(
                         """
                         INSERT INTO historical_fixtures (
                             fixture_id, source, league_id, season, kickoff_at, status_short,
@@ -5102,30 +6001,11 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (source, fixture_id) DO NOTHING
                         """,
-                        (
-                            fid, source, league_id, season, kickoff, status,
-                            h_id, a_id, c_home, c_away, h_name, a_name,
-                            h_goals, a_goals, raw_json_str, now_str,
-                        ),
+                        insert_rows,
                     )
-                    if cur.rowcount == 1:
-                        inserted_count += 1
-            conn.commit()
-
-        else:
-            for fid, item, c_home, c_away in resolved_fixtures:
-                kickoff = str(item.get("fixture", {}).get("date", ""))
-                status = item.get("fixture", {}).get("status", {}).get("short", "")
-                h_id = item.get("teams", {}).get("home", {}).get("id")
-                a_id = item.get("teams", {}).get("away", {}).get("id")
-                h_name = item.get("teams", {}).get("home", {}).get("name", "")
-                a_name = item.get("teams", {}).get("away", {}).get("name", "")
-                h_goals = item.get("goals", {}).get("home")
-                a_goals = item.get("goals", {}).get("away")
-
-                raw_json_str = _json_dumps(item, "raw_json")
-
-                cursor = conn.execute(
+                    inserted_count += max(int(cur.rowcount or 0), 0)
+            else:
+                cursor = conn.executemany(
                     """
                     INSERT OR IGNORE INTO historical_fixtures (
                         fixture_id, source, league_id, season, kickoff_at, status_short,
@@ -5134,25 +6014,171 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        fid, source, league_id, season, kickoff, status,
-                        h_id, a_id, c_home, c_away, h_name, a_name,
-                        h_goals, a_goals, raw_json_str, now_str,
-                    ),
+                    insert_rows,
                 )
-                if cursor.rowcount == 1:
-                    inserted_count += 1
-            conn.commit()
+                inserted_count += max(int(cursor.rowcount or 0), 0)
+        insert_duration = time.perf_counter() - t_insert_start
+
+        # Additive enrichment of the persisted logical fixture, addressed by the
+        # row's own (source, fixture_id) so a record acquired through a different
+        # provider updates the existing fixture instead of creating a duplicate.
+        update_sql = (
+            "UPDATE historical_fixtures SET raw_json = {p}, fetched_at = {p}, "
+            "canonical_home_id = {p}, canonical_away_id = {p} "
+            "WHERE source = {p} AND fixture_id = {p}"
+        ).format(p="%s" if db_type == "postgres" else "?")
+
+        update_rows = []
+        for fid, item, c_home, c_away, match_row, _origin in resolved_plan:
+            if match_row is None:
+                continue
+
+            row_fixture_id = int(match_row[0])
+            row_source = str(match_row[1])
+            raw_json_existing = match_row[2]
+            existing_payload = _json_loads(raw_json_existing) if raw_json_existing else {}
+            if not isinstance(existing_payload, dict):
+                existing_payload = {}
+            existing_payload = dict(existing_payload)
+
+            # Seed protected values from their stored columns so a re-acquisition
+            # can never make the persisted payload disagree with the row itself.
+            fixture_obj = existing_payload.get("fixture")
+            if not isinstance(fixture_obj, dict):
+                fixture_obj = {}
+                existing_payload["fixture"] = fixture_obj
+            if match_row[5] and not fixture_obj.get("date"):
+                fixture_obj["date"] = match_row[5]
+            if match_row[6] and not (isinstance(fixture_obj.get("status"), dict) and fixture_obj["status"].get("short")):
+                fixture_obj["status"] = {"short": match_row[6]}
+            teams_obj = existing_payload.get("teams")
+            if not isinstance(teams_obj, dict):
+                teams_obj = {}
+                existing_payload["teams"] = teams_obj
+            for side, stored_name in (("home", match_row[7]), ("away", match_row[8])):
+                side_obj = teams_obj.get(side)
+                if not isinstance(side_obj, dict):
+                    side_obj = {}
+                    teams_obj[side] = side_obj
+                if stored_name and not side_obj.get("name"):
+                    side_obj["name"] = stored_name
+            goals_obj = existing_payload.get("goals")
+            if not isinstance(goals_obj, dict):
+                goals_obj = {}
+                existing_payload["goals"] = goals_obj
+            if match_row[9] is not None and goals_obj.get("home") is None:
+                goals_obj["home"] = match_row[9]
+            if match_row[10] is not None and goals_obj.get("away") is None:
+                goals_obj["away"] = match_row[10]
+
+            incoming_provider = _football_provider_name(item, source)
+
+            # The record owner keeps the `provider` label; a contributing provider
+            # is recorded separately so cross-provider enrichment never rewrites
+            # the attribution of the persisted row.
+            incoming_payload = item
+            incoming_provenance = item.get("provider_provenance")
+            existing_provenance = existing_payload.get("provider_provenance")
+            existing_owner = (
+                existing_provenance.get("provider")
+                if isinstance(existing_provenance, dict) and isinstance(existing_provenance.get("provider"), str)
+                else None
+            )
+            if isinstance(incoming_provenance, dict) and existing_owner:
+                incoming_payload = dict(item)
+                provenance_copy = dict(incoming_provenance)
+                provenance_copy["provider"] = existing_owner
+                incoming_payload["provider_provenance"] = provenance_copy
+
+            merged, added_fields, conflicts = merge_historical_fixture_metadata(existing_payload, incoming_payload)
+
+            merged, evidence_fields = _football_apply_provider_evidence(merged, incoming_provider, fid)
+            applied_fields = set(added_fields) | set(evidence_fields)
+
+            for conflict in conflicts:
+                field = conflict.get("field")
+                if field:
+                    conflict_counts[field] = conflict_counts.get(field, 0) + 1
+                    conflict_events += 1
+
+            canonical_home_value = match_row[3] if match_row[3] else (merged.get("canonical_home_id") or c_home)
+            canonical_away_value = match_row[4] if match_row[4] else (merged.get("canonical_away_id") or c_away)
+
+            canonical_added = False
+            if not match_row[3] and c_home:
+                canonical_added = True
+            if not match_row[4] and c_away:
+                canonical_added = True
+
+            if not applied_fields and not canonical_added:
+                # A conflict-only attempt must still leave durable, inspectable
+                # evidence even though the stored values do not change. The merge
+                # helper de-duplicates an identical repeat, so a retried conflict
+                # is persisted once and then reported as unchanged.
+                if conflicts and merged != existing_payload:
+                    conflict_only_count += 1
+                else:
+                    existing_unchanged += 1
+                    continue
+            else:
+                enriched_count += 1
+
+            merged["canonical_home_id"] = canonical_home_value
+            merged["canonical_away_id"] = canonical_away_value
+            raw_json_str = _json_dumps(merged, "raw_json")
+
+            update_rows.append(
+                (raw_json_str, now_str, canonical_home_value, canonical_away_value, row_source, row_fixture_id)
+            )
+
+        t_update_start = time.perf_counter()
+        update_statements = len(update_rows)
+        update_batches = 0
+        if update_rows:
+            update_batches = 1
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.executemany(update_sql, update_rows)
+            else:
+                conn.executemany(update_sql, update_rows)
+        update_duration = time.perf_counter() - t_update_start
+
+        t_commit_start = time.perf_counter()
+        conn.commit()
+        commit_duration = time.perf_counter() - t_commit_start
 
         t_db_elapsed = time.perf_counter() - t_db_start
         return {
             "total": len(fixtures),
             "valid": len(valid_fixtures),
             "inserted": inserted_count,
+            "enriched": enriched_count,
+            "already_existing": existing_unchanged,
+            "conflict_only": conflict_only_count,
+            "ambiguous_identity": ambiguous_identity_count,
+            "legacy_identity_overlap": legacy_overlap_count,
             "duplicates_skipped": dup_count,
             "rejected_count": rejected_count,
             "rejection_reasons": rejection_reasons,
+            "metadata_conflicts": conflict_counts,
+            "metadata_conflict_events": conflict_events,
+            # Persistence timing is split so the measured write bottleneck can be
+            # attributed instead of only totalled. Query/write counts are evidence
+            # that batching actually reduced round trips.
+            "identity_resolution_duration": round(identity_resolution_duration, 4),
+            "insert_duration": round(insert_duration, 4),
+            "update_duration": round(update_duration, 4),
+            "commit_duration": round(commit_duration, 4),
             "db_write_duration": round(t_db_elapsed, 4),
+            "records_processed": len(valid_fixtures),
+            "identity_resolution_calls": identity_resolution_calls,
+            "identity_cache_hits": identity_cache_hits,
+            "distinct_team_identities": len(identity_cache),
+            "insert_statements": insert_statements,
+            "insert_batches": insert_batches,
+            "update_statements": update_statements,
+            "update_batches": update_batches,
+            "season_read_queries": 1,
         }
 
     except Exception:
@@ -5162,7 +6188,23 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
         conn.close()
 
 
-def get_historical_fixtures(league_id, season):
+
+def _historical_duplicate_candidate_predicate(db_type):
+    """Return the backend-native predicate excluding annotated duplicates."""
+    if db_type == "postgres":
+        return (
+            "LOWER(COALESCE(raw_json #>> "
+            "'{reconciliation_metadata,legacy_duplicate_candidate}', 'false')) <> 'true'"
+        )
+    return (
+        "(CASE WHEN json_valid(raw_json) THEN "
+        "COALESCE(json_extract(raw_json, "
+        "'$.reconciliation_metadata.legacy_duplicate_candidate'), 0) "
+        "ELSE 0 END) NOT IN (1, 'true', 'True', 'TRUE')"
+    )
+
+
+def get_historical_fixtures(league_id, season, include_reconciliation_candidates=False):
     """
     Retrieve stored historical fixtures for a league and season.
 
@@ -5174,15 +6216,20 @@ def get_historical_fixtures(league_id, season):
     season = _validate_positive_int(season, "season")
 
     conn, db_type = _connect()
+    candidate_predicate = (
+        ""
+        if include_reconciliation_candidates
+        else f" AND {_historical_duplicate_candidate_predicate(db_type)}"
+    )
 
     try:
         if db_type == "postgres":
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT raw_json, canonical_home_id, canonical_away_id
                     FROM historical_fixtures
-                    WHERE league_id = %s AND season = %s
+                    WHERE league_id = %s AND season = %s{candidate_predicate}
                     ORDER BY kickoff_at ASC, fixture_id ASC
                     """,
                     (league_id, season),
@@ -5191,10 +6238,10 @@ def get_historical_fixtures(league_id, season):
         else:
             try:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT raw_json, canonical_home_id, canonical_away_id
                     FROM historical_fixtures
-                    WHERE league_id = ? AND season = ?
+                    WHERE league_id = ? AND season = ?{candidate_predicate}
                     ORDER BY kickoff_at ASC, fixture_id ASC
                     """,
                     (league_id, season),
@@ -5204,10 +6251,10 @@ def get_historical_fixtures(league_id, season):
                 init_db()
                 conn, _ = _connect()
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT raw_json, canonical_home_id, canonical_away_id
                     FROM historical_fixtures
-                    WHERE league_id = ? AND season = ?
+                    WHERE league_id = ? AND season = ?{candidate_predicate}
                     ORDER BY kickoff_at ASC, fixture_id ASC
                     """,
                     (league_id, season),
@@ -5265,16 +6312,201 @@ def get_historical_fixture_count(league_id, season):
         conn.close()
 
 
+_ENRICHMENT_STAT_COLUMNS = (
+    "home_shots", "away_shots",
+    "home_shots_on_target", "away_shots_on_target",
+    "home_corners", "away_corners",
+    "home_yellow_cards", "away_yellow_cards",
+    "home_red_cards", "away_red_cards",
+    "home_possession", "away_possession",
+    "home_xg", "away_xg",
+)
+
+
+def _enrichment_number(value):
+    """Return a non-negative finite number, or None. Never invent a value."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(str(value).replace("%", "").strip())
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    return number
+
+
+def _stat_pair(value):
+    if not isinstance(value, dict):
+        return (None, None)
+    return (_enrichment_number(value.get("home")), _enrichment_number(value.get("away")))
+
+
+def _api_stat_pair(block):
+    """Normalize one API-Football team statistics block into a field map."""
+    result = {}
+    rows = block.get("statistics") if isinstance(block, dict) else None
+    if not isinstance(rows, list):
+        return result
+    labels = {
+        "total shots": "shots",
+        "shots on goal": "shots_on_target",
+        "shots on target": "shots_on_target",
+        "corner kicks": "corners",
+        "corners": "corners",
+        "yellow cards": "yellow_cards",
+        "red cards": "red_cards",
+        "ball possession": "possession",
+        "possession": "possession",
+        "expected goals": "xG",
+        "expected goals (xg)": "xG",
+        "xg": "xG",
+    }
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("type") or "").strip().lower()
+        field = labels.get(label)
+        number = _enrichment_number(row.get("value"))
+        if field and number is not None:
+            result[field] = number
+    return result
+
+
+def extract_historical_enrichment_statistics(item):
+    """
+    Extract verified numeric statistics from an enrichment payload.
+
+    Supports the repository's dictionary statistics contract and the raw
+    API-Football team-statistics list. Returns typed column values plus the
+    non-empty field mask; no value is inferred from a missing field.
+    """
+    values = {column: None for column in _ENRICHMENT_STAT_COLUMNS}
+    fields = []
+    if not isinstance(item, dict):
+        return values, fields
+
+    statistics = item.get("statistics")
+    home_id = (item.get("teams") or {}).get("home", {}).get("id") if isinstance(item.get("teams"), dict) else None
+    away_id = (item.get("teams") or {}).get("away", {}).get("id") if isinstance(item.get("teams"), dict) else None
+    home_stats = {}
+    away_stats = {}
+    if isinstance(statistics, list):
+        for block in statistics:
+            if not isinstance(block, dict):
+                continue
+            team_id = (block.get("team") or {}).get("id") if isinstance(block.get("team"), dict) else None
+            parsed = _api_stat_pair(block)
+            if team_id == home_id:
+                home_stats.update(parsed)
+            elif team_id == away_id:
+                away_stats.update(parsed)
+
+    if not home_stats and not away_stats and isinstance(statistics, dict):
+        for field in ("shots", "shots_on_target", "corners", "possession", "xG"):
+            home, away = _stat_pair(statistics.get(field))
+            if field == "xG":
+                field = "xG"
+            home_stats[field] = home
+            away_stats[field] = away
+        cards = statistics.get("cards")
+        if isinstance(cards, dict):
+            for side, target in (("home", home_stats), ("away", away_stats)):
+                side_cards = cards.get(side)
+                if isinstance(side_cards, dict):
+                    target["yellow_cards"] = _enrichment_number(side_cards.get("yellow"))
+                    target["red_cards"] = _enrichment_number(side_cards.get("red"))
+        for field in ("yellow_cards", "red_cards"):
+            home, away = _stat_pair(statistics.get(field))
+            if home is not None:
+                home_stats[field] = home
+            if away is not None:
+                away_stats[field] = away
+
+    column_map = {
+        "shots": ("home_shots", "away_shots"),
+        "shots_on_target": ("home_shots_on_target", "away_shots_on_target"),
+        "corners": ("home_corners", "away_corners"),
+        "yellow_cards": ("home_yellow_cards", "away_yellow_cards"),
+        "red_cards": ("home_red_cards", "away_red_cards"),
+        "possession": ("home_possession", "away_possession"),
+        "xG": ("home_xg", "away_xg"),
+    }
+    for field, (home_col, away_col) in column_map.items():
+        home = home_stats.get(field)
+        away = away_stats.get(field)
+        if home is not None and away is not None:
+            values[home_col] = home
+            values[away_col] = away
+            fields.append("xG" if field == "xG" else field)
+    if (
+        values["home_yellow_cards"] is not None
+        and values["away_yellow_cards"] is not None
+        and values["home_red_cards"] is not None
+        and values["away_red_cards"] is not None
+    ):
+        fields.append("cards")
+    return values, sorted(set(fields))
+
+
+def _restore_typed_enrichment_statistics(payload, typed_values):
+    """Fill missing statistics from typed columns without replacing provider data."""
+    if not isinstance(payload, dict):
+        return payload
+    stats = payload.get("statistics")
+    stats_is_dict = isinstance(stats, dict)
+    if not stats_is_dict and stats is not None:
+        # Keep the provider-native list intact; expose the reconstructed values
+        # separately rather than rewriting the raw payload.
+        typed_stats = {}
+        target = typed_stats
+    else:
+        target = stats if stats_is_dict else {}
+        typed_stats = None
+    pairs = {
+        "shots": ("home_shots", "away_shots"),
+        "shots_on_target": ("home_shots_on_target", "away_shots_on_target"),
+        "corners": ("home_corners", "away_corners"),
+        "possession": ("home_possession", "away_possession"),
+        "xG": ("home_xg", "away_xg"),
+    }
+    for field, (home_col, away_col) in pairs.items():
+        home = typed_values.get(home_col)
+        away = typed_values.get(away_col)
+        if home is not None and away is not None and target.get(field) is None:
+            target[field] = {"home": home, "away": away}
+    yellow = (typed_values.get("home_yellow_cards"), typed_values.get("away_yellow_cards"))
+    red = (typed_values.get("home_red_cards"), typed_values.get("away_red_cards"))
+    if all(value is not None for value in yellow + red):
+        if target.get("yellow_cards") is None:
+            target["yellow_cards"] = {"home": yellow[0], "away": yellow[1]}
+        if target.get("red_cards") is None:
+            target["red_cards"] = {"home": red[0], "away": red[1]}
+        if target.get("cards") is None:
+            target["cards"] = {
+                "home": {"yellow": yellow[0], "red": red[0]},
+                "away": {"yellow": yellow[1], "red": red[1]},
+            }
+    if typed_stats is not None:
+        payload["statistics_typed"] = typed_stats
+    elif not isinstance(payload.get("statistics"), dict):
+        payload["statistics"] = target
+    return payload
+
+
 def save_historical_enrichment(enriched_fixtures, source="api_football"):
     """
-    Save historical fixture enrichment into persistent storage.
+    Save verified historical fixture enrichment into persistent storage.
 
-    Accepts dict (fixture_id -> fixture) or list of enriched fixtures.
-    Valid sources: "api_football", "football_data_org", "soccerdata", "reconciled".
-    Performs an idempotent source-scoped upsert and allows improved enrichment records to replace stale records.
-    Returns count of newly inserted or updated enrichment records.
+    Row count alone is never evidence of statistical completeness. The typed
+    columns and field mask make the usable values explicit, and an existing
+    verified value is retained when a later provider supplies only a partial or
+    empty payload.
     """
-    valid_sources = ("api_football", "football_data_org", "soccerdata", "reconciled")
+    valid_sources = (
+        "api_football", "football_data_org", "football_data_csv",
+        "soccerdata", "reconciled",
+    )
     source_str = str(source).strip().lower()
     if source_str not in valid_sources:
         logger.warning(f"Unrecognized enrichment source '{source}', proceeding with storage insertion.")
@@ -5287,23 +6519,18 @@ def save_historical_enrichment(enriched_fixtures, source="api_football"):
 
     valid_items = []
     seen_ids = set()
-
     for item in items:
         if not isinstance(item, dict):
             continue
-
         fid = item.get("fixture", {}).get("id")
         if fid is None:
             continue
-
         try:
             fid = int(fid)
         except (TypeError, ValueError):
             continue
-
         if fid in seen_ids:
             continue
-
         seen_ids.add(fid)
         valid_items.append((fid, item))
 
@@ -5313,93 +6540,97 @@ def save_historical_enrichment(enriched_fixtures, source="api_football"):
     conn, db_type = _connect()
     now_str = _utc_now()
     written_count = 0
+    stat_columns_sql = ", ".join(_ENRICHMENT_STAT_COLUMNS)
+    update_stat_sql = ", ".join(
+        f"{column} = COALESCE(EXCLUDED.{column}, historical_fixture_enrichment.{column})"
+        for column in _ENRICHMENT_STAT_COLUMNS
+    )
 
     try:
         clean_ids = [fid for fid, _ in valid_items]
         existing_payloads = {}
-
         if db_type == "postgres":
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    SELECT fixture_id, raw_json
-                    FROM historical_fixture_enrichment
-                    WHERE source = %s AND fixture_id = ANY(%s)
-                    """,
+                    "SELECT fixture_id, raw_json FROM historical_fixture_enrichment WHERE source = %s AND fixture_id = ANY(%s)",
                     (source, clean_ids),
                 )
                 for r_fid, r_raw in cur.fetchall():
                     existing_payloads[r_fid] = _json_loads(r_raw)
-
-                for fid, item in valid_items:
-                    raw_json_str = _json_dumps(item, "raw_json")
-                    prev_obj = existing_payloads.get(fid)
-                    is_changed = (prev_obj is None or prev_obj != item)
-
-                    cur.execute(
-                        """
-                        INSERT INTO historical_fixture_enrichment (
-                            fixture_id,
-                            raw_json,
-                            fetched_at,
-                            source
-                        )
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (source, fixture_id)
-                        DO UPDATE SET
-                            raw_json = EXCLUDED.raw_json,
-                            fetched_at = EXCLUDED.fetched_at
-                        """,
-                        (fid, raw_json_str, now_str, source),
-                    )
-                    if is_changed:
-                        written_count += 1
-            conn.commit()
-
         else:
-            try:
-                placeholders = ",".join(["?"] * len(clean_ids))
-                rows = conn.execute(
-                    f"""
-                    SELECT fixture_id, raw_json
-                    FROM historical_fixture_enrichment
-                    WHERE source = ? AND fixture_id IN ({placeholders})
-                    """,
-                    [source] + clean_ids,
-                ).fetchall()
-            except sqlite3.OperationalError:
-                rows = []
-
+            placeholders = ",".join(["?"] * len(clean_ids))
+            rows = conn.execute(
+                f"SELECT fixture_id, raw_json FROM historical_fixture_enrichment WHERE source = ? AND fixture_id IN ({placeholders})",
+                [source] + clean_ids,
+            ).fetchall()
             for r_fid, r_raw in rows:
                 existing_payloads[r_fid] = _json_loads(r_raw)
 
-            for fid, item in valid_items:
-                raw_json_str = _json_dumps(item, "raw_json")
-                prev_obj = existing_payloads.get(fid)
-                is_changed = (prev_obj is None or prev_obj != item)
-
-                conn.execute(
-                    """
-                    INSERT INTO historical_fixture_enrichment (
-                        fixture_id,
-                        raw_json,
-                        fetched_at,
-                        source
-                    )
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(source, fixture_id)
-                    DO UPDATE SET
-                        raw_json = excluded.raw_json,
-                        fetched_at = excluded.fetched_at
-                    """,
-                    (fid, raw_json_str, now_str, source),
+        for fid, item in valid_items:
+            previous = existing_payloads.get(fid)
+            payload = item
+            if isinstance(previous, dict):
+                new_values, new_fields = extract_historical_enrichment_statistics(item)
+                old_values, _ = extract_historical_enrichment_statistics(previous)
+                same_verified_values = bool(new_fields) and all(
+                    new_values.get(column) is None
+                    or new_values.get(column) == old_values.get(column)
+                    for column in _ENRICHMENT_STAT_COLUMNS
                 )
-                if is_changed:
-                    written_count += 1
-            conn.commit()
-
+                if same_verified_values:
+                    payload = previous
+                elif new_fields:
+                    # A same-source refresh carries the authoritative values for
+                    # the fields it includes; previous fields only fill gaps.
+                    payload, _, _ = merge_historical_fixture_metadata(item, previous)
+                else:
+                    # An empty/partial refresh must not erase a richer payload.
+                    payload, _, _ = merge_historical_fixture_metadata(previous, item)
+            values, fields = extract_historical_enrichment_statistics(payload)
+            provider_version = None
+            provenance = payload.get("provider_provenance") if isinstance(payload.get("provider_provenance"), dict) else {}
+            provider_version = provenance.get("provider_version") or payload.get("provider_version") or source
+            raw_json_str = _json_dumps(payload, "raw_json")
+            field_mask = ",".join(fields) or None
+            params = [fid, raw_json_str, now_str, source] + [
+                values.get(column) for column in _ENRICHMENT_STAT_COLUMNS
+            ] + [field_mask, provider_version]
+            is_changed = previous is None or previous != payload
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        INSERT INTO historical_fixture_enrichment (
+                            fixture_id, raw_json, fetched_at, source, {stat_columns_sql}, field_mask, provider_version
+                        ) VALUES (%s, %s, %s, %s, {', '.join(['%s'] * len(_ENRICHMENT_STAT_COLUMNS))}, %s, %s)
+                        ON CONFLICT (source, fixture_id) DO UPDATE SET
+                            raw_json = EXCLUDED.raw_json,
+                            fetched_at = EXCLUDED.fetched_at,
+                            {update_stat_sql},
+                            field_mask = COALESCE(EXCLUDED.field_mask, historical_fixture_enrichment.field_mask),
+                            provider_version = COALESCE(EXCLUDED.provider_version, historical_fixture_enrichment.provider_version)
+                        """,
+                        tuple(params),
+                    )
+            else:
+                conn.execute(
+                    f"""
+                    INSERT INTO historical_fixture_enrichment (
+                        fixture_id, raw_json, fetched_at, source, {stat_columns_sql}, field_mask, provider_version
+                    ) VALUES (?, ?, ?, ?, {', '.join(['?'] * len(_ENRICHMENT_STAT_COLUMNS))}, ?, ?)
+                    ON CONFLICT(source, fixture_id) DO UPDATE SET
+                        raw_json = excluded.raw_json,
+                        fetched_at = excluded.fetched_at,
+                        {update_stat_sql.replace('EXCLUDED.', 'excluded.').replace('historical_fixture_enrichment.', '')},
+                        field_mask = COALESCE(excluded.field_mask, historical_fixture_enrichment.field_mask),
+                        provider_version = COALESCE(excluded.provider_version, historical_fixture_enrichment.provider_version)
+                    """,
+                    tuple(params),
+                )
+            if is_changed:
+                written_count += 1
+        conn.commit()
         return written_count
-
     except Exception:
         conn.rollback()
         raise
@@ -5948,7 +7179,8 @@ def get_historical_enrichment(fixture_ids, source=None):
         "reconciled": 0,
         "api_football": 1,
         "football_data_org": 2,
-        "soccerdata": 3,
+        "football_data_csv": 3,
+        "soccerdata": 4,
     }
 
     try:
@@ -5960,7 +7192,7 @@ def get_historical_enrichment(fixture_ids, source=None):
                 if source is not None:
                     cur.execute(
                         """
-                        SELECT fixture_id, raw_json, source
+                        SELECT fixture_id, raw_json, source, home_shots, away_shots, home_shots_on_target, away_shots_on_target, home_corners, away_corners, home_yellow_cards, away_yellow_cards, home_red_cards, away_red_cards, home_possession, away_possession, home_xg, away_xg, field_mask, provider_version
                         FROM historical_fixture_enrichment
                         WHERE source = %s AND fixture_id = ANY(%s)
                         """,
@@ -5969,7 +7201,7 @@ def get_historical_enrichment(fixture_ids, source=None):
                 else:
                     cur.execute(
                         """
-                        SELECT fixture_id, raw_json, source
+                        SELECT fixture_id, raw_json, source, home_shots, away_shots, home_shots_on_target, away_shots_on_target, home_corners, away_corners, home_yellow_cards, away_yellow_cards, home_red_cards, away_red_cards, home_possession, away_possession, home_xg, away_xg, field_mask, provider_version
                         FROM historical_fixture_enrichment
                         WHERE fixture_id = ANY(%s)
                         """,
@@ -5983,7 +7215,7 @@ def get_historical_enrichment(fixture_ids, source=None):
                     query_params = [str(source).strip().lower()] + clean_ids
                     rows = conn.execute(
                         f"""
-                        SELECT fixture_id, raw_json, source
+                        SELECT fixture_id, raw_json, source, home_shots, away_shots, home_shots_on_target, away_shots_on_target, home_corners, away_corners, home_yellow_cards, away_yellow_cards, home_red_cards, away_red_cards, home_possession, away_possession, home_xg, away_xg, field_mask, provider_version
                         FROM historical_fixture_enrichment
                         WHERE source = ? AND fixture_id IN ({placeholders})
                         """,
@@ -5992,7 +7224,7 @@ def get_historical_enrichment(fixture_ids, source=None):
                 else:
                     rows = conn.execute(
                         f"""
-                        SELECT fixture_id, raw_json, source
+                        SELECT fixture_id, raw_json, source, home_shots, away_shots, home_shots_on_target, away_shots_on_target, home_corners, away_corners, home_yellow_cards, away_yellow_cards, home_red_cards, away_red_cards, home_possession, away_possession, home_xg, away_xg, field_mask, provider_version
                         FROM historical_fixture_enrichment
                         WHERE fixture_id IN ({placeholders})
                         """,
@@ -6007,7 +7239,7 @@ def get_historical_enrichment(fixture_ids, source=None):
                     query_params = [str(source).strip().lower()] + clean_ids
                     rows = conn.execute(
                         f"""
-                        SELECT fixture_id, raw_json, source
+                        SELECT fixture_id, raw_json, source, home_shots, away_shots, home_shots_on_target, away_shots_on_target, home_corners, away_corners, home_yellow_cards, away_yellow_cards, home_red_cards, away_red_cards, home_possession, away_possession, home_xg, away_xg, field_mask, provider_version
                         FROM historical_fixture_enrichment
                         WHERE source = ? AND fixture_id IN ({placeholders})
                         """,
@@ -6016,17 +7248,24 @@ def get_historical_enrichment(fixture_ids, source=None):
                 else:
                     rows = conn.execute(
                         f"""
-                        SELECT fixture_id, raw_json, source
+                        SELECT fixture_id, raw_json, source, home_shots, away_shots, home_shots_on_target, away_shots_on_target, home_corners, away_corners, home_yellow_cards, away_yellow_cards, home_red_cards, away_red_cards, home_possession, away_possession, home_xg, away_xg, field_mask, provider_version
                         FROM historical_fixture_enrichment
                         WHERE fixture_id IN ({placeholders})
                         """,
                         clean_ids,
                     ).fetchall()
 
-        for fid, raw, rec_source in rows:
+        for row in rows:
+            fid, raw, rec_source = row[0], row[1], row[2]
             payload = _json_loads(raw)
             if not isinstance(payload, dict):
                 continue
+            typed_values = dict(zip(_ENRICHMENT_STAT_COLUMNS, row[3:17]))
+            payload = _restore_typed_enrichment_statistics(payload, typed_values)
+            if row[17]:
+                payload["enrichment_field_mask"] = row[17]
+            if row[18]:
+                payload["enrichment_provider_version"] = row[18]
 
             num_fid = int(fid)
             prio = priority_map.get(str(rec_source).strip().lower(), 99)

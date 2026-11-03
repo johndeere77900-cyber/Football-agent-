@@ -8,6 +8,11 @@ import os
 # Credentials must be supplied through the runtime environment.
 # GitHub Actions is responsible for validating required credentials.
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY")
+# API-Sports issues one key per sport. The historical acquisition workflow exposes
+# the basketball key as API_BASKETBALL_KEY, so the basketball adapter must read it
+# rather than requiring the football key to be present. The football key remains a
+# supported fallback for deployments that use a single shared API-Sports key.
+API_BASKETBALL_KEY = os.environ.get("API_BASKETBALL_KEY") or os.environ.get("API_FOOTBALL_KEY")
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
 
 # --- API endpoints ----------------------------------------------------------
@@ -111,6 +116,25 @@ ENABLE_ESPN_BASKETBALL = os.environ.get("ENABLE_ESPN_BASKETBALL", "false" if ENV
 
 # --- Historical Seasons Target ----------------------------------------------
 TARGET_SEASONS = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+
+# --- Approved historical football acquisition providers ---------------------
+# The only providers whose records may be reconciled as one canonical logical
+# fixture. They are listed in approved acquisition order.
+#
+# Cross-provider identity matching exists because these providers use different
+# native fixture ids for the same match. It must never widen to the legacy live
+# namespaces (`api_football`, `football_data_org`) or to the umbrella
+# `soccerdata` writer label: those rows belong to a different acquisition
+# contract, and merging them would rewrite source/provenance and destroy the
+# provider-native ids that live and historical lookups depend on. Legacy rows
+# therefore stay isolated and are only ever addressed by their exact
+# `(source, fixture_id)` key.
+FOOTBALL_APPROVED_HISTORICAL_PROVIDERS = (
+    "football_data_csv",
+    "soccerdata_fbref",
+    "soccerdata_match_history",
+    "soccerdata_sofascore",
+)
 
 # --- Canonical Team Aliases (Competition-Aware & Sport-Specific) ----------
 # Keyed by (normalized_alias, league_id) where competition context is required,
@@ -313,6 +337,24 @@ FOOTBALL_CANONICAL_TEAM_ALIASES = {
     ("porto", 94): "porto",
     ("sporting cp", 94): "sporting cp",
     ("sporting lisbon", 94): "sporting cp",
+
+    # Eredivisie clubs that providers abbreviate differently. These aliases
+    # resolve before a new canonical id is minted; they never reassign an
+    # existing provider mapping, which is reported for manual reconciliation.
+    ("az alkmaar", 88): "az alkmaar",
+    ("az", 88): "az alkmaar",
+    ("go ahead eagles", 88): "go ahead eagles",
+    ("go ahead", 88): "go ahead eagles",
+    ("fortuna sittard", 88): "fortuna sittard",
+    ("for sittard", 88): "fortuna sittard",
+    ("nec nijmegen", 88): "nec nijmegen",
+    ("nijmegen", 88): "nec nijmegen",
+    ("fc volendam", 88): "volendam",
+    ("volendam", 88): "volendam",
+    ("rkc waalwijk", 88): "rkc waalwijk",
+    ("waalwijk", 88): "rkc waalwijk",
+    ("sparta rotterdam", 88): "sparta rotterdam",
+    ("sparta", 88): "sparta rotterdam",
 
     # Generic Test Fixtures (League 39 & 2026 test fixtures)
     ("home fc", 39): "39_home_fc",
@@ -665,8 +707,13 @@ COMPETITION_SEASON_WINDOWS = {
     # European club cups (qualifying begins in July)
     ("football", 2): {"start": (0, 7, 1), "end": (1, 6, 30), "format": "cup"},
     ("football", 3): {"start": (0, 7, 1), "end": (1, 6, 30), "format": "cup"},
-    # International competitions
-    ("football", 5): {"start": (0, 8, 1), "end": (1, 7, 31), "format": "international"},
+    # International competitions.
+    # The UEFA Nations League is NOT an annual competition: its editions are
+    # biennial (2018-19, 2020-21, 2022-23, 2024-25, 2026-27) and each edition's
+    # league phase occupies different months, so a generic annual window would
+    # judge every edition against the wrong dates. Editions are declared in
+    # COMPETITION_SEASON_WINDOW_OVERRIDES only where a boundary is documented;
+    # everything else fails closed with lifecycle UNKNOWN.
     ("football", 1): {"start": (0, 6, 1), "end": (0, 7, 31), "format": "tournament"},
     ("football", 4): {"start": (0, 6, 1), "end": (0, 7, 31), "format": "tournament"},
     # NBA regular season and playoffs
@@ -705,6 +752,56 @@ COMPETITION_SEASON_WINDOW_OVERRIDES = {
         "format": "league",
         "exception": "late_start_and_covid_schedule_changes",
     },
+    # FIFA World Cup: the finals tournament is quadrennial and its window is not
+    # derivable from a generic summer boundary (2022 was played in November and
+    # December). Only editions whose dates are documented are declared.
+    # 2018: 14 June - 15 July 2018 (FIFA).
+    # 2022: 20 November - 18 December 2022 (FIFA).
+    # 2026: 11 June - 19 July 2026 (FIFA).
+    ("football", 1, 2018): {
+        "start": (0, 6, 14),
+        "end": (0, 7, 15),
+        "format": "tournament",
+        "exception": "world_cup_finals_window",
+    },
+    ("football", 1, 2022): {
+        "start": (0, 11, 20),
+        "end": (0, 12, 18),
+        "format": "tournament",
+        "exception": "world_cup_finals_window",
+    },
+    ("football", 1, 2026): {
+        "start": (0, 6, 11),
+        "end": (0, 7, 19),
+        "format": "tournament",
+        "exception": "world_cup_finals_window",
+    },
+    # UEFA European Championship: Euro 2020 was played 11 June - 11 July 2021
+    # (postponed by COVID-19), so the season labelled 2020 is judged against the
+    # window it was actually played in. Euro 2024 ran 14 June - 14 July 2024.
+    ("football", 4, 2020): {
+        "start": (1, 6, 11),
+        "end": (1, 7, 11),
+        "format": "tournament",
+        "exception": "euro_2020_played_in_2021",
+    },
+    ("football", 4, 2024): {
+        "start": (0, 6, 14),
+        "end": (0, 7, 14),
+        "format": "tournament",
+        "exception": "euro_2024_finals_window",
+    },
+    # UEFA Nations League 2026-27: league phase 24 September - 17 November 2026,
+    # League A quarter-finals and promotion/relegation play-offs 25-30 March 2027
+    # (UEFA). The June 2027 finals window is not declared here because it is not
+    # verified in this repository, so the window ends at the last confirmed date
+    # and any later fixture fails closed instead of being assumed complete.
+    ("football", 5, 2026): {
+        "start": (0, 9, 24),
+        "end": (1, 3, 31),
+        "format": "international",
+        "exception": "nations_league_2026_27_league_phase_and_playoffs",
+    },
 }
 
 # Independently established expected NBA coverage: the published number of
@@ -719,6 +816,13 @@ COMPETITION_SEASON_WINDOW_OVERRIDES = {
 # dataset holds AT LEAST this many persisted games. A season absent from this map
 # has no independently established expectation and therefore fails closed: its
 # stored record count is never treated as its own evidence of completeness.
+#
+# 2026 is deliberately absent. The 2026-27 NBA season is in progress (it began in
+# October 2026) and its final regular-season game total is not established, so no
+# expectation can be asserted for it; copying 1230 from a previous season would
+# be an unverified assumption and would let an ongoing season be judged complete.
+# The entry is added only once the season's schedule total is independently
+# documented.
 NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES = {
     2019: 1059,
     2020: 1080,
@@ -728,6 +832,78 @@ NBA_EXPECTED_MIN_REGULAR_SEASON_GAMES = {
     2024: 1230,
     2025: 1230,
 }
+
+# Documented match totals for cup / international / tournament editions.
+#
+# Single-elimination cups, two-legged ties, group stages, knockout rounds and
+# international finals tournaments have no fixed pair schedule, so the domestic
+# double-round-robin expectation (N * (N - 1) fixtures with a balanced home/away
+# record per team) must never be applied to them.
+#
+# An edition is listed here only when its completed match total is independently
+# documented:
+# - FIFA World Cup 2018: 32 teams, 64 matches (14 June - 15 July 2018).
+# - FIFA World Cup 2022: 32 teams, 64 matches (20 November - 18 December 2022).
+# - UEFA EURO 2020: 24 teams, 51 matches (played 11 June - 11 July 2021).
+# - UEFA EURO 2024: 24 teams, 51 matches (14 June - 14 July 2024).
+#
+# Editions whose format or total is not documented here (for example the UEFA
+# Champions League, the UEFA Europa League and the Nations League, whose league
+# phase and knockout rounds vary by edition) remain deliberately absent: their
+# coverage stays UNKNOWN and therefore INCOMPLETE instead of receiving an
+# invented expected count. The 2026 World Cup is also absent because its 104-match
+# total is not asserted in this repository.
+FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS = {
+    ("football", 1, 2018): {
+        "expected_fixture_count": 64,
+        "evidence": "FIFA World Cup 2018: 32 teams, 64 matches (14 June - 15 July 2018).",
+    },
+    ("football", 1, 2022): {
+        "expected_fixture_count": 64,
+        "evidence": "FIFA World Cup 2022: 32 teams, 64 matches (20 November - 18 December 2022).",
+    },
+    ("football", 4, 2020): {
+        "expected_fixture_count": 51,
+        "evidence": "UEFA EURO 2020: 24 teams, 51 matches (played 11 June - 11 July 2021).",
+    },
+    ("football", 4, 2024): {
+        "expected_fixture_count": 51,
+        "evidence": "UEFA EURO 2024: 24 teams, 51 matches (14 June - 14 July 2024).",
+    },
+}
+
+
+def documented_football_tournament_editions(league_id):
+    """
+    Return the tournament editions of one football competition that are documented.
+
+    Only editions carrying an independently established match total are returned,
+    and only for the requested competition. This is what lets a finished edition
+    outside the generic season range (for example the 2018 FIFA World Cup) be
+    acquired and inventoried, while an undocumented season of the same competition
+    - or the same calendar year in another competition - is still rejected.
+    """
+    editions = set()
+    try:
+        requested_league = int(league_id)
+    except (TypeError, ValueError):
+        return editions
+
+    expectations = FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS or {}
+    for key in expectations:
+        if not isinstance(key, tuple) or len(key) != 3:
+            continue
+        sport_key, documented_league, documented_season = key
+        if str(sport_key).strip().lower() != "football":
+            continue
+        try:
+            if int(documented_league) != requested_league:
+                continue
+            editions.add(int(documented_season))
+        except (TypeError, ValueError):
+            continue
+    return editions
+
 
 # Season-specific authoritative football coverage expectations.
 #

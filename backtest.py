@@ -848,9 +848,12 @@ def _merge_enriched_fixture(
     if not isinstance(enriched, dict):
         return original
 
-    merged = dict(original)
-    merged.update(enriched)
-
+    # Reuse the persisted-fixture merge contract: existing verified values win,
+    # nulls never replace data, nested statistics merge key by key, and conflicts
+    # retain their provenance instead of being silently overwritten.
+    merged, _added, _conflicts = storage.merge_historical_fixture_metadata(
+        original, enriched
+    )
     return merged
 
 

@@ -48,6 +48,7 @@ on:
 jobs:
   acquire_historical:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
       - uses: actions/checkout@v4
@@ -128,6 +129,7 @@ jobs:
 
       - name: Historical Data Sync
         id: sync
+        timeout-minutes: 300
         env:
           API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
@@ -168,6 +170,7 @@ jobs:
       - name: Verify Persisted Historical Datasets
         if: always() && steps.sync.outcome != 'skipped'
         id: verify
+        timeout-minutes: 60
         env:
           API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
@@ -207,3 +210,12 @@ jobs:
             echo "ERROR: Verify Persisted Historical Datasets step failed with exit code $VERIFY_EXIT"
             exit "$VERIFY_EXIT"
           fi
+
+      - name: Upload acquisition diagnostics and partial run reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-acquisition-${{ github.run_id }}-${{ github.run_attempt }}
+          path: data/historical_runs/
+          if-no-files-found: warn
+          retention-days: 14

@@ -39,6 +39,9 @@ def test_verify_persisted_historical_datasets_football_and_basketball_pass(tmp_p
         "id": 20001,
         "date": "2024-10-20T19:00:00+00:00",
         "league": {"id": 12, "season": 2024},
+        # Provider-native api-sports stage: the phase a real API-Basketball game
+        # carries, so the persisted record is classified without inference.
+        "stage": "Regular Season",
         "teams": {"home": {"id": 101, "name": "Lakers"}, "away": {"id": 102, "name": "Celtics"}},
         "scores": {"home": {"total": 110}, "away": {"total": 105}},
         "status": {"short": "FT"},

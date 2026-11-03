@@ -1541,6 +1541,25 @@ def predict_fixture(
                 )
             )
 
+    # Knowledge context is provenance, never a prediction input. It records
+    # whether the competition edition and participant universe are confirmed,
+    # provisional or unknown, and whether the resolved canonical clubs belong to
+    # a verified roster when the catalogue has one.
+    try:
+        import sports_knowledge
+
+        prediction["sports_knowledge_context"] = sports_knowledge.prediction_context(
+            "football",
+            league["id"],
+            league["season"],
+            team_ids=[c_home_id, c_away_id],
+        )
+    except Exception:
+        prediction["sports_knowledge_context"] = {
+            "source": "sports_knowledge",
+            "evidence_status": sports_knowledge.EVIDENCE_UNKNOWN if "sports_knowledge" in locals() else "UNKNOWN",
+        }
+
     if not isinstance(markets, dict):
         raise ValueError(
             "Prediction markets are invalid."
@@ -2847,6 +2866,30 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--report-nba-phase-recovery",
+        action="store_true",
+        help="Compare persisted NBA identities with fresh ESPN identities (read-only).",
+    )
+
+    parser.add_argument(
+        "--report-football-reconciliation",
+        action="store_true",
+        help="Reconcile every persisted football manifest with its stored records (read-only).",
+    )
+
+    parser.add_argument(
+        "--report-basketball-reconciliation",
+        action="store_true",
+        help="Reconcile every persisted basketball manifest and phase count (read-only).",
+    )
+
+    parser.add_argument(
+        "--report-team-identity-conflicts",
+        action="store_true",
+        help="Report conflicting team identity mappings and proposed reconciliation (read-only).",
+    )
+
+    parser.add_argument(
         "--backtest-history",
         action="store_true",
         help="Show past backtest runs.",
@@ -2987,6 +3030,37 @@ def main():
         if args.season is not None and getattr(args, "seasons", None) is not None:
             raise ValueError("Cannot specify both --season and --seasons together.")
 
+        if args.report_football_reconciliation:
+            storage.init_db()
+            historical_sync.build_football_manifest_reconciliation(
+                league_ids=[args.league] if args.league else None,
+                seasons=getattr(args, "seasons", None) or ([args.season] if args.season else None),
+            )
+            return 0
+
+        if args.report_basketball_reconciliation:
+            storage.init_db()
+            historical_sync.build_basketball_manifest_reconciliation(
+                league_ids=[args.league] if args.league else None,
+                seasons=getattr(args, "seasons", None) or ([args.season] if args.season else None),
+            )
+            return 0
+
+        if args.report_team_identity_conflicts:
+            storage.init_db()
+            import team_identity
+
+            team_identity.build_identity_conflict_report(sport=args.sport or "football")
+            return 0
+
+        if args.report_nba_phase_recovery:
+            storage.init_db()
+            historical_sync.build_basketball_phase_recovery_report(
+                league_id=args.league,
+                seasons=getattr(args, "seasons", None) or ([args.season] if args.season else None),
+            )
+            return 0
+
         if args.verify_historical_datasets:
             storage.init_db()
             summary = historical_sync.verify_persisted_historical_datasets(
@@ -3010,6 +3084,14 @@ def main():
                 with_enrichment=args.with_enrichment,
                 refresh=args.refresh,
             )
+
+            if isinstance(summary, dict) and summary.get("interrupted"):
+                print(
+                    f"Historical queue was interrupted ({summary.get('interrupt_signal')}); "
+                    "committed records and checkpoints were preserved.",
+                    file=sys.stderr,
+                )
+                return 130
 
             reports = summary.get("reports", []) if isinstance(summary, dict) else []
             incomplete_count = sum(

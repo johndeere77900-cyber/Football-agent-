@@ -1,0 +1,127 @@
+{
+  "schema_version": 2,
+  "sport": "basketball",
+  "curated_at": "2026-11-01T00:00:00+00:00",
+  "description": "Curated basketball competition knowledge. Football and basketball are the two schemas this foundation completes; other sports are added later as additional catalogues behind the same loader.",
+  "approved_acquisition_order": ["espn_url", "api_basketball"],
+  "sources": {
+    "espn_nba": {
+      "name": "ESPN NBA",
+      "url": "https://www.espn.com/nba/",
+      "retrieved_at": "2026-11-01T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "espn_scoreboard_api": {
+      "name": "ESPN site scoreboard API",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+      "retrieved_at": "2026-11-01T00:00:00+00:00",
+      "confidence": "high"
+    },
+    "api_basketball": {
+      "name": "API-Basketball (api-sports)",
+      "url": "https://v1.basketball.api-sports.io",
+      "retrieved_at": "2026-11-01T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "nba_2020_season": {
+      "name": "2019-20 NBA season record",
+      "url": "https://www.basketball-reference.com/leagues/NBA_2020.html",
+      "retrieved_at": "2026-11-01T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "nba_schedule": {
+      "name": "NBA schedule",
+      "url": "https://www.nba.com/schedule",
+      "retrieved_at": "2026-11-01T00:00:00+00:00",
+      "confidence": "medium"
+    }
+  },
+  "providers": {
+    "espn_url": {
+      "kind": "direct_url",
+      "name": "ESPN NBA monthly scoreboard",
+      "documentation_url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+      "coverage": "NBA; one request per season month",
+      "notes": "Primary NBA historical route. Competition membership is proven from payload uids, never assumed from the requested URL."
+    },
+    "api_basketball": {
+      "kind": "api",
+      "name": "API-Basketball",
+      "documentation_url": "https://v1.basketball.api-sports.io",
+      "coverage": "configured basketball leagues",
+      "notes": "Fallback route. Pagination metadata is a coverage unit; quota exhaustion is a distinct outcome."
+    }
+  },
+  "competitions": [
+    {
+      "league_id": 12,
+      "name": "NBA",
+      "aliases": ["nba", "national basketball association"],
+      "governing_body": "National Basketball Association",
+      "country": "United States",
+      "region": "North America",
+      "format": "league",
+      "coverage_format": "league",
+      "edition_rule": {
+        "type": "annual_split_year",
+        "label": "split_year",
+        "from": 2019,
+        "to": 2026,
+        "window": {"start": [0, 10, 1], "end": [1, 6, 30]},
+        "window_evidence": "NBA regular season plus playoffs; boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-10-01T00:00:00+00:00",
+            "end": "2020-10-31T00:00:00+00:00",
+            "evidence": "2019-20 season suspended 2020-03-11 and resumed in the Orlando bubble 2020-07-30; Finals ended 2020-10-11."
+          },
+          "2020": {
+            "start": "2020-12-22T00:00:00+00:00",
+            "end": "2021-07-31T00:00:00+00:00",
+            "evidence": "2020-21 season started 2020-12-22 and the Finals ended 2021-07-20."
+          }
+        }
+      },
+      "provider_coverage": {
+        "espn_url": {"supported": true, "code": "s:40~l:46"},
+        "api_basketball": {"supported": true, "code": "12"}
+      },
+      "expected_units": {
+        "type": "regular_season_games",
+        "per_edition": {
+          "2019": 1059,
+          "2020": 1080,
+          "2021": 1230,
+          "2022": 1230,
+          "2023": 1230,
+          "2024": 1230,
+          "2025": 1230,
+          "2026": null
+        },
+        "evidence": "2019-20 played 1059 regular-season games (COVID-interrupted); 2020-21 was a 72-game season (1080); full seasons are 30 x 82 / 2 = 1230. The 2026 edition (2026-27) is in progress and has no established total, so it is null and fails closed."
+      },
+      "phase_classification": {
+        "regular_season": "counts toward regular-season coverage",
+        "preseason": "never counts toward regular-season coverage",
+        "postseason": "never counts toward regular-season coverage",
+        "play_in": "separate phase; never counts toward regular-season coverage",
+        "all_star": "separate event; never counts toward regular-season coverage",
+        "unclassified": "preserved and reported, never counted as regular season"
+      },
+      "evidence": [
+        {"source": "espn_scoreboard_api", "statement": "The scoreboard payload states the competition in its league uid and season type on each event."},
+        {"source": "nba_2020_season", "statement": "The 2019-20 regular season was interrupted and resumed, so the season's window extends beyond June."},
+        {"source": "nba_schedule", "statement": "A full NBA regular season is 82 games per team across 30 teams."}
+      ],
+      "hypotheses": [
+        {
+          "statement": "nba_api and sportsdataverse may supply richer NBA metadata; both are reference-only until a separate compatibility review.",
+          "status": "unverified_research_note"
+        }
+      ],
+      "known_blockers": [
+        "No independently established 2026 (2026-27) regular-season total exists yet; the ongoing season must not be marked COMPLETE."
+      ]
+    }
+  ]
+}

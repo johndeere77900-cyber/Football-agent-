@@ -528,8 +528,91 @@ def _validate_and_canonicalize_team_manifest(raw_team_ids, league_id, sport="foo
     return sorted(canonical_set, key=lambda x: str(x))
 
 
+def _knowledge_historical_team_ids(league_id, season, sport="football"):
+    """
+    Resolve a verified edition participant roster from the knowledge catalogue.
+
+    Catalogue participants are names plus repository canonical keys, not provider
+    ids. Every participant must resolve to one canonical id; a partial or
+    ambiguous roster is rejected. When local identity mappings exist, every
+    catalogue id must already be registered there. This keeps the catalogue from
+    silently creating identities that no persisted mapping supports.
+    """
+    try:
+        import sports_knowledge
+
+        record = sports_knowledge.edition(sport, league_id, season)
+        if record.get("participant_status") != sports_knowledge.PARTICIPANT_STATUS_VERIFIED:
+            return []
+        participants = record.get("participants") or []
+        if not participants:
+            return []
+
+        expected_count = (record.get("coverage_requirements") or {}).get("expected_participant_count")
+        if isinstance(expected_count, int) and expected_count != len(participants):
+            logger.warning(
+                "Knowledge participant count mismatch for %s league %s season %s: %s != %s",
+                sport, league_id, season, expected_count, len(participants),
+            )
+            return []
+
+        import team_identity
+
+        resolution_provider = "football_data_csv" if sport == "football" else "api_basketball"
+        canonical_ids = []
+        for participant in participants:
+            if not isinstance(participant, dict):
+                return []
+            canonical_id = str(participant.get("canonical_id") or "").strip()
+            if not canonical_id:
+                canonical_id = team_identity.resolve_canonical_team_id(
+                    raw_name=participant.get("name"),
+                    provider=resolution_provider,
+                    provider_team_id=None,
+                    league_id=league_id,
+                    sport=sport,
+                    auto_register=False,
+                )
+            if not canonical_id or not canonical_id.startswith(f"{sport}_team_"):
+                logger.warning(
+                    "Knowledge participant unresolved for %s league %s season %s: %r",
+                    sport, league_id, season, participant.get("name"),
+                )
+                return []
+            canonical_ids.append(canonical_id)
+
+        if len(set(canonical_ids)) != len(canonical_ids):
+            logger.warning(
+                "Knowledge participant identity collision for %s league %s season %s",
+                sport, league_id, season,
+            )
+            return []
+
+        try:
+            import storage
+
+            registered_ids = set(storage.get_team_identities_by_league(sport, league_id))
+        except Exception:
+            registered_ids = set()
+        if registered_ids and not set(canonical_ids).issubset(registered_ids):
+            missing = sorted(set(canonical_ids) - registered_ids)
+            logger.warning(
+                "Knowledge participant ids not registered for %s league %s season %s: %s",
+                sport, league_id, season, missing,
+            )
+            return []
+
+        return sorted(set(canonical_ids))
+    except Exception as exc:
+        logger.warning(
+            "Knowledge participant resolution unavailable for %s league %s season %s: %s",
+            sport, league_id, season, exc,
+        )
+        return []
+
+
 def _get_authoritative_historical_team_ids(
-    league_id, season, max_budget=None, allow_network=False, provider_metadata=None, provider=None, *args, **kwargs
+    league_id, season, max_budget=None, allow_network=False, provider_metadata=None, provider=None, sport=None, *args, **kwargs
 ):
     """
     Return the authoritative canonical competition team IDs for structural validation.
@@ -539,8 +622,14 @@ def _get_authoritative_historical_team_ids(
     If ANY expected team fails resolution, or if partial results are produced, returns [].
 
     Priority:
-    1. Provider metadata if supplied (read-first without external calls)
-    2. Stored DB manifest metadata
+    1. Verified edition-specific participant roster in the knowledge catalogue
+       when the provider did not declare its own universe
+    2. Provider metadata if supplied (read-first without external calls)
+    3. Stored DB manifest metadata
+
+    A provider-declared universe is a competing claim, not an empty slot. If it
+    is unusable, the function fails closed rather than silently substituting the
+    catalogue roster.
 
     Returns:
         list[str|int] of verified canonical team IDs, or [] when unavailable/incomplete.
@@ -548,9 +637,21 @@ def _get_authoritative_historical_team_ids(
     import team_identity
     import storage
 
-    sport = "football"
+    sport = str(sport or "football").strip().lower()
     if isinstance(provider_metadata, dict):
-        sport = provider_metadata.get("sport") or "football"
+        sport = provider_metadata.get("sport") or sport
+
+    # An explicit provider universe is a claim about this edition. If it is
+    # malformed or conflicts with the catalogue, do not silently replace it with
+    # a different roster: the caller must see a fail-closed result. The catalogue
+    # is used whenever no provider universe was declared at all.
+    provider_declared_universe = (
+        isinstance(provider_metadata, dict) and "expected_team_ids" in provider_metadata
+    )
+    if not provider_declared_universe:
+        catalogue_ids = _knowledge_historical_team_ids(league_id, season, sport=sport)
+        if catalogue_ids:
+            return catalogue_ids
 
     if isinstance(provider_metadata, dict) and provider_metadata.get("expected_team_ids"):
         exp_ids = provider_metadata["expected_team_ids"]
@@ -591,6 +692,36 @@ def _classify_provider_attempt_outcome(fixtures, meta):
     meta = meta if isinstance(meta, dict) else {}
     status = str(meta.get("status") or "").strip().upper()
 
+    # Provider-native failure categories are recorded by the adapters themselves
+    # (HTTP status and error class). They are honoured before the generic status
+    # buckets so an access restriction, a rate limit, a timeout, an unsupported
+    # endpoint or a parser error stays distinguishable from a real empty result.
+    error_category = str(meta.get("error_category") or "").strip().lower()
+    http_status = meta.get("http_status")
+    if isinstance(http_status, bool):
+        http_status = None
+    try:
+        http_status = int(http_status) if http_status is not None else None
+    except (TypeError, ValueError):
+        http_status = None
+
+    if error_category == "access_restricted" or http_status in (401, 403):
+        return "ACCESS_DENIED"
+    if error_category in ("unsupported_coverage", "provider_config_unavailable") or http_status == 404:
+        # This is a coverage/configuration outcome, not a transient provider
+        # failure. Keeping the full label prevents a 404 endpoint from being
+        # mistaken for a failed request that should be retried.
+        return "UNSUPPORTED_COVERAGE"
+    if error_category == "rate_limited" or http_status == 429:
+        return "RATE_LIMITED"
+    if error_category == "network_error":
+        error_text = str(meta.get("error") or "").lower()
+        if "timeout" in error_text or "timed out" in error_text:
+            return "TIMEOUT"
+        return "NETWORK_ERROR"
+    if error_category == "parsing_error":
+        return "PARSER_ERROR"
+
     # A non-empty fixture list is not proof of a successful attempt: the provider's
     # own metadata may report a failure, a quota stop, malformed data or partial data
     # for that same attempt. Those explicit states are decided first.
@@ -614,6 +745,87 @@ def _classify_provider_attempt_outcome(fixtures, meta):
     return "NO_DATA_FROM_PROVIDER"
 
 
+def _attempted_provider_label(attempted):
+    """
+    Return the acquisition label of the approved routes that produced a dataset.
+
+    ``source`` describes the acquisition route of this attempt (the direct
+    Football-Data.co.uk CSV download, the SoccerData route, or ``mixed`` when
+    both produced records). It is deliberately coarser than
+    ``providers_contributed``, which is derived from the records themselves and
+    names the individual FBref / MatchHistory / Sofascore providers. Keeping the
+    two separate means a writer label can never overwrite record-level
+    attribution, and a reconciled dataset is still described by the route that
+    actually produced it.
+
+    An attempt that returned no records never becomes the source label.
+    """
+    labels = []
+    for provider_name, produced in attempted:
+        if produced and provider_name not in labels:
+            labels.append(provider_name)
+    if not labels:
+        # No approved route produced records: the dataset has no acquisition
+        # source, and reporting a provider name here would misattribute it.
+        return "none"
+    if len(labels) > 1:
+        return "mixed"
+    return labels[0]
+
+
+def _providers_contributed_from_records(fixtures, attempted=None):
+    """
+    Derive which providers actually contributed to a reconciled fixture dataset.
+
+    Contributors are read from the records themselves instead of a
+    hand-maintained per-branch list: a reconciled record names every provider
+    that supplied a field in ``reconciliation_metadata.providers_used`` and
+    ``field_provenance``, and an unreconciled record names its single provider.
+    This is what keeps SoccerData FBref (or MatchHistory/Sofascore) attributed
+    when it only filled gaps in rows produced by an earlier provider.
+
+    ``attempted`` is an optional ordered list of ``(provider_name, records)``
+    pairs used only as a fallback when the records carry no provenance at all
+    (for example legacy rows); it never drops a provider that is named by a
+    record. Providers that only describe reconciliation itself (``mixed``,
+    ``reconciled``, ``unknown``) are never reported as contributors.
+    """
+    non_provider_labels = {"mixed", "reconciled", "unknown", "internal_db"}
+    contributed = set()
+
+    for fixture in fixtures if isinstance(fixtures, list) else []:
+        if not isinstance(fixture, dict):
+            continue
+
+        reconciliation = fixture.get("reconciliation_metadata") if isinstance(fixture.get("reconciliation_metadata"), dict) else {}
+        for provider in reconciliation.get("providers_used") or []:
+            if isinstance(provider, str) and provider.strip() and provider.strip() not in non_provider_labels:
+                contributed.add(provider.strip())
+
+        provenance = fixture.get("provider_provenance") if isinstance(fixture.get("provider_provenance"), dict) else {}
+        provider = provenance.get("provider")
+        if isinstance(provider, str) and provider.strip() and provider.strip() not in non_provider_labels:
+            contributed.add(provider.strip())
+        # A record enriched by another provider keeps its original `provider` but
+        # lists every contributor, so cross-provider enrichment is attributed even
+        # when it supplied no field-level provenance.
+        for contributor in provenance.get("providers") or []:
+            if isinstance(contributor, str) and contributor.strip() and contributor.strip() not in non_provider_labels:
+                contributed.add(contributor.strip())
+
+        field_provenance = fixture.get("field_provenance") if isinstance(fixture.get("field_provenance"), dict) else {}
+        for field_provider in field_provenance.values():
+            if isinstance(field_provider, str) and field_provider.strip() and field_provider.strip() not in non_provider_labels:
+                contributed.add(field_provider.strip())
+
+    if not contributed and attempted:
+        for provider_name, produced in attempted:
+            if isinstance(provider_name, str) and provider_name.strip() and produced:
+                contributed.add(provider_name.strip())
+
+    return sorted(contributed)
+
+
 def _football_season_coverage_exception(league_id, season):
     """
     Return the recorded authoritative season coverage exception for a football
@@ -634,6 +846,31 @@ def _football_season_coverage_exception(league_id, season):
     exceptions = getattr(config, "FOOTBALL_SEASON_COVERAGE_EXCEPTIONS", {}) or {}
     entry = exceptions.get(("football", lid, ssn))
     return entry if isinstance(entry, dict) else None
+
+
+def _football_tournament_coverage_expectation(league_id, season):
+    """
+    Return the documented match total for a cup/tournament edition, or None.
+
+    Single-elimination, group-stage and international editions have no fixed pair
+    schedule, so a double-round-robin expectation must never be applied to them.
+    Only editions whose match total is independently documented are listed; any
+    other cup or tournament edition remains unverifiable (fail closed) instead of
+    receiving an invented expected count.
+    """
+    try:
+        lid = int(league_id)
+        ssn = int(season)
+    except (TypeError, ValueError):
+        return None
+    expectations = getattr(config, "FOOTBALL_TOURNAMENT_COVERAGE_EXPECTATIONS", {}) or {}
+    entry = expectations.get(("football", lid, ssn))
+    if not isinstance(entry, dict):
+        return None
+    expected = entry.get("expected_fixture_count")
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected <= 0:
+        return None
+    return expected
 
 
 def _validate_historical_structural_coverage(fixtures, season, provider_metadata=None, league_id=None, sport="football"):
@@ -676,13 +913,31 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
         expected_team_ids = _validate_and_canonicalize_team_manifest(expected_team_ids, league_id, sport=sport)
 
     if not expected_team_ids and is_double_round_robin:
+        # Domestic leagues continue to use the full provider/manifest/knowledge
+        # resolver. The cup path below consults the knowledge catalogue directly
+        # so an unknown competition format keeps its existing fail-closed result
+        # instead of triggering provider identity registration as a side effect.
         expected_team_ids = _get_authoritative_historical_team_ids(
             league_id,
             season,
             max_budget=provider_metadata.get("max_budget"),
             allow_network=provider_metadata.get("allow_network", False),
             provider_metadata=provider_metadata,
+            provider=provider_metadata.get("provider"),
+            sport=sport,
         )
+    elif not expected_team_ids:
+        try:
+            import sports_knowledge
+
+            catalogue_ids = _knowledge_historical_team_ids(league_id, season, sport=sport)
+            if catalogue_ids:
+                expected_team_ids = catalogue_ids
+        except Exception as exc:
+            logger.warning(
+                "Knowledge participant lookup unavailable for %s league %s season %s: %s",
+                sport, league_id, season, exc,
+            )
 
     canonical_expected_set = set()
     all_resolved = True
@@ -750,7 +1005,17 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
     elif is_double_round_robin and expected_team_count > 0:
         expected_fixture_count = expected_team_count * (expected_team_count - 1)
     else:
-        expected_fixture_count = None
+        # A non-league edition may have an independently documented total in
+        # the knowledge catalogue (for example a World Cup or EURO). Never use
+        # a catalogue total to override an explicit provider/config count.
+        try:
+            import sports_knowledge
+
+            knowledge_expectation = sports_knowledge.expected_coverage_units(sport, league_id, season)
+            knowledge_total = knowledge_expectation.get("value")
+            expected_fixture_count = knowledge_total if isinstance(knowledge_total, int) and knowledge_total > 0 else None
+        except Exception:
+            expected_fixture_count = None
 
     expected_matches_per_team = 2 * (expected_team_count - 1) if is_double_round_robin else None
     expected_home_away_per_team = expected_team_count - 1 if is_double_round_robin else None
@@ -1114,6 +1379,17 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
 
     if not is_double_round_robin:
         # Non-double-round-robin (tournament, cup, international)
+        #
+        # These formats have no fixed pair schedule, so the double-round-robin
+        # expectation is never applied. An expected match total is only used when
+        # it is independently documented for that edition; otherwise coverage stays
+        # unverifiable and the dataset stays INCOMPLETE.
+        if expected_fixture_count is None:
+            documented_expected = _football_tournament_coverage_expectation(league_id, season)
+            if documented_expected is not None:
+                expected_fixture_count = documented_expected
+                provider_metadata = dict(provider_metadata)
+                provider_metadata["has_authoritative_evidence"] = True
         has_authoritative_evidence = (
             provider_metadata.get("has_authoritative_evidence") is True
             and isinstance(expected_fixture_count, int)
@@ -1135,23 +1411,37 @@ def _validate_historical_structural_coverage(fixtures, season, provider_metadata
                 "expected_fixture_count": expected_fixture_count,
             }
 
-        is_verified = (
-            valid_fixture_count > 0
-            and valid_fixture_count == expected_fixture_count
-            and (not expected_team_set or expected_team_set.issubset(participating_teams))
-        )
+        # A match total is never completion evidence on its own: the tournament
+        # participant universe must be independently established and every expected
+        # participant must appear. An empty participant set is an evidence gap, not
+        # a wildcard, and a universe inferred from the acquired fixtures is not
+        # independent verification, so that case fails closed and stays INCOMPLETE.
+        participant_universe_available = bool(expected_team_set)
+        missing_participants = expected_team_set - participating_teams
+        unexpected_participants = participating_teams - expected_team_set
+
+        if not participant_universe_available:
+            tournament_reason = "tournament_participant_universe_unavailable"
+        elif valid_fixture_count <= 0 or valid_fixture_count != expected_fixture_count:
+            tournament_reason = "tournament_coverage_incomplete"
+        elif missing_participants or unexpected_participants:
+            tournament_reason = "tournament_participant_mismatch"
+        else:
+            tournament_reason = None
+
         return {
-            "verified": is_verified,
-            "reason": None if is_verified else "tournament_coverage_incomplete",
+            "verified": tournament_reason is None,
+            "reason": tournament_reason,
             "fixture_count": valid_fixture_count,
             "distinct_fixture_count": distinct_fixture_count,
             "team_count": len(participating_teams),
             "expected_team_count": expected_team_count,
             "expected_team_ids": sorted(expected_team_set),
-            "missing_team_ids": sorted(expected_team_set - participating_teams),
-            "unexpected_team_ids": sorted(participating_teams - expected_team_set) if expected_team_set else [],
+            "missing_team_ids": sorted(missing_participants),
+            "unexpected_team_ids": sorted(unexpected_participants),
             "team_match_counts": team_match_counts,
             "expected_fixture_count": expected_fixture_count,
+            "evidence_gaps": [] if participant_universe_available else ["authoritative_participant_universe"],
         }
 
     # Manifest-vs-authority size consistency. An expected-team manifest whose size
@@ -2660,6 +2950,39 @@ class DataResolver:
             else "unknown"
         )
 
+        # Knowledge-driven provider selection: approved order is unchanged, but
+        # a provider the catalogue marks unsupported for this competition is
+        # never attempted. The route is reported with the outcome so an
+        # unsupported provider is distinguishable from an exhausted one.
+        try:
+            import sports_knowledge
+
+            knowledge_route = sports_knowledge.provider_route("football", league_id, season)
+        except Exception as route_exc:
+            logger.warning(
+                "Knowledge provider route unavailable for league %s season %s: %s",
+                league_id, season, route_exc,
+            )
+            knowledge_route = {
+                "approved_order": [
+                    "football_data_csv",
+                    "soccerdata_fbref",
+                    "soccerdata_match_history",
+                    "soccerdata_sofascore",
+                ],
+                "eligible_providers": [
+                    "football_data_csv",
+                    "soccerdata_fbref",
+                    "soccerdata_match_history",
+                    "soccerdata_sofascore",
+                ],
+                "unsupported_providers": {},
+                "edition_evidence_status": "UNKNOWN",
+                "completion_allowed": False,
+                "blockers": ["knowledge_provider_route_unavailable"],
+            }
+        eligible_providers = set(knowledge_route.get("eligible_providers") or [])
+
         import storage
 
         # 1. Read-first persistence: Reuse stored DB fixtures when dataset status is COMPLETE and verified
@@ -2689,6 +3012,7 @@ class DataResolver:
                             "source": "internal_db",
                             "provider_metadata": {
                                 "competition_format": competition_format,
+                                "knowledge_provider_route": knowledge_route,
                                 "expected_team_ids": expected_team_ids_db,
                                 "is_complete": True,
                                 "is_partial": False,
@@ -2718,8 +3042,9 @@ class DataResolver:
         if page == 1:
             # 2a. Direct CSV - Attempt direct downloadable CSV BEFORE network-dependent team-universe discovery
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
-            if rem_time > 0:
+            if rem_time > 0 and "football_data_csv" in eligible_providers:
                 attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
+                t_csv_start = time.perf_counter()
                 try:
                     csv_fixtures = _fetch_direct_csv_league_fixtures(
                         league_id, season, timeout=attempt_timeout, max_budget=max_budget
@@ -2731,6 +3056,9 @@ class DataResolver:
                         "source": "football_data_csv",
                     }
                     logger.warning(f"Direct CSV acquisition failed for league {league_id} season {season}: {csv_exc}")
+                csv_meta.setdefault(
+                    "duration_seconds", round(time.perf_counter() - t_csv_start, 3)
+                )
 
             if completed_only and csv_fixtures:
                 csv_fixtures = [
@@ -2764,6 +3092,7 @@ class DataResolver:
                     "source": "football_data_csv",
                     "provider_metadata": {
                         "competition_format": competition_format,
+                        "knowledge_provider_route": knowledge_route,
                         "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
@@ -2780,7 +3109,7 @@ class DataResolver:
             # 2b. SoccerData FBref
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_fb_code = LEAGUE_TO_SD_FBREF_CODE.get(league_id)
-            if sd_fb_code and rem_time > 0:
+            if sd_fb_code and rem_time > 0 and "soccerdata_fbref" in eligible_providers:
                 attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
                 t_fb_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData FBref fetch starting for league_id={league_id}, season={season}, sd_code={sd_fb_code}")
@@ -2794,12 +3123,19 @@ class DataResolver:
                     # successful ones, so a failure and its category stay visible in
                     # the dataset diagnostics instead of being dropped.
                     sd_fb_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
+                    sd_fb_meta.setdefault("duration_seconds", round(t_fb_elapsed, 3))
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_fb_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
                     else:
                         sd_fb_meta.setdefault("status", sd_status)
                 except Exception as sd_exc:
                     t_fb_elapsed = time.perf_counter() - t_fb_start
+                    sd_fb_meta = {
+                        "status": "SOURCE_FAILED",
+                        "error": str(sd_exc),
+                        "source": "soccerdata_fbref",
+                        "duration_seconds": round(t_fb_elapsed, 3),
+                    }
                     logger.warning(f"[TIMING FAILED] DataResolver FBref primary route failed for league_id={league_id}, season={season}, elapsed={t_fb_elapsed:.2f}s: {sd_exc}")
             elif sd_fb_code and rem_time <= 0:
                 logger.warning(f"Skipping SoccerData FBref for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")
@@ -2833,19 +3169,26 @@ class DataResolver:
             )
 
             if fb_coverage["verified"] is True:
-                contribs = [
-                    p for p, count in [
-                        ("football_data_csv", len(csv_fixtures)),
-                        ("soccerdata_fbref", len(sd_fb_fixtures)),
-                    ] if count > 0
-                ]
+                contribs = _providers_contributed_from_records(
+                    combined_fixtures,
+                    attempted=[
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata_fbref", sd_fb_fixtures),
+                    ],
+                )
                 return {
                     "fixtures": combined_fixtures,
                     "expected_pages": 1,
                     "current_page": 1,
-                    "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                    "source": _attempted_provider_label((
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata", sd_fb_fixtures),
+                        ("soccerdata", sd_mh_fixtures),
+                        ("soccerdata", sd_ss_fixtures),
+                    )),
                     "provider_metadata": {
                         "competition_format": competition_format,
+                        "knowledge_provider_route": knowledge_route,
                         "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
@@ -2863,7 +3206,7 @@ class DataResolver:
             # 2c. SoccerData MatchHistory
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_mh_code = LEAGUE_TO_SD_MH_CODE.get(league_id)
-            if sd_mh_code and rem_time > 0:
+            if sd_mh_code and rem_time > 0 and "soccerdata_match_history" in eligible_providers:
                 attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
                 t_mh_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData MatchHistory fetch starting for league_id={league_id}, season={season}, sd_code={sd_mh_code}")
@@ -2880,12 +3223,19 @@ class DataResolver:
                     t_mh_elapsed = time.perf_counter() - t_mh_start
                     logger.info(f"[TIMING COMPLETE] SoccerData MatchHistory fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_mh_elapsed:.2f}s")
                     sd_mh_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
+                    sd_mh_meta.setdefault("duration_seconds", round(t_mh_elapsed, 3))
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_mh_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
                     else:
                         sd_mh_meta.setdefault("status", sd_status)
                 except Exception as sd_exc:
                     t_mh_elapsed = time.perf_counter() - t_mh_start
+                    sd_mh_meta = {
+                        "status": "SOURCE_FAILED",
+                        "error": str(sd_exc),
+                        "source": "soccerdata_match_history",
+                        "duration_seconds": round(t_mh_elapsed, 3),
+                    }
                     logger.warning(f"[TIMING FAILED] DataResolver MatchHistory primary route failed for league_id={league_id}, season={season}, elapsed={t_mh_elapsed:.2f}s: {sd_exc}")
             elif sd_mh_code and rem_time <= 0:
                 logger.warning(f"Skipping SoccerData MatchHistory for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")
@@ -2913,19 +3263,27 @@ class DataResolver:
             )
 
             if mh_coverage["verified"] is True:
-                contribs = [
-                    p for p, count in [
-                        ("football_data_csv", len(csv_fixtures)),
-                        ("soccerdata_match_history", len(sd_mh_fixtures)),
-                    ] if count > 0
-                ]
+                contribs = _providers_contributed_from_records(
+                    combined_fixtures,
+                    attempted=[
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata_fbref", sd_fb_fixtures),
+                        ("soccerdata_match_history", sd_mh_fixtures),
+                    ],
+                )
                 return {
                     "fixtures": combined_fixtures,
                     "expected_pages": 1,
                     "current_page": 1,
-                    "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                    "source": _attempted_provider_label((
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata", sd_fb_fixtures),
+                        ("soccerdata", sd_mh_fixtures),
+                        ("soccerdata", sd_ss_fixtures),
+                    )),
                     "provider_metadata": {
                         "competition_format": competition_format,
+                        "knowledge_provider_route": knowledge_route,
                         "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
@@ -2944,7 +3302,7 @@ class DataResolver:
             # 2d. SoccerData Sofascore
             rem_time = primary_deadline_seconds - (time.monotonic() - t_primary_start)
             sd_ss_code = LEAGUE_TO_SD_SOFASCORE_CODE.get(league_id)
-            if sd_ss_code and rem_time > 0:
+            if sd_ss_code and rem_time > 0 and "soccerdata_sofascore" in eligible_providers:
                 attempt_timeout = min(rem_time, PRIMARY_PROVIDER_ATTEMPT_TIMEOUT_SECONDS)
                 t_ss_start = time.perf_counter()
                 logger.info(f"[TIMING START] SoccerData Sofascore fetch starting for league_id={league_id}, season={season}, sd_code={sd_ss_code}")
@@ -2961,6 +3319,7 @@ class DataResolver:
                     t_ss_elapsed = time.perf_counter() - t_ss_start
                     logger.info(f"[TIMING COMPLETE] SoccerData Sofascore fetch finished for league_id={league_id}, season={season}, status={sd_status}, elapsed={t_ss_elapsed:.2f}s")
                     sd_ss_meta = sd_meta_res if isinstance(sd_meta_res, dict) else {}
+                    sd_ss_meta.setdefault("duration_seconds", round(t_ss_elapsed, 3))
                     if sd_status == "SOURCE_AVAILABLE" and sd_games:
                         sd_ss_fixtures = _validate_and_filter_primary_soccerdata_matches(sd_games, league_id, season, completed_only=completed_only)
                     else:
@@ -2968,7 +3327,12 @@ class DataResolver:
                             sd_ss_meta["status"] = sd_status
                 except Exception as sd_exc:
                     t_ss_elapsed = time.perf_counter() - t_ss_start
-                    sd_ss_meta = {"status": "SOURCE_FAILED", "error": str(sd_exc)}
+                    sd_ss_meta = {
+                        "status": "SOURCE_FAILED",
+                        "error": str(sd_exc),
+                        "source": "soccerdata_sofascore",
+                        "duration_seconds": round(t_ss_elapsed, 3),
+                    }
                     logger.warning(f"[TIMING FAILED] DataResolver Sofascore primary route failed for league_id={league_id}, season={season}, elapsed={t_ss_elapsed:.2f}s: {sd_exc}")
             elif sd_ss_code and rem_time <= 0:
                 logger.warning(f"Skipping SoccerData Sofascore for league_id={league_id}, season={season}: Shared primary deadline ({primary_deadline_seconds}s) expired.")
@@ -2996,20 +3360,28 @@ class DataResolver:
             )
 
             if primary_route_coverage["verified"] is True:
-                contribs = [
-                    p for p, count in [
-                        ("football_data_csv", len(csv_fixtures)),
-                        ("soccerdata_match_history", len(sd_mh_fixtures)),
-                        ("soccerdata_sofascore", len(sd_ss_fixtures)),
-                    ] if count > 0
-                ]
+                contribs = _providers_contributed_from_records(
+                    combined_fixtures,
+                    attempted=[
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata_fbref", sd_fb_fixtures),
+                        ("soccerdata_match_history", sd_mh_fixtures),
+                        ("soccerdata_sofascore", sd_ss_fixtures),
+                    ],
+                )
                 return {
                     "fixtures": combined_fixtures,
                     "expected_pages": 1,
                     "current_page": 1,
-                    "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                    "source": _attempted_provider_label((
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata", sd_fb_fixtures),
+                        ("soccerdata", sd_mh_fixtures),
+                        ("soccerdata", sd_ss_fixtures),
+                    )),
                     "provider_metadata": {
                         "competition_format": competition_format,
+                        "knowledge_provider_route": knowledge_route,
                         "expected_team_ids": expected_team_ids_local,
                         "is_complete": True,
                         "is_partial": False,
@@ -3046,7 +3418,12 @@ class DataResolver:
 
         secondary_failed = False
         secondary_quota_exhausted = False
-        secondary_access_denied = False
+        # Access denial is derived from the provider outcomes actually observed in
+        # this attempt, so a 403 is reported as an access restriction instead of a
+        # generic failure (and never as an empty page).
+        secondary_access_denied = any(
+            outcome == "ACCESS_DENIED" for outcome in provider_outcomes.values()
+        )
 
         stored_db_fixtures = storage.get_historical_fixtures(league_id, season) if (league_id and season) else []
         all_accumulated_fixtures = list(combined_fixtures)
@@ -3075,21 +3452,28 @@ class DataResolver:
         )
 
         if sec_coverage["verified"] is True:
-            contribs = [
-                p for p, count in [
-                    ("football_data_csv", len(csv_fixtures)),
-                    ("soccerdata_fbref", len(sd_fb_fixtures)),
-                    ("soccerdata_match_history", len(sd_mh_fixtures)),
-                    ("soccerdata_sofascore", len(sd_ss_fixtures)),
-                ] if count > 0
-            ]
+            contribs = _providers_contributed_from_records(
+                combined_fixtures,
+                attempted=[
+                    ("football_data_csv", csv_fixtures),
+                    ("soccerdata_fbref", sd_fb_fixtures),
+                    ("soccerdata_match_history", sd_mh_fixtures),
+                    ("soccerdata_sofascore", sd_ss_fixtures),
+                ],
+            )
             return {
                 "fixtures": combined_fixtures,
                 "expected_pages": 1,
                 "current_page": page,
-                "source": "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "soccerdata"),
+                "source": _attempted_provider_label((
+                        ("football_data_csv", csv_fixtures),
+                        ("soccerdata", sd_fb_fixtures),
+                        ("soccerdata", sd_mh_fixtures),
+                        ("soccerdata", sd_ss_fixtures),
+                    )),
                 "provider_metadata": {
                     "competition_format": competition_format,
+                    "knowledge_provider_route": knowledge_route,
                     "expected_team_ids": expected_team_ids,
                     "is_complete": True,
                     "is_partial": False,
@@ -3112,19 +3496,26 @@ class DataResolver:
             league_id=league_id,
         )
 
-        contribs = [
-            p for p, count in [
-                ("football_data_csv", len(csv_fixtures)),
-                ("soccerdata_fbref", len(sd_fb_fixtures)),
-                ("soccerdata_match_history", len(sd_mh_fixtures)),
-                ("soccerdata_sofascore", len(sd_ss_fixtures)),
-            ] if count > 0
-        ]
+        contribs = _providers_contributed_from_records(
+            combined_fixtures,
+            attempted=[
+                ("football_data_csv", csv_fixtures),
+                ("soccerdata_fbref", sd_fb_fixtures),
+                ("soccerdata_match_history", sd_mh_fixtures),
+                ("soccerdata_sofascore", sd_ss_fixtures),
+            ],
+        )
 
-        final_source = "mixed" if len(contribs) > 1 else (contribs[0] if contribs else "none")
+        final_source = _attempted_provider_label((
+            ("football_data_csv", csv_fixtures),
+            ("soccerdata", sd_fb_fixtures),
+            ("soccerdata", sd_mh_fixtures),
+            ("soccerdata", sd_ss_fixtures),
+        ))
 
         final_provider_metadata = {
             "competition_format": competition_format,
+            "knowledge_provider_route": knowledge_route,
             "expected_team_ids": expected_team_ids,
             "is_complete": final_coverage["verified"],
             "is_partial": not final_coverage["verified"],

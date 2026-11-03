@@ -82,6 +82,7 @@ ESPN_SEASON_TYPE_CLASSIFICATION = {
     1: "preseason",
     2: "regular_season",
     3: "postseason",
+    4: "all_star",
     5: "play_in",
 }
 
@@ -284,6 +285,10 @@ def fetch_espn_nba_season_games(
         # Accepted events whose competition phase could not be established. They are
         # preserved and reported here, never counted as regular-season coverage.
         "events_unclassified": 0,
+        # Scheduled/non-final events are legitimate provider records, not
+        # malformed records or failed HTTP coverage units. They are counted
+        # separately so an active season is not described as corrupt.
+        "events_non_final": 0,
         "rejection_reasons": {},
         "competition_verified": True,
         "competition_uid": ESPN_NBA_LEAGUE_UID,
@@ -370,6 +375,7 @@ def fetch_espn_nba_season_games(
 
         month_games = []
         month_rejected = 0
+        month_non_final = 0
         month_rejection_reasons = {}
 
         def _reject(reason):
@@ -429,7 +435,11 @@ def fetch_espn_nba_season_games(
             status_name = status_type.get("name", "")
             is_final = completed or status_name in ("STATUS_FINAL", "STATUS_FULL_TIME", "FT")
             if not is_final:
-                _reject("event_not_final")
+                # A scheduled/future event has no final score yet. It is not a
+                # malformed provider record and must not fail the month's HTTP
+                # coverage; it is retained only as a diagnostic count.
+                month_non_final += 1
+                coverage_meta["events_non_final"] += 1
                 continue
 
             status_short = "FT"
@@ -554,6 +564,7 @@ def fetch_espn_nba_season_games(
                     "competition_verified": False,
                     "event_count": len(events),
                     "events_rejected": month_rejected,
+                    "events_non_final": month_non_final,
                 }
             )
             continue
@@ -572,13 +583,33 @@ def fetch_espn_nba_season_games(
                 "event_count": len(events),
                 "events_accepted": len(month_games),
                 "events_rejected": month_rejected,
+                "events_non_final": month_non_final,
                 "competition_verified": bool(competition_verified),
                 "rejection_reasons": month_rejection_reasons or None,
             }
         )
         normalized_games.extend(month_games)
 
-    coverage_meta["competition_verified"] = coverage_meta["months_failed"] == 0
+    # Season-level competition membership is only ever claimed from payload
+    # evidence. A month that succeeded with events but whose league metadata was
+    # absent does not prove NBA membership, so `months_failed == 0` on its own is
+    # not evidence: the season claim requires at least one month whose own payload
+    # was positively verified, together with every month succeeding and none
+    # failing. Months that legitimately hold no events contribute no evidence but
+    # do not contradict it, so they neither establish nor break the claim.
+    verified_months = sum(
+        1
+        for detail in coverage_meta["monthly_details"]
+        if isinstance(detail, dict)
+        and detail.get("status") == "SUCCESS"
+        and detail.get("competition_verified") is True
+    )
+    coverage_meta["months_competition_verified"] = verified_months
+    coverage_meta["competition_verified"] = bool(
+        coverage_meta["months_failed"] == 0
+        and coverage_meta["months_succeeded"] == len(months)
+        and verified_months > 0
+    )
     coverage_meta["all_months_succeeded"] = (
         coverage_meta["months_attempted"] == len(months)
         and coverage_meta["months_failed"] == 0
@@ -588,6 +619,7 @@ def fetch_espn_nba_season_games(
     logger.info(
         f"ESPN NBA provider fetched {len(normalized_games)} games for season {ssn} "
         f"(succeeded {coverage_meta['months_succeeded']}/{coverage_meta['months_attempted']} months, "
-        f"accepted {coverage_meta['events_accepted']} events, rejected {coverage_meta['events_rejected']})."
+        f"accepted {coverage_meta['events_accepted']} events, rejected {coverage_meta['events_rejected']}, "
+        f"non-final {coverage_meta['events_non_final']})."
     )
     return normalized_games, coverage_meta

@@ -1,0 +1,3047 @@
+{
+  "schema_version": 2,
+  "sport": "football",
+  "curated_at": "2026-11-02T00:00:00+00:00",
+  "description": "Verified edition-level participant universes, formats, stages and promotion/relegation context. Missing editions are intentionally absent; absence means UNKNOWN, not an empty roster.",
+  "sources": {
+    "premier_league_tables": {
+      "name": "Premier League tables",
+      "url": "https://www.premierleague.com/tables",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "laliga_standings": {
+      "name": "LaLiga standings",
+      "url": "https://www.laliga.com/en-GB/laliga-easports/standings",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "seriea_table": {
+      "name": "Lega Serie A table",
+      "url": "https://www.legaseriea.it/en/serie-a/table",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "bundesliga_table": {
+      "name": "Bundesliga table",
+      "url": "https://www.bundesliga.com/en/bundesliga/table",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "ligue1_standings": {
+      "name": "Ligue 1 standings",
+      "url": "https://www.ligue1.com/ranking",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "eredivisie_standings": {
+      "name": "Eredivisie standings",
+      "url": "https://eredivisie.nl/stand",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "primeira_liga_table": {
+      "name": "Liga Portugal standings",
+      "url": "https://www.ligaportugal.pt/en/liga/classificacao",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "fifa_wc_2018": {
+      "name": "FIFA World Cup Russia 2018",
+      "url": "https://www.fifa.com/en/tournaments/mens/worldcup/2018",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "high"
+    },
+    "fifa_wc_2022": {
+      "name": "FIFA World Cup Qatar 2022",
+      "url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "high"
+    },
+    "uefa_euro_2020": {
+      "name": "UEFA EURO 2020",
+      "url": "https://www.uefa.com/uefaeuro-2020/",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "high"
+    },
+    "uefa_euro_2024": {
+      "name": "UEFA EURO 2024",
+      "url": "https://www.uefa.com/euro2024/",
+      "retrieved_at": "2026-11-02T00:00:00+00:00",
+      "confidence": "high"
+    }
+  },
+  "editions": {
+    "39": {
+      "2023": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Arsenal"
+          },
+          {
+            "name": "Aston Villa"
+          },
+          {
+            "name": "Bournemouth"
+          },
+          {
+            "name": "Brentford"
+          },
+          {
+            "name": "Brighton & Hove Albion",
+            "aliases": [
+              "Brighton",
+              "Brighton and Hove Albion"
+            ],
+            "canonical_id": "football_team_brighton"
+          },
+          {
+            "name": "Burnley",
+            "aliases": [
+              "Burnley"
+            ],
+            "canonical_id": "football_team_burnley"
+          },
+          {
+            "name": "Chelsea"
+          },
+          {
+            "name": "Crystal Palace"
+          },
+          {
+            "name": "Everton"
+          },
+          {
+            "name": "Fulham"
+          },
+          {
+            "name": "Liverpool"
+          },
+          {
+            "name": "Luton Town",
+            "aliases": [
+              "Luton"
+            ],
+            "canonical_id": "football_team_39_luton_town"
+          },
+          {
+            "name": "Manchester City"
+          },
+          {
+            "name": "Manchester United"
+          },
+          {
+            "name": "Newcastle United",
+            "aliases": [
+              "Newcastle",
+              "Newcastle Utd"
+            ],
+            "canonical_id": "football_team_newcastle"
+          },
+          {
+            "name": "Nottingham Forest",
+            "aliases": [
+              "Nott'm Forest",
+              "Nottm Forest"
+            ],
+            "canonical_id": "football_team_39_nottingham"
+          },
+          {
+            "name": "Sheffield United",
+            "aliases": [
+              "Sheffield Utd"
+            ],
+            "canonical_id": "football_team_sheffield_united"
+          },
+          {
+            "name": "Tottenham Hotspur",
+            "aliases": [
+              "Tottenham",
+              "Spurs"
+            ],
+            "canonical_id": "football_team_tottenham"
+          },
+          {
+            "name": "West Ham United",
+            "aliases": [
+              "West Ham"
+            ],
+            "canonical_id": "football_team_west_ham"
+          },
+          {
+            "name": "Wolverhampton Wanderers",
+            "aliases": [
+              "Wolves",
+              "Wolverhampton"
+            ],
+            "canonical_id": "football_team_39_wolverhampton"
+          }
+        ],
+        "participant_evidence": {
+          "source": "premier_league_tables",
+          "statement": "Final Premier League 2023/24 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Burnley",
+          "Sheffield United",
+          "Luton Town"
+        ],
+        "relegated": [
+          "Luton Town",
+          "Burnley",
+          "Sheffield United"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2024": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Arsenal"
+          },
+          {
+            "name": "Aston Villa"
+          },
+          {
+            "name": "Bournemouth"
+          },
+          {
+            "name": "Brentford"
+          },
+          {
+            "name": "Brighton & Hove Albion",
+            "aliases": [
+              "Brighton",
+              "Brighton and Hove Albion"
+            ],
+            "canonical_id": "football_team_brighton"
+          },
+          {
+            "name": "Chelsea"
+          },
+          {
+            "name": "Crystal Palace"
+          },
+          {
+            "name": "Everton"
+          },
+          {
+            "name": "Fulham"
+          },
+          {
+            "name": "Ipswich Town",
+            "aliases": [
+              "Ipswich"
+            ],
+            "canonical_id": "football_team_39_ipswich"
+          },
+          {
+            "name": "Leicester City",
+            "aliases": [
+              "Leicester"
+            ],
+            "canonical_id": "football_team_leicester"
+          },
+          {
+            "name": "Liverpool"
+          },
+          {
+            "name": "Manchester City"
+          },
+          {
+            "name": "Manchester United"
+          },
+          {
+            "name": "Newcastle United",
+            "aliases": [
+              "Newcastle",
+              "Newcastle Utd"
+            ],
+            "canonical_id": "football_team_newcastle"
+          },
+          {
+            "name": "Nottingham Forest",
+            "aliases": [
+              "Nott'm Forest",
+              "Nottm Forest"
+            ],
+            "canonical_id": "football_team_39_nottingham"
+          },
+          {
+            "name": "Southampton"
+          },
+          {
+            "name": "Tottenham Hotspur",
+            "aliases": [
+              "Tottenham",
+              "Spurs"
+            ],
+            "canonical_id": "football_team_tottenham"
+          },
+          {
+            "name": "West Ham United",
+            "aliases": [
+              "West Ham"
+            ],
+            "canonical_id": "football_team_west_ham"
+          },
+          {
+            "name": "Wolverhampton Wanderers",
+            "aliases": [
+              "Wolves",
+              "Wolverhampton"
+            ],
+            "canonical_id": "football_team_39_wolverhampton"
+          }
+        ],
+        "participant_evidence": {
+          "source": "premier_league_tables",
+          "statement": "Final Premier League 2024/25 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Leicester City",
+          "Ipswich Town",
+          "Southampton"
+        ],
+        "relegated": [
+          "Leicester City",
+          "Ipswich Town",
+          "Southampton"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2019": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Arsenal"
+          },
+          {
+            "name": "Aston Villa"
+          },
+          {
+            "name": "Bournemouth"
+          },
+          {
+            "name": "Brighton & Hove Albion",
+            "aliases": [
+              "Brighton",
+              "Brighton and Hove Albion"
+            ],
+            "canonical_id": "football_team_brighton"
+          },
+          {
+            "name": "Burnley",
+            "aliases": [
+              "Burnley"
+            ],
+            "canonical_id": "football_team_burnley"
+          },
+          {
+            "name": "Chelsea"
+          },
+          {
+            "name": "Crystal Palace"
+          },
+          {
+            "name": "Everton"
+          },
+          {
+            "name": "Leicester City",
+            "aliases": [
+              "Leicester"
+            ],
+            "canonical_id": "football_team_leicester"
+          },
+          {
+            "name": "Liverpool"
+          },
+          {
+            "name": "Manchester City"
+          },
+          {
+            "name": "Manchester United"
+          },
+          {
+            "name": "Newcastle United",
+            "aliases": [
+              "Newcastle",
+              "Newcastle Utd"
+            ],
+            "canonical_id": "football_team_newcastle"
+          },
+          {
+            "name": "Norwich City",
+            "aliases": [
+              "Norwich"
+            ],
+            "canonical_id": "football_team_norwich"
+          },
+          {
+            "name": "Sheffield United",
+            "aliases": [
+              "Sheffield Utd"
+            ],
+            "canonical_id": "football_team_sheffield_united"
+          },
+          {
+            "name": "Southampton"
+          },
+          {
+            "name": "Tottenham Hotspur",
+            "aliases": [
+              "Tottenham",
+              "Spurs"
+            ],
+            "canonical_id": "football_team_tottenham"
+          },
+          {
+            "name": "Watford"
+          },
+          {
+            "name": "West Ham United",
+            "aliases": [
+              "West Ham"
+            ],
+            "canonical_id": "football_team_west_ham"
+          },
+          {
+            "name": "Wolverhampton Wanderers",
+            "aliases": [
+              "Wolves",
+              "Wolverhampton"
+            ],
+            "canonical_id": "football_team_39_wolverhampton"
+          }
+        ],
+        "participant_evidence": {
+          "source": "premier_league_tables",
+          "statement": "Final Premier League 2019/20 club list; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Norwich City",
+          "Sheffield United",
+          "Aston Villa"
+        ],
+        "relegated": [
+          "Norwich City",
+          "Aston Villa",
+          "Watford"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2020": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Arsenal"
+          },
+          {
+            "name": "Aston Villa"
+          },
+          {
+            "name": "Brighton & Hove Albion",
+            "aliases": [
+              "Brighton",
+              "Brighton and Hove Albion"
+            ],
+            "canonical_id": "football_team_brighton"
+          },
+          {
+            "name": "Burnley",
+            "aliases": [
+              "Burnley"
+            ],
+            "canonical_id": "football_team_burnley"
+          },
+          {
+            "name": "Chelsea"
+          },
+          {
+            "name": "Crystal Palace"
+          },
+          {
+            "name": "Everton"
+          },
+          {
+            "name": "Fulham"
+          },
+          {
+            "name": "Leeds United",
+            "aliases": [
+              "Leeds"
+            ],
+            "canonical_id": "football_team_leeds"
+          },
+          {
+            "name": "Leicester City",
+            "aliases": [
+              "Leicester"
+            ],
+            "canonical_id": "football_team_leicester"
+          },
+          {
+            "name": "Liverpool"
+          },
+          {
+            "name": "Manchester City"
+          },
+          {
+            "name": "Manchester United"
+          },
+          {
+            "name": "Newcastle United",
+            "aliases": [
+              "Newcastle",
+              "Newcastle Utd"
+            ],
+            "canonical_id": "football_team_newcastle"
+          },
+          {
+            "name": "Sheffield United",
+            "aliases": [
+              "Sheffield Utd"
+            ],
+            "canonical_id": "football_team_sheffield_united"
+          },
+          {
+            "name": "Southampton"
+          },
+          {
+            "name": "Tottenham Hotspur",
+            "aliases": [
+              "Tottenham",
+              "Spurs"
+            ],
+            "canonical_id": "football_team_tottenham"
+          },
+          {
+            "name": "West Bromwich Albion",
+            "aliases": [
+              "West Brom"
+            ],
+            "canonical_id": "football_team_west_brom"
+          },
+          {
+            "name": "West Ham United",
+            "aliases": [
+              "West Ham"
+            ],
+            "canonical_id": "football_team_west_ham"
+          },
+          {
+            "name": "Wolverhampton Wanderers",
+            "aliases": [
+              "Wolves",
+              "Wolverhampton"
+            ],
+            "canonical_id": "football_team_39_wolverhampton"
+          }
+        ],
+        "participant_evidence": {
+          "source": "premier_league_tables",
+          "statement": "Final Premier League 2020/21 club list; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Leeds United",
+          "West Bromwich Albion",
+          "Fulham"
+        ],
+        "relegated": [
+          "Fulham",
+          "West Bromwich Albion",
+          "Sheffield United"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2021": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Arsenal"
+          },
+          {
+            "name": "Aston Villa"
+          },
+          {
+            "name": "Brentford"
+          },
+          {
+            "name": "Brighton & Hove Albion",
+            "aliases": [
+              "Brighton",
+              "Brighton and Hove Albion"
+            ],
+            "canonical_id": "football_team_brighton"
+          },
+          {
+            "name": "Burnley",
+            "aliases": [
+              "Burnley"
+            ],
+            "canonical_id": "football_team_burnley"
+          },
+          {
+            "name": "Chelsea"
+          },
+          {
+            "name": "Crystal Palace"
+          },
+          {
+            "name": "Everton"
+          },
+          {
+            "name": "Leeds United",
+            "aliases": [
+              "Leeds"
+            ],
+            "canonical_id": "football_team_leeds"
+          },
+          {
+            "name": "Leicester City",
+            "aliases": [
+              "Leicester"
+            ],
+            "canonical_id": "football_team_leicester"
+          },
+          {
+            "name": "Liverpool"
+          },
+          {
+            "name": "Manchester City"
+          },
+          {
+            "name": "Manchester United"
+          },
+          {
+            "name": "Newcastle United",
+            "aliases": [
+              "Newcastle",
+              "Newcastle Utd"
+            ],
+            "canonical_id": "football_team_newcastle"
+          },
+          {
+            "name": "Norwich City",
+            "aliases": [
+              "Norwich"
+            ],
+            "canonical_id": "football_team_norwich"
+          },
+          {
+            "name": "Southampton"
+          },
+          {
+            "name": "Tottenham Hotspur",
+            "aliases": [
+              "Tottenham",
+              "Spurs"
+            ],
+            "canonical_id": "football_team_tottenham"
+          },
+          {
+            "name": "Watford"
+          },
+          {
+            "name": "West Ham United",
+            "aliases": [
+              "West Ham"
+            ],
+            "canonical_id": "football_team_west_ham"
+          },
+          {
+            "name": "Wolverhampton Wanderers",
+            "aliases": [
+              "Wolves",
+              "Wolverhampton"
+            ],
+            "canonical_id": "football_team_39_wolverhampton"
+          }
+        ],
+        "participant_evidence": {
+          "source": "premier_league_tables",
+          "statement": "Final Premier League 2021/22 club list; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Brentford",
+          "Norwich City",
+          "Watford"
+        ],
+        "relegated": [
+          "Norwich City",
+          "Watford",
+          "Burnley"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2022": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Arsenal"
+          },
+          {
+            "name": "Aston Villa"
+          },
+          {
+            "name": "Bournemouth"
+          },
+          {
+            "name": "Brentford"
+          },
+          {
+            "name": "Brighton & Hove Albion",
+            "aliases": [
+              "Brighton",
+              "Brighton and Hove Albion"
+            ],
+            "canonical_id": "football_team_brighton"
+          },
+          {
+            "name": "Chelsea"
+          },
+          {
+            "name": "Crystal Palace"
+          },
+          {
+            "name": "Everton"
+          },
+          {
+            "name": "Fulham"
+          },
+          {
+            "name": "Leeds United",
+            "aliases": [
+              "Leeds"
+            ],
+            "canonical_id": "football_team_leeds"
+          },
+          {
+            "name": "Leicester City",
+            "aliases": [
+              "Leicester"
+            ],
+            "canonical_id": "football_team_leicester"
+          },
+          {
+            "name": "Liverpool"
+          },
+          {
+            "name": "Manchester City"
+          },
+          {
+            "name": "Manchester United"
+          },
+          {
+            "name": "Newcastle United",
+            "aliases": [
+              "Newcastle",
+              "Newcastle Utd"
+            ],
+            "canonical_id": "football_team_newcastle"
+          },
+          {
+            "name": "Nottingham Forest",
+            "aliases": [
+              "Nott'm Forest",
+              "Nottm Forest"
+            ],
+            "canonical_id": "football_team_39_nottingham"
+          },
+          {
+            "name": "Southampton"
+          },
+          {
+            "name": "Tottenham Hotspur",
+            "aliases": [
+              "Tottenham",
+              "Spurs"
+            ],
+            "canonical_id": "football_team_tottenham"
+          },
+          {
+            "name": "West Ham United",
+            "aliases": [
+              "West Ham"
+            ],
+            "canonical_id": "football_team_west_ham"
+          },
+          {
+            "name": "Wolverhampton Wanderers",
+            "aliases": [
+              "Wolves",
+              "Wolverhampton"
+            ],
+            "canonical_id": "football_team_39_wolverhampton"
+          }
+        ],
+        "participant_evidence": {
+          "source": "premier_league_tables",
+          "statement": "Final Premier League 2022/23 club list; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Bournemouth",
+          "Fulham",
+          "Nottingham Forest"
+        ],
+        "relegated": [
+          "Leicester City",
+          "Leeds United",
+          "Southampton"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2025": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Arsenal"
+          },
+          {
+            "name": "Aston Villa"
+          },
+          {
+            "name": "Bournemouth"
+          },
+          {
+            "name": "Brentford"
+          },
+          {
+            "name": "Brighton & Hove Albion",
+            "aliases": [
+              "Brighton",
+              "Brighton and Hove Albion"
+            ],
+            "canonical_id": "football_team_brighton"
+          },
+          {
+            "name": "Burnley",
+            "aliases": [
+              "Burnley"
+            ],
+            "canonical_id": "football_team_burnley"
+          },
+          {
+            "name": "Chelsea"
+          },
+          {
+            "name": "Crystal Palace"
+          },
+          {
+            "name": "Everton"
+          },
+          {
+            "name": "Fulham"
+          },
+          {
+            "name": "Leeds United",
+            "aliases": [
+              "Leeds"
+            ],
+            "canonical_id": "football_team_leeds"
+          },
+          {
+            "name": "Liverpool"
+          },
+          {
+            "name": "Manchester City"
+          },
+          {
+            "name": "Manchester United"
+          },
+          {
+            "name": "Newcastle United",
+            "aliases": [
+              "Newcastle",
+              "Newcastle Utd"
+            ],
+            "canonical_id": "football_team_newcastle"
+          },
+          {
+            "name": "Nottingham Forest",
+            "aliases": [
+              "Nott'm Forest",
+              "Nottm Forest"
+            ],
+            "canonical_id": "football_team_39_nottingham"
+          },
+          {
+            "name": "Sunderland",
+            "aliases": [
+              "Sunderland"
+            ],
+            "canonical_id": "football_team_sunderland"
+          },
+          {
+            "name": "Tottenham Hotspur",
+            "aliases": [
+              "Tottenham",
+              "Spurs"
+            ],
+            "canonical_id": "football_team_tottenham"
+          },
+          {
+            "name": "West Ham United",
+            "aliases": [
+              "West Ham"
+            ],
+            "canonical_id": "football_team_west_ham"
+          },
+          {
+            "name": "Wolverhampton Wanderers",
+            "aliases": [
+              "Wolves",
+              "Wolverhampton"
+            ],
+            "canonical_id": "football_team_39_wolverhampton"
+          }
+        ],
+        "participant_evidence": {
+          "source": "premier_league_tables",
+          "statement": "Final Premier League 2025/26 club list; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Leeds United",
+          "Burnley",
+          "Sunderland"
+        ],
+        "relegated": [],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      }
+    },
+    "140": {
+      "2023": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Alavés"
+          },
+          {
+            "name": "Almería"
+          },
+          {
+            "name": "Athletic Bilbao",
+            "aliases": [
+              "Athletic Club",
+              "Ath Bilbao"
+            ],
+            "canonical_id": "football_team_athletic_bilbao"
+          },
+          {
+            "name": "Atlético Madrid",
+            "aliases": [
+              "Atletico de Madrid",
+              "Ath Madrid"
+            ],
+            "canonical_id": "football_team_atletico_madrid"
+          },
+          {
+            "name": "Barcelona"
+          },
+          {
+            "name": "Cádiz"
+          },
+          {
+            "name": "Celta Vigo",
+            "aliases": [
+              "Celta de Vigo",
+              "Celta"
+            ],
+            "canonical_id": "football_team_celta_vigo"
+          },
+          {
+            "name": "Getafe"
+          },
+          {
+            "name": "Girona"
+          },
+          {
+            "name": "Granada"
+          },
+          {
+            "name": "Las Palmas"
+          },
+          {
+            "name": "Mallorca"
+          },
+          {
+            "name": "Osasuna"
+          },
+          {
+            "name": "Rayo Vallecano"
+          },
+          {
+            "name": "Real Betis",
+            "aliases": [
+              "Betis"
+            ],
+            "canonical_id": "football_team_real_betis"
+          },
+          {
+            "name": "Real Madrid"
+          },
+          {
+            "name": "Real Sociedad",
+            "aliases": [
+              "Sociedad"
+            ]
+          },
+          {
+            "name": "Sevilla"
+          },
+          {
+            "name": "Valencia"
+          },
+          {
+            "name": "Villarreal"
+          }
+        ],
+        "participant_evidence": {
+          "source": "laliga_standings",
+          "statement": "Final La Liga 2023/24 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Alavés",
+          "Las Palmas",
+          "Granada"
+        ],
+        "relegated": [
+          "Almería",
+          "Cádiz",
+          "Granada"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2024": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Alavés"
+          },
+          {
+            "name": "Athletic Bilbao",
+            "aliases": [
+              "Athletic Club",
+              "Ath Bilbao"
+            ],
+            "canonical_id": "football_team_athletic_bilbao"
+          },
+          {
+            "name": "Atlético Madrid",
+            "aliases": [
+              "Atletico de Madrid",
+              "Ath Madrid"
+            ],
+            "canonical_id": "football_team_atletico_madrid"
+          },
+          {
+            "name": "Barcelona"
+          },
+          {
+            "name": "Celta Vigo",
+            "aliases": [
+              "Celta de Vigo",
+              "Celta"
+            ],
+            "canonical_id": "football_team_celta_vigo"
+          },
+          {
+            "name": "Espanyol",
+            "aliases": [
+              "Espanyol de Barcelona",
+              "Espanol"
+            ]
+          },
+          {
+            "name": "Getafe"
+          },
+          {
+            "name": "Girona"
+          },
+          {
+            "name": "Las Palmas"
+          },
+          {
+            "name": "Leganés"
+          },
+          {
+            "name": "Mallorca"
+          },
+          {
+            "name": "Osasuna"
+          },
+          {
+            "name": "Rayo Vallecano"
+          },
+          {
+            "name": "Real Betis",
+            "aliases": [
+              "Betis"
+            ],
+            "canonical_id": "football_team_real_betis"
+          },
+          {
+            "name": "Real Madrid"
+          },
+          {
+            "name": "Real Sociedad",
+            "aliases": [
+              "Sociedad"
+            ]
+          },
+          {
+            "name": "Sevilla"
+          },
+          {
+            "name": "Valencia"
+          },
+          {
+            "name": "Valladolid"
+          },
+          {
+            "name": "Villarreal"
+          }
+        ],
+        "participant_evidence": {
+          "source": "laliga_standings",
+          "statement": "Final La Liga 2024/25 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Espanyol",
+          "Leganés",
+          "Valladolid"
+        ],
+        "relegated": [
+          "Valladolid",
+          "Las Palmas",
+          "Leganés"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2019": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Alavés",
+            "canonical_id": "football_team_alaves"
+          },
+          {
+            "name": "Athletic Bilbao",
+            "canonical_id": "football_team_athletic_bilbao"
+          },
+          {
+            "name": "Atlético Madrid",
+            "canonical_id": "football_team_atletico_madrid"
+          },
+          {
+            "name": "Barcelona",
+            "canonical_id": "football_team_barcelona"
+          },
+          {
+            "name": "Celta Vigo",
+            "canonical_id": "football_team_celta_vigo"
+          },
+          {
+            "name": "Eibar",
+            "canonical_id": "football_team_eibar"
+          },
+          {
+            "name": "Espanyol",
+            "canonical_id": "football_team_espanyol"
+          },
+          {
+            "name": "Getafe",
+            "canonical_id": "football_team_getafe"
+          },
+          {
+            "name": "Granada",
+            "canonical_id": "football_team_granada"
+          },
+          {
+            "name": "Leganés",
+            "canonical_id": "football_team_leganes"
+          },
+          {
+            "name": "Levante",
+            "canonical_id": "football_team_levante"
+          },
+          {
+            "name": "Mallorca",
+            "canonical_id": "football_team_mallorca"
+          },
+          {
+            "name": "Osasuna",
+            "canonical_id": "football_team_osasuna"
+          },
+          {
+            "name": "Real Betis",
+            "canonical_id": "football_team_real_betis"
+          },
+          {
+            "name": "Real Madrid",
+            "canonical_id": "football_team_real_madrid"
+          },
+          {
+            "name": "Real Sociedad",
+            "canonical_id": "football_team_real_sociedad"
+          },
+          {
+            "name": "Sevilla",
+            "canonical_id": "football_team_sevilla"
+          },
+          {
+            "name": "Valencia",
+            "canonical_id": "football_team_valencia"
+          },
+          {
+            "name": "Valladolid",
+            "canonical_id": "football_team_valladolid"
+          },
+          {
+            "name": "Villarreal",
+            "canonical_id": "football_team_villarreal"
+          }
+        ],
+        "participant_evidence": {
+          "source": "laliga_standings",
+          "statement": "Final La Liga 2019/20 club list; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Granada",
+          "Osasuna",
+          "Mallorca"
+        ],
+        "relegated": [
+          "Eibar",
+          "Leganés",
+          "Espanyol"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      }
+    },
+    "135": {
+      "2023": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Atalanta"
+          },
+          {
+            "name": "Bologna"
+          },
+          {
+            "name": "Cagliari"
+          },
+          {
+            "name": "Empoli"
+          },
+          {
+            "name": "Fiorentina"
+          },
+          {
+            "name": "Frosinone"
+          },
+          {
+            "name": "Genoa"
+          },
+          {
+            "name": "Hellas Verona",
+            "aliases": [
+              "Verona"
+            ],
+            "canonical_id": "football_team_hellas_verona"
+          },
+          {
+            "name": "Inter Milan",
+            "aliases": [
+              "Inter",
+              "Internazionale"
+            ],
+            "canonical_id": "football_team_inter_milan"
+          },
+          {
+            "name": "Juventus"
+          },
+          {
+            "name": "Lazio"
+          },
+          {
+            "name": "Lecce"
+          },
+          {
+            "name": "AC Milan",
+            "aliases": [
+              "Milan"
+            ],
+            "canonical_id": "football_team_ac_milan"
+          },
+          {
+            "name": "Monza"
+          },
+          {
+            "name": "Napoli"
+          },
+          {
+            "name": "Roma"
+          },
+          {
+            "name": "Salernitana"
+          },
+          {
+            "name": "Sassuolo"
+          },
+          {
+            "name": "Torino"
+          },
+          {
+            "name": "Udinese"
+          }
+        ],
+        "participant_evidence": {
+          "source": "seriea_table",
+          "statement": "Final Serie A 2023/24 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Frosinone",
+          "Genoa",
+          "Cagliari"
+        ],
+        "relegated": [
+          "Frosinone",
+          "Salernitana",
+          "Sassuolo"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2024": {
+        "format_details": "20 clubs; double round robin (380 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 380
+          }
+        ],
+        "fixture_total": 380,
+        "participants": [
+          {
+            "name": "Atalanta"
+          },
+          {
+            "name": "Bologna"
+          },
+          {
+            "name": "Cagliari"
+          },
+          {
+            "name": "Como"
+          },
+          {
+            "name": "Empoli"
+          },
+          {
+            "name": "Fiorentina"
+          },
+          {
+            "name": "Genoa"
+          },
+          {
+            "name": "Hellas Verona",
+            "aliases": [
+              "Verona"
+            ],
+            "canonical_id": "football_team_hellas_verona"
+          },
+          {
+            "name": "Inter Milan",
+            "aliases": [
+              "Inter",
+              "Internazionale"
+            ],
+            "canonical_id": "football_team_inter_milan"
+          },
+          {
+            "name": "Juventus"
+          },
+          {
+            "name": "Lazio"
+          },
+          {
+            "name": "Lecce"
+          },
+          {
+            "name": "AC Milan",
+            "aliases": [
+              "Milan"
+            ],
+            "canonical_id": "football_team_ac_milan"
+          },
+          {
+            "name": "Monza"
+          },
+          {
+            "name": "Napoli"
+          },
+          {
+            "name": "Parma"
+          },
+          {
+            "name": "Roma"
+          },
+          {
+            "name": "Torino"
+          },
+          {
+            "name": "Udinese"
+          },
+          {
+            "name": "Venezia"
+          }
+        ],
+        "participant_evidence": {
+          "source": "seriea_table",
+          "statement": "Final Serie A 2024/25 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Como",
+          "Parma",
+          "Venezia"
+        ],
+        "relegated": [
+          "Monza",
+          "Empoli",
+          "Venezia"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 380,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      }
+    },
+    "78": {
+      "2023": {
+        "format_details": "18 clubs; double round robin (306 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 306
+          }
+        ],
+        "fixture_total": 306,
+        "participants": [
+          {
+            "name": "Augsburg"
+          },
+          {
+            "name": "Bayer Leverkusen",
+            "aliases": [
+              "Leverkusen"
+            ],
+            "canonical_id": "football_team_bayer_leverkusen"
+          },
+          {
+            "name": "Bayern Munich",
+            "aliases": [
+              "FC Bayern München",
+              "Bayern Munchen"
+            ],
+            "canonical_id": "football_team_bayern_munich"
+          },
+          {
+            "name": "Bochum"
+          },
+          {
+            "name": "Borussia Dortmund",
+            "aliases": [
+              "Dortmund"
+            ]
+          },
+          {
+            "name": "Borussia Mönchengladbach",
+            "aliases": [
+              "M'gladbach",
+              "M Gladbach"
+            ],
+            "canonical_id": "football_team_m_gladbach"
+          },
+          {
+            "name": "Cologne",
+            "aliases": [
+              "1. FC Köln",
+              "Koln"
+            ],
+            "canonical_id": "football_team_koln"
+          },
+          {
+            "name": "Darmstadt"
+          },
+          {
+            "name": "Eintracht Frankfurt",
+            "aliases": [
+              "Ein Frankfurt"
+            ],
+            "canonical_id": "football_team_eintracht_frankfurt"
+          },
+          {
+            "name": "Freiburg"
+          },
+          {
+            "name": "Heidenheim"
+          },
+          {
+            "name": "Hoffenheim"
+          },
+          {
+            "name": "Mainz"
+          },
+          {
+            "name": "RB Leipzig"
+          },
+          {
+            "name": "Stuttgart"
+          },
+          {
+            "name": "Union Berlin"
+          },
+          {
+            "name": "Werder Bremen"
+          },
+          {
+            "name": "Wolfsburg"
+          }
+        ],
+        "participant_evidence": {
+          "source": "bundesliga_table",
+          "statement": "Final Bundesliga 2023/24 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Heidenheim",
+          "Darmstadt"
+        ],
+        "relegated": [
+          "Cologne",
+          "Darmstadt"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 18,
+          "expected_fixture_count": 306,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2024": {
+        "format_details": "18 clubs; double round robin (306 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 306
+          }
+        ],
+        "fixture_total": 306,
+        "participants": [
+          {
+            "name": "Augsburg"
+          },
+          {
+            "name": "Bayer Leverkusen",
+            "aliases": [
+              "Leverkusen"
+            ],
+            "canonical_id": "football_team_bayer_leverkusen"
+          },
+          {
+            "name": "Bayern Munich",
+            "aliases": [
+              "FC Bayern München",
+              "Bayern Munchen"
+            ],
+            "canonical_id": "football_team_bayern_munich"
+          },
+          {
+            "name": "Bochum"
+          },
+          {
+            "name": "Borussia Dortmund",
+            "aliases": [
+              "Dortmund"
+            ]
+          },
+          {
+            "name": "Borussia Mönchengladbach",
+            "aliases": [
+              "M'gladbach",
+              "M Gladbach"
+            ],
+            "canonical_id": "football_team_m_gladbach"
+          },
+          {
+            "name": "Eintracht Frankfurt",
+            "aliases": [
+              "Ein Frankfurt"
+            ],
+            "canonical_id": "football_team_eintracht_frankfurt"
+          },
+          {
+            "name": "Freiburg"
+          },
+          {
+            "name": "Heidenheim"
+          },
+          {
+            "name": "Hoffenheim"
+          },
+          {
+            "name": "Holstein Kiel"
+          },
+          {
+            "name": "Mainz"
+          },
+          {
+            "name": "RB Leipzig"
+          },
+          {
+            "name": "St. Pauli"
+          },
+          {
+            "name": "Stuttgart"
+          },
+          {
+            "name": "Union Berlin"
+          },
+          {
+            "name": "Werder Bremen"
+          },
+          {
+            "name": "Wolfsburg"
+          }
+        ],
+        "participant_evidence": {
+          "source": "bundesliga_table",
+          "statement": "Final Bundesliga 2024/25 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Holstein Kiel",
+          "St. Pauli"
+        ],
+        "relegated": [
+          "Bochum",
+          "Holstein Kiel"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 18,
+          "expected_fixture_count": 306,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      }
+    },
+    "61": {
+      "2023": {
+        "format_details": "18 clubs; double round robin (306 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 306
+          }
+        ],
+        "fixture_total": 306,
+        "participants": [
+          {
+            "name": "Brest"
+          },
+          {
+            "name": "Clermont"
+          },
+          {
+            "name": "Le Havre"
+          },
+          {
+            "name": "Lens"
+          },
+          {
+            "name": "Lille"
+          },
+          {
+            "name": "Lorient"
+          },
+          {
+            "name": "Lyon",
+            "aliases": [
+              "Olympique Lyonnais"
+            ]
+          },
+          {
+            "name": "Marseille",
+            "aliases": [
+              "Olympique de Marseille",
+              "Olympique Marseille"
+            ]
+          },
+          {
+            "name": "Metz"
+          },
+          {
+            "name": "Monaco",
+            "aliases": [
+              "AS Monaco"
+            ]
+          },
+          {
+            "name": "Montpellier"
+          },
+          {
+            "name": "Nantes"
+          },
+          {
+            "name": "Nice"
+          },
+          {
+            "name": "Paris Saint-Germain",
+            "aliases": [
+              "Paris SG",
+              "PSG"
+            ],
+            "canonical_id": "football_team_paris_saint_germain"
+          },
+          {
+            "name": "Reims"
+          },
+          {
+            "name": "Rennes"
+          },
+          {
+            "name": "Strasbourg"
+          },
+          {
+            "name": "Toulouse"
+          }
+        ],
+        "participant_evidence": {
+          "source": "ligue1_standings",
+          "statement": "Final Ligue 1 2023/24 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Le Havre",
+          "Metz"
+        ],
+        "relegated": [
+          "Clermont",
+          "Lorient",
+          "Metz"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 18,
+          "expected_fixture_count": 306,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2024": {
+        "format_details": "18 clubs; double round robin (306 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 306
+          }
+        ],
+        "fixture_total": 306,
+        "participants": [
+          {
+            "name": "Angers"
+          },
+          {
+            "name": "Auxerre"
+          },
+          {
+            "name": "Brest"
+          },
+          {
+            "name": "Le Havre"
+          },
+          {
+            "name": "Lens"
+          },
+          {
+            "name": "Lille"
+          },
+          {
+            "name": "Lyon",
+            "aliases": [
+              "Olympique Lyonnais"
+            ]
+          },
+          {
+            "name": "Marseille",
+            "aliases": [
+              "Olympique de Marseille",
+              "Olympique Marseille"
+            ]
+          },
+          {
+            "name": "Monaco",
+            "aliases": [
+              "AS Monaco"
+            ]
+          },
+          {
+            "name": "Montpellier"
+          },
+          {
+            "name": "Nantes"
+          },
+          {
+            "name": "Nice"
+          },
+          {
+            "name": "Paris Saint-Germain",
+            "aliases": [
+              "Paris SG",
+              "PSG"
+            ],
+            "canonical_id": "football_team_paris_saint_germain"
+          },
+          {
+            "name": "Reims"
+          },
+          {
+            "name": "Rennes"
+          },
+          {
+            "name": "Saint-Étienne",
+            "aliases": [
+              "St Etienne",
+              "Saint Etienne"
+            ],
+            "canonical_id": "football_team_st_etienne"
+          },
+          {
+            "name": "Strasbourg"
+          },
+          {
+            "name": "Toulouse"
+          }
+        ],
+        "participant_evidence": {
+          "source": "ligue1_standings",
+          "statement": "Final Ligue 1 2024/25 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Angers",
+          "Auxerre",
+          "Saint-Étienne"
+        ],
+        "relegated": [
+          "Montpellier",
+          "Saint-Étienne",
+          "Reims"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 18,
+          "expected_fixture_count": 306,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      }
+    },
+    "88": {
+      "2023": {
+        "format_details": "18 clubs; double round robin (306 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 306
+          }
+        ],
+        "fixture_total": 306,
+        "participants": [
+          {
+            "name": "Ajax"
+          },
+          {
+            "name": "Almere City"
+          },
+          {
+            "name": "AZ Alkmaar",
+            "aliases": [
+              "AZ"
+            ],
+            "canonical_id": "football_team_az_alkmaar"
+          },
+          {
+            "name": "Excelsior"
+          },
+          {
+            "name": "Feyenoord"
+          },
+          {
+            "name": "Fortuna Sittard",
+            "aliases": [
+              "For Sittard"
+            ]
+          },
+          {
+            "name": "Go Ahead Eagles",
+            "aliases": [
+              "Go Ahead"
+            ]
+          },
+          {
+            "name": "Heerenveen"
+          },
+          {
+            "name": "Heracles Almelo"
+          },
+          {
+            "name": "NEC Nijmegen",
+            "aliases": [
+              "Nijmegen",
+              "N.E.C."
+            ],
+            "canonical_id": "football_team_nijmegen"
+          },
+          {
+            "name": "PEC Zwolle",
+            "aliases": [
+              "Zwolle"
+            ],
+            "canonical_id": "football_team_zwolle"
+          },
+          {
+            "name": "PSV"
+          },
+          {
+            "name": "RKC Waalwijk",
+            "aliases": [
+              "Waalwijk"
+            ],
+            "canonical_id": "football_team_waalwijk"
+          },
+          {
+            "name": "Sparta Rotterdam",
+            "aliases": [
+              "Sparta"
+            ]
+          },
+          {
+            "name": "Twente"
+          },
+          {
+            "name": "Utrecht"
+          },
+          {
+            "name": "Vitesse"
+          },
+          {
+            "name": "FC Volendam",
+            "aliases": [
+              "Volendam"
+            ],
+            "canonical_id": "football_team_volendam"
+          }
+        ],
+        "participant_evidence": {
+          "source": "eredivisie_standings",
+          "statement": "Final Eredivisie 2023/24 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Heracles Almelo",
+          "PEC Zwolle",
+          "Almere City"
+        ],
+        "relegated": [
+          "Vitesse",
+          "FC Volendam",
+          "Excelsior"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 18,
+          "expected_fixture_count": 306,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2024": {
+        "format_details": "18 clubs; double round robin (306 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 306
+          }
+        ],
+        "fixture_total": 306,
+        "participants": [
+          {
+            "name": "Ajax"
+          },
+          {
+            "name": "Almere City"
+          },
+          {
+            "name": "AZ Alkmaar",
+            "aliases": [
+              "AZ"
+            ],
+            "canonical_id": "football_team_az_alkmaar"
+          },
+          {
+            "name": "Feyenoord"
+          },
+          {
+            "name": "Fortuna Sittard",
+            "aliases": [
+              "For Sittard"
+            ]
+          },
+          {
+            "name": "Go Ahead Eagles",
+            "aliases": [
+              "Go Ahead"
+            ]
+          },
+          {
+            "name": "Groningen"
+          },
+          {
+            "name": "Heerenveen"
+          },
+          {
+            "name": "Heracles Almelo"
+          },
+          {
+            "name": "NAC Breda"
+          },
+          {
+            "name": "NEC Nijmegen",
+            "aliases": [
+              "Nijmegen",
+              "N.E.C."
+            ],
+            "canonical_id": "football_team_nijmegen"
+          },
+          {
+            "name": "PEC Zwolle",
+            "aliases": [
+              "Zwolle"
+            ],
+            "canonical_id": "football_team_zwolle"
+          },
+          {
+            "name": "PSV"
+          },
+          {
+            "name": "RKC Waalwijk",
+            "aliases": [
+              "Waalwijk"
+            ],
+            "canonical_id": "football_team_waalwijk"
+          },
+          {
+            "name": "Sparta Rotterdam",
+            "aliases": [
+              "Sparta"
+            ]
+          },
+          {
+            "name": "Twente"
+          },
+          {
+            "name": "Utrecht"
+          },
+          {
+            "name": "Willem II"
+          }
+        ],
+        "participant_evidence": {
+          "source": "eredivisie_standings",
+          "statement": "Final Eredivisie 2024/25 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Groningen",
+          "Willem II",
+          "NAC Breda"
+        ],
+        "relegated": [
+          "Willem II",
+          "Almere City",
+          "RKC Waalwijk"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 18,
+          "expected_fixture_count": 306,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      }
+    },
+    "94": {
+      "2023": {
+        "format_details": "18 clubs; double round robin (306 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 306
+          }
+        ],
+        "fixture_total": 306,
+        "participants": [
+          {
+            "name": "Arouca"
+          },
+          {
+            "name": "Benfica"
+          },
+          {
+            "name": "Boavista"
+          },
+          {
+            "name": "Braga",
+            "aliases": [
+              "Sp Braga"
+            ],
+            "canonical_id": "football_team_sp_braga"
+          },
+          {
+            "name": "Casa Pia"
+          },
+          {
+            "name": "Chaves"
+          },
+          {
+            "name": "Estoril"
+          },
+          {
+            "name": "Estrela Amadora"
+          },
+          {
+            "name": "Famalicão"
+          },
+          {
+            "name": "Farense"
+          },
+          {
+            "name": "Gil Vicente"
+          },
+          {
+            "name": "Moreirense"
+          },
+          {
+            "name": "Portimonense"
+          },
+          {
+            "name": "Porto"
+          },
+          {
+            "name": "Rio Ave"
+          },
+          {
+            "name": "Sporting CP",
+            "aliases": [
+              "Sporting Lisbon",
+              "Sp Lisbon"
+            ],
+            "canonical_id": "football_team_sporting_cp"
+          },
+          {
+            "name": "Vitória de Guimarães",
+            "aliases": [
+              "Guimaraes",
+              "Vitoria de Guimaraes"
+            ],
+            "canonical_id": "football_team_guimaraes"
+          },
+          {
+            "name": "Vizela"
+          }
+        ],
+        "participant_evidence": {
+          "source": "primeira_liga_table",
+          "statement": "Final Primeira Liga 2023/24 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "Farense",
+          "Estrela Amadora",
+          "Moreirense"
+        ],
+        "relegated": [
+          "Chaves",
+          "Portimonense",
+          "Vizela"
+        ],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 18,
+          "expected_fixture_count": 306,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2024": {
+        "format_details": "18 clubs; double round robin (306 matches)",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season",
+            "fixture_count": 306
+          }
+        ],
+        "fixture_total": 306,
+        "participants": [
+          {
+            "name": "Arouca"
+          },
+          {
+            "name": "AVS"
+          },
+          {
+            "name": "Benfica"
+          },
+          {
+            "name": "Boavista"
+          },
+          {
+            "name": "Braga",
+            "aliases": [
+              "Sp Braga"
+            ],
+            "canonical_id": "football_team_sp_braga"
+          },
+          {
+            "name": "Casa Pia"
+          },
+          {
+            "name": "Estoril"
+          },
+          {
+            "name": "Estrela Amadora"
+          },
+          {
+            "name": "Famalicão"
+          },
+          {
+            "name": "Farense"
+          },
+          {
+            "name": "Gil Vicente"
+          },
+          {
+            "name": "Moreirense"
+          },
+          {
+            "name": "Nacional"
+          },
+          {
+            "name": "Porto"
+          },
+          {
+            "name": "Rio Ave"
+          },
+          {
+            "name": "Santa Clara"
+          },
+          {
+            "name": "Sporting CP",
+            "aliases": [
+              "Sporting Lisbon",
+              "Sp Lisbon"
+            ],
+            "canonical_id": "football_team_sporting_cp"
+          },
+          {
+            "name": "Vitória de Guimarães",
+            "aliases": [
+              "Guimaraes",
+              "Vitoria de Guimaraes"
+            ],
+            "canonical_id": "football_team_guimaraes"
+          }
+        ],
+        "participant_evidence": {
+          "source": "primeira_liga_table",
+          "statement": "Final Primeira Liga 2024/25 club list for the edition; promoted/relegated lists describe entry to and exit from this edition."
+        },
+        "promoted": [
+          "AVS",
+          "Nacional",
+          "Santa Clara"
+        ],
+        "relegated": [],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 18,
+          "expected_fixture_count": 306,
+          "scope": "all_regular_season_matches",
+          "requires_all_stages": true
+        }
+      }
+    },
+    "1": {
+      "2018": {
+        "format_details": "32 teams; group stage followed by knockout rounds",
+        "stages": [
+          {
+            "id": "group_stage",
+            "name": "Group stage",
+            "fixture_count": 48
+          },
+          {
+            "id": "round_of_16",
+            "name": "Round of 16",
+            "fixture_count": 8
+          },
+          {
+            "id": "quarter_finals",
+            "name": "Quarter-finals",
+            "fixture_count": 4
+          },
+          {
+            "id": "semi_finals",
+            "name": "Semi-finals",
+            "fixture_count": 2
+          },
+          {
+            "id": "third_place",
+            "name": "Third-place match",
+            "fixture_count": 1
+          },
+          {
+            "id": "final",
+            "name": "Final",
+            "fixture_count": 1
+          }
+        ],
+        "fixture_total": 64,
+        "participants": [
+          {
+            "name": "Russia"
+          },
+          {
+            "name": "Saudi Arabia"
+          },
+          {
+            "name": "Egypt"
+          },
+          {
+            "name": "Uruguay"
+          },
+          {
+            "name": "Portugal"
+          },
+          {
+            "name": "Spain"
+          },
+          {
+            "name": "Morocco"
+          },
+          {
+            "name": "Iran",
+            "aliases": [
+              "IR Iran"
+            ],
+            "canonical_id": "football_team_iran"
+          },
+          {
+            "name": "France"
+          },
+          {
+            "name": "Australia"
+          },
+          {
+            "name": "Peru"
+          },
+          {
+            "name": "Denmark"
+          },
+          {
+            "name": "Argentina"
+          },
+          {
+            "name": "Iceland"
+          },
+          {
+            "name": "Croatia"
+          },
+          {
+            "name": "Nigeria"
+          },
+          {
+            "name": "Brazil"
+          },
+          {
+            "name": "Switzerland"
+          },
+          {
+            "name": "Costa Rica"
+          },
+          {
+            "name": "Serbia"
+          },
+          {
+            "name": "Germany",
+            "aliases": [
+              "Deutschland"
+            ]
+          },
+          {
+            "name": "Mexico"
+          },
+          {
+            "name": "Sweden"
+          },
+          {
+            "name": "South Korea",
+            "aliases": [
+              "Korea Republic",
+              "Korea Rep"
+            ],
+            "canonical_id": "football_team_south_korea"
+          },
+          {
+            "name": "Belgium"
+          },
+          {
+            "name": "Panama"
+          },
+          {
+            "name": "Tunisia"
+          },
+          {
+            "name": "England"
+          },
+          {
+            "name": "Poland"
+          },
+          {
+            "name": "Senegal"
+          },
+          {
+            "name": "Colombia"
+          },
+          {
+            "name": "Japan"
+          }
+        ],
+        "participant_evidence": {
+          "source": "fifa_wc_2018",
+          "statement": "Final FIFA World Cup 2018 participant list."
+        },
+        "promoted": [],
+        "relegated": [],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 32,
+          "expected_fixture_count": 64,
+          "scope": "all_final_tournament_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2022": {
+        "format_details": "32 teams; group stage followed by knockout rounds",
+        "stages": [
+          {
+            "id": "group_stage",
+            "name": "Group stage",
+            "fixture_count": 48
+          },
+          {
+            "id": "round_of_16",
+            "name": "Round of 16",
+            "fixture_count": 8
+          },
+          {
+            "id": "quarter_finals",
+            "name": "Quarter-finals",
+            "fixture_count": 4
+          },
+          {
+            "id": "semi_finals",
+            "name": "Semi-finals",
+            "fixture_count": 2
+          },
+          {
+            "id": "third_place",
+            "name": "Third-place match",
+            "fixture_count": 1
+          },
+          {
+            "id": "final",
+            "name": "Final",
+            "fixture_count": 1
+          }
+        ],
+        "fixture_total": 64,
+        "participants": [
+          {
+            "name": "Qatar"
+          },
+          {
+            "name": "Ecuador"
+          },
+          {
+            "name": "Senegal"
+          },
+          {
+            "name": "Netherlands",
+            "aliases": [
+              "Holland"
+            ]
+          },
+          {
+            "name": "England"
+          },
+          {
+            "name": "Iran",
+            "aliases": [
+              "IR Iran"
+            ],
+            "canonical_id": "football_team_iran"
+          },
+          {
+            "name": "United States",
+            "aliases": [
+              "USA",
+              "United States of America"
+            ],
+            "canonical_id": "football_team_usa"
+          },
+          {
+            "name": "Wales"
+          },
+          {
+            "name": "Argentina"
+          },
+          {
+            "name": "Saudi Arabia"
+          },
+          {
+            "name": "Mexico"
+          },
+          {
+            "name": "Poland"
+          },
+          {
+            "name": "France"
+          },
+          {
+            "name": "Australia"
+          },
+          {
+            "name": "Denmark"
+          },
+          {
+            "name": "Tunisia"
+          },
+          {
+            "name": "Spain"
+          },
+          {
+            "name": "Costa Rica"
+          },
+          {
+            "name": "Germany",
+            "aliases": [
+              "Deutschland"
+            ]
+          },
+          {
+            "name": "Japan"
+          },
+          {
+            "name": "Morocco"
+          },
+          {
+            "name": "Croatia"
+          },
+          {
+            "name": "Belgium"
+          },
+          {
+            "name": "Canada"
+          },
+          {
+            "name": "Brazil"
+          },
+          {
+            "name": "Serbia"
+          },
+          {
+            "name": "Switzerland"
+          },
+          {
+            "name": "Cameroon"
+          },
+          {
+            "name": "Portugal"
+          },
+          {
+            "name": "Ghana"
+          },
+          {
+            "name": "Uruguay"
+          },
+          {
+            "name": "South Korea",
+            "aliases": [
+              "Korea Republic",
+              "Korea Rep"
+            ],
+            "canonical_id": "football_team_south_korea"
+          }
+        ],
+        "participant_evidence": {
+          "source": "fifa_wc_2022",
+          "statement": "Final FIFA World Cup 2022 participant list."
+        },
+        "promoted": [],
+        "relegated": [],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 32,
+          "expected_fixture_count": 64,
+          "scope": "all_final_tournament_matches",
+          "requires_all_stages": true
+        }
+      }
+    },
+    "4": {
+      "2020": {
+        "format_details": "24 teams; group stage followed by knockout rounds",
+        "stages": [
+          {
+            "id": "group_stage",
+            "name": "Group stage",
+            "fixture_count": 36
+          },
+          {
+            "id": "round_of_16",
+            "name": "Round of 16",
+            "fixture_count": 8
+          },
+          {
+            "id": "quarter_finals",
+            "name": "Quarter-finals",
+            "fixture_count": 4
+          },
+          {
+            "id": "semi_finals",
+            "name": "Semi-finals",
+            "fixture_count": 2
+          },
+          {
+            "id": "final",
+            "name": "Final",
+            "fixture_count": 1
+          }
+        ],
+        "fixture_total": 51,
+        "participants": [
+          {
+            "name": "Turkey",
+            "aliases": [
+              "Türkiye"
+            ],
+            "canonical_id": "football_team_turkey"
+          },
+          {
+            "name": "Italy"
+          },
+          {
+            "name": "Wales"
+          },
+          {
+            "name": "Switzerland"
+          },
+          {
+            "name": "Denmark"
+          },
+          {
+            "name": "Finland"
+          },
+          {
+            "name": "Belgium"
+          },
+          {
+            "name": "Russia"
+          },
+          {
+            "name": "Netherlands",
+            "aliases": [
+              "Holland"
+            ]
+          },
+          {
+            "name": "Ukraine"
+          },
+          {
+            "name": "Austria"
+          },
+          {
+            "name": "North Macedonia",
+            "aliases": [
+              "Macedonia"
+            ],
+            "canonical_id": "football_team_north_macedonia"
+          },
+          {
+            "name": "England"
+          },
+          {
+            "name": "Croatia"
+          },
+          {
+            "name": "Scotland"
+          },
+          {
+            "name": "Czechia",
+            "aliases": [
+              "Czech Republic"
+            ],
+            "canonical_id": "football_team_czechia"
+          },
+          {
+            "name": "Spain"
+          },
+          {
+            "name": "Sweden"
+          },
+          {
+            "name": "Poland"
+          },
+          {
+            "name": "Slovakia"
+          },
+          {
+            "name": "France"
+          },
+          {
+            "name": "Germany",
+            "aliases": [
+              "Deutschland"
+            ]
+          },
+          {
+            "name": "Portugal"
+          },
+          {
+            "name": "Hungary"
+          }
+        ],
+        "participant_evidence": {
+          "source": "uefa_euro_2020",
+          "statement": "Final UEFA EURO 2020 participant list."
+        },
+        "promoted": [],
+        "relegated": [],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 24,
+          "expected_fixture_count": 51,
+          "scope": "all_final_tournament_matches",
+          "requires_all_stages": true
+        }
+      },
+      "2024": {
+        "format_details": "24 teams; group stage followed by knockout rounds",
+        "stages": [
+          {
+            "id": "group_stage",
+            "name": "Group stage",
+            "fixture_count": 36
+          },
+          {
+            "id": "round_of_16",
+            "name": "Round of 16",
+            "fixture_count": 8
+          },
+          {
+            "id": "quarter_finals",
+            "name": "Quarter-finals",
+            "fixture_count": 4
+          },
+          {
+            "id": "semi_finals",
+            "name": "Semi-finals",
+            "fixture_count": 2
+          },
+          {
+            "id": "final",
+            "name": "Final",
+            "fixture_count": 1
+          }
+        ],
+        "fixture_total": 51,
+        "participants": [
+          {
+            "name": "Germany",
+            "aliases": [
+              "Deutschland"
+            ]
+          },
+          {
+            "name": "Scotland"
+          },
+          {
+            "name": "Hungary"
+          },
+          {
+            "name": "Switzerland"
+          },
+          {
+            "name": "Spain"
+          },
+          {
+            "name": "Croatia"
+          },
+          {
+            "name": "Italy"
+          },
+          {
+            "name": "Albania"
+          },
+          {
+            "name": "Denmark"
+          },
+          {
+            "name": "Slovenia"
+          },
+          {
+            "name": "Serbia"
+          },
+          {
+            "name": "England"
+          },
+          {
+            "name": "Poland"
+          },
+          {
+            "name": "Netherlands",
+            "aliases": [
+              "Holland"
+            ]
+          },
+          {
+            "name": "Austria"
+          },
+          {
+            "name": "France"
+          },
+          {
+            "name": "Belgium"
+          },
+          {
+            "name": "Slovakia"
+          },
+          {
+            "name": "Romania"
+          },
+          {
+            "name": "Ukraine"
+          },
+          {
+            "name": "Turkey",
+            "aliases": [
+              "Türkiye"
+            ],
+            "canonical_id": "football_team_turkey"
+          },
+          {
+            "name": "Georgia"
+          },
+          {
+            "name": "Portugal"
+          },
+          {
+            "name": "Czechia",
+            "aliases": [
+              "Czech Republic"
+            ],
+            "canonical_id": "football_team_czechia"
+          }
+        ],
+        "participant_evidence": {
+          "source": "uefa_euro_2024",
+          "statement": "Final UEFA EURO 2024 participant list."
+        },
+        "promoted": [],
+        "relegated": [],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 24,
+          "expected_fixture_count": 51,
+          "scope": "all_final_tournament_matches",
+          "requires_all_stages": true
+        }
+      }
+    }
+  }
+}

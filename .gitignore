@@ -9,4 +9,5 @@ downloaded_files/*.lock
 predictions.db
 telegram_memory.json
 data/backtests/*.json
+data/historical_runs/
 .venv/

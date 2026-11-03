@@ -490,6 +490,31 @@ def predict_game(
     if calib_meta["calibration_status"] == "ERROR":
         contract["status"] = "CALIBRATION_ERROR"
 
+    # Knowledge context is provenance only: it never changes basketball model
+    # probabilities, but it records whether the NBA edition's roster and regular
+    # season expectation are confirmed, provisional or unknown.
+    try:
+        import sports_knowledge
+        import team_identity
+
+        home_canonical = team_identity.resolve_canonical_team_id(
+            home_team.get("name"), "api_basketball", home_id, league_id=league_id, sport="basketball"
+        )
+        away_canonical = team_identity.resolve_canonical_team_id(
+            away_team.get("name"), "api_basketball", away_id, league_id=league_id, sport="basketball"
+        )
+        contract["sports_knowledge_context"] = sports_knowledge.prediction_context(
+            "basketball",
+            league_id,
+            season,
+            team_ids=[home_canonical, away_canonical],
+        )
+    except Exception:
+        contract["sports_knowledge_context"] = {
+            "source": "sports_knowledge",
+            "evidence_status": "UNKNOWN",
+        }
+
     return contract
 
 
