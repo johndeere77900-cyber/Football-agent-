@@ -1329,4 +1329,4 @@ No production Neon connection, SQL, migration, deletion or record rewrite was
 performed. The 23,110 vs 19,698 production count decomposition remains outside this
 change and reserved for ChatGPT.
 
-Final parallel sweep record: **695 passed, 38 failed, 0 skipped** (JUnit report, 733 tests). Four of those 38 were fixed after the report was written (both coverage-fallback scenarios, the data-resolver provider-order test and the page-2 read-first regression, all verified passing in targeted runs). The remaining failures are pre-existing legacy-chain tests that this sweep did not rewrite; they are listed in 23.6.1 and are not claimed fixed.
+Final parallel sweep record: **695 passed, 38 failed, 0 skipped** (JUnit report, 733 tests). Three of those 38 were fixed after the report was written (both coverage-fallback scenarios and the data-resolver provider-order test), all verified passing in targeted runs; the page-2 read-first fix predates this run. The remaining failures are pre-existing legacy-chain tests that this sweep did not rewrite; they are listed in 23.6.1 and are not claimed fixed.
