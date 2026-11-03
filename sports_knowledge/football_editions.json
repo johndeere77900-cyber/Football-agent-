@@ -69,6 +69,84 @@
       "url": "https://www.uefa.com/euro2024/",
       "retrieved_at": "2026-11-02T00:00:00+00:00",
       "confidence": "high"
+    },
+    "fifa_wc26_qualified": {
+      "name": "FIFA — Qualified teams for the FIFA World Cup 2026",
+      "url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "fifa_wc26_playoff": {
+      "name": "FIFA — World Cup 2026 Play-Off Tournament",
+      "url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/qualifiers/play-off-tournament",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "uefa_euro24_qualifying": {
+      "name": "UEFA — EURO 2024 qualifying",
+      "url": "https://www.uefa.com/euro2024/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "uefa_nations_league": {
+      "name": "UEFA — Nations League format and EURO play-off access",
+      "url": "https://www.uefa.com/uefanationsleague/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "uefa_ucl_format": {
+      "name": "UEFA — Champions League league phase format",
+      "url": "https://www.uefa.com/uefachampionsleague/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "uefa_uel_format": {
+      "name": "UEFA — Europa League league phase format",
+      "url": "https://www.uefa.com/uefaeuropaleague/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "pl_2024_transition": {
+      "name": "Premier League — 2024/25 season club changes",
+      "url": "https://www.premierleague.com/en/news/4033069",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "laliga_2024_transition": {
+      "name": "LALIGA — promoted clubs for 2024/25",
+      "url": "https://www.laliga.com/en-US/news/rcd-espanyol-cd-leganes-and-real-valladolid-get-ready-for-the-step-up-to-laliga-ea-sports",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "seriea_2024_transition": {
+      "name": "Reuters — Parma and Como promoted to Serie A",
+      "url": "https://www.reuters.com/sports/soccer/parma-como-promoted-serie-2024-05-10/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "bundesliga_2024_transition": {
+      "name": "DW — St. Pauli follow Holstein Kiel in promotion to Bundesliga",
+      "url": "https://www.dw.com/en/st-pauli-follow-holstein-kiel-in-promotion-to-bundesliga/a-69055742",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "ligue1_2024_transition": {
+      "name": "Ligue 1 — Angers' return and the 2024/25 promoted clubs",
+      "url": "https://ligue1.com/en/articles/l1_article_543-angers-road-back-to-ligue-1-after-one-season-absence",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "eredivisie_2024_transition": {
+      "name": "Eredivisie — Willem II returns to the Eredivisie",
+      "url": "https://eredivisie.com/news/willem-ii-returns-to-the-eredivisie-after-two-seasons/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "primeira_liga_2024_transition": {
+      "name": "2024-25 Primeira Liga — promoted and relegated clubs",
+      "url": "https://en.wikipedia.org/wiki/2024%E2%80%9325_Primeira_Liga",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
     }
   },
   "editions": {
@@ -337,6 +415,47 @@
           "expected_fixture_count": 380,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://www.premierleague.com/en/news/4033069",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Premier League 2024/25 club changes (promoted Leicester City, Ipswich Town, Southampton; relegated Burnley, Luton Town, Sheffield United)."
+          },
+          "division_teams": 20,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 3,
+          "relegation_playoff_places": 0,
+          "promoted": [
+            "Leicester City",
+            "Ipswich Town",
+            "Southampton"
+          ],
+          "promoted_routes": {
+            "Leicester City": "automatic",
+            "Ipswich Town": "automatic",
+            "Southampton": "playoff"
+          },
+          "relegated": [
+            "Burnley",
+            "Luton Town",
+            "Sheffield United"
+          ],
+          "promotion_playoff": {
+            "competition": "EFL Championship play-offs",
+            "winner": "Southampton",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "status": "NOT_APPLICABLE"
+          },
+          "lower_division": "EFL Championship",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       },
       "2019": {
@@ -1290,6 +1409,47 @@
           "expected_fixture_count": 380,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://www.laliga.com/en-US/news/rcd-espanyol-cd-leganes-and-real-valladolid-get-ready-for-the-step-up-to-laliga-ea-sports",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "LALIGA 2024/25 club changes (promoted Leganés, Real Valladolid, Espanyol; relegated Cádiz, Almería, Granada)."
+          },
+          "division_teams": 20,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 3,
+          "relegation_playoff_places": 0,
+          "promoted": [
+            "Leganés",
+            "Real Valladolid",
+            "Espanyol"
+          ],
+          "promoted_routes": {
+            "Leganés": "automatic",
+            "Real Valladolid": "automatic",
+            "Espanyol": "playoff"
+          },
+          "relegated": [
+            "Cádiz",
+            "Almería",
+            "Granada"
+          ],
+          "promotion_playoff": {
+            "competition": "LALIGA HYPERMOTION play-offs",
+            "winner": "Espanyol",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "status": "NOT_APPLICABLE"
+          },
+          "lower_division": "LALIGA HYPERMOTION",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       },
       "2019": {
@@ -1673,6 +1833,47 @@
           "expected_fixture_count": 380,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://www.reuters.com/sports/soccer/parma-como-promoted-serie-2024-05-10/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Serie A 2024/25 club changes (promoted Parma, Como, Venezia; relegated Frosinone, Sassuolo, Salernitana)."
+          },
+          "division_teams": 20,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 3,
+          "relegation_playoff_places": 0,
+          "promoted": [
+            "Parma",
+            "Como",
+            "Venezia"
+          ],
+          "promoted_routes": {
+            "Parma": "automatic",
+            "Como": "automatic",
+            "Venezia": "playoff"
+          },
+          "relegated": [
+            "Frosinone",
+            "Sassuolo",
+            "Salernitana"
+          ],
+          "promotion_playoff": {
+            "competition": "Serie B play-offs",
+            "winner": "Venezia",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "status": "NOT_APPLICABLE"
+          },
+          "lower_division": "Serie B",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       }
     },
@@ -1930,6 +2131,54 @@
           "expected_fixture_count": 306,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://www.dw.com/en/st-pauli-follow-holstein-kiel-in-promotion-to-bundesliga/a-69055742",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Bundesliga 2024/25 club changes (promoted St. Pauli, Holstein Kiel; relegated Cologne, Darmstadt; Bochum retained via the relegation play-off)."
+          },
+          "division_teams": 18,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 2,
+          "relegation_playoff_places": 1,
+          "promoted": [
+            "St. Pauli",
+            "Holstein Kiel"
+          ],
+          "promoted_routes": {
+            "St. Pauli": "automatic",
+            "Holstein Kiel": "automatic"
+          },
+          "relegated": [
+            "Cologne",
+            "Darmstadt"
+          ],
+          "retained_via_playoff": [
+            "Bochum"
+          ],
+          "promotion_playoff": {
+            "competition": "2. Bundesliga promotion play-off",
+            "winner": null,
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "competition": "Bundesliga relegation play-off",
+            "participants": [
+              "Bochum",
+              "Fortuna Düsseldorf"
+            ],
+            "outcome": "Bochum retained its Bundesliga place",
+            "status": "VERIFIED",
+            "evidence_note": "Bochum is listed in the verified 2024/25 Bundesliga participant roster."
+          },
+          "lower_division": "2. Bundesliga",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       }
     },
@@ -2184,6 +2433,47 @@
           "expected_fixture_count": 306,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://ligue1.com/en/articles/l1_article_543-angers-road-back-to-ligue-1-after-one-season-absence",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Ligue 1 2024/25 club changes (promoted Auxerre, Angers, Saint-Étienne; relegated Metz, Lorient, Clermont)."
+          },
+          "division_teams": 18,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 3,
+          "relegation_playoff_places": 0,
+          "promoted": [
+            "Auxerre",
+            "Angers",
+            "Saint-Étienne"
+          ],
+          "promoted_routes": {
+            "Auxerre": "automatic",
+            "Angers": "automatic",
+            "Saint-Étienne": "playoff"
+          },
+          "relegated": [
+            "Metz",
+            "Lorient",
+            "Clermont"
+          ],
+          "promotion_playoff": {
+            "competition": "Ligue 2 play-offs / barrages",
+            "winner": "Saint-Étienne",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "status": "NOT_APPLICABLE"
+          },
+          "lower_division": "Ligue 2",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       },
       "2019": {
@@ -2553,6 +2843,49 @@
           "expected_fixture_count": 306,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://eredivisie.com/news/willem-ii-returns-to-the-eredivisie-after-two-seasons/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Eredivisie 2024/25 club changes (promoted Willem II, Groningen, NAC Breda; relegated Vitesse, Volendam, Excelsior)."
+          },
+          "division_teams": 18,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 2,
+          "relegation_playoff_places": 1,
+          "promoted": [
+            "Willem II",
+            "Groningen",
+            "NAC Breda"
+          ],
+          "promoted_routes": {
+            "Willem II": "automatic",
+            "Groningen": "automatic",
+            "NAC Breda": "playoff"
+          },
+          "relegated": [
+            "Vitesse",
+            "Volendam",
+            "Excelsior"
+          ],
+          "promotion_playoff": {
+            "competition": "Eredivisie promotion/relegation play-offs",
+            "winner": "NAC Breda",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "competition": "Eredivisie promotion/relegation play-offs",
+            "loser": "Excelsior",
+            "status": "VERIFIED"
+          },
+          "lower_division": "Eerste Divisie",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       },
       "2019": {
@@ -2900,6 +3233,49 @@
           "expected_fixture_count": 306,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://en.wikipedia.org/wiki/2024%E2%80%9325_Primeira_Liga",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Primeira Liga 2024/25 club changes (promoted Santa Clara, Nacional, AVS; relegated Vizela, Chaves, Portimonense)."
+          },
+          "division_teams": 18,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 2,
+          "relegation_playoff_places": 1,
+          "promoted": [
+            "Santa Clara",
+            "Nacional",
+            "AVS"
+          ],
+          "promoted_routes": {
+            "Santa Clara": "automatic",
+            "Nacional": "automatic",
+            "AVS": "playoff"
+          },
+          "relegated": [
+            "Vizela",
+            "Chaves",
+            "Portimonense"
+          ],
+          "promotion_playoff": {
+            "competition": "Liga Portugal 2 promotion play-off",
+            "winner": "AVS",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "competition": "Primeira Liga relegation play-off",
+            "loser": "Portimonense",
+            "status": "VERIFIED"
+          },
+          "lower_division": "Liga Portugal 2",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       }
     },
@@ -3228,6 +3604,216 @@
           "expected_fixture_count": 64,
           "scope": "all_final_tournament_matches",
           "requires_all_stages": true
+        },
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+          "scope": "2020-2022 qualification cycle",
+          "allocation_basis": "hosts_separate",
+          "finals_places": 32,
+          "direct_places": 29,
+          "playoff_places": 2,
+          "hosts_qualified": [
+            "Qatar"
+          ],
+          "confederations": {
+            "AFC": {
+              "direct_places": 4,
+              "playoff_places": 1,
+              "format": "third round: two groups of six; group winners and runners-up qualify; two third-placed teams meet in a play-off for the inter-confederation route",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "AFC allocation for the 2022 cycle (4 direct + 1 play-off; hosts Qatar qualified automatically)."
+              }
+            },
+            "CAF": {
+              "direct_places": 5,
+              "playoff_places": 0,
+              "format": "third round: five two-legged ties; winners qualify",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "CAF allocation for the 2022 cycle (5 direct places)."
+              }
+            },
+            "CONCACAF": {
+              "direct_places": 3,
+              "playoff_places": 1,
+              "format": "final round: eight-team double round robin; top three qualify, fourth enters the inter-confederation play-off",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Concacaf allocation for the 2022 cycle (3 direct + 1 play-off)."
+              }
+            },
+            "CONMEBOL": {
+              "direct_places": 4,
+              "playoff_places": 1,
+              "format": "single ten-team double round robin; top four qualify, fifth enters the inter-confederation play-off",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "CONMEBOL allocation for the 2022 cycle (4 direct + 1 play-off)."
+              }
+            },
+            "OFC": {
+              "direct_places": 0,
+              "playoff_places": 1,
+              "format": "OFC qualifying tournament; winner enters the inter-confederation play-off",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "OFC allocation for the 2022 cycle (no direct place, 1 play-off place)."
+              }
+            },
+            "UEFA": {
+              "direct_places": 13,
+              "playoff_places": 0,
+              "format": "ten groups; group winners qualify; remaining places decided by the European play-offs",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "UEFA allocation for the 2022 cycle (13 places)."
+              }
+            }
+          },
+          "inter_confederation_playoff": {
+            "places": 2,
+            "routes": [
+              "AFC play-off winner",
+              "CONMEBOL fifth place",
+              "Concacaf fourth place",
+              "OFC winner"
+            ],
+            "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN"
+          },
+          "qualified_teams": [],
+          "eliminated_teams": [],
+          "results_status": "UNKNOWN",
+          "results_note": "Per-team group tables, match results and the final qualified list for the 2022 cycle are not enumerated here; the finals roster lives on the edition participant list.",
+          "evidence": {
+            "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "FIFA 2022 World Cup qualification: confederation allocations and inter-confederation play-off structure."
+          }
+        }
+      },
+      "2026": {
+        "format_details": "48 teams; twelve groups of four, then a round of 32, round of 16, quarter-finals, semi-finals, third-place match and final (104 matches)",
+        "participant_status": "UNKNOWN",
+        "coverage_requirements": {},
+        "stages": [],
+        "edition_notes": "Expanded 48-team finals format introduced for 2026. The 48-team finals roster is not independently verified here; no fixture total is asserted.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+          "scope": "2023-2026 qualification cycle",
+          "allocation_basis": "includes_hosts",
+          "finals_places": 48,
+          "direct_places": 46,
+          "playoff_places": 2,
+          "hosts_qualified": [
+            "Canada",
+            "Mexico",
+            "United States"
+          ],
+          "confederations": {
+            "AFC": {
+              "direct_places": 8,
+              "playoff_places": 1,
+              "format": "third round: three groups of six; top two qualify; fourth round and a fifth-round decider allocate the remaining direct place and the play-off place",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: AFC has eight direct spots plus one Play-Off Tournament place."
+              }
+            },
+            "CAF": {
+              "direct_places": 9,
+              "playoff_places": 1,
+              "format": "nine groups; group winners qualify; the best runners-up contest a CAF play-off for the inter-confederation route",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: CAF has nine direct spots plus one Play-Off Tournament place."
+              }
+            },
+            "CONCACAF": {
+              "direct_places": 6,
+              "playoff_places": 2,
+              "format": "hosts Canada, Mexico and the United States qualified automatically; three final-round group winners qualify; two further teams enter the Play-Off Tournament",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/qualifiers/play-off-tournament",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: two Concacaf teams enter the Play-Off Tournament; Concacaf holds six direct places including the three hosts."
+              }
+            },
+            "CONMEBOL": {
+              "direct_places": 6,
+              "playoff_places": 1,
+              "format": "single ten-team double round robin; top six qualify, seventh enters the Play-Off Tournament",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: CONMEBOL has six direct spots plus one Play-Off Tournament place."
+              }
+            },
+            "OFC": {
+              "direct_places": 1,
+              "playoff_places": 1,
+              "format": "OFC qualifying tournament; winner qualifies directly, runner-up enters the Play-Off Tournament",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/qualifiers/play-off-tournament",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: OFC holds one direct place and one Play-Off Tournament place."
+              }
+            },
+            "UEFA": {
+              "direct_places": 16,
+              "playoff_places": 0,
+              "format": "twelve groups; group winners qualify; the four remaining places are decided by the European play-offs among the group runners-up",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: UEFA holds sixteen places."
+              }
+            }
+          },
+          "inter_confederation_playoff": {
+            "places": 2,
+            "participants": 6,
+            "routes": [
+              "AFC",
+              "CAF",
+              "CONMEBOL",
+              "OFC",
+              "Concacaf (two teams)"
+            ],
+            "host_window": "March 2026",
+            "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN"
+          },
+          "qualified_teams": [],
+          "eliminated_teams": [],
+          "results_status": "UNKNOWN",
+          "results_note": "Per-confederation group tables, match results and the final 48-team list are not enumerated here; the finals participants are recorded on the edition participant list once verified.",
+          "evidence": {
+            "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "FIFA 2026 World Cup qualification: expanded 48-team allocation, six confederation allocations and the six-team inter-confederation Play-Off Tournament for two places."
+          }
         }
       }
     },
@@ -3498,6 +4084,193 @@
           "expected_fixture_count": 51,
           "scope": "all_final_tournament_matches",
           "requires_all_stages": true
+        },
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+          "scope": "2023-2024 qualification cycle",
+          "allocation_basis": "hosts_separate",
+          "finals_places": 24,
+          "direct_places": 20,
+          "playoff_places": 3,
+          "hosts_qualified": [
+            "Germany"
+          ],
+          "confederations": {
+            "UEFA": {
+              "direct_places": 20,
+              "playoff_places": 3,
+              "format": "ten groups; the top two in each group qualify (20); three further places are decided by the EURO play-offs, whose participants are selected through the Nations League rankings; hosts Germany qualified automatically",
+              "evidence": {
+                "source_url": "https://www.uefa.com/euro2024/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "UEFA EURO 2024 qualifying: ten groups with two direct qualifiers each, plus three play-off paths."
+              }
+            }
+          },
+          "qualified_teams": [],
+          "eliminated_teams": [],
+          "results_status": "UNKNOWN",
+          "results_note": "The 24-team finals roster is recorded on the edition participant list; per-group standings and play-off results are not enumerated here.",
+          "evidence": {
+            "source_url": "https://www.uefa.com/euro2024/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "UEFA EURO 2024 qualification format and host qualification."
+          }
+        }
+      }
+    },
+    "5": {
+      "2024": {
+        "format_details": "Four leagues (A-D) split into groups; League A group winners reach the finals; promotion and relegation between leagues; the league phase ranks teams for EURO and World Cup play-off access",
+        "participant_status": "UNKNOWN",
+        "coverage_requirements": {},
+        "stages": [],
+        "edition_notes": "2024/25 Nations League edition. Participant rosters and finals results are not independently verified here.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+          "scope": "2024-25 edition",
+          "finals_places": null,
+          "direct_places": null,
+          "playoff_places": null,
+          "confederations": {
+            "UEFA": {
+              "direct_places": 0,
+              "playoff_places": 0,
+              "format": "four leagues (A-D) split into groups with promotion and relegation between leagues; League A group winners reach the finals; the league phase also ranks teams for EURO and World Cup play-off access",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefanationsleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "UEFA Nations League structure, promotion/relegation between leagues and qualification play-off access."
+              }
+            }
+          },
+          "results_status": "UNKNOWN",
+          "results_note": "Nations League standings, finals results and the derived play-off access list are not enumerated here; the edition window is declared separately.",
+          "evidence": {
+            "source_url": "https://www.uefa.com/uefanationsleague/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "UEFA Nations League format: leagues A-D, promotion/relegation and play-off access."
+          }
+        }
+      }
+    },
+    "2": {
+      "2024": {
+        "format_details": "36 clubs; single league phase of eight matches; top eight to the round of 16, 9-24 to knockout play-offs, 25-36 eliminated",
+        "participant_status": "UNKNOWN",
+        "coverage_requirements": {},
+        "stages": [],
+        "edition_notes": "2024/25 league-phase format. The 36-club roster is not independently verified here; acquisition completion stays fail-closed.",
+        "competition_access": {
+          "status": "STRUCTURE_VERIFIED_ROUTES_PER_CLUB_UNKNOWN",
+          "format": "league_phase",
+          "league_phase_clubs": 36,
+          "matches_per_club": 8,
+          "advancement": {
+            "league_phase_top_8": "round_of_16",
+            "league_phase_9_24": "knockout_play-offs",
+            "league_phase_25_36": "eliminated"
+          },
+          "routes": [
+            {
+              "id": "domestic_league_position",
+              "type": "league_position",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefachampionsleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Association places are allocated by domestic league position; exact per-country allocation for this season is not enumerated."
+              }
+            },
+            {
+              "id": "title_holder",
+              "type": "champions_path",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefachampionsleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "The competition title holder enters through the champions path."
+              }
+            },
+            {
+              "id": "qualifying_rounds",
+              "type": "preliminary_rounds",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefachampionsleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Clubs from lower-ranked associations enter through preliminary and qualifying rounds."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.uefa.com/uefachampionsleague/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "UEFA Champions League 2024/25 league-phase structure: 36 clubs, eight matches each, top eight to the round of 16, 9-24 to knockout play-offs."
+          }
+        }
+      }
+    },
+    "3": {
+      "2024": {
+        "format_details": "36 clubs; single league phase of eight matches; top eight to the round of 16, 9-24 to knockout play-offs, 25-36 eliminated",
+        "participant_status": "UNKNOWN",
+        "coverage_requirements": {},
+        "stages": [],
+        "edition_notes": "2024/25 league-phase format. The 36-club roster is not independently verified here; acquisition completion stays fail-closed.",
+        "competition_access": {
+          "status": "STRUCTURE_VERIFIED_ROUTES_PER_CLUB_UNKNOWN",
+          "format": "league_phase",
+          "league_phase_clubs": 36,
+          "matches_per_club": 8,
+          "advancement": {
+            "league_phase_top_8": "round_of_16",
+            "league_phase_9_24": "knockout_play-offs",
+            "league_phase_25_36": "eliminated"
+          },
+          "routes": [
+            {
+              "id": "domestic_league_position",
+              "type": "league_position",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefaeuropaleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Association places are allocated by domestic league position; exact per-country allocation for this season is not enumerated."
+              }
+            },
+            {
+              "id": "domestic_cup_winner",
+              "type": "domestic_cup_winner",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefaeuropaleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Domestic cup winners enter the Europa League route."
+              }
+            },
+            {
+              "id": "champions_league_qualifying_transfer",
+              "type": "transfer_from_other_competition",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefaeuropaleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Clubs eliminated in Champions League qualifying transfer to the Europa League route."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.uefa.com/uefaeuropaleague/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "UEFA Europa League 2024/25 league-phase structure: 36 clubs, eight matches each, top eight to the round of 16, 9-24 to knockout play-offs."
+          }
         }
       }
     }
