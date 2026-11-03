@@ -202,7 +202,9 @@ def _local_database_evidence(sport, league_id, season):
         if sport == "basketball":
             records = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
         else:
-            records = storage.get_historical_fixtures(league_id, season)
+            records = storage.get_historical_fixtures(
+                league_id, season, include_reconciliation_candidates=True
+            )
         return {
             "source": "local_database",
             "manifest_status": manifest.get("status") or UNKNOWN,

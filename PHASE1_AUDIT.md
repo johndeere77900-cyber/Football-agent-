@@ -975,3 +975,83 @@ a reconciled manifest table.
   per-target timings, checkpoints and run reports; that does not retroactively
   identify Run 42.
 - No live, prediction, backtest, grading, training or Telegram path was changed.
+
+## 22. Data-integrity implementation sweep (2026-11-03)
+
+This section records repository implementation only. It does **not** claim that
+production Neon data was repaired. ChatGPT/Neon owns production inspection,
+SQL/migrations, manifest changes and data repair.
+
+### 22.1 Logical football reads versus physical audit reads
+
+- `storage.py` exposes `get_historical_fixtures(..., include_reconciliation_candidates=False)`
+  and `get_team_historical_fixtures(..., include_reconciliation_candidates=False)`.
+  The default reads exclude rows whose
+  `reconciliation_metadata.legacy_duplicate_candidate` is true.
+- PostgreSQL uses `raw_json #>> '{reconciliation_metadata,legacy_duplicate_candidate}'`;
+  SQLite uses `json_extract` and treats its boolean as `1`. Malformed SQLite JSON
+  is not hidden by the predicate.
+- `get_historical_fixture_count()` remains the physical count. Manifest/storage
+  count validation was not weakened.
+- Acquisition verification, raw inventory, manifest reconciliation and duplicate
+  audits explicitly request the physical set. This includes `historical_sync.py`,
+  `build_phase1_inventory.py`, and the internal persisted-record helper.
+- `build_football_manifest_reconciliation()` now reports physical rows, eligible
+  rows, annotated candidates, eligible logical identities, unmarked duplicate
+  groups/rows and ambiguous identities separately. The 12 annotated production
+  candidates are therefore retained and visible rather than silently deduplicated
+  or hidden from raw counts.
+
+### 22.2 Persisted NBA manifest revalidation
+
+- `_basketball_persisted_revalidation()` rebuilds completion evidence from
+  persisted games and provider-native coverage. It independently checks count,
+  source-scoped identities, structural validity, provider phase, exact ESPN
+  monthly units, monthly success/NBA verification, and the configured regular-season
+  expectation.
+- A failed API-Basketball fallback that persisted zero games is reported as
+  `ignored_provider_coverage` and does not invalidate a validated ESPN dataset.
+- The result exposes `persisted_revalidation_eligible`, exact blocker,
+  `another_provider_request_necessary`, provider-specific expected/completed units
+  and each validation check. The reconciliation report includes the same evidence.
+- The sync uses this path before acquisition and promotes a completed season with
+  the existing storage completion API when the evidence passes. It does not trust
+  the old `INCOMPLETE` label.
+- The active 2026/27 NBA season has no configured completed-season expectation and
+  is blocked by its ongoing lifecycle before the expected-total branch. No total
+  is invented and no scheduled game is treated as missing historical coverage.
+- `espn_basketball_provider.py` now separates non-final scheduled events from
+  malformed/rejected events: they are counted diagnostically as
+  `events_non_final`, not as corruption or failed HTTP coverage units.
+
+### 22.3 Enrichment quality and provenance
+
+- `save_historical_enrichment()` populates the typed statistic columns,
+  `field_mask` and `provider_version`; `football_data_csv` is a recognized
+  enrichment source. Existing verified values are not erased by a later empty or
+  partial payload, and an identical same-source refresh remains idempotent.
+- `get_historical_enrichment()` reconstructs missing statistics from the typed
+  columns while retaining the raw provider payload.
+- Football enrichment status is no longer based on row count. It is computed per
+  finished fixture from usable home/away values in either the main fixture or its
+  enrichment record. `COMPLETE` requires every configured required field
+  (shots, shots on target, corners and yellow/red card values); `PARTIAL` means at
+  least one usable field; empty rows alone produce `NONE`.
+- The report carries field-level coverage for shots, shots on target, corners,
+  cards, possession and xG. No verified xG source is present in the inspected
+  data, so xG is reported as unavailable rather than invented.
+- `backtest.py::_merge_enriched_fixture()` now uses
+  `storage.merge_historical_fixture_metadata()`: nested statistics merge
+  additively, existing non-null values win, conflicts retain provenance, and
+  fixture identity/result fields are not replaced by a partial enrichment.
+
+### 22.4 Remaining production evidence gaps
+
+- Production Neon still needs the read-only reconciliation commands and the
+  controlled post-reconciliation acquisition. This code does not prove the 12
+  annotations are correct, that 9,565 NBA rows all pass the new persisted check,
+  or that any manifest has been promoted.
+- The 23,110 vs 19,698 football count decomposition and the Run 42 attribution
+  remain external investigations.
+- UCL/UEL/Nations League/domestic participant universes and documented totals
+  remain unavailable; no totals were invented.

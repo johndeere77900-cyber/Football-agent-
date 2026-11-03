@@ -218,3 +218,41 @@ When a sport's acquisition budget is exhausted, the remaining datasets for that
 sport are skipped for the rest of the run (recorded as `INCOMPLETE` with
 `quota_budget_stopped`), while the other sport's independent budget continues to be
 processed.
+
+## Logical and physical football fixture reads
+
+`get_historical_fixtures()` and `get_team_historical_fixtures()` return the
+logical analytical dataset by default: rows annotated with
+`reconciliation_metadata.legacy_duplicate_candidate = true` are excluded. Pass
+`include_reconciliation_candidates=True` only for raw inventory, manifest
+reconciliation or duplicate audits. `get_historical_fixture_count()` is always the
+physical database count; manifest count validation therefore remains physical.
+
+The football reconciliation report reports physical rows, eligible rows,
+annotated candidates, unmarked duplicate groups and ambiguous identities as
+separate facts. Annotated candidates are retained, never deleted by an analytical
+read.
+
+## Persisted-only NBA revalidation
+
+Before a new provider acquisition, the basketball sync reconstructs completion
+evidence from persisted games: count, identities, structural validity, phase,
+exact ESPN monthly coverage, monthly NBA verification and the configured
+regular-season expectation. The report exposes
+`persisted_revalidation_eligible`, the exact blocker, whether another provider
+request is necessary, and provider-specific expected/completed units. A failed
+fallback that persisted no games cannot invalidate a verified ESPN dataset.
+
+The active season remains incomplete for its lifecycle reason. Non-final ESPN
+events are reported as `events_non_final`, not malformed records or failed
+coverage units, and no phase or expected total is inferred from dates.
+
+## Enrichment field quality
+
+Enrichment completion is measured from usable per-fixture statistics, not row
+count. The enrichment table stores typed values, `field_mask` and
+`provider_version`; reads restore missing values from those columns. A same-source
+refresh keeps its authoritative values, while an empty or partial payload cannot
+erase an existing verified value. `football_data_csv` is recognized, and xG is
+reported unavailable when no verified xG source exists. Backtest enrichment uses
+the same additive merge contract as persisted fixtures.
