@@ -2865,19 +2865,51 @@ def list_historical_datasets(sport=None):
     return manifests
 
 
+def _approved_historical_sources(sport):
+    """
+    Return the source cohort a football manifest may describe.
+
+    Football historical completion, attribution and persisted-evidence validation
+    cover only the approved acquisition cohort. Legacy `api_football`,
+    `football_data_org` and umbrella `soccerdata` rows stay physically present but
+    can never satisfy, inflate or invalidate an approved dataset. Basketball has a
+    single writer contract, so it keeps its existing all-source behavior (`None`).
+    """
+    if str(sport or "").strip().lower() != "football":
+        return None
+    return tuple(getattr(config, "FOOTBALL_APPROVED_HISTORICAL_SOURCES", ()) or ())
+
+
 def _persisted_historical_record_count(sport, league_id, season):
-    """Return the record count the database actually holds for a dataset."""
+    """
+    Return the record count a dataset's manifest must describe.
+
+    For football this is the approved historical acquisition cohort, so a legacy
+    row can neither make an approved manifest look inconsistent nor let a caller
+    promote a dataset on records the approved contract never acquired.
+    """
     if sport == "basketball":
         return get_historical_basketball_game_count(league_id, season)
-    return get_historical_fixture_count(league_id, season)
+    return get_historical_fixture_count(
+        league_id, season, sources=_approved_historical_sources(sport)
+    )
 
 
 def _persisted_historical_records(sport, league_id, season):
-    """Return the persisted records for a dataset (the database is the source of truth)."""
+    """
+    Return the persisted records that justify a dataset's state.
+
+    The database remains the source of truth, but for football the approved
+    acquisition cohort is the only evidence a manifest may describe: legacy rows
+    stay physically present and are never validated, merged or counted here.
+    """
     if sport == "basketball":
         return get_historical_basketball_games(league_id, season, include_storage_source=True)
     return get_historical_fixtures(
-        league_id, season, include_reconciliation_candidates=True
+        league_id,
+        season,
+        include_reconciliation_candidates=True,
+        sources=_approved_historical_sources(sport),
     )
 
 
@@ -2964,7 +2996,9 @@ def _validate_persisted_completion_evidence(
     persisted record is re-validated here, duplicate source-scoped identities are
     rejected, and the caller's provider coverage must be internally consistent and
     supported by a validated provider. Caller-supplied counts are never accepted
-    in place of persisted facts.
+    in place of persisted facts. For football the validated evidence is the
+    approved historical cohort, so legacy rows can neither pass nor fail an
+    approved dataset's validation.
     """
     records = _persisted_historical_records(sport, league_id, season)
     if not isinstance(records, list) or not records:
@@ -3043,7 +3077,9 @@ def mark_historical_dataset_complete(
     Storage-level completion invariants enforced (all of them must hold):
     - The persisted dataset exists and the supplied `fixture_count` equals the
       persisted record count; the database is the source of truth, so a caller can
-      never promote a dataset with a fabricated or stale count.
+      never promote a dataset with a fabricated or stale count. For football that
+      count is the approved historical acquisition cohort, so legacy rows can
+      neither satisfy nor inflate an approved dataset's completion.
     - Every persisted record independently passes the sport-specific validation
       (canonical team identities, valid kickoff, completed status, valid scores,
       unique source-scoped identities).
@@ -3106,12 +3142,14 @@ def mark_historical_dataset_complete(
         )
 
     # Persisted-data reconciliation: the manifest describes what the database
-    # actually holds for this sport/league/season.
+    # holds for this sport/league/season in the cohort the contract covers (the
+    # approved historical acquisition sources for football, all sources for
+    # basketball).
     persisted_count = _persisted_historical_record_count(sport, league_id, season)
     if persisted_count <= 0:
         raise ValueError(
             f"Cannot mark dataset COMPLETE: no persisted records for sport={sport}, "
-            f"league_id={league_id}, season={season}."
+            f"league_id={league_id}, season={season} in the approved historical cohort."
         )
     if fixture_count != persisted_count:
         raise ValueError(
@@ -3309,7 +3347,12 @@ def mark_historical_dataset_incomplete(
         if sport == "basketball":
             fixture_count = get_historical_basketball_game_count(league_id, season)
         else:
-            fixture_count = get_historical_fixture_count(league_id, season)
+            # The manifest records the approved cohort's size, never the physical
+            # total: an INCOMPLETE dataset holding only legacy rows reports 0
+            # approved records instead of adopting them.
+            fixture_count = get_historical_fixture_count(
+                league_id, season, sources=_approved_historical_sources(sport)
+            )
     else:
         fixture_count = _validate_non_negative_int(fixture_count, "fixture_count")
 
