@@ -3137,6 +3137,14 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
     breakdown, duplicates, expected versus observed canonical teams, date range,
     provider diagnostics and the exact remaining blocker. Read-only: no manifest,
     record or status is changed.
+
+    Every manifest is reconciled against the approved historical acquisition
+    cohort (``config.FOOTBALL_APPROVED_HISTORICAL_SOURCES``) only. A legacy row in
+    the same league-season - for example an ``api_football`` record acquired under
+    the previous contract - stays physically present and is never deleted or
+    relabelled, but it is not part of what this manifest claims, so it cannot
+    produce a false count mismatch or invalidate structural coverage. The excluded
+    remainder is reported separately so both cohorts stay distinct.
     """
     from collections import Counter
 
@@ -3156,8 +3164,19 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
         if season_filter and ssn not in season_filter:
             continue
 
+        approved_sources = tuple(
+            getattr(config, "FOOTBALL_APPROVED_HISTORICAL_SOURCES", ())
+        )
+        # The manifest is a claim about the approved acquisition cohort, not about
+        # every row sharing its league-season. Legacy rows remain on disk and
+        # readable, but they are outside this contract: counting them would report
+        # a false manifest count mismatch and could fail structural coverage for
+        # records the manifest never claimed.
         fixtures = storage.get_historical_fixtures(
-            lid, ssn, include_reconciliation_candidates=True
+            lid,
+            ssn,
+            include_reconciliation_candidates=True,
+            sources=approved_sources,
         )
         physical_fixtures = [
             fixture for fixture in fixtures if isinstance(fixture, dict)
@@ -3167,6 +3186,13 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
             if not _is_legacy_duplicate_candidate(fixture)
         ]
         physical_stored_count = len(physical_fixtures)
+        # The all-source count stays available so the exclusion is auditable
+        # rather than silently applied: approved cohort vs physically present
+        # remainder. Nothing is deleted, rewritten or relabelled to produce it.
+        all_source_stored_count = storage.get_historical_fixture_count(lid, ssn)
+        excluded_unapproved_stored_count = max(
+            all_source_stored_count - physical_stored_count, 0
+        )
         annotated_candidate_count = physical_stored_count - len(fixture_list)
         source_counts = Counter()
         eligible_source_counts = Counter()
@@ -3360,6 +3386,9 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
             "manifest_fixture_count": manifest.get("fixture_count"),
             "stored_count": physical_stored_count,
             "physical_stored_count": physical_stored_count,
+            "all_source_stored_count": all_source_stored_count,
+            "excluded_unapproved_stored_count": excluded_unapproved_stored_count,
+            "approved_sources": list(approved_sources),
             "eligible_record_count": len(fixture_list),
             "eligible_logical_count": len(logical_identity_counts),
             "annotated_duplicate_candidates": annotated_candidate_count,
@@ -3419,6 +3448,9 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
         "stale_error_reason_count": sum(1 for item in results if item["stale_error_reason"]),
         "annotated_duplicate_candidate_count": sum(
             item["annotated_duplicate_candidates"] for item in results
+        ),
+        "excluded_unapproved_stored_count": sum(
+            item["excluded_unapproved_stored_count"] for item in results
         ),
         "unmarked_duplicate_group_count": sum(
             item["unmarked_duplicate_groups"] for item in results
@@ -4284,6 +4316,13 @@ def verify_persisted_historical_datasets(
     Independently verify persisted historical records and manifest statuses against actual DB state.
     Reconciles stored counts, distinct record IDs, date coverage, and structural integrity for football and basketball.
     Returns summary dict and prints a formatted report.
+
+    Football manifests are verified against the approved historical acquisition
+    cohort (``config.FOOTBALL_APPROVED_HISTORICAL_SOURCES``) only, matching the
+    cohort acquisition wrote. Legacy rows stay physically present but cannot
+    inflate distinct counts or invalidate acquisition completion; the all-source
+    count is reported alongside so the exclusion stays auditable. Basketball
+    verification is unchanged.
     """
     storage.init_db()
 
@@ -4335,6 +4374,9 @@ def verify_persisted_historical_datasets(
         manifest_count = status_info.get("fixture_count", 0)
 
         issues = []
+        # Only set by the football branch; basketball verification is unchanged.
+        all_source_stored_count = None
+        excluded_unapproved_stored_count = None
 
         if sp == "basketball":
             records = storage.get_historical_basketball_games(lid, ssn, include_storage_source=True)
@@ -4397,7 +4439,23 @@ def verify_persisted_historical_datasets(
                     issues.append("failed_basketball_structural_validation")
 
         else:
-            records = storage.get_historical_fixtures(lid, ssn, include_reconciliation_candidates=True)
+            approved_sources = tuple(
+                getattr(config, "FOOTBALL_APPROVED_HISTORICAL_SOURCES", ())
+            )
+            # The manifest describes the approved acquisition cohort. Legacy rows
+            # (for example `api_football`) stay physically present but must not
+            # inflate distinct counts or invalidate acquisition completion, so the
+            # audit reads the same cohort acquisition wrote.
+            records = storage.get_historical_fixtures(
+                lid,
+                ssn,
+                include_reconciliation_candidates=True,
+                sources=approved_sources,
+            )
+            all_source_stored_count = storage.get_historical_fixture_count(lid, ssn)
+            excluded_unapproved_stored_count = max(
+                all_source_stored_count - len(records), 0
+            )
             # Same rule for football: the declared competition window establishes
             # whether the season is still running. A season whose window has not
             # opened is not "in progress", and a season with no verifiable window is
@@ -4467,6 +4525,8 @@ def verify_persisted_historical_datasets(
             "manifest_status": manifest_status,
             "manifest_count": manifest_count,
             "actual_stored_count": actual_count,
+            "all_source_stored_count": all_source_stored_count,
+            "excluded_unapproved_stored_count": excluded_unapproved_stored_count,
             "distinct_records": distinct_count,
             "duplicate_count": actual_count - distinct_count,
             "date_range": f"{min_date} to {max_date}",
