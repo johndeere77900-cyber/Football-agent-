@@ -1407,3 +1407,19 @@ No production Neon connection, schema change, SQL, migration, deletion or record
 rewrite was performed. `main` remains at `7dc9fe8`; PR #55 remains open and
 unmerged. The 23,110 vs 19,698 production-count decomposition remains reserved for
 ChatGPT's Neon work.
+
+
+### 24.5 CI command hardening
+
+CI run #234 (head `5ffeaf6`) remained in the test step well beyond the local
+sequential runtime. The workflow still invoked plain `python -m pytest tests -v`,
+which leaves the SeleniumBase plugin active and had no job-level timeout. The
+verified hermetic command is now used in CI:
+
+```
+python -m pytest tests -v -n 4 --dist loadfile -p no:seleniumbase
+```
+
+The job also has a 30-minute timeout, so a future hang cannot consume an unbounded
+runner again. This does not skip any test: the full 740-test suite passes with the
+same flags locally.
