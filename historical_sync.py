@@ -44,6 +44,7 @@ import data_resolver
 from data_resolver import DataResolver
 import config
 import storage
+from nba_revalidation_evidence import basketball_espn_month_evidence
 
 # --- Competition lifecycle states (independent of acquisition state) -------
 COMPETITION_LIFECYCLE_UPCOMING = "UPCOMING"
@@ -1676,46 +1677,42 @@ def _basketball_persisted_revalidation(league_id, season, manifest, promote=Fals
     raw_coverage = raw_coverage if isinstance(raw_coverage, dict) else {}
     provider_evidence = {}
     ignored_providers = {}
+    espn_month_evidence = None
     for source_name, record_count in counts_by_source.items():
         entry = raw_coverage.get(source_name)
         entry = entry if isinstance(entry, dict) else {}
         if source_name == "espn_url":
-            expected_units = espn_basketball_provider.get_season_month_count(season)
-            details = entry.get("monthly_details") if isinstance(entry.get("monthly_details"), list) else []
-            success_details = [
-                detail for detail in details
-                if isinstance(detail, dict) and detail.get("status") == "SUCCESS"
-            ]
-            verified_details = [
-                detail for detail in success_details
-                if detail.get("competition_verified") is True
-                and isinstance(detail.get("event_count"), int)
-                and not isinstance(detail.get("event_count"), bool)
-                and detail.get("event_count") >= 0
-            ]
-            months = {detail.get("month") for detail in details if isinstance(detail, dict)}
-            units_complete = (
-                expected_units > 0
-                and len(details) == expected_units
-                and len(months) == expected_units
-                and len(success_details) == expected_units
-                and len(verified_details) == expected_units
-            )
-            valid_empty = sum(
-                1 for detail in success_details if detail.get("event_count") == 0
-            )
+            espn_month_evidence = basketball_espn_month_evidence(season, entry)
+            expected_units = espn_month_evidence["expected_units"]
+            completed_units = espn_month_evidence["success_units"]
+            units_complete = espn_month_evidence["evidence_complete"]
             provider_evidence[source_name] = {
                 "coverage_unit": "months",
                 "expected": expected_units,
-                "completed": len(success_details),
+                "completed": completed_units,
                 "status": ACQUISITION_STATE_VALIDATED if units_complete else ACQUISITION_STATE_INCOMPLETE,
-                "competition_verified": units_complete,
-                "valid_empty_units": valid_empty,
+                "competition_verified": espn_month_evidence["month_units_complete"],
+                "valid_empty_units": espn_month_evidence["valid_empty_units"],
                 "records_persisted": record_count,
                 "contributed": True,
                 "attempted": True,
-                "monthly_details": details,
+                "monthly_details": entry.get("monthly_details"),
                 "evidence_source": "persisted_provider_coverage",
+                "expected_month_keys": espn_month_evidence["expected_month_keys"],
+                "actual_month_keys": espn_month_evidence["actual_month_keys"],
+                "missing_month_keys": espn_month_evidence["missing_month_keys"],
+                "unexpected_month_keys": espn_month_evidence["unexpected_month_keys"],
+                "duplicate_month_keys": espn_month_evidence["duplicate_month_keys"],
+                "month_keys_exact": espn_month_evidence["month_keys_exact"],
+                "month_units_complete": espn_month_evidence["month_units_complete"],
+                "monthly_rejected_totals": espn_month_evidence["monthly_rejected_totals"],
+                "rejection_reasons_by_month": espn_month_evidence["rejection_reasons_by_month"],
+                "events_rejected": espn_month_evidence["events_rejected"],
+                "events_accepted": espn_month_evidence["events_accepted"],
+                "events_non_final": espn_month_evidence["events_non_final"],
+                "historical_non_final_rejections": espn_month_evidence["historical_non_final_rejections"],
+                "historical_non_final_rejections_unresolved": espn_month_evidence["historical_non_final_rejections_unresolved"],
+                "rejection_evidence_consistent": espn_month_evidence["rejection_evidence_consistent"],
             }
         else:
             expected_units = entry.get("expected")
@@ -1771,7 +1768,9 @@ def _basketball_persisted_revalidation(league_id, season, manifest, promote=Fals
         "fixture_count": len(stored),
         "expected_pages": expected_units_total,
         "pages_completed": completed_units_total,
-        "rejected_count": 0,
+        "rejected_count": (
+            espn_month_evidence["events_rejected"] if espn_month_evidence else 0
+        ),
         "empty_pages_count": valid_empty_total,
         "coverage_unit": dataset_coverage_unit,
         "provider_coverage": provider_evidence,
@@ -1803,14 +1802,59 @@ def _basketball_persisted_revalidation(league_id, season, manifest, promote=Fals
         blocker = "invalid_persisted_game_record"
     elif not phase_complete:
         blocker = "season_type_metadata_missing"
+    elif lifecycle_state != COMPETITION_LIFECYCLE_COMPLETED and (
+        str(lifecycle_reason).startswith("active_season")
+        or lifecycle_reason == "season_not_started"
+    ):
+        # An ongoing season is incomplete for its lifecycle, never because a
+        # future/current-season total or historical rejection evidence was
+        # expected. Active/upcoming lifecycle is checked before provider-event
+        # evidence so the 2026/27 season keeps its truthful ongoing blocker.
+        blocker = f"lifecycle_{lifecycle_state.lower()}_{lifecycle_reason}"
+    elif espn_month_evidence and not espn_month_evidence["month_keys_exact"]:
+        parts = []
+        if espn_month_evidence["missing_month_keys"]:
+            parts.append("missing=" + ",".join(espn_month_evidence["missing_month_keys"]))
+        if espn_month_evidence["unexpected_month_keys"]:
+            parts.append("unexpected=" + ",".join(espn_month_evidence["unexpected_month_keys"]))
+        if espn_month_evidence["duplicate_month_keys"]:
+            parts.append("duplicate=" + ",".join(espn_month_evidence["duplicate_month_keys"]))
+        if espn_month_evidence["month_key_issues"]:
+            parts.append("malformed=" + ",".join(espn_month_evidence["month_key_issues"]))
+        if not parts:
+            parts.append(
+                f"count={len(espn_month_evidence['actual_month_keys'])}"
+                f"_of_{espn_month_evidence['expected_units']}"
+            )
+        blocker = "provider_month_keys_invalid:" + ";".join(parts)
+    elif espn_month_evidence and not espn_month_evidence["month_units_complete"]:
+        blocker = (
+            "provider_month_evidence_incomplete:"
+            f"{espn_month_evidence['verified_units']}_of_{espn_month_evidence['expected_units']}"
+        )
+    elif espn_month_evidence and not espn_month_evidence["rejection_evidence_consistent"]:
+        detail = (espn_month_evidence["malformed_details"] or ["unknown"])[0]
+        blocker = f"provider_rejection_evidence_inconsistent:{detail}"
+    elif espn_month_evidence and (
+        espn_month_evidence["events_rejected"] > 0
+        or espn_month_evidence["events_non_final"] > 0
+    ):
+        parts = []
+        if espn_month_evidence["events_rejected"]:
+            parts.append(f"rejected={espn_month_evidence['events_rejected']}")
+        if espn_month_evidence["historical_non_final_rejections"]:
+            parts.append(
+                f"historical_non_final={espn_month_evidence['historical_non_final_rejections']}"
+            )
+        if espn_month_evidence["other_rejected_events"]:
+            parts.append(f"other_rejected={espn_month_evidence['other_rejected_events']}")
+        if espn_month_evidence["events_non_final"]:
+            parts.append(f"non_final_events={espn_month_evidence['events_non_final']}")
+        blocker = "unresolved_provider_event_evidence:" + ",".join(parts)
+    elif lifecycle_state != COMPETITION_LIFECYCLE_COMPLETED:
+        blocker = f"lifecycle_{lifecycle_state.lower()}_{lifecycle_reason}"
     elif not units_complete:
         blocker = f"provider_coverage_units_incomplete:{completed_units_total}_of_{expected_units_total}"
-    elif lifecycle_state != COMPETITION_LIFECYCLE_COMPLETED:
-        # An ongoing season is incomplete for its lifecycle, never because a
-        # future/current-season total was invented. This is checked before the
-        # expected-total branch so 2026/27 reports the truthful active-season
-        # reason instead of "expected coverage unavailable".
-        blocker = f"lifecycle_{lifecycle_state.lower()}_{lifecycle_reason}"
     elif expected_min is None:
         blocker = "expected_season_coverage_unavailable"
     elif not season_sufficient:
@@ -1826,6 +1870,10 @@ def _basketball_persisted_revalidation(league_id, season, manifest, promote=Fals
             blocker.startswith("manifest_count_mismatch")
             or blocker.startswith("invalid")
             or blocker.startswith("season_type_metadata_missing")
+            or blocker.startswith("provider_month_keys_invalid")
+            or blocker.startswith("provider_month_evidence_incomplete")
+            or blocker.startswith("provider_rejection_evidence_inconsistent")
+            or blocker.startswith("unresolved_provider_event_evidence")
             or blocker.startswith("provider_coverage_units_incomplete")
             or blocker.startswith("regular_season_coverage_insufficient")
         )
@@ -1851,6 +1899,7 @@ def _basketball_persisted_revalidation(league_id, season, manifest, promote=Fals
         "provider_completed_units": completed_units_total,
         "provider_evidence": provider_evidence,
         "ignored_providers": ignored_providers,
+        "espn_month_evidence": espn_month_evidence,
         "dataset_valid": dataset_valid,
         "coverage_verified": coverage_verified,
         "lifecycle_state": lifecycle_state,
@@ -1861,6 +1910,16 @@ def _basketball_persisted_revalidation(league_id, season, manifest, promote=Fals
             "every_game_structurally_valid": structural_valid,
             "every_game_has_provider_phase": phase_complete,
             "provider_units_complete": units_complete,
+            "provider_month_keys_exact": (
+                espn_month_evidence["month_keys_exact"] if espn_month_evidence else None
+            ),
+            "provider_month_units_complete": (
+                espn_month_evidence["month_units_complete"] if espn_month_evidence else None
+            ),
+            "rejection_evidence_consistent": (
+                espn_month_evidence["rejection_evidence_consistent"]
+                if espn_month_evidence else None
+            ),
             "regular_season_expectation_met": season_sufficient,
             "competition_lifecycle_completed": lifecycle_state == COMPETITION_LIFECYCLE_COMPLETED,
         },
@@ -3520,6 +3579,13 @@ def build_basketball_manifest_reconciliation(league_ids=None, seasons=None) -> d
             and persisted_revalidation.get("persisted_revalidation_eligible")
         ):
             blocker = "manifest_not_complete_despite_valid_persisted_evidence"
+        if blocker is None and not persisted_revalidation.get(
+            "persisted_revalidation_eligible"
+        ):
+            blocker = (
+                persisted_revalidation.get("exact_blocker")
+                or "persisted_revalidation_failed"
+            )
 
         manifest_status_consistent = (manifest_status == "COMPLETE" and blocker is None)
         stale_error_reason = (
@@ -3539,6 +3605,16 @@ def build_basketball_manifest_reconciliation(league_ids=None, seasons=None) -> d
             )
         elif str(blocker).startswith("regular_season_coverage_insufficient"):
             action = "reacquire_missing_regular_season_games"
+        elif (
+            str(blocker).startswith("provider_month_keys_invalid")
+            or str(blocker).startswith("provider_month_evidence_incomplete")
+        ):
+            action = "refresh_espn_monthly_coverage"
+        elif (
+            str(blocker).startswith("provider_rejection_evidence_inconsistent")
+            or str(blocker).startswith("unresolved_provider_event_evidence")
+        ):
+            action = "refresh_espn_rejected_events"
         elif str(blocker).startswith("provider_coverage_units_incomplete"):
             action = "complete_provider_coverage_units"
         elif blocker == "no_validated_provider_coverage":
@@ -3607,6 +3683,54 @@ def build_basketball_manifest_reconciliation(league_ids=None, seasons=None) -> d
             "ignored_provider_coverage": persisted_revalidation.get(
                 "ignored_providers"
             ),
+            "espn_month_evidence": persisted_revalidation.get(
+                "espn_month_evidence"
+            ),
+            "expected_espn_month_keys": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("expected_month_keys"),
+            "actual_espn_month_keys": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("actual_month_keys"),
+            "missing_espn_month_keys": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("missing_month_keys"),
+            "unexpected_espn_month_keys": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("unexpected_month_keys"),
+            "duplicate_espn_month_keys": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("duplicate_month_keys"),
+            "monthly_rejected_event_totals": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("monthly_rejected_totals"),
+            "rejection_reasons_by_month": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("rejection_reasons_by_month"),
+            "espn_events_rejected_total": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("events_rejected"),
+            "espn_events_non_final_total": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("events_non_final"),
+            "historical_non_final_rejections_unresolved": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("historical_non_final_rejections_unresolved"),
+            "non_final_events_unresolved": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("non_final_events_unresolved"),
+            "other_rejected_events_total": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("other_rejected_events"),
+            "rejection_evidence_consistent": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("rejection_evidence_consistent"),
+            "espn_month_keys_exact": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("month_keys_exact"),
+            "espn_month_units_complete": (
+                persisted_revalidation.get("espn_month_evidence") or {}
+            ).get("month_units_complete"),
             "coverage_unit": manifest.get("coverage_unit"),
             "expected_coverage_units": expected_units,
             "completed_coverage_units": completed_units,
@@ -3660,6 +3784,8 @@ def build_basketball_manifest_reconciliation(league_ids=None, seasons=None) -> d
             f"phases={item['phase_counts']} "
             f"regular={item['regular_season_games']}/{item['expected_min_regular_season_games']} "
             f"coverage={item['completed_coverage_units']}/{item['expected_coverage_units']} "
+            f"rejected={item['espn_events_rejected_total']} "
+            f"non_final={item['espn_events_non_final_total']} "
             f"blocker={item['exact_blocker']}",
             flush=True,
         )

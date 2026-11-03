@@ -1023,6 +1023,19 @@ SQL/migrations, manifest changes and data repair.
 - `espn_basketball_provider.py` now separates non-final scheduled events from
   malformed/rejected events: they are counted diagnostically as
   `events_non_final`, not as corruption or failed HTTP coverage units.
+- Persisted monthly evidence is checked against the exact keys derived from
+  `get_season_month_offsets(season)`, including the 2019-20 13-month and 2020-21
+  8-month contracts. Missing, duplicate, unexpected or malformed keys fail closed.
+- Monthly `events_accepted`, `events_rejected`, `events_non_final` and
+  `rejection_reasons` are reconciled. Historical `event_not_final` rejections
+  remain unresolved until a provider refresh establishes their outcome, and any
+  other rejected event blocks promotion as well. Active-season lifecycle is
+  evaluated first, so the 2026/27 season keeps its ongoing blocker and does not
+  request historical revalidation it cannot use.
+- The reconciliation report now exposes expected/actual/missing/unexpected/
+  duplicate month keys, per-month rejection totals and reasons, unresolved
+  historical non-final evidence, and whether the rejection evidence is internally
+  consistent.
 
 ### 22.3 Enrichment quality and provenance
 

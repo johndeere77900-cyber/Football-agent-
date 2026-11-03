@@ -247,6 +247,17 @@ The active season remains incomplete for its lifecycle reason. Non-final ESPN
 events are reported as `events_non_final`, not malformed records or failed
 coverage units, and no phase or expected total is inferred from dates.
 
+Monthly evidence is also checked against the provider's season-specific offsets.
+Every expected month key must occur exactly once, with successful status, NBA
+competition verification and a valid event count. Accepted, rejected and
+non-final event counters are reconciled against the month total; rejection reasons
+must sum to the rejection count. Historical `event_not_final` rejections and the
+newer `events_non_final` counts block a completed season's promotion until a
+controlled provider refresh resolves them. The active season keeps its lifecycle
+blocker instead of being classified as malformed. The reconciliation report
+exposes the expected/actual month sets, rejection totals and reasons, consistency
+result and exact promotion blocker.
+
 ## Enrichment field quality
 
 Enrichment completion is measured from usable per-fixture statistics, not row
