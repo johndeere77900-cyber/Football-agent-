@@ -2209,11 +2209,29 @@ def _knowledge_intent(normalized, league_id):
         return "transition"
     if any(term in normalized for term in ("missing", "gaps", "unknown", "what do you know", "stale")):
         return "gaps"
-    if league_id in (2, 3) and any(
-        term in normalized for term in ("qualif", "route", "how did", "enter", "entry", "access")
+    if any(term in normalized for term in ("who won", "winner", "champion", "champions")):
+        return "results"
+    if any(
+        term in normalized for term in ("route", "how did", "enter", "entry", "access", "franchise", "expansion")
     ):
         return "access"
-    if any(term in normalized for term in ("qualified", "qualification", "qualifies", "qualify", "allocation", "group")):
+    if any(
+        term in normalized
+        for term in (
+            "qualified",
+            "qualification",
+            "qualifies",
+            "qualify",
+            "allocation",
+            "group",
+            "play-in",
+            "play in",
+            "playoff",
+            "playoffs",
+            "postseason",
+            "seed",
+        )
+    ):
         return "qualification"
     if any(term in normalized for term in ("format", "league phase", "structure", "how many teams")):
         return "format"
@@ -2319,8 +2337,10 @@ def _knowledge_summary(record, team):
         if rendered:
             lines.append(f"• Stages: {rendered}")
     qualification = record.get("qualification")
-    results_status = qualification.get("results_status") if isinstance(qualification, dict) else None
     results = record.get("results")
+    results_status = results.get("status") if isinstance(results, dict) else None
+    if results_status is None and isinstance(qualification, dict):
+        results_status = qualification.get("results_status")
     if isinstance(results, dict) and results.get("winner"):
         final_note = f" (final: {results['final']})" if results.get("final") else ""
         lines.append(f"• Winner: {results['winner']}{final_note}")
@@ -2480,6 +2500,7 @@ def _knowledge_transition(record):
     block = sports_knowledge.edition_promotion_relegation(
         record.get("sport") or "football", record.get("league_id"), record.get("season")
     )
+    sport = record.get("sport") or "football"
     if not block.get("available"):
         lines = [
             _knowledge_header(record),
@@ -2487,9 +2508,9 @@ def _knowledge_transition(record):
         ]
         available = [
             season
-            for season in sports_knowledge.edition_years("football", record.get("league_id"))
+            for season in sports_knowledge.edition_years(sport, record.get("league_id"))
             if isinstance(
-                sports_knowledge.edition("football", record.get("league_id"), season).get("promotion_relegation"),
+                sports_knowledge.edition(sport, record.get("league_id"), season).get("promotion_relegation"),
                 dict,
             )
         ]
@@ -2545,9 +2566,10 @@ def _knowledge_transition(record):
 def _knowledge_change(record, league_id, season):
     import sports_knowledge
 
+    sport = record.get("sport") or "football"
     lines = [f"📚 *What changed around {record.get('name')} {record.get('label')}*"]
-    current = sports_knowledge.edition_promotion_relegation("football", league_id, season)
-    following = sports_knowledge.edition_promotion_relegation("football", league_id, season + 1)
+    current = sports_knowledge.edition_promotion_relegation(sport, league_id, season)
+    following = sports_knowledge.edition_promotion_relegation(sport, league_id, season + 1)
     rendered = False
     for block, label in ((current, season), (following, season + 1)):
         if not block.get("available"):
@@ -2555,7 +2577,7 @@ def _knowledge_change(record, league_id, season):
         rendered = True
         lines.append(f"\n*Transition recorded on {label}*")
         lines.extend(_knowledge_transition(
-            sports_knowledge.edition("football", league_id, label)
+            sports_knowledge.edition(sport, league_id, label)
         )[1:])
     if not rendered:
         lines.append(
@@ -2565,13 +2587,15 @@ def _knowledge_change(record, league_id, season):
     return lines
 
 
-def _knowledge_gaps(league_id, season):
+def _knowledge_gaps(league_id, season, sport="football"):
     import sports_knowledge
 
     rows = [
         row
         for row in sports_knowledge.knowledge_gap_report()
-        if row.get("league_id") == league_id and (season is None or row.get("season") == season)
+        if row.get("league_id") == league_id
+        and (season is None or row.get("season") == season)
+        and (row.get("sport") or "football") == sport
     ]
     lines = ["🧭 *KNOWLEDGE COVERAGE*"]
     if not rows:
@@ -2601,47 +2625,47 @@ def _knowledge_gaps(league_id, season):
 
 
 def handle_knowledge_op(params):
-    """Answer a historical football knowledge question from the catalogue."""
+    """Answer a historical sports knowledge question from the catalogue."""
     import sports_knowledge
 
     raw_text = params.get("raw_text", "")
     normalized = normalize_text(raw_text)
     _, league_id, league_sport = mentions_league(normalized)
-
-    if league_sport == "basketball" or (league_id is None and "nba" in normalized):
-        return (
-            "🏀 *BASKETBALL KNOWLEDGE*\n"
-            "• Basketball season knowledge is recorded for NBA editions only and is kept "
-            "separate from football retrieval.\n"
-            "• Ask a football question or use /coverage for supported competitions."
-        )
+    sport = "basketball" if league_sport == "basketball" else "football"
+    if league_id is None and "nba" in normalized:
+        sport = "basketball"
+        league_id = config.ALLOWED_BASKETBALL_LEAGUE_IDS[0]
 
     if league_id is None:
         competitions = [
-            f"• {item.get('name')} ({item.get('league_id')})"
-            for item in sports_knowledge.list_competitions("football")
+            f"• {item.get('name')} ({sport_key}, id {item.get('league_id')})"
+            for sport_key in ("football", "basketball")
+            for item in sports_knowledge.list_competitions(sport_key)
         ]
         return "\n".join(
-            ["📚 *SEASON-AWARE FOOTBALL KNOWLEDGE*", "• Supported competitions:"]
+            ["📚 *SEASON-AWARE SPORTS KNOWLEDGE*", "• Supported competitions:"]
             + competitions
-            + ["", "Ask e.g. `who qualified from UEFA for the world cup 2026` or "
-               "`which teams were promoted to the premier league 2024`."]
+            + ["", "Ask e.g. `who qualified from UEFA for the world cup 2026`, "
+               "`which teams were promoted to the premier league 2024` or "
+               "`who won the nba 2023`."]
         )
 
     requested_season = params.get("knowledge_season")
     if requested_season is None:
         requested_season = _knowledge_season_from_text(normalized)
-    latest, has_structure = _knowledge_latest_season(league_id)
+    latest, has_structure = _knowledge_latest_season(league_id, sport)
     season = requested_season if requested_season is not None else latest
     if season is None:
-        return "📚 *SEASON-AWARE FOOTBALL KNOWLEDGE*\n• No catalogued edition covers that competition."
+        return "📚 *SEASON-AWARE SPORTS KNOWLEDGE*\n• No catalogued edition covers that competition."
 
-    record = sports_knowledge.edition("football", league_id, season)
+    record = sports_knowledge.edition(sport, league_id, season)
     intent = _knowledge_intent(normalized, league_id)
     team = _knowledge_detect_team(normalized, record)
 
     if intent == "gaps":
-        return "\n".join(_knowledge_gaps(league_id, None if requested_season is None else season))
+        return "\n".join(
+            _knowledge_gaps(league_id, None if requested_season is None else season, sport=sport)
+        )
     if intent == "transition":
         return "\n".join(_knowledge_transition(record))
     if intent == "change":

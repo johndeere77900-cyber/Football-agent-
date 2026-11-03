@@ -29,6 +29,15 @@ def setup_db():
 
 
 @pytest.fixture(autouse=True)
+def _openfootball_unavailable(monkeypatch):
+    """Keep the legacy fallback scenarios on the stages they are asserting."""
+    unavailable = lambda *args, **kwargs: ("SOURCE_UNAVAILABLE", [], {})
+    monkeypatch.setattr("openfootball_provider.get_json_games", unavailable)
+    monkeypatch.setattr("openfootball_provider.get_txt_games", unavailable)
+    monkeypatch.setattr("soccerdata_provider.get_fbref_games", unavailable)
+
+
+@pytest.fixture(autouse=True)
 def mock_team_universe(monkeypatch):
     def _mock_get_team_ids(league_id, season, *args, **kwargs):
         if league_id in (39, 140, 135, 78, 2):
@@ -205,11 +214,11 @@ def test_scenario_1_fd_zero_fixtures_triggers_match_history(mock_api_fb, mock_fd
 
 
 @patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[])
-@patch("soccerdata_provider.get_sofascore_historical_games")
+@patch("soccerdata_provider.get_fbref_games")
 @patch("soccerdata_provider.get_match_history_games")
 @patch("football_data_api.get_competition_matches")
 @patch("api_football.get_league_fixtures_page")
-def test_fd_partial_plus_mh_partial_plus_sofascore_complete_yields_is_complete_true(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss, mock_csv):
+def test_fd_partial_plus_mh_partial_plus_fbref_complete_yields_is_complete_true(mock_api_fb, mock_fd, mock_sd_mh, mock_sd_ss, mock_csv):
     mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
 
     teams = list(range(1, 21))
@@ -231,6 +240,8 @@ def test_fd_partial_plus_mh_partial_plus_sofascore_complete_yields_is_complete_t
         make_test_fixture(4000 + i, h_name=f"Team {h_id}", a_name=f"Team {a_id}", h_id=h_id, a_id=a_id)
         for i, (h_id, a_id) in enumerate(ss_pairings)
     ]
+    for fixture in ss_fixtures:
+        fixture["provider_provenance"]["provider"] = "soccerdata_fbref"
     mock_sd_ss.return_value = (
         "SOURCE_AVAILABLE",
         ss_fixtures,

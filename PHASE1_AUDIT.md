@@ -1190,3 +1190,101 @@ two-attempt budget allocates 7.5s + 7.5s rather than 15s + 0s.
 - No API-Football historical provider, alias, fallback, credential requirement or
   legacy-record merge was added.
 - No production Neon access, migration, deletion or record rewrite was performed.
+
+---
+
+## 23. Integration sweep (2026-11-03) — CI SIGKILL diagnosis, hermetic tests, comprehensive basketball knowledge
+
+### 23.1 CI failure was a runner OOM kill, not a test result
+
+PR #55's CI run `41639327368` (head `517c2ad`) completed with **exit code 137** after
+about 8m31s. 137 is SIGKILL; the workflow step is `python -m pytest tests -v`.
+No pytest summary was produced, so no pass/fail count can be quoted from that run.
+The check-run annotation only records `Process completed with exit code 137`.
+
+Local reproduction found the cause: `tests/test_architecture_boundary.py` exercised
+resolver fallback legs that reached live SoccerData downloads. The three slowest
+tests were 55.73s, 29.45s and 27.23s, and the suite visibly stalled inside
+`soccerdata_provider.get_match_history_games` / `get_sofascore_historical_games`
+(`subprocess.Popen` -> `_communicate`). Those downloads are unbounded in memory on
+a CI runner, which is consistent with a SIGKILL rather than an assertion failure.
+
+Correction: the boundary suite now installs autouse stubs for every live provider
+entry point it can reach (SoccerData MatchHistory/FBref/Sofascore/team history,
+API-Football and football-data.org), while each test still overrides the provider it
+asserts on. `tests/test_architecture_boundary.py` now runs **22 passed in 2.86s**
+(previously 118.69s), and the live-network tests 3 and 6 are explicitly stubbed.
+No assertion was weakened and the static architecture-boundary check is unchanged.
+
+### 23.2 Provider-route contract updates
+
+The approved route is the seven-provider order (`openfootball_json`,
+`openfootball_txt`, `openfootball_internationals`, `openligadb`,
+`football_data_csv`, `soccerdata_fbref`, `soccerdata_match_history`). Two tests still
+asserted the retired four-provider order:
+
+- `tests/test_zero_network_and_provider_order.py` now mocks every approved stage,
+  proves the early stop at the first sufficient provider, asserts the approved
+  execution order, and keeps the retired API-Football / football-data.org providers
+  off the historical path.
+- `tests/test_phase1_reliability_knowledge.py::test_approved_provider_orders_are_unchanged`
+  now records the seven-provider order.
+
+`DataResolver.get_league_fixtures_page()` also served page 2 of a COMPLETE dataset
+through the provider route instead of the read-first page. The read-first branch now
+runs for every page and returns the fixtures for page 1 and an empty page for page > 1,
+without a provider call.
+
+### 23.3 Approved-cohort test fixtures
+
+Backtest tests persisted synthetic fixtures with no provider provenance, so the
+default legacy `api_football` source put them outside the approved historical cohort
+introduced by this PR; `mark_historical_dataset_complete()` then correctly refused
+the dataset. The fixtures now declare the approved `football_data_csv` source.
+The completion guard was **not** relaxed: a dataset with only legacy rows still fails
+closed. Five backtest suites now pass: **43 passed in 3.37s**.
+
+### 23.4 Comprehensive basketball knowledge
+
+`sports_knowledge/basketball_editions.json` now carries, for every NBA edition
+2019-2026:
+
+- competition access: `NOT_APPLICABLE` with the evidenced explanation that the NBA is
+  a closed 30-franchise league (route `franchise_membership`);
+- promotion/relegation: `NOT_APPLICABLE`, no promoted/relegated clubs;
+- qualification: a 16-team postseason (12 direct + 4 play-in) for 2020-2026, and the
+  documented conditional 2020-bubble play-in for 2019-20;
+- results: verified champions, runners-up and Finals series scores for 2019-20 through
+  2024-25; 2025-26 is `STRUCTURE_VERIFIED_RESULTS_UNKNOWN`; 2026-27 is `UNKNOWN`.
+  No unplayed result is invented.
+
+`telegram_bot.handle_knowledge_op()` now answers NBA champion, qualification, access,
+transition and results questions from those evidenced records instead of refusing
+basketball. `sports_knowledge.validate()` returns `[]`.
+
+### 23.5 Verification performed
+
+- `tests/test_phase1_reliability_knowledge.py` + `tests/test_telegram_bot.py`:
+  **53 passed** (includes the new NBA knowledge and agent tests).
+- Backtest suites: **43 passed**.
+- Zero-network/provider-order + boundary suites: **27 passed**.
+- Targeted coverage/data-resolver route tests: **6 passed**.
+- `python -m py_compile` on `data_resolver.py` and `telegram_bot.py`; catalogue
+  validation clean.
+
+### 23.6 Remaining failures (not claimed as fixed)
+
+A full parallel run still reports failures in legacy tests that assume the retired
+acquisition chain (notably `tests/test_data_resolver.py::test_F_soccerdata_with_complete_metadata_complete`
+and `tests/test_data_resolver.py::test_sofascore_fallback_error_reporting_captured`,
+which still expect SoccerData/Sofascore to be in the automatic route). Those tests
+were not rewritten in this sweep; no assertion was deleted or relaxed, and no
+production guard was weakened to accommodate them. The full run did not produce a
+final summary because the pytest session stalled in teardown (xdist controller did
+not exit), so this section does not quote a total pass/fail count.
+
+No production Neon connection, SQL, migration, deletion or record rewrite was
+performed. The 23,110 vs 19,698 production count decomposition remains outside this
+change and reserved for ChatGPT.
+
+Final parallel sweep record: **695 passed, 38 failed, 0 skipped** (JUnit report, 733 tests). Four of those 38 were fixed after the report was written (both coverage-fallback scenarios, the data-resolver provider-order test and the page-2 read-first regression, all verified passing in targeted runs). The remaining failures are pre-existing legacy-chain tests that this sweep did not rewrite; they are listed in the CI log and are not claimed fixed.

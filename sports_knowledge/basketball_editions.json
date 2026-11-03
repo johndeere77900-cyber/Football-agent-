@@ -9,6 +9,24 @@
       "url": "https://www.nba.com/standings",
       "retrieved_at": "2026-11-02T00:00:00+00:00",
       "confidence": "medium"
+    },
+    "nba_playoffs_format": {
+      "name": "NBA playoffs and play-in tournament",
+      "url": "https://www.nba.com/playoffs",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "nba_team_membership": {
+      "name": "NBA teams",
+      "url": "https://www.nba.com/teams",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "medium"
+    },
+    "basketball_reference_playoffs": {
+      "name": "Basketball Reference NBA playoffs",
+      "url": "https://www.basketball-reference.com/playoffs/",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "high"
     }
   },
   "editions": {
@@ -276,7 +294,76 @@
           "expected_regular_season_games": 1230,
           "scope": "regular_season"
         },
-        "edition_notes": "2023-24 and 2024-25 each played 1230 regular-season games; play-in and postseason totals are not regular-season coverage."
+        "edition_notes": "2023-24 and 2024-25 each played 1230 regular-season games; play-in and postseason totals are not regular-season coverage.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED",
+          "scope": "conference_top_six_direct_plus_play_in",
+          "finals_places": 16,
+          "direct_places": 12,
+          "playoff_places": 4,
+          "playoffs": {
+            "name": "Play-in tournament",
+            "format": "Seeds 7-10 in each conference: 7 vs 8 decides the 7 seed; 9 vs 10 then meets the 7/8 loser for the 8 seed.",
+            "status": "STRUCTURE_VERIFIED"
+          },
+          "results_status": "UNKNOWN",
+          "evidence": {
+            "source_url": "https://www.nba.com/playoffs",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "Postseason field is 16 clubs: six direct places plus two play-in places per conference. Series results are not asserted here."
+          }
+        },
+        "competition_access": {
+          "status": "NOT_APPLICABLE",
+          "format": "Closed franchise league: the 30 member clubs hold their places; entry is not earned through sporting promotion from a lower division.",
+          "routes": [
+            {
+              "id": "franchise_membership",
+              "type": "closed_league_franchise",
+              "evidence": {
+                "source_url": "https://www.nba.com/teams",
+                "retrieved_at": "2026-11-03",
+                "confidence": "medium",
+                "note": "NBA membership is a fixed franchise list rather than an annual promotion route."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "The NBA is a closed league; no promotion or relegation route exists."
+          }
+        },
+        "promotion_relegation": {
+          "status": "NOT_APPLICABLE",
+          "transition": "None - closed franchise league with no promotion or relegation",
+          "promoted": [],
+          "relegated": [],
+          "automatic_promotion_places": 0,
+          "promotion_playoff_places": 0,
+          "automatic_relegation_places": 0,
+          "relegation_playoff_places": 0,
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "NBA clubs are not promoted into or relegated out of the league."
+          }
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Boston Celtics",
+          "runner_up": "Dallas Mavericks",
+          "final": "Boston Celtics 4-1 Dallas Mavericks",
+          "evidence": {
+            "source_url": "https://www.basketball-reference.com/leagues/NBA_2024.html",
+            "retrieved_at": "2026-11-03",
+            "confidence": "high",
+            "note": "2024 NBA Finals result recorded from the season summary."
+          }
+        }
       },
       "2024": {
         "format_details": "30 teams; preseason, regular season, play-in, postseason and All-Star events are distinct phases",
@@ -541,7 +628,76 @@
           "expected_regular_season_games": 1230,
           "scope": "regular_season"
         },
-        "edition_notes": "2023-24 and 2024-25 each played 1230 regular-season games; play-in and postseason totals are not regular-season coverage."
+        "edition_notes": "2023-24 and 2024-25 each played 1230 regular-season games; play-in and postseason totals are not regular-season coverage.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED",
+          "scope": "conference_top_six_direct_plus_play_in",
+          "finals_places": 16,
+          "direct_places": 12,
+          "playoff_places": 4,
+          "playoffs": {
+            "name": "Play-in tournament",
+            "format": "Seeds 7-10 in each conference: 7 vs 8 decides the 7 seed; 9 vs 10 then meets the 7/8 loser for the 8 seed.",
+            "status": "STRUCTURE_VERIFIED"
+          },
+          "results_status": "UNKNOWN",
+          "evidence": {
+            "source_url": "https://www.nba.com/playoffs",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "Postseason field is 16 clubs: six direct places plus two play-in places per conference. Series results are not asserted here."
+          }
+        },
+        "competition_access": {
+          "status": "NOT_APPLICABLE",
+          "format": "Closed franchise league: the 30 member clubs hold their places; entry is not earned through sporting promotion from a lower division.",
+          "routes": [
+            {
+              "id": "franchise_membership",
+              "type": "closed_league_franchise",
+              "evidence": {
+                "source_url": "https://www.nba.com/teams",
+                "retrieved_at": "2026-11-03",
+                "confidence": "medium",
+                "note": "NBA membership is a fixed franchise list rather than an annual promotion route."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "The NBA is a closed league; no promotion or relegation route exists."
+          }
+        },
+        "promotion_relegation": {
+          "status": "NOT_APPLICABLE",
+          "transition": "None - closed franchise league with no promotion or relegation",
+          "promoted": [],
+          "relegated": [],
+          "automatic_promotion_places": 0,
+          "promotion_playoff_places": 0,
+          "automatic_relegation_places": 0,
+          "relegation_playoff_places": 0,
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "NBA clubs are not promoted into or relegated out of the league."
+          }
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Oklahoma City Thunder",
+          "runner_up": "Indiana Pacers",
+          "final": "Oklahoma City Thunder 4-3 Indiana Pacers",
+          "evidence": {
+            "source_url": "https://www.basketball-reference.com/leagues/NBA_2025.html",
+            "retrieved_at": "2026-11-03",
+            "confidence": "high",
+            "note": "2025 NBA Finals result recorded from the season summary."
+          }
+        }
       },
       "2025": {
         "format_details": "30 teams; preseason, regular season, play-in, postseason and All-Star events are distinct phases",
@@ -806,7 +962,73 @@
           "expected_regular_season_games": 1230,
           "scope": "regular_season"
         },
-        "edition_notes": "2023-24 and 2024-25 each played 1230 regular-season games; play-in and postseason totals are not regular-season coverage."
+        "edition_notes": "2023-24 and 2024-25 each played 1230 regular-season games; play-in and postseason totals are not regular-season coverage.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED",
+          "scope": "conference_top_six_direct_plus_play_in",
+          "finals_places": 16,
+          "direct_places": 12,
+          "playoff_places": 4,
+          "playoffs": {
+            "name": "Play-in tournament",
+            "format": "Seeds 7-10 in each conference: 7 vs 8 decides the 7 seed; 9 vs 10 then meets the 7/8 loser for the 8 seed.",
+            "status": "STRUCTURE_VERIFIED"
+          },
+          "results_status": "UNKNOWN",
+          "evidence": {
+            "source_url": "https://www.nba.com/playoffs",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "Postseason field is 16 clubs: six direct places plus two play-in places per conference. Series results are not asserted here."
+          }
+        },
+        "competition_access": {
+          "status": "NOT_APPLICABLE",
+          "format": "Closed franchise league: the 30 member clubs hold their places; entry is not earned through sporting promotion from a lower division.",
+          "routes": [
+            {
+              "id": "franchise_membership",
+              "type": "closed_league_franchise",
+              "evidence": {
+                "source_url": "https://www.nba.com/teams",
+                "retrieved_at": "2026-11-03",
+                "confidence": "medium",
+                "note": "NBA membership is a fixed franchise list rather than an annual promotion route."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "The NBA is a closed league; no promotion or relegation route exists."
+          }
+        },
+        "promotion_relegation": {
+          "status": "NOT_APPLICABLE",
+          "transition": "None - closed franchise league with no promotion or relegation",
+          "promoted": [],
+          "relegated": [],
+          "automatic_promotion_places": 0,
+          "promotion_playoff_places": 0,
+          "automatic_relegation_places": 0,
+          "relegation_playoff_places": 0,
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "NBA clubs are not promoted into or relegated out of the league."
+          }
+        },
+        "results": {
+          "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+          "evidence": {
+            "source_url": "https://www.basketball-reference.com/playoffs/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "The 2025-26 champion is not recorded in this catalogue; no result is inferred."
+          }
+        }
       },
       "2019": {
         "format_details": "30 teams; preseason, regular season, play-in, postseason and All-Star events are distinct phases",
@@ -1071,7 +1293,76 @@
           "expected_regular_season_games": 1059,
           "scope": "regular_season"
         },
-        "edition_notes": "2019-20 was interrupted by COVID-19 and resumed in the Orlando bubble; 1059 regular-season games were played."
+        "edition_notes": "2019-20 was interrupted by COVID-19 and resumed in the Orlando bubble; 1059 regular-season games were played.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED",
+          "scope": "conference_top_eight_with_conditional_play_in",
+          "finals_places": 16,
+          "direct_places": 16,
+          "playoff_places": 0,
+          "playoffs": {
+            "name": "Conditional play-in (2020 NBA bubble)",
+            "format": "Top eight per conference qualified; where the ninth seed finished within four games of the eighth, a play-in decided the eighth seed.",
+            "status": "STRUCTURE_VERIFIED"
+          },
+          "results_status": "UNKNOWN",
+          "evidence": {
+            "source_url": "https://www.nba.com/playoffs",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "2019-20 was completed in the Orlando bubble under a temporary format; the play-in was conditional rather than a fixed four-team bracket."
+          }
+        },
+        "competition_access": {
+          "status": "NOT_APPLICABLE",
+          "format": "Closed franchise league: the 30 member clubs hold their places; entry is not earned through sporting promotion from a lower division.",
+          "routes": [
+            {
+              "id": "franchise_membership",
+              "type": "closed_league_franchise",
+              "evidence": {
+                "source_url": "https://www.nba.com/teams",
+                "retrieved_at": "2026-11-03",
+                "confidence": "medium",
+                "note": "NBA membership is a fixed franchise list rather than an annual promotion route."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "The NBA is a closed league; no promotion or relegation route exists."
+          }
+        },
+        "promotion_relegation": {
+          "status": "NOT_APPLICABLE",
+          "transition": "None - closed franchise league with no promotion or relegation",
+          "promoted": [],
+          "relegated": [],
+          "automatic_promotion_places": 0,
+          "promotion_playoff_places": 0,
+          "automatic_relegation_places": 0,
+          "relegation_playoff_places": 0,
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "NBA clubs are not promoted into or relegated out of the league."
+          }
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Los Angeles Lakers",
+          "runner_up": "Miami Heat",
+          "final": "Los Angeles Lakers 4-2 Miami Heat",
+          "evidence": {
+            "source_url": "https://www.basketball-reference.com/leagues/NBA_2020.html",
+            "retrieved_at": "2026-11-03",
+            "confidence": "high",
+            "note": "2020 NBA Finals result recorded from the season summary."
+          }
+        }
       },
       "2020": {
         "format_details": "30 teams; preseason, regular season, play-in, postseason and All-Star events are distinct phases",
@@ -1336,7 +1627,76 @@
           "expected_regular_season_games": 1080,
           "scope": "regular_season"
         },
-        "edition_notes": "2020-21 was a shortened 72-game season; 1080 regular-season games were played."
+        "edition_notes": "2020-21 was a shortened 72-game season; 1080 regular-season games were played.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED",
+          "scope": "conference_top_six_direct_plus_play_in",
+          "finals_places": 16,
+          "direct_places": 12,
+          "playoff_places": 4,
+          "playoffs": {
+            "name": "Play-in tournament",
+            "format": "Seeds 7-10 in each conference: 7 vs 8 decides the 7 seed; 9 vs 10 then meets the 7/8 loser for the 8 seed.",
+            "status": "STRUCTURE_VERIFIED"
+          },
+          "results_status": "UNKNOWN",
+          "evidence": {
+            "source_url": "https://www.nba.com/playoffs",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "Postseason field is 16 clubs: six direct places plus two play-in places per conference. Series results are not asserted here."
+          }
+        },
+        "competition_access": {
+          "status": "NOT_APPLICABLE",
+          "format": "Closed franchise league: the 30 member clubs hold their places; entry is not earned through sporting promotion from a lower division.",
+          "routes": [
+            {
+              "id": "franchise_membership",
+              "type": "closed_league_franchise",
+              "evidence": {
+                "source_url": "https://www.nba.com/teams",
+                "retrieved_at": "2026-11-03",
+                "confidence": "medium",
+                "note": "NBA membership is a fixed franchise list rather than an annual promotion route."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "The NBA is a closed league; no promotion or relegation route exists."
+          }
+        },
+        "promotion_relegation": {
+          "status": "NOT_APPLICABLE",
+          "transition": "None - closed franchise league with no promotion or relegation",
+          "promoted": [],
+          "relegated": [],
+          "automatic_promotion_places": 0,
+          "promotion_playoff_places": 0,
+          "automatic_relegation_places": 0,
+          "relegation_playoff_places": 0,
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "NBA clubs are not promoted into or relegated out of the league."
+          }
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Milwaukee Bucks",
+          "runner_up": "Phoenix Suns",
+          "final": "Milwaukee Bucks 4-2 Phoenix Suns",
+          "evidence": {
+            "source_url": "https://www.basketball-reference.com/leagues/NBA_2021.html",
+            "retrieved_at": "2026-11-03",
+            "confidence": "high",
+            "note": "2021 NBA Finals result recorded from the season summary."
+          }
+        }
       },
       "2021": {
         "format_details": "30 teams; preseason, regular season, play-in, postseason and All-Star events are distinct phases",
@@ -1601,7 +1961,76 @@
           "expected_regular_season_games": 1230,
           "scope": "regular_season"
         },
-        "edition_notes": "Full 30-team, 82-game season: 1230 regular-season games."
+        "edition_notes": "Full 30-team, 82-game season: 1230 regular-season games.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED",
+          "scope": "conference_top_six_direct_plus_play_in",
+          "finals_places": 16,
+          "direct_places": 12,
+          "playoff_places": 4,
+          "playoffs": {
+            "name": "Play-in tournament",
+            "format": "Seeds 7-10 in each conference: 7 vs 8 decides the 7 seed; 9 vs 10 then meets the 7/8 loser for the 8 seed.",
+            "status": "STRUCTURE_VERIFIED"
+          },
+          "results_status": "UNKNOWN",
+          "evidence": {
+            "source_url": "https://www.nba.com/playoffs",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "Postseason field is 16 clubs: six direct places plus two play-in places per conference. Series results are not asserted here."
+          }
+        },
+        "competition_access": {
+          "status": "NOT_APPLICABLE",
+          "format": "Closed franchise league: the 30 member clubs hold their places; entry is not earned through sporting promotion from a lower division.",
+          "routes": [
+            {
+              "id": "franchise_membership",
+              "type": "closed_league_franchise",
+              "evidence": {
+                "source_url": "https://www.nba.com/teams",
+                "retrieved_at": "2026-11-03",
+                "confidence": "medium",
+                "note": "NBA membership is a fixed franchise list rather than an annual promotion route."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "The NBA is a closed league; no promotion or relegation route exists."
+          }
+        },
+        "promotion_relegation": {
+          "status": "NOT_APPLICABLE",
+          "transition": "None - closed franchise league with no promotion or relegation",
+          "promoted": [],
+          "relegated": [],
+          "automatic_promotion_places": 0,
+          "promotion_playoff_places": 0,
+          "automatic_relegation_places": 0,
+          "relegation_playoff_places": 0,
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "NBA clubs are not promoted into or relegated out of the league."
+          }
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Golden State Warriors",
+          "runner_up": "Boston Celtics",
+          "final": "Golden State Warriors 4-2 Boston Celtics",
+          "evidence": {
+            "source_url": "https://www.basketball-reference.com/leagues/NBA_2022.html",
+            "retrieved_at": "2026-11-03",
+            "confidence": "high",
+            "note": "2022 NBA Finals result recorded from the season summary."
+          }
+        }
       },
       "2022": {
         "format_details": "30 teams; preseason, regular season, play-in, postseason and All-Star events are distinct phases",
@@ -1866,7 +2295,76 @@
           "expected_regular_season_games": 1230,
           "scope": "regular_season"
         },
-        "edition_notes": "Full 30-team, 82-game season: 1230 regular-season games."
+        "edition_notes": "Full 30-team, 82-game season: 1230 regular-season games.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED",
+          "scope": "conference_top_six_direct_plus_play_in",
+          "finals_places": 16,
+          "direct_places": 12,
+          "playoff_places": 4,
+          "playoffs": {
+            "name": "Play-in tournament",
+            "format": "Seeds 7-10 in each conference: 7 vs 8 decides the 7 seed; 9 vs 10 then meets the 7/8 loser for the 8 seed.",
+            "status": "STRUCTURE_VERIFIED"
+          },
+          "results_status": "UNKNOWN",
+          "evidence": {
+            "source_url": "https://www.nba.com/playoffs",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "Postseason field is 16 clubs: six direct places plus two play-in places per conference. Series results are not asserted here."
+          }
+        },
+        "competition_access": {
+          "status": "NOT_APPLICABLE",
+          "format": "Closed franchise league: the 30 member clubs hold their places; entry is not earned through sporting promotion from a lower division.",
+          "routes": [
+            {
+              "id": "franchise_membership",
+              "type": "closed_league_franchise",
+              "evidence": {
+                "source_url": "https://www.nba.com/teams",
+                "retrieved_at": "2026-11-03",
+                "confidence": "medium",
+                "note": "NBA membership is a fixed franchise list rather than an annual promotion route."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "The NBA is a closed league; no promotion or relegation route exists."
+          }
+        },
+        "promotion_relegation": {
+          "status": "NOT_APPLICABLE",
+          "transition": "None - closed franchise league with no promotion or relegation",
+          "promoted": [],
+          "relegated": [],
+          "automatic_promotion_places": 0,
+          "promotion_playoff_places": 0,
+          "automatic_relegation_places": 0,
+          "relegation_playoff_places": 0,
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "NBA clubs are not promoted into or relegated out of the league."
+          }
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Denver Nuggets",
+          "runner_up": "Miami Heat",
+          "final": "Denver Nuggets 4-1 Miami Heat",
+          "evidence": {
+            "source_url": "https://www.basketball-reference.com/leagues/NBA_2023.html",
+            "retrieved_at": "2026-11-03",
+            "confidence": "high",
+            "note": "2023 NBA Finals result recorded from the season summary."
+          }
+        }
       },
       "2026": {
         "format_details": "30 teams; preseason, regular season, play-in, postseason and All-Star events are distinct phases",
@@ -2131,7 +2629,73 @@
           "expected_regular_season_games": null,
           "scope": "regular_season"
         },
-        "edition_notes": "2026-27 is ongoing; no final regular-season total is asserted, so coverage fails closed."
+        "edition_notes": "2026-27 is ongoing; no final regular-season total is asserted, so coverage fails closed.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED",
+          "scope": "conference_top_six_direct_plus_play_in",
+          "finals_places": 16,
+          "direct_places": 12,
+          "playoff_places": 4,
+          "playoffs": {
+            "name": "Play-in tournament",
+            "format": "Seeds 7-10 in each conference: 7 vs 8 decides the 7 seed; 9 vs 10 then meets the 7/8 loser for the 8 seed.",
+            "status": "STRUCTURE_VERIFIED"
+          },
+          "results_status": "UNKNOWN",
+          "evidence": {
+            "source_url": "https://www.nba.com/playoffs",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "Postseason field is 16 clubs: six direct places plus two play-in places per conference. Series results are not asserted here."
+          }
+        },
+        "competition_access": {
+          "status": "NOT_APPLICABLE",
+          "format": "Closed franchise league: the 30 member clubs hold their places; entry is not earned through sporting promotion from a lower division.",
+          "routes": [
+            {
+              "id": "franchise_membership",
+              "type": "closed_league_franchise",
+              "evidence": {
+                "source_url": "https://www.nba.com/teams",
+                "retrieved_at": "2026-11-03",
+                "confidence": "medium",
+                "note": "NBA membership is a fixed franchise list rather than an annual promotion route."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "The NBA is a closed league; no promotion or relegation route exists."
+          }
+        },
+        "promotion_relegation": {
+          "status": "NOT_APPLICABLE",
+          "transition": "None - closed franchise league with no promotion or relegation",
+          "promoted": [],
+          "relegated": [],
+          "automatic_promotion_places": 0,
+          "promotion_playoff_places": 0,
+          "automatic_relegation_places": 0,
+          "relegation_playoff_places": 0,
+          "evidence": {
+            "source_url": "https://www.nba.com/teams",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "NBA clubs are not promoted into or relegated out of the league."
+          }
+        },
+        "results": {
+          "status": "UNKNOWN",
+          "evidence": {
+            "source_url": "https://www.basketball-reference.com/playoffs/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "medium",
+            "note": "The 2026-27 edition is in progress; no champion or finals result exists yet."
+          }
+        }
       }
     }
   }

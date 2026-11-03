@@ -3072,7 +3072,7 @@ class DataResolver:
         # 1. Read-first persistence: reuse a COMPLETE, independently revalidated
         # approved cohort. Legacy rows in the same league-season are never treated
         # as part of this acquisition's cohort.
-        if league_id and season and page == 1 and not self.force_fallback:
+        if league_id and season and not self.force_fallback:
             ds_status = storage.get_historical_dataset_status(league_id, season)
             if ds_status.get("status") == "COMPLETE":
                 db_stored = storage.get_historical_fixtures(

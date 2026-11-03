@@ -326,7 +326,7 @@ def test_statistical_enrichment_is_optional(monkeypatch, tmp_path):
     monkeypatch.setattr(backtest.config, "DB_PATH", str(tmp_path / "predictions.db"))
     backtest.storage.init_db()
     fixtures = historical_dataset()
-    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025, source="football_data_csv")
     completion_helpers.mark_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
@@ -347,7 +347,7 @@ def test_statistical_enrichment_uses_one_batched_call(monkeypatch, tmp_path):
     monkeypatch.setattr(backtest.config, "DB_PATH", str(tmp_path / "predictions.db"))
     backtest.storage.init_db()
     fixtures = historical_dataset()
-    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025, source="football_data_csv")
     completion_helpers.mark_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(
@@ -366,7 +366,7 @@ def test_missing_statistical_data_is_not_fabricated(monkeypatch, tmp_path):
     monkeypatch.setattr(backtest.config, "DB_PATH", str(tmp_path / "predictions.db"))
     backtest.storage.init_db()
     fixtures = historical_dataset()
-    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    backtest.storage.save_historical_fixtures(fixtures, league_id=39, season=2025, source="football_data_csv")
     completion_helpers.mark_complete(39, 2025, len(fixtures))
 
     result = backtest.run_real_backtest(

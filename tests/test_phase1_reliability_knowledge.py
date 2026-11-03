@@ -10,6 +10,7 @@ import data_resolver
 import historical_sync
 import sports_knowledge
 import storage
+import telegram_bot
 
 
 def _bb_game(game_id, **overrides):
@@ -238,12 +239,68 @@ def test_nba_2026_has_no_fabricated_expectation():
     assert sports_knowledge.expected_coverage_units("basketball", 12, 2019)["value"] == 1059
 
 
+def test_basketball_editions_carry_comprehensive_structure_and_results():
+    champions = {
+        2019: "Los Angeles Lakers",
+        2020: "Milwaukee Bucks",
+        2021: "Golden State Warriors",
+        2022: "Denver Nuggets",
+        2023: "Boston Celtics",
+        2024: "Oklahoma City Thunder",
+    }
+    for season, winner in champions.items():
+        record = sports_knowledge.edition("basketball", 12, season)
+        assert record["results"]["status"] == "VERIFIED"
+        assert record["results"]["winner"] == winner
+        assert record["qualification"]["finals_places"] == 16
+        assert record["competition_access"]["status"] == "NOT_APPLICABLE"
+        assert record["promotion_relegation"]["status"] == "NOT_APPLICABLE"
+
+    # The 2019-20 bubble used a conditional play-in, not the fixed four-team bracket.
+    assert sports_knowledge.edition("basketball", 12, 2019)["qualification"]["playoff_places"] == 0
+    standard = sports_knowledge.edition("basketball", 12, 2024)["qualification"]
+    assert standard["direct_places"] == 12
+    assert standard["playoff_places"] == 4
+
+
+def test_basketball_unplayed_editions_do_not_assert_results():
+    for season in (2025, 2026):
+        results = sports_knowledge.edition("basketball", 12, season).get("results") or {}
+        assert results.get("status") in (
+            "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+            "UNKNOWN",
+        )
+        assert not results.get("winner")
+
+
+def test_knowledge_agent_answers_basketball_questions():
+    champion = telegram_bot.handle_knowledge_op({"raw_text": "who won the nba 2023"})
+    assert "Boston Celtics" in champion
+    assert "Dallas Mavericks" in champion
+
+    qualification = telegram_bot.handle_knowledge_op(
+        {"raw_text": "how do nba teams qualify for the playoffs 2024"}
+    )
+    assert "12 direct" in qualification
+    assert "4 play-off" in qualification
+
+    access = telegram_bot.handle_knowledge_op({"raw_text": "how do teams enter the nba 2024"})
+    assert "NOT_APPLICABLE" in access
+    assert "closed franchise league" in access.lower()
+
+    unfinished = telegram_bot.handle_knowledge_op({"raw_text": "who won the nba 2025"})
+    assert "STRUCTURE_VERIFIED_RESULTS_UNKNOWN" in unfinished
+
+
 def test_approved_provider_orders_are_unchanged():
     assert sports_knowledge.provider_order("football") == [
+        "openfootball_json",
+        "openfootball_txt",
+        "openfootball_internationals",
+        "openligadb",
         "football_data_csv",
         "soccerdata_fbref",
         "soccerdata_match_history",
-        "soccerdata_sofascore",
     ]
     assert sports_knowledge.provider_order("basketball") == ["espn_url", "api_basketball"]
 
