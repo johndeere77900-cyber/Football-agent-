@@ -1283,8 +1283,50 @@ production guard was weakened to accommodate them. The full run did not produce 
 final summary because the pytest session stalled in teardown (xdist controller did
 not exit), so this section does not quote a total pass/fail count.
 
+
+#### 23.6.1 Failing nodes in the recorded JUnit sweep
+
+- `tests.test_coverage_fallback_scenarios::test_scenario_1_fd_zero_fixtures_triggers_match_history`
+- `tests.test_direct_csv_and_resiliency.TestDirectCSVAndResiliency::test_direct_csv_provider_used_without_secondary_api`
+- `tests.test_historical_completion_integrity::test_1_valid_complete_dataset_skips_acquisition`
+- `tests.test_historical_hardening::test_complete_dataset_zero_api_calls`
+- `tests.test_historical_hardening::test_backtest_fails_if_api_football_called`
+- `tests.test_historical_completion_integrity::test_7_valid_complete_dataset_remains_idempotent`
+- `tests.test_coverage_fallback_scenarios::test_fd_partial_plus_mh_partial_plus_sofascore_complete_yields_is_complete_true`
+- `tests.test_historical_sync::test_historical_sync_saves_fixtures`
+- `tests.test_historical_sync::test_historical_sync_repeated_runs_are_idempotent`
+- `tests.test_efficiency_and_telegram::test_next_n_spans_multiple_dates_and_horizon_reporting`
+- `tests.test_historical_sync::test_historical_sync_refresh_forces_reacquisition`
+- `tests.test_historical_sync::test_sync_historical_fixtures_season_guards`
+- `tests.test_historical_sync::test_unplayed_fixtures_not_persisted`
+- `tests.test_data_resolver::test_sofascore_fallback_error_reporting_captured`
+- `tests.test_historical_sync::test_ongoing_season_not_marked_complete`
+- `tests.test_historical_sync::test_provider_failure_falls_through_without_secondary_api`
+- `tests.test_historical_sync::test_insufficient_data_preserves_records_and_stays_incomplete`
+- `tests.test_historical_sync::test_ongoing_2026_fixtures_handled_by_status`
+- `tests.test_data_resolver::test_F_soccerdata_with_complete_metadata_complete`
+- `tests.test_data_resolver::test_provider_execution_order_primary_before_secondary`
+- `tests.test_p0_p1_integrity_repair::test_pre_acquisition_quota_exhaustion_preserves_manifest_fields_football_and_basketball`
+- `tests.test_p0_p1_integrity_repair::test_empty_page_acquisition_scenarios_football_and_basketball`
+- `tests.test_historical_hardening::test_enrichment_quota_ceiling_stops_batches`
+- `tests.test_historical_ingestion_integrity::test_req15_malformed_fixture_cannot_cause_complete`
+- `tests.test_historical_ingestion_integrity::test_req16_manifest_fixture_count_equals_actual_stored`
+- `tests.test_historical_ingestion_integrity::test_req17_database_first_backtest_behavior`
+- `tests.test_historical_ingestion_integrity::test_req18_normal_backtest_makes_zero_api_calls`
+- `tests.test_historical_ingestion_integrity::test_req19_football_historical_makes_zero_api_football_calls`
+- `tests.test_provider_neutral_identity::test_12_zero_fixtures_fallback_marks_dataset_incomplete`
+- `tests.test_resume_queue_and_cli::test_resume_from_incomplete_checkpoint`
+- `tests.test_rolling_backtest_window::test_existing_single_season_backtest_compatibility`
+- `tests.test_resume_queue_and_cli::test_changed_expected_page_count_fails_closed`
+- `tests.test_sports_knowledge_editions::test_provider_route_filters_unsupported_competition_providers`
+- `tests.test_soccerdata_provider::test_sofascore_not_used_when_match_history_returns_usable_data`
+- `tests.test_soccerdata_provider::test_soccerdata_reached_when_fd_returns_structurally_incomplete_dataset`
+- `tests.test_phase3_production_integration::test_football_backtest_database_first_e2e`
+- `tests.test_phase3_production_integration::test_backtest_actual_calibration_order`
+- `tests.test_database_first_production::test_insufficient_data_no_fabrication`
+
 No production Neon connection, SQL, migration, deletion or record rewrite was
 performed. The 23,110 vs 19,698 production count decomposition remains outside this
 change and reserved for ChatGPT.
 
-Final parallel sweep record: **695 passed, 38 failed, 0 skipped** (JUnit report, 733 tests). Four of those 38 were fixed after the report was written (both coverage-fallback scenarios, the data-resolver provider-order test and the page-2 read-first regression, all verified passing in targeted runs). The remaining failures are pre-existing legacy-chain tests that this sweep did not rewrite; they are listed in the CI log and are not claimed fixed.
+Final parallel sweep record: **695 passed, 38 failed, 0 skipped** (JUnit report, 733 tests). Four of those 38 were fixed after the report was written (both coverage-fallback scenarios, the data-resolver provider-order test and the page-2 read-first regression, all verified passing in targeted runs). The remaining failures are pre-existing legacy-chain tests that this sweep did not rewrite; they are listed in 23.6.1 and are not claimed fixed.
