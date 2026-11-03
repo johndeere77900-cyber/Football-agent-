@@ -411,10 +411,10 @@ def test_soccerdata_reached_when_fd_returns_structurally_incomplete_dataset(mock
     resolver = DataResolver()
     res = resolver.get_league_fixtures_page(league_id=61, season=2025, page=1)
 
-    # Prove SoccerData MatchHistory was called because structural coverage failed
+    # MatchHistory is still attempted, but Sofascore is diagnostic-only and must
+    # never be called as an automatic historical fallback.
     assert mock_sd_mh.call_count == 1
-    # Prove Sofascore tertiary fallback was also called when MatchHistory was unavailable
-    assert mock_sd_ss.call_count == 1
+    mock_sd_ss.assert_not_called()
     assert res["provider_metadata"]["is_complete"] is False
     assert res["provider_metadata"]["structural_coverage"]["verified"] is False
 

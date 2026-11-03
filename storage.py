@@ -2926,21 +2926,55 @@ def derive_manifest_source(sport, league_id, season):
     records = _persisted_historical_records(sport, league_id, season)
     sources = set()
     for record in records if isinstance(records, list) else []:
-        if not isinstance(record, dict):
-            continue
-        if record.get("_storage_source"):
-            src = record.get("_storage_source")
-        else:
-            src = record.get("source")
-            if not src and isinstance(record.get("provider_provenance"), dict):
-                src = record["provider_provenance"].get("provider")
-        if isinstance(src, str) and src.strip():
-            sources.add(src.strip())
+        if isinstance(record, dict):
+            sources.update(_record_provider_names(record))
+    for label in ("mixed", "reconciled", "internal_db", "none", "unknown"):
+        sources.discard(label)
     if not sources:
         return None
     if len(sources) == 1:
         return next(iter(sources))
     return "mixed"
+
+
+def _record_provider_names(record):
+    """Return every provider that contributed to one persisted record.
+
+    The original owner, the writer label, enrichment providers and reconciled
+    field provenance all describe contribution. Attempted-but-empty providers are
+    absent by construction, so this never turns a failed attempt into attribution.
+    """
+    names = set()
+
+    def _add(value):
+        if isinstance(value, str) and value.strip():
+            names.add(value.strip())
+
+    _add(record.get("_storage_source"))
+    _add(record.get("source"))
+
+    provenance = record.get("provider_provenance")
+    if isinstance(provenance, dict):
+        _add(provenance.get("provider"))
+        for value in provenance.get("providers") or []:
+            _add(value)
+
+    native_ids = record.get("provider_fixture_ids")
+    if isinstance(native_ids, dict):
+        for value in native_ids:
+            _add(value)
+
+    field_provenance = record.get("field_provenance")
+    if isinstance(field_provenance, dict):
+        for value in field_provenance.values():
+            _add(value)
+
+    reconciliation = record.get("reconciliation_metadata")
+    if isinstance(reconciliation, dict):
+        for value in reconciliation.get("providers_used") or []:
+            _add(value)
+
+    return names
 
 
 def _verified_empty_coverage_units(provider_coverage):
@@ -6286,11 +6320,25 @@ def _historical_source_filter(sources, db_type):
         provenance_provider = "COALESCE(raw_json #>> '{provider_provenance,provider}', '')"
     else:
         provenance_provider = "COALESCE(json_extract(raw_json, '$.provider_provenance.provider'), '')"
+    if db_type == "postgres":
+        providers_array = (
+            "COALESCE(raw_json::jsonb #> '{provider_provenance,providers}', '[]'::jsonb)"
+        )
+        provider_list_predicate = (
+            f"EXISTS (SELECT 1 FROM jsonb_array_elements_text({providers_array}) AS jp(value) "
+            f"WHERE jp.value IN ({placeholders}))"
+        )
+    else:
+        providers_array = "COALESCE(json_extract(raw_json, '$.provider_provenance.providers'), '[]')"
+        provider_list_predicate = (
+            f"EXISTS (SELECT 1 FROM json_each({providers_array}) AS jp WHERE jp.value IN ({placeholders}))"
+        )
     predicate = (
         f" AND (source IN ({placeholders}) OR "
-        f"(source = 'mixed' AND {provenance_provider} IN ({placeholders})))"
+        f"(source = 'mixed' AND ({provenance_provider} IN ({placeholders}) "
+        f"OR {provider_list_predicate})))"
     )
-    return predicate, cleaned + cleaned
+    return predicate, cleaned + cleaned + cleaned
 
 
 def get_historical_fixtures(
@@ -6327,7 +6375,7 @@ def get_historical_fixtures(
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT raw_json, canonical_home_id, canonical_away_id
+                    SELECT raw_json, canonical_home_id, canonical_away_id, source
                     FROM historical_fixtures
                     WHERE league_id = %s AND season = %s{source_predicate}{candidate_predicate}
                     ORDER BY kickoff_at ASC, fixture_id ASC
@@ -6339,7 +6387,7 @@ def get_historical_fixtures(
             try:
                 rows = conn.execute(
                     f"""
-                    SELECT raw_json, canonical_home_id, canonical_away_id
+                    SELECT raw_json, canonical_home_id, canonical_away_id, source
                     FROM historical_fixtures
                     WHERE league_id = ? AND season = ?{source_predicate}{candidate_predicate}
                     ORDER BY kickoff_at ASC, fixture_id ASC
@@ -6352,7 +6400,7 @@ def get_historical_fixtures(
                 conn, _ = _connect()
                 rows = conn.execute(
                     f"""
-                    SELECT raw_json, canonical_home_id, canonical_away_id
+                    SELECT raw_json, canonical_home_id, canonical_away_id, source
                     FROM historical_fixtures
                     WHERE league_id = ? AND season = ?{source_predicate}{candidate_predicate}
                     ORDER BY kickoff_at ASC, fixture_id ASC
@@ -6368,6 +6416,12 @@ def get_historical_fixtures(
                     payload["canonical_home_id"] = row[1]
                 if row[2]:
                     payload["canonical_away_id"] = row[2]
+                # Preserve the persisted writer label alongside the raw record.
+                # `source` inside raw_json describes record ownership; the column
+                # records which writer stored this row. Attribution must see both.
+                if len(row) > 3 and row[3]:
+                    payload["_storage_source"] = row[3]
+                    payload.setdefault("source", row[3])
                 fixtures.append(payload)
 
         return fixtures

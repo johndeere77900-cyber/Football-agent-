@@ -817,6 +817,18 @@ def sync_historical_fixtures(
             total_legacy_identity_overlap += save_result.get("legacy_identity_overlap", 0)
             total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
             total_rejected_count += save_result.get("rejected_count", 0)
+            page_provider_metadata = (
+                (page_meta or {}).get("provider_metadata")
+                if isinstance(page_meta, dict) else {}
+            )
+            if isinstance(page_provider_metadata, dict):
+                page_rejected = page_provider_metadata.get("rejected_count")
+                if isinstance(page_rejected, int):
+                    total_rejected_count += page_rejected
+                else:
+                    for provider_attempt in page_provider_metadata.values():
+                        if isinstance(provider_attempt, dict):
+                            total_rejected_count += int(provider_attempt.get("rejected_count") or 0)
             total_db_write_duration += save_result.get("db_write_duration", 0.0)
             db_write_calls += 1
             total_identity_resolution_duration += float(

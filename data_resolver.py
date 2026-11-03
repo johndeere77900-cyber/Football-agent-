@@ -3120,6 +3120,7 @@ class DataResolver:
         provider_outcomes = {}
         route_access_denied = False
         route_quota_exhausted = False
+        route_rejected_count = 0
 
         def _filter_completed(fixtures):
             if not completed_only:
@@ -3133,8 +3134,10 @@ class DataResolver:
 
         def _merge_fixture_candidates(candidates):
             added = 0
+            rejected = 0
             for candidate in candidates:
                 if not isinstance(candidate, dict):
+                    rejected += 1
                     continue
                 is_valid, _reason, normalized = storage.validate_historical_fixture(
                     candidate,
@@ -3143,6 +3146,7 @@ class DataResolver:
                     require_completed=completed_only,
                 )
                 if not is_valid:
+                    rejected += 1
                     continue
                 normalized = normalized or candidate
                 matching = [
@@ -3157,7 +3161,7 @@ class DataResolver:
                 else:
                     combined_fixtures.append(normalized)
                     added += 1
-            return added
+            return added, rejected
 
         def _attempt_meta(provider_name, status, meta, duration, count):
             info = dict(meta) if isinstance(meta, dict) else {}
@@ -3298,10 +3302,12 @@ class DataResolver:
 
                 duration = time.perf_counter() - t_start
                 incoming = _filter_completed(incoming)
-                added = _merge_fixture_candidates(incoming)
+                added, candidate_rejections = _merge_fixture_candidates(incoming)
+                route_rejected_count += candidate_rejections
                 provider_fixtures[provider] = list(incoming)
                 info = _attempt_meta(provider, status, meta, duration, len(incoming))
                 info["added"] = added
+                info["rejected_count"] = candidate_rejections
                 provider_meta[provider] = info
                 outcome = _classify_provider_attempt_outcome(incoming, info)
                 provider_outcomes[provider] = outcome
@@ -3402,7 +3408,9 @@ class DataResolver:
             league_id=league_id,
         )
         if accumulated_coverage.get("verified") is True:
-            complete = route_completion_allowed
+            # A rejected provider row means the dataset was not acquired cleanly;
+            # structural coverage alone must not promote it to COMPLETE.
+            complete = route_completion_allowed and route_rejected_count == 0
             contribs = _providers_contributed_from_records(accumulated, attempted=attempted)
             return {
                 "fixtures": combined_fixtures,
@@ -3418,7 +3426,12 @@ class DataResolver:
                     "structural_coverage": accumulated_coverage,
                     "providers_contributed": contribs,
                     "provider_outcomes": provider_outcomes,
-                    "exhausted_reason": None if complete else "knowledge_edition_evidence_incomplete",
+                    "rejected_count": route_rejected_count,
+                    "exhausted_reason": (
+                        None if complete
+                        else "provider_rows_rejected" if route_rejected_count
+                        else "knowledge_edition_evidence_incomplete"
+                    ),
                     "knowledge_completion_blockers": route_blockers,
                 },
                 "secondary_failed": False,
@@ -3437,7 +3450,11 @@ class DataResolver:
             "structural_coverage": accumulated_coverage,
             "providers_contributed": contribs,
             "provider_outcomes": provider_outcomes,
-            "exhausted_reason": "approved_providers_exhausted_without_verified_coverage",
+            "rejected_count": route_rejected_count,
+            "exhausted_reason": (
+                "provider_rows_rejected" if route_rejected_count
+                else "approved_providers_exhausted_without_verified_coverage"
+            ),
             "knowledge_completion_blockers": route_blockers,
         }
         for provider in approved_order:
@@ -3448,6 +3465,7 @@ class DataResolver:
             }
             final_provider_metadata[provider] = {
                 "count": int(info.get("count") or 0),
+                "rejected_count": int(info.get("rejected_count") or 0),
                 "is_complete": False,
                 "is_partial": True,
                 "raw_metadata": info,

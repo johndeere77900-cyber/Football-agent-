@@ -236,7 +236,7 @@ def test_req15_malformed_fixture_cannot_cause_complete(mock_sd_mh, mock_sd_ss, m
 # 16. Manifest fixture count remains equal to actual stored valid fixture count
 def test_req16_manifest_fixture_count_equals_actual_stored(temp_db):
     valid_fix = make_fixture(fid=4001)
-    storage.save_historical_fixtures([valid_fix], league_id=39, season=2024)
+    storage.save_historical_fixtures([valid_fix], league_id=39, season=2024, source="football_data_csv")
     count = storage.get_historical_fixture_count(39, 2024)
     completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=count)
 
@@ -255,7 +255,7 @@ def test_req17_database_first_backtest_behavior(temp_db):
             a = (a % 4) + 1
         fixtures.append(make_fixture(fid=5000 + i, date=d, home_id=h, away_id=a))
 
-    storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
+    storage.save_historical_fixtures(fixtures, league_id=39, season=2024, source="football_data_csv")
     completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=len(fixtures))
 
     res = backtest.run_real_backtest(league_id=39, season=2024, sample_size=2, min_prior_matches=1)
@@ -273,7 +273,7 @@ def test_req18_normal_backtest_makes_zero_api_calls(temp_db, monkeypatch):
             a = (a % 4) + 1
         fixtures.append(make_fixture(fid=6000 + i, date=d, home_id=h, away_id=a))
 
-    storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
+    storage.save_historical_fixtures(fixtures, league_id=39, season=2024, source="football_data_csv")
     completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=len(fixtures))
 
     def fail_api(*args, **kwargs):

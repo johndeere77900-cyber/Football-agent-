@@ -59,7 +59,7 @@ def test_complete_dataset_zero_api_calls(temp_db, monkeypatch):
         {**sample_fixture(9001, home_id=1, away_id=2), "league": {"id": 39, "season": 2024}},
         {**sample_fixture(9002, home_id=2, away_id=1), "league": {"id": 39, "season": 2024}},
     ]
-    storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
+    storage.save_historical_fixtures(fixtures, league_id=39, season=2024, source="football_data_csv")
     completion_helpers.mark_complete(
         league_id=39, season=2024, fixture_count=2, expected_team_ids=[c1, c2]
     )
@@ -77,7 +77,7 @@ def test_complete_dataset_zero_api_calls(temp_db, monkeypatch):
 
 def test_partial_dataset_leaves_status_incomplete_and_backtest_refuses(temp_db):
     fixtures = [sample_fixture(9003)]
-    storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
+    storage.save_historical_fixtures(fixtures, league_id=39, season=2024, source="football_data_csv")
     storage.mark_historical_dataset_incomplete(league_id=39, season=2024, fixture_count=1)
 
     status = storage.get_historical_dataset_status(39, 2024)
@@ -107,7 +107,7 @@ def test_provider_header_remaining_zero_raises_exhausted(temp_db, monkeypatch):
 
 def test_backtest_fails_if_api_football_called(temp_db, monkeypatch):
     fixtures = dataset_with_history()
-    storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
+    storage.save_historical_fixtures(fixtures, league_id=39, season=2024, source="football_data_csv")
     completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=len(fixtures))
 
     def fail_call(*args, **kwargs):
@@ -468,20 +468,23 @@ def test_get_fixtures_for_date_multi_provider_persists_reconciled_source(
 
 
 def test_enrichment_quota_ceiling_stops_batches(temp_db, monkeypatch):
+    """The retired API-Football budget must not stop or fund the approved route."""
     monkeypatch.setattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 2)
 
     fixtures = [sample_fixture(9020 + i) for i in range(10)]
-    storage.save_historical_fixtures(fixtures, league_id=39, season=2024)
+    storage.save_historical_fixtures(fixtures, league_id=39, season=2024, source="football_data_csv")
     storage.mark_historical_dataset_incomplete(league_id=39, season=2024)
 
-    # Pre-record 2 API requests to exhaust budget
+    # Spend the legacy budget; the approved route must neither consume it nor
+    # report a quota stop that did not happen.
     storage.record_api_request("api_football", "fixtures")
     storage.record_api_request("api_football", "fixtures")
 
-    with patch("api_football.get_league_fixtures", return_value=fixtures):
+    with patch("data_resolver._fetch_direct_csv_league_fixtures", return_value=[]):
         report = historical_sync.sync_historical_fixtures(
             league_id=39, season=2024, with_enrichment=True, historical_budget=2
         )
 
-    assert report["quota_budget_stopped"] is True
+    assert report["api_requests_consumed"] == 0
+    assert report["quota_budget_stopped"] is False
     assert report["status"] == "INCOMPLETE"

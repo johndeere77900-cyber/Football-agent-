@@ -110,11 +110,22 @@ def test_knowledge_gap_report_covers_configured_history_and_future_horizon():
 
 def test_provider_route_filters_unsupported_competition_providers():
     premier = sports_knowledge.provider_route("football", 39, 2023)
-    assert premier["eligible_providers"] == sports_knowledge.provider_order("football")
+    # Eligibility is competition-specific: the approved order is preserved, but
+    # only the providers that actually map this competition are attempted.
+    assert premier["eligible_providers"] == [
+        "openfootball_json",
+        "football_data_csv",
+        "soccerdata_fbref",
+        "soccerdata_match_history",
+    ]
+    approved = sports_knowledge.provider_order("football")
+    assert [p for p in approved if p in premier["eligible_providers"]] == premier["eligible_providers"]
     assert premier["completion_allowed"] is True
 
     ucl = sports_knowledge.provider_route("football", 2, 2022)
-    assert ucl["eligible_providers"] == ["soccerdata_sofascore"]
+    # Sofascore is diagnostic-only and never part of the automatic approved route.
+    assert ucl["eligible_providers"] == []
+    assert "soccerdata_sofascore" not in sports_knowledge.provider_order("football")
     assert ucl["unsupported_providers"]["football_data_csv"]
     assert ucl["completion_allowed"] is False
 

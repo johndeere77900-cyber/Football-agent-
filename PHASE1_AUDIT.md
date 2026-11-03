@@ -1330,3 +1330,80 @@ performed. The 23,110 vs 19,698 production count decomposition remains outside t
 change and reserved for ChatGPT.
 
 Final parallel sweep record: **695 passed, 38 failed, 0 skipped** (JUnit report, 733 tests). Three of those 38 were fixed after the report was written (both coverage-fallback scenarios and the data-resolver provider-order test), all verified passing in targeted runs; the page-2 read-first fix predates this run. The remaining failures are pre-existing legacy-chain tests that this sweep did not rewrite; they are listed in 23.6.1 and are not claimed fixed.
+
+---
+
+## 24. Full-suite green verification and Phase 1 contract closure (2026-11-03)
+
+The remaining legacy-chain failures from §23.6 are resolved. The final recorded run was:
+
+```
+python -m pytest tests -q -n 4 --dist loadfile \
+  --junitxml=/tmp/results4.xml -p no:seleniumbase -p no:cacheprovider
+```
+
+Result: **740 passed in 72.30s**, exit status 0, JUnit written. The 740 tests are the
+733-test sweep plus seven new regression tests for the contracts below. No test was
+skipped, deleted, or weakened to obtain this result.
+
+### 24.1 Attribution and persistence
+
+- `storage.get_historical_fixtures()` now selects the persisted `source` column and
+  exposes it as `_storage_source`, separately from the record's own `source`.
+  Attribution can distinguish the original owner from the writer that stored the row.
+- `storage.derive_manifest_source()` now derives contributors from every persisted
+  contribution field: the writer label, `provider_provenance.provider`,
+  `provider_provenance.providers`, `provider_fixture_ids`, `field_provenance`, and
+  `reconciliation_metadata.providers_used`. Reconciliation labels such as `mixed`
+  are never reported as providers. Empty datasets still return `None`.
+- The approved-source SQL filter now admits a `mixed` row when its persisted
+  `provider_provenance.providers` list contains an approved provider, not only when
+  its single `provider` field does. Legacy rows remain physically present and
+  outside the approved cohort.
+- Provider rows rejected by structural validation are counted in the router
+  metadata. `historical_sync` aggregates them into `rejected_count`, so a malformed
+  provider row can no longer disappear from the report or allow a COMPLETE label.
+  A verified-coverage route branch now also refuses completion when any provider row
+  was rejected.
+- Added regression coverage for persisted writer source, mixed-provider manifests,
+  rejected-row propagation, and basketball provider/blocker preservation.
+
+### 24.2 Knowledge scope and lifecycle
+
+- Added `REQUIRED_KNOWLEDGE_SCOPE`, a bounded required-competition registry
+  independent of `ALLOWED_LEAGUE_IDS`. `knowledge_gap_report()` now emits explicit
+  `competition_not_catalogued` rows for required competitions absent from the
+  catalogue, and `validate()` reports them instead of silently omitting them.
+- `_recovery_state()` now separates fact-level evidence from edition completeness.
+  A verified result or roster alone yields PARTIAL; CONFIRMED requires a concluded
+  window plus verified roster and result. CONFLICTED and PROVISIONAL remain
+  explicit.
+- `_UPDATE_BLOCKS` now covers participants, stages, standings, brackets and awards
+  in addition to qualification, access, promotion/relegation and results. Existing
+  evidence, downgrade, conflict and byte-exact rollback guards are unchanged.
+- Gap reporting now retains source URLs from result, qualification, access,
+  promotion/relegation, standings, brackets, awards, stages and participant
+  evidence, rather than only participant/competition evidence.
+
+### 24.3 Test-contract corrections
+
+- Legacy acquisition modules now receive scoped autouse stubs for the new
+  OpenFootball/OpenLigaDB stages (and SoccerData where the module does not test the
+  adapter itself). This keeps ordinary suites offline and prevents provider timeout
+  from masquerading as an assertion failure. The SoccerData adapter suite keeps its
+  own real mocks and passes 26/26.
+- Tests that intended an approved completed dataset now persist the approved
+  `football_data_csv` writer/source instead of legacy `api_football` rows. The
+  completion guard was not relaxed: legacy-only datasets still fail closed.
+- Stale Sofascore expectations were replaced with the approved contract: Sofascore
+  is diagnostic-only and is never called as an automatic historical fallback.
+- Provider-route tests assert the approved seven-provider order and the actual
+  competition-specific eligible subset, rather than requiring every provider for
+  every competition.
+
+### 24.4 Constraints and outstanding boundaries
+
+No production Neon connection, schema change, SQL, migration, deletion or record
+rewrite was performed. `main` remains at `7dc9fe8`; PR #55 remains open and
+unmerged. The 23,110 vs 19,698 production-count decomposition remains reserved for
+ChatGPT's Neon work.

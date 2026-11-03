@@ -378,3 +378,160 @@ def test_committed_inventory_matches_the_generator():
         for target in generated["targets"]
     }
     assert committed_keys == generated_keys
+
+
+# ---------------------------------------------------------------------------
+# Persisted attribution, required scope and edition lifecycle
+# ---------------------------------------------------------------------------
+
+def test_manifest_source_reads_writer_enrichment_and_reconciliation_evidence(monkeypatch):
+    records = [
+        {
+            "_storage_source": "football_data_csv",
+            "provider_provenance": {
+                "provider": "football_data_csv",
+                "providers": ["football_data_csv", "soccerdata_fbref"],
+            },
+            "provider_fixture_ids": {"soccerdata_fbref": 991},
+            "field_provenance": {"stats_shots": "soccerdata_fbref"},
+            "reconciliation_metadata": {
+                "providers_used": ["football_data_csv", "soccerdata_fbref"],
+                "provider_count": 2,
+            },
+        }
+    ]
+    monkeypatch.setattr(storage, "_persisted_historical_records", lambda *args, **kwargs: records)
+    assert storage.derive_manifest_source("football", 39, 2024) == "mixed"
+
+    single = [{"reconciliation_metadata": {"providers_used": ["soccerdata_fbref"]}}]
+    monkeypatch.setattr(storage, "_persisted_historical_records", lambda *args, **kwargs: single)
+    assert storage.derive_manifest_source("football", 39, 2024) == "soccerdata_fbref"
+
+    labels_only = [{"provider_provenance": {"provider": "mixed"}}]
+    monkeypatch.setattr(storage, "_persisted_historical_records", lambda *args, **kwargs: labels_only)
+    assert storage.derive_manifest_source("football", 39, 2024) is None
+
+
+def test_get_historical_fixtures_exposes_the_persisted_writer_source():
+    fixture = {
+        "fixture": {
+            "id": 7001,
+            "date": "2024-08-17T15:00:00+00:00",
+            "status": {"short": "FT"},
+        },
+        "league": {"id": 39, "season": 2024},
+        "teams": {
+            "home": {"id": 1, "name": "Team One"},
+            "away": {"id": 2, "name": "Team Two"},
+        },
+        "goals": {"home": 2, "away": 1},
+    }
+    result = storage.save_historical_fixtures(
+        [fixture], league_id=39, season=2024, source="football_data_csv", require_completed=True
+    )
+    assert result["inserted"] == 1
+
+    stored = storage.get_historical_fixtures(39, 2024)
+    assert len(stored) == 1
+    assert stored[0]["_storage_source"] == "football_data_csv"
+    assert storage.derive_manifest_source("football", 39, 2024) == "football_data_csv"
+
+
+def test_recovery_state_is_partial_until_roster_and_result_are_verified():
+    only_result = {
+        "results": {"status": "VERIFIED"},
+        "participant_status": "UNKNOWN",
+        "start": "2024-01-01",
+        "end": "2024-06-01",
+    }
+    assert sports_knowledge._recovery_state(only_result) == "PARTIAL"
+
+    confirmed = dict(only_result, participant_status="VERIFIED")
+    assert sports_knowledge._recovery_state(confirmed) == "CONFIRMED"
+
+    future = {"is_future": True, "results": {"status": "VERIFIED"}}
+    assert sports_knowledge._recovery_state(future) == "PROVISIONAL"
+
+    conflicted = {"results": {"status": "CONFLICTED"}}
+    assert sports_knowledge._recovery_state(conflicted) == "CONFLICTED"
+    assert "PARTIAL" in sports_knowledge.knowledge_recovery_states()
+
+
+def test_required_scope_missing_competition_stays_visible(monkeypatch):
+    scope = dict(sports_knowledge.REQUIRED_KNOWLEDGE_SCOPE["football"])
+    scope[999999] = "Missing Required Cup"
+    monkeypatch.setitem(sports_knowledge.REQUIRED_KNOWLEDGE_SCOPE, "football", scope)
+
+    rows = sports_knowledge.knowledge_gap_report(horizon=2020)
+    missing = [
+        row for row in rows
+        if row["sport"] == "football" and row["league_id"] == 999999
+    ]
+    assert missing
+    assert all("competition_not_catalogued" in row["evidence_gaps"] for row in missing)
+    assert all(row["participant_status"] == sports_knowledge.PARTICIPANT_STATUS_UNKNOWN for row in missing)
+
+
+def test_gap_report_keeps_result_block_source_evidence():
+    record = {
+        "results": {
+            "status": "VERIFIED",
+            "evidence": {"source_url": "https://example.test/final"},
+        },
+        "qualification": {
+            "status": "VERIFIED",
+            "routes": [{"evidence": {"source_url": "https://example.test/qualification"}}],
+        },
+    }
+    urls = sports_knowledge._edition_source_urls(record)
+    assert "https://example.test/final" in urls
+    assert "https://example.test/qualification" in urls
+
+
+def test_guarded_update_accepts_participant_stage_and_award_blocks():
+    supported = set(sports_knowledge._UPDATE_BLOCKS)
+    assert {"participants", "stages", "standings", "brackets", "awards"} <= supported
+
+    result = sports_knowledge.apply_knowledge_update(
+        "basketball",
+        12,
+        2024,
+        "awards",
+        {
+            "status": "VERIFIED",
+            "awards": [{"award": "MVP", "winner": "Test Player"}],
+            "evidence": {
+                "source_url": "https://example.test/awards",
+                "retrieved_at": "2026-11-03",
+                "confidence": "medium",
+            },
+        },
+        retrieved_at="2026-11-03",
+        dry_run=True,
+    )
+    assert not any("unsupported block" in problem for problem in result["problems"])
+
+
+def test_basketball_enrichment_preserves_provider_list_and_blockers():
+    original = _bb_game(
+        5006,
+        provider_provenance={
+            "provider": "espn_url",
+            "providers": ["espn_url"],
+            "blockers": ["phase_unclassified"],
+        },
+    )
+    storage.save_historical_basketball_games([original], league_id=12, season=2024)
+
+    enriched = _bb_game(
+        5006,
+        provider_provenance={"provider": "espn_url", "season_type": "regular_season"},
+    )
+    result = storage.save_historical_basketball_games([enriched], league_id=12, season=2024)
+    assert result["enriched"] == 1
+
+    stored = storage.get_historical_basketball_games(12, 2024)[0]
+    provenance = stored["provider_provenance"]
+    assert provenance["providers"] == ["espn_url"]
+    assert provenance["blockers"] == ["phase_unclassified"]
+    assert provenance["season_type"] == "regular_season"

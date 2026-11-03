@@ -44,9 +44,9 @@ def test_rolling_window_loads_2024_2025_2026_and_combines_chronologically(temp_d
     s2025 = [sample_fixture(201 + i, f"2025-05-{i+1:02d}T15:00:00+00:00", home_id=(i%2)+1, away_id=(i%2)+3, season=2025) for i in range(10)]
     s2026 = [sample_fixture(301 + i, f"2026-01-{i+1:02d}T15:00:00+00:00", home_id=(i%2)+1, away_id=(i%2)+3, season=2026) for i in range(10)]
 
-    storage.save_historical_fixtures(s2024, league_id=39, season=2024)
-    storage.save_historical_fixtures(s2025, league_id=39, season=2025)
-    storage.save_historical_fixtures(s2026, league_id=39, season=2026)
+    storage.save_historical_fixtures(s2024, league_id=39, season=2024, source="football_data_csv")
+    storage.save_historical_fixtures(s2025, league_id=39, season=2025, source="football_data_csv")
+    storage.save_historical_fixtures(s2026, league_id=39, season=2026, source="football_data_csv")
 
     def fail_if_api_called(*args, **kwargs):
         raise AssertionError("Live provider API should NOT be called!")
@@ -79,9 +79,9 @@ def test_rolling_window_excludes_upcoming_2026_fixtures(temp_db):
         for i in range(5)
     ]
 
-    storage.save_historical_fixtures(completed_2024, league_id=39, season=2024)
-    storage.save_historical_fixtures(completed_2025, league_id=39, season=2025)
-    storage.save_historical_fixtures(upcoming_2026, league_id=39, season=2026)
+    storage.save_historical_fixtures(completed_2024, league_id=39, season=2024, source="football_data_csv")
+    storage.save_historical_fixtures(completed_2025, league_id=39, season=2025, source="football_data_csv")
+    storage.save_historical_fixtures(upcoming_2026, league_id=39, season=2026, source="football_data_csv")
 
     res = backtest.run_rolling_backtest_window(
         league_id=39,
@@ -118,7 +118,7 @@ def test_rolling_window_candidate_result_excluded_from_features(temp_db):
         sample_fixture(5, "2024-01-20T15:00:00+00:00", home_id=1, away_id=2, home_goals=5, away_goals=0, season=2024),
         sample_fixture(6, "2024-01-25T15:00:00+00:00", home_id=1, away_id=2, home_goals=6, away_goals=0, season=2024),
     ]
-    storage.save_historical_fixtures(fixtures_2024, league_id=39, season=2024)
+    storage.save_historical_fixtures(fixtures_2024, league_id=39, season=2024, source="football_data_csv")
 
     res = backtest.run_rolling_backtest_window(
         league_id=39,
@@ -140,7 +140,7 @@ def test_rolling_window_candidate_result_excluded_from_features(temp_db):
 def test_rolling_window_metadata_persistence(temp_db):
     """H: Rolling window metadata persisted in backtest_runs."""
     fixtures_2024 = [sample_fixture(10 + i, f"2024-02-{i+1:02d}T15:00:00+00:00", home_id=(i%2)+1, away_id=(i%2)+3, season=2024) for i in range(10)]
-    storage.save_historical_fixtures(fixtures_2024, league_id=39, season=2024)
+    storage.save_historical_fixtures(fixtures_2024, league_id=39, season=2024, source="football_data_csv")
 
     res = backtest.run_rolling_backtest_window(
         league_id=39,
@@ -156,7 +156,7 @@ def test_rolling_window_metadata_persistence(temp_db):
 def test_existing_single_season_backtest_compatibility(temp_db):
     """J: Single-season run_real_backtest() continues working."""
     fixtures_2024 = [sample_fixture(50 + i, f"2024-04-{i+1:02d}T15:00:00+00:00", home_id=(i%2)+1, away_id=(i%2)+3, season=2024) for i in range(10)]
-    storage.save_historical_fixtures(fixtures_2024, league_id=39, season=2024)
+    storage.save_historical_fixtures(fixtures_2024, league_id=39, season=2024, source="football_data_csv")
     completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=10)
 
     res = backtest.run_real_backtest(

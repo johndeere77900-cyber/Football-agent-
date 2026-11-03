@@ -352,8 +352,10 @@ def test_sofascore_fallback_error_reporting_captured(mock_api_fb, mock_fd, mock_
 
     assert res["source"] == "none"
     meta = res.get("provider_metadata", {})
-    ss_meta = meta.get("soccerdata_sofascore", {}).get("raw_metadata", {})
-    assert ss_meta.get("status") == "SOURCE_FAILED" or "error" in ss_meta
+    # Sofascore is diagnostic-only: it is never in the automatic route, so it
+    # has no provider attempt or diagnostics to report here.
+    assert "soccerdata_sofascore" not in (meta.get("provider_outcomes") or {})
+    mock_sd_ss.assert_not_called()
 
 
 # Test D — football-data.org trustworthy complete metadata without quota exhaustion -> COMPLETE

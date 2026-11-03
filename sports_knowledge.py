@@ -67,8 +67,41 @@ HISTORICAL_KNOWLEDGE_START = 2019
 
 EVIDENCE_CONFIRMED = "CONFIRMED"
 EVIDENCE_PROVISIONAL = "PROVISIONAL"
+EVIDENCE_PARTIAL = "PARTIAL"
 EVIDENCE_UNKNOWN = "UNKNOWN"
 EVIDENCE_NOT_APPLICABLE = "NOT_APPLICABLE"
+
+# Required knowledge scope is deliberately independent of the acquisition
+# allow-list. The allow-list says what may be acquired; this registry says which
+# competitions the Phase 1 knowledge base is expected to describe. A required
+# competition missing from the catalogue must remain visible as a gap instead of
+# disappearing because it was never registered.
+REQUIRED_KNOWLEDGE_SCOPE = {
+    "football": {
+        1: "FIFA World Cup",
+        2: "UEFA Champions League",
+        3: "UEFA Europa League",
+        4: "UEFA European Championship",
+        5: "UEFA Nations League",
+        39: "Premier League",
+        61: "Ligue 1",
+        78: "Bundesliga",
+        88: "Eredivisie",
+        94: "Primeira Liga",
+        135: "Serie A",
+        140: "La Liga",
+    },
+    "basketball": {
+        12: "NBA",
+    },
+}
+
+
+def required_competition_scope(sport=None):
+    """Return the bounded required-competition registry for one sport."""
+    if sport is None:
+        return {key: dict(value) for key, value in REQUIRED_KNOWLEDGE_SCOPE.items()}
+    return dict(REQUIRED_KNOWLEDGE_SCOPE.get(_normalize_sport(sport), {}))
 
 _REQUIRED_COMPETITION_FIELDS = (
     "league_id",
@@ -1030,6 +1063,38 @@ def _recommended_knowledge_action(record, provider_support):
     return "complete the missing evidence before treating the edition as complete"
 
 
+def _edition_source_urls(record, competition=None):
+    """Collect the source URLs attached to every evidenced edition block."""
+    urls = []
+
+    def _add(url):
+        if isinstance(url, str) and url.strip() and url.strip() not in urls:
+            urls.append(url.strip())
+
+    evidence = record.get("participant_evidence")
+    if isinstance(evidence, dict):
+        _add(evidence.get("source_url"))
+    for key in (
+        "qualification", "competition_access", "promotion_relegation", "results",
+        "standings", "brackets", "awards",
+    ):
+        block = record.get(key)
+        if isinstance(block, dict):
+            block_evidence = block.get("evidence")
+            if isinstance(block_evidence, dict):
+                _add(block_evidence.get("source_url"))
+            for route in block.get("routes") or []:
+                if isinstance(route, dict) and isinstance(route.get("evidence"), dict):
+                    _add(route["evidence"].get("source_url"))
+    for stage in record.get("stages") or []:
+        if isinstance(stage, dict) and isinstance(stage.get("evidence"), dict):
+            _add(stage["evidence"].get("source_url"))
+    for fact in (competition or {}).get("evidence") or []:
+        if isinstance(fact, dict):
+            _add(fact.get("source_url"))
+    return urls
+
+
 def knowledge_gap_report(horizon=None, include_not_applicable=True):
     """
     Return a complete, refreshable evidence report for every configured edition.
@@ -1037,13 +1102,21 @@ def knowledge_gap_report(horizon=None, include_not_applicable=True):
     The report covers every configured competition from
     ``HISTORICAL_KNOWLEDGE_START`` through the future horizon, plus explicitly
     documented editions outside that range (for example the 2018 World Cup).
-    Missing evidence is represented as an explicit gap; no participant list,
-    fixture total or provider route is inferred from acquired fixtures.
+    Required competitions missing from the catalogue remain visible as
+    ``competition_not_catalogued`` gaps instead of disappearing. Missing evidence
+    is represented as an explicit gap; no participant list, fixture total or
+    provider route is inferred from acquired fixtures.
     """
     horizon = int(horizon or KNOWLEDGE_FUTURE_HORIZON)
     rows = []
     for sport in SPORT_FILES:
-        for competition in list_competitions(sport):
+        competitions = list_competitions(sport)
+        catalogued_ids = {
+            int(competition.get("league_id"))
+            for competition in competitions
+            if isinstance(competition.get("league_id"), int)
+        }
+        for competition in competitions:
             league_id = int(competition.get("league_id"))
             documented = set(edition_years(sport, league_id, include_future=True, future_to=horizon) or [])
             seasons = set(range(HISTORICAL_KNOWLEDGE_START, horizon + 1)) | documented
@@ -1058,13 +1131,6 @@ def knowledge_gap_report(horizon=None, include_not_applicable=True):
                     else None
                 )
                 expected = expected_coverage_units(sport, league_id, season)
-                source_urls = []
-                evidence = record.get("participant_evidence")
-                if isinstance(evidence, dict) and evidence.get("source_url"):
-                    source_urls.append(evidence.get("source_url"))
-                for fact in competition.get("evidence") or []:
-                    if isinstance(fact, dict) and fact.get("source_url") and fact.get("source_url") not in source_urls:
-                        source_urls.append(fact.get("source_url"))
                 rows.append(
                     {
                         "sport": sport,
@@ -1085,9 +1151,41 @@ def knowledge_gap_report(horizon=None, include_not_applicable=True):
                         "stages": record.get("stages") or [],
                         "provider_order": provider_order(sport),
                         "provider_support": provider_support,
-                        "source_urls": source_urls,
+                        "source_urls": _edition_source_urls(record, competition),
                         "evidence_gaps": record.get("evidence_gaps") or [],
                         "recommended_action": _recommended_knowledge_action(record, provider_support),
+                    }
+                )
+
+        for league_id, name in required_competition_scope(sport).items():
+            if league_id in catalogued_ids:
+                continue
+            for season in range(HISTORICAL_KNOWLEDGE_START, horizon + 1):
+                rows.append(
+                    {
+                        "sport": sport,
+                        "competition": name,
+                        "league_id": league_id,
+                        "season": season,
+                        "edition_label": str(season),
+                        "exists": None,
+                        "is_future": season > __import__("datetime").datetime.now(
+                            __import__("datetime").timezone.utc
+                        ).year,
+                        "lifecycle_window_status": STATUS_UNKNOWN,
+                        "evidence_status": EVIDENCE_UNKNOWN,
+                        "participant_status": PARTICIPANT_STATUS_UNKNOWN,
+                        "expected_participant_count": None,
+                        "expected_fixture_count": None,
+                        "fixture_total": None,
+                        "format": None,
+                        "coverage_format": None,
+                        "stages": [],
+                        "provider_order": provider_order(sport),
+                        "provider_support": {},
+                        "source_urls": [],
+                        "evidence_gaps": ["competition_not_catalogued"],
+                        "recommended_action": "catalogue the required competition identity and edition evidence before acquisition",
                     }
                 )
     return rows
@@ -1095,26 +1193,52 @@ def knowledge_gap_report(horizon=None, include_not_applicable=True):
 
 def knowledge_recovery_states():
     """Return the lifecycle states a recoverable knowledge fact can hold."""
-    return ("CONFIRMED", "PROVISIONAL", "ONGOING", "COMPLETED", "UNKNOWN", "CONFLICTED")
+    return ("CONFIRMED", "PROVISIONAL", "PARTIAL", "ONGOING", "COMPLETED", "UNKNOWN", "CONFLICTED")
 
 
 def _recovery_state(record):
-    """Map one edition record onto a recovery lifecycle state."""
+    """Map one edition record onto a recovery lifecycle state.
+
+    Fact-level evidence and edition-level completeness are separate. A verified
+    result, roster or structure makes the record PARTIAL; only an edition with a
+    concluded window, a verified roster and a verified result is CONFIRMED. A
+    future edition stays PROVISIONAL even if one fact about it is known.
+    """
     import datetime as _datetime
 
+    def _status(value):
+        return str((value or {}).get("status") or "").upper() if isinstance(value, dict) else ""
+
+    if (
+        _status(record.get("results")) == "CONFLICTED"
+        or _status(record.get("qualification")) == "CONFLICTED"
+        or _status(record.get("competition_access")) == "CONFLICTED"
+        or _status(record.get("promotion_relegation")) == "CONFLICTED"
+    ):
+        return "CONFLICTED"
     if record.get("is_future"):
         return "PROVISIONAL"
-    results = record.get("results")
-    if isinstance(results, dict) and str(results.get("status") or "").upper() == "VERIFIED":
-        return "CONFIRMED"
+
+    results_verified = _status(record.get("results")) == "VERIFIED"
+    participants_verified = record.get("participant_status") == PARTICIPANT_STATUS_VERIFIED
     start, end = record.get("start"), record.get("end")
     today = _datetime.datetime.now(_datetime.timezone.utc).date().isoformat()
-    if isinstance(start, str) and isinstance(end, str) and start[:10] <= today <= end[:10]:
-        return "ONGOING"
-    if isinstance(end, str) and end[:10] < today:
-        return "COMPLETED"
-    if record.get("participant_status") == PARTICIPANT_STATUS_VERIFIED:
+    concluded = isinstance(end, str) and end[:10] < today
+    ongoing = isinstance(start, str) and isinstance(end, str) and start[:10] <= today <= end[:10]
+
+    if results_verified and participants_verified and concluded:
         return "CONFIRMED"
+    if ongoing:
+        return "ONGOING"
+    has_fact = any(
+        isinstance(record.get(key), (dict, list)) and bool(record.get(key))
+        for key in (
+            "results", "qualification", "competition_access", "promotion_relegation",
+            "stages", "standings", "brackets", "awards",
+        )
+    ) or participants_verified or bool(record.get("fixture_total"))
+    if has_fact:
+        return "PARTIAL"
     return "UNKNOWN"
 
 
@@ -1171,7 +1295,17 @@ def knowledge_recovery_plan(sport="football", horizon=None):
     return plan
 
 
-_UPDATE_BLOCKS = ("qualification", "competition_access", "promotion_relegation", "results")
+_UPDATE_BLOCKS = (
+    "qualification",
+    "competition_access",
+    "promotion_relegation",
+    "results",
+    "participants",
+    "stages",
+    "standings",
+    "brackets",
+    "awards",
+)
 
 
 def _editions_path(sport):
@@ -1665,6 +1799,17 @@ def validate():
 
         allowed_ids = set(getattr(config, "ALLOWED_LEAGUE_IDS", []) if sport_key == "football" else getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", []))
         alias_map = getattr(config, "LEAGUE_NAME_TO_ID", {}) if sport_key == "football" else {}
+
+        catalogued_ids = {
+            int(entry.get("league_id"))
+            for entry in list_competitions(sport_key)
+            if isinstance(entry.get("league_id"), int)
+        }
+        for required_id, required_name in required_competition_scope(sport_key).items():
+            if required_id not in catalogued_ids:
+                problems.append(
+                    f"{sport_key} league {required_id}: required competition {required_name!r} is not catalogued"
+                )
 
         for entry in list_competitions(sport_key):
             league_id = entry.get("league_id")
