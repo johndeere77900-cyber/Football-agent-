@@ -708,7 +708,10 @@ def _classify_provider_attempt_outcome(fixtures, meta):
     if error_category == "access_restricted" or http_status in (401, 403):
         return "ACCESS_DENIED"
     if error_category in ("unsupported_coverage", "provider_config_unavailable") or http_status == 404:
-        return "UNSUPPORTED"
+        # This is a coverage/configuration outcome, not a transient provider
+        # failure. Keeping the full label prevents a 404 endpoint from being
+        # mistaken for a failed request that should be retried.
+        return "UNSUPPORTED_COVERAGE"
     if error_category == "rate_limited" or http_status == 429:
         return "RATE_LIMITED"
     if error_category == "network_error":

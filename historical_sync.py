@@ -2046,6 +2046,11 @@ def sync_historical_basketball_games(
         evidence_empty_units += espn_valid_empty_units
 
     stored_games_all = storage.get_historical_basketball_games(league_id, season, include_storage_source=True)
+    phase_counts_b = _basketball_season_type_counts(stored_games_all)
+    regular_season_games_b = (
+        phase_counts_b.get("regular_season", 0) + phase_counts_b.get("regular", 0)
+    )
+    unclassified_games_b = phase_counts_b.get("unclassified", 0)
     db_validation_passed = _validate_historical_basketball_dataset(
         stored_games_all,
         league_id,
@@ -2088,7 +2093,21 @@ def sync_historical_basketball_games(
     if not coverage_units_complete:
         coverage_reason = "coverage_units_incomplete"
     elif not db_validation_passed:
-        coverage_reason = "persisted_dataset_invalid"
+        # Name the first fact that prevents validation instead of collapsing
+        # every case into one generic string. Missing provider phase is exactly
+        # the class of historical gap this acquisition path must be able to
+        # explain and repair; it is never assumed to be the regular season.
+        if unclassified_games_b > 0:
+            coverage_reason = "season_type_metadata_missing"
+        elif expected_min_season_games is None:
+            coverage_reason = "expected_season_coverage_unavailable"
+        elif regular_season_games_b < expected_min_season_games:
+            coverage_reason = (
+                f"regular_season_coverage_insufficient_"
+                f"{regular_season_games_b}_of_{expected_min_season_games}"
+            )
+        else:
+            coverage_reason = "persisted_dataset_invalid"
     elif not season_coverage_sufficient:
         coverage_reason = season_coverage_reason
     else:
@@ -2104,7 +2123,13 @@ def sync_historical_basketball_games(
         "completed_coverage_units": safe_pages_comp_b,
         "expected_min_season_games": expected_min_season_games,
         "season_coverage_verified": bool(season_coverage_sufficient),
-        "season_type_counts": _basketball_season_type_counts(stored_games_all),
+        "season_type_counts": phase_counts_b,
+        "regular_season_games": regular_season_games_b,
+        "unclassified_games": unclassified_games_b,
+        "phase_diagnostic": (
+            "season_type_metadata_missing" if unclassified_games_b > 0
+            else None
+        ),
         "provider_coverage": provider_coverage,
     }
 
@@ -2434,6 +2459,7 @@ def build_basketball_phase_recovery_report(seasons=None, league_id=None, fetch_e
             "matched_identities", "enrichable", "matched_without_phase",
             "requires_reacquisition", "conflicting", "fresh_espn_events",
             "fresh_not_persisted", "reacquired", "rejected_by_provider",
+            "non_espn_phase_missing", "espn_phase_missing", "exact_identity_matches",
         )
     }
 
@@ -2487,15 +2513,32 @@ def build_basketball_phase_recovery_report(seasons=None, league_id=None, fetch_e
             "fresh_not_persisted": 0,
             "reacquired": 0,
             "rejected_by_provider": int((coverage or {}).get("events_rejected") or 0),
+            "non_espn_phase_missing": 0,
+            "espn_phase_missing": 0,
         }
         unmatched_examples = []
         conflict_examples = []
         persisted_espn_ids = set()
+        source_counts = {}
+        phase_counts = {}
+        phase_missing_by_source = {}
 
         for (source, event_id), game in persisted.items():
+            source_key = source if isinstance(source, str) and source.strip() else "unknown_source"
             phase = _basketball_game_season_type(game)
+            source_counts[source_key] = source_counts.get(source_key, 0) + 1
+            phase_key = phase or "unclassified"
+            phase_counts[phase_key] = phase_counts.get(phase_key, 0) + 1
+            if phase is None:
+                phase_missing_by_source[source_key] = phase_missing_by_source.get(source_key, 0) + 1
+
             if source != "espn_url":
                 stats["non_espn_records"] += 1
+                if phase is None:
+                    # An API-Basketball id is not an ESPN event identity. It must
+                    # be refreshed from its own provider (or re-acquired); it is
+                    # never counted as recoverable from the ESPN comparison.
+                    stats["non_espn_phase_missing"] += 1
                 continue
             stats["espn_records"] += 1
             persisted_espn_ids.add(event_id)
@@ -2503,6 +2546,7 @@ def build_basketball_phase_recovery_report(seasons=None, league_id=None, fetch_e
             if phase:
                 stats["espn_classified"] += 1
                 if fresh_game is not None:
+                    stats["exact_identity_matches"] = stats.get("exact_identity_matches", 0) + 1
                     fresh_phase = _basketball_game_season_type(fresh_game)
                     if fresh_phase and fresh_phase != phase:
                         stats["conflicting"] += 1
@@ -2514,11 +2558,13 @@ def build_basketball_phase_recovery_report(seasons=None, league_id=None, fetch_e
                             })
                 continue
             stats["espn_unclassified"] += 1
+            stats["espn_phase_missing"] += 1
             if fresh_game is None:
                 stats["requires_reacquisition"] += 1
                 if len(unmatched_examples) < 20:
                     unmatched_examples.append(event_id)
                 continue
+            stats["exact_identity_matches"] = stats.get("exact_identity_matches", 0) + 1
             stats["matched_identities"] += 1
             if _basketball_game_season_type(fresh_game):
                 stats["enrichable"] += 1
@@ -2526,15 +2572,21 @@ def build_basketball_phase_recovery_report(seasons=None, league_id=None, fetch_e
                 stats["matched_without_phase"] += 1
 
         if stats["enrichable"]:
-            stats["recommended_recovery_action"] = "run_espn_first_sync_to_enrich_matches"
+            stats["recommended_recovery_action"] = "run_exact_espn_phase_enrichment"
         elif stats["requires_reacquisition"]:
-            stats["recommended_recovery_action"] = "reacquire_unmatched_records_from_their_source"
+            stats["recommended_recovery_action"] = "reacquire_unmatched_espn_identities"
+        elif stats["non_espn_phase_missing"]:
+            stats["recommended_recovery_action"] = "refresh_from_each_records_own_provider"
         elif stats["espn_unclassified"]:
             stats["recommended_recovery_action"] = "provider_phase_evidence_unavailable"
         else:
             stats["recommended_recovery_action"] = "none"
 
         stats["fresh_not_persisted"] = len(set(fresh_by_id) - persisted_espn_ids)
+        stats["source_breakdown"] = dict(sorted(source_counts.items()))
+        stats["phase_counts"] = dict(sorted(phase_counts.items()))
+        stats["phase_missing_by_source"] = dict(sorted(phase_missing_by_source.items()))
+        stats["exact_identity_matches"] = int(stats.get("exact_identity_matches") or 0)
         stats["unmatched_examples"] = unmatched_examples
         stats["conflict_examples"] = conflict_examples
         stats["espn_attempted"] = espn_attempted
@@ -2620,6 +2672,8 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
         source_counts = Counter()
         invalid_reasons = Counter()
         seen = set()
+        valid_seen = set()
+        valid_count = 0
         duplicate_count = 0
         logical_duplicates = 0
         fixture_sources = {}
@@ -2666,6 +2720,9 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
                 is_valid, reason = False, f"validation_error:{type(exc).__name__}"
             if not is_valid:
                 invalid_reasons[str(reason or "invalid")] += 1
+            else:
+                valid_count += 1
+                valid_seen.add(key)
 
         logical_duplicates = sum(
             1 for sources in fixture_sources.values() if len(sources) > 1
@@ -2714,10 +2771,28 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
         expected_fixture_total = units.get("value") if isinstance(units, dict) else None
 
         manifest_status = manifest.get("status") or "INCOMPLETE"
-        if manifest_status == "COMPLETE":
-            blocker = None
-        elif not fixture_list:
+        manifest_fixture_count = manifest.get("fixture_count")
+        manifest_count_matches = (
+            isinstance(manifest_fixture_count, int)
+            and not isinstance(manifest_fixture_count, bool)
+            and manifest_fixture_count == len(fixture_list)
+        )
+        invalid_count = sum(invalid_reasons.values())
+
+        # A COMPLETE label is a claim, not evidence. The audit must reconcile the
+        # claim against the database on every pass: a stale or manually altered
+        # manifest can otherwise hide missing, duplicate or invalid records behind
+        # the word COMPLETE. The same checks are applied to INCOMPLETE manifests so
+        # the report always names the first fact that blocks promotion.
+        if not fixture_list:
             blocker = manifest.get("error_reason") or "no_persisted_records"
+        elif not manifest_count_matches:
+            blocker = (
+                f"manifest_count_mismatch:{manifest_fixture_count!r}_of_{len(fixture_list)}"
+            )
+        elif invalid_count > 0:
+            first_invalid = next(iter(invalid_reasons))
+            blocker = f"invalid_persisted_records:{first_invalid}"
         elif not expected_teams:
             blocker = "expected_team_universe_unavailable"
         elif coverage.get("verified") is not True:
@@ -2727,11 +2802,24 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
             )
         elif lifecycle_state != COMPETITION_LIFECYCLE_COMPLETED:
             blocker = f"lifecycle_{lifecycle_state.lower()}_{lifecycle_reason}"
-        else:
+        elif manifest_status != "COMPLETE":
             blocker = manifest.get("error_reason") or "manifest_not_complete_despite_valid_coverage"
+        else:
+            blocker = None
+
+        manifest_status_consistent = (manifest_status == "COMPLETE" and blocker is None)
+        stale_error_reason = (
+            manifest_status == "COMPLETE"
+            and blocker is None
+            and bool(manifest.get("error_reason"))
+        )
 
         if blocker is None:
             recovery_action = "none"
+        elif str(blocker).startswith("manifest_count_mismatch"):
+            recovery_action = "reconcile_manifest_count_with_persisted_records"
+        elif str(blocker).startswith("invalid_persisted_records"):
+            recovery_action = "repair_or_reacquire_invalid_records"
         elif blocker == "expected_team_universe_unavailable":
             recovery_action = "resolve_authoritative_expected_team_universe"
         elif blocker == "no_persisted_records":
@@ -2749,12 +2837,21 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
             "manifest_status": manifest_status,
             "manifest_fixture_count": manifest.get("fixture_count"),
             "stored_count": len(fixture_list),
-            "valid_count": len(fixture_list) - sum(invalid_reasons.values()),
-            "valid_distinct_count": len(seen) - duplicate_count - sum(invalid_reasons.values()),
+            "manifest_count_matches": manifest_count_matches,
+            "manifest_count_delta": (
+                len(fixture_list) - manifest_fixture_count
+                if isinstance(manifest_fixture_count, int)
+                and not isinstance(manifest_fixture_count, bool)
+                else None
+            ),
+            "manifest_status_consistent": manifest_status_consistent,
+            "stale_error_reason": stale_error_reason,
+            "valid_count": valid_count,
+            "valid_distinct_count": len(valid_seen),
             "duplicate_count": duplicate_count,
             "logical_duplicate_fixture_ids": logical_duplicates,
             "source_breakdown": dict(source_counts),
-            "invalid_count": sum(invalid_reasons.values()),
+            "invalid_count": invalid_count,
             "invalid_reasons": dict(invalid_reasons),
             "expected_team_source": expected_source,
             "expected_team_count": len(expected_teams),
@@ -2768,6 +2865,7 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
             "provider_diagnostics_present": diagnostics_present,
             "expected_fixture_total": expected_fixture_total,
             "coverage": coverage,
+            "coverage_evidence_gaps": coverage.get("evidence_gaps") if isinstance(coverage, dict) else None,
             "lifecycle_state": lifecycle_state,
             "lifecycle_reason": lifecycle_reason,
             "exact_blocker": blocker,
@@ -2782,6 +2880,11 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
         "mutated": False,
         "manifest_count": len(results),
         "status_counts": dict(Counter(item["manifest_status"] for item in results)),
+        "inconsistent_complete_manifest_count": sum(
+            1 for item in results
+            if item["manifest_status"] == "COMPLETE" and not item["manifest_status_consistent"]
+        ),
+        "stale_error_reason_count": sum(1 for item in results if item["stale_error_reason"]),
         "blocker_counts": dict(Counter(
             item["exact_blocker"] or "none" for item in results
         )),
@@ -2804,6 +2907,309 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
             flush=True,
         )
     print(f"  manifests={len(results)} statuses={summary['status_counts']}", flush=True)
+    if summary.get("report_path"):
+        print(f"  report: {summary['report_path']}", flush=True)
+    return summary
+
+
+def build_basketball_manifest_reconciliation(league_ids=None, seasons=None) -> dict:
+    """
+    Reconcile every persisted basketball manifest against its stored games.
+
+    This is the basketball counterpart to the football manifest audit. It is
+    read-only and reports, per NBA season: the manifest's claim versus the actual
+    row count, source and phase breakdown, duplicate or invalid identities,
+    provider coverage units and status, independently established regular-season
+    expectation, lifecycle state and the first exact reason completion cannot be
+    claimed. Missing phase metadata is reported as ``season_type_metadata_missing``
+    and is never converted into a regular-season count.
+    """
+    from collections import Counter
+
+    storage.init_db()
+    manifests = storage.list_historical_datasets("basketball")
+    league_filter = {int(value) for value in league_ids} if league_ids else None
+    season_filter = {int(value) for value in seasons} if seasons else None
+    results = []
+
+    for manifest in manifests:
+        lid = int(manifest["league_id"])
+        ssn = int(manifest["season"])
+        if league_filter and lid not in league_filter:
+            continue
+        if season_filter and ssn not in season_filter:
+            continue
+
+        games = storage.get_historical_basketball_games(
+            lid, ssn, include_storage_source=True
+        )
+        game_list = games if isinstance(games, list) else []
+        source_counts = {}
+        phase_counts = _basketball_season_type_counts(game_list)
+        phase_missing_by_source = {}
+        invalid_reasons = Counter()
+        seen = set()
+        valid_count = 0
+        duplicate_count = 0
+        dates = []
+
+        for game in game_list:
+            source = _basketball_game_source(game) or "unknown_source"
+            source_counts[source] = source_counts.get(source, 0) + 1
+            event_id = _basketball_game_event_id(game)
+            if event_id is None:
+                invalid_reasons["missing_or_invalid_event_id"] += 1
+                event_key = None
+            else:
+                event_key = (source, event_id)
+                if event_key in seen:
+                    duplicate_count += 1
+                seen.add(event_key)
+
+            phase = _basketball_game_season_type(game)
+            if phase is None:
+                phase_missing_by_source[source] = (
+                    phase_missing_by_source.get(source, 0) + 1
+                )
+
+            raw_date = game.get("date") if isinstance(game, dict) else None
+            if isinstance(raw_date, str) and raw_date:
+                dates.append(raw_date[:10])
+
+            try:
+                is_valid, reason, _ = storage.validate_historical_basketball_game(
+                    game,
+                    target_league_id=lid,
+                    target_season=ssn,
+                    require_completed=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - report, never abort the audit
+                is_valid, reason = False, f"validation_error:{type(exc).__name__}"
+            if not is_valid:
+                invalid_reasons[str(reason or "invalid")] += 1
+            else:
+                valid_count += 1
+
+        manifest_status = manifest.get("status") or "INCOMPLETE"
+        manifest_count = manifest.get("fixture_count")
+        count_matches = (
+            isinstance(manifest_count, int)
+            and not isinstance(manifest_count, bool)
+            and manifest_count == len(game_list)
+        )
+        expected_min = _expected_min_season_games(lid, ssn)
+        regular_count = (
+            phase_counts.get("regular_season", 0) + phase_counts.get("regular", 0)
+        )
+        unclassified_count = phase_counts.get("unclassified", 0)
+        provider_coverage = (
+            manifest.get("provider_coverage")
+            if isinstance(manifest.get("provider_coverage"), dict)
+            else {}
+        )
+        provider_statuses = {
+            provider: entry.get("status")
+            for provider, entry in provider_coverage.items()
+            if isinstance(entry, dict)
+        }
+        expected_units = manifest.get("expected_pages") or 0
+        completed_units = manifest.get("pages_completed") or 0
+        dataset_valid = _validate_historical_basketball_dataset(
+            game_list, lid, ssn, manifest
+        )
+        units_complete = expected_units > 0 and completed_units == expected_units
+        season_sufficient = (
+            expected_min is not None and regular_count >= expected_min
+        )
+        coverage_verified = bool(
+            dataset_valid and units_complete and season_sufficient
+            and any(status == ACQUISITION_STATE_VALIDATED for status in provider_statuses.values())
+        )
+        coverage_reason = None
+        if unclassified_count > 0:
+            coverage_reason = "season_type_metadata_missing"
+        elif not units_complete:
+            coverage_reason = "provider_coverage_units_incomplete"
+        elif expected_min is None:
+            coverage_reason = "expected_season_coverage_unavailable"
+        elif regular_count < expected_min:
+            coverage_reason = "regular_season_coverage_insufficient"
+        elif not dataset_valid:
+            coverage_reason = "persisted_dataset_invalid"
+        lifecycle_coverage = {
+            "verified": coverage_verified,
+            "reason": coverage_reason,
+            "coverage_unit": manifest.get("coverage_unit"),
+            "expected_coverage_units": expected_units,
+            "completed_coverage_units": completed_units,
+            "provider_coverage": provider_coverage,
+        }
+        lifecycle_state, lifecycle_reason, _ = get_competition_lifecycle(
+            "basketball", lid, ssn, game_list, coverage=lifecycle_coverage
+        )
+
+        # First fact that prevents a COMPLETE claim. Missing provider phase is
+        # reported before the lifecycle it invalidates, otherwise "coverage
+        # unverified" would hide the actual repairable gap. An unfinished season
+        # is still the blocker when no phase/data defect exists.
+        if not game_list:
+            blocker = manifest.get("error_reason") or "no_persisted_records"
+        elif not count_matches:
+            blocker = f"manifest_count_mismatch:{manifest_count!r}_of_{len(game_list)}"
+        elif sum(invalid_reasons.values()) > 0:
+            blocker = f"invalid_persisted_records:{next(iter(invalid_reasons))}"
+        elif duplicate_count > 0:
+            blocker = "duplicate_persisted_game_identities"
+        elif unclassified_count > 0:
+            blocker = "season_type_metadata_missing"
+        elif expected_min is None and lifecycle_state != COMPETITION_LIFECYCLE_COMPLETED:
+            blocker = f"lifecycle_{lifecycle_state.lower()}_{lifecycle_reason}"
+        elif expected_min is None:
+            blocker = "expected_season_coverage_unavailable"
+        elif regular_count < expected_min:
+            blocker = (
+                f"regular_season_coverage_insufficient:"
+                f"{regular_count}_of_{expected_min}"
+            )
+        elif not units_complete:
+            blocker = (
+                f"provider_coverage_units_incomplete:"
+                f"{completed_units}_of_{expected_units}"
+            )
+        elif not any(status == ACQUISITION_STATE_VALIDATED for status in provider_statuses.values()):
+            blocker = "no_validated_provider_coverage"
+        elif not dataset_valid:
+            blocker = "persisted_dataset_invalid"
+        elif lifecycle_state != COMPETITION_LIFECYCLE_COMPLETED:
+            blocker = f"lifecycle_{lifecycle_state.lower()}_{lifecycle_reason}"
+        elif manifest_status != "COMPLETE":
+            blocker = manifest.get("error_reason") or "manifest_not_complete_despite_valid_game_data"
+        else:
+            blocker = None
+
+        manifest_status_consistent = (manifest_status == "COMPLETE" and blocker is None)
+        stale_error_reason = (
+            manifest_status == "COMPLETE"
+            and blocker is None
+            and bool(manifest.get("error_reason"))
+        )
+
+        if blocker is None:
+            action = "none"
+        elif blocker == "season_type_metadata_missing":
+            espn_candidates = phase_missing_by_source.get("espn_url", 0)
+            action = (
+                "run_exact_espn_phase_enrichment"
+                if espn_candidates
+                else "refresh_missing_phases_from_each_source"
+            )
+        elif str(blocker).startswith("regular_season_coverage_insufficient"):
+            action = "reacquire_missing_regular_season_games"
+        elif str(blocker).startswith("provider_coverage_units_incomplete"):
+            action = "complete_provider_coverage_units"
+        elif blocker == "no_validated_provider_coverage":
+            action = "repair_provider_coverage_evidence"
+        elif str(blocker).startswith("manifest_count_mismatch"):
+            action = "reconcile_manifest_count_with_persisted_records"
+        elif str(blocker).startswith("invalid_persisted_records"):
+            action = "repair_or_reacquire_invalid_records"
+        elif blocker == "duplicate_persisted_game_identities":
+            action = "reconcile_duplicate_identities"
+        elif str(blocker).startswith("lifecycle_"):
+            action = "wait_for_season_completion_or_verify_lifecycle"
+        elif blocker == "expected_season_coverage_unavailable":
+            action = "wait_for_documented_season_expectation"
+        elif blocker == "persisted_dataset_invalid":
+            action = "inspect_persisted_dataset_validation"
+        else:
+            action = "inspect_manifest_and_provider_evidence"
+
+        results.append({
+            "league_id": lid,
+            "season": ssn,
+            "manifest_status": manifest_status,
+            "manifest_fixture_count": manifest_count,
+            "stored_count": len(game_list),
+            "manifest_count_matches": count_matches,
+            "manifest_count_delta": (
+                len(game_list) - manifest_count
+                if isinstance(manifest_count, int)
+                and not isinstance(manifest_count, bool)
+                else None
+            ),
+            "manifest_status_consistent": manifest_status_consistent,
+            "stale_error_reason": stale_error_reason,
+            "valid_count": valid_count,
+            "invalid_count": sum(invalid_reasons.values()),
+            "invalid_reasons": dict(invalid_reasons),
+            "duplicate_count": duplicate_count,
+            "source_breakdown": dict(sorted(source_counts.items())),
+            "phase_counts": dict(sorted(phase_counts.items())),
+            "phase_missing_by_source": dict(sorted(phase_missing_by_source.items())),
+            "regular_season_games": regular_count,
+            "unclassified_games": unclassified_count,
+            "expected_min_regular_season_games": expected_min,
+            "coverage_unit": manifest.get("coverage_unit"),
+            "expected_coverage_units": expected_units,
+            "completed_coverage_units": completed_units,
+            "provider_statuses": provider_statuses,
+            "provider_coverage": provider_coverage,
+            "coverage_verified": coverage_verified,
+            "coverage_reason": coverage_reason,
+            "lifecycle_state": lifecycle_state,
+            "lifecycle_reason": lifecycle_reason,
+            "dataset_valid": dataset_valid,
+            "date_range": {"start": min(dates), "end": max(dates)} if dates else None,
+            "exact_blocker": blocker,
+            "recommended_recovery_action": action,
+            "error_reason": manifest.get("error_reason"),
+            "updated_at": manifest.get("updated_at"),
+        })
+
+    summary = {
+        "report_type": "basketball_manifest_reconciliation",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mutated": False,
+        "manifest_count": len(results),
+        "status_counts": dict(Counter(item["manifest_status"] for item in results)),
+        "inconsistent_complete_manifest_count": sum(
+            1 for item in results
+            if item["manifest_status"] == "COMPLETE" and not item["manifest_status_consistent"]
+        ),
+        "stale_error_reason_count": sum(1 for item in results if item["stale_error_reason"]),
+        "phase_missing_source_counts": dict(Counter(
+            source
+            for item in results
+            for source, count in item["phase_missing_by_source"].items()
+            for _ in range(count)
+        )),
+        "phase_missing_count": sum(item["unclassified_games"] for item in results),
+        "blocker_counts": dict(Counter(
+            item["exact_blocker"] or "none" for item in results
+        )),
+        "targets": results,
+    }
+    summary["report_path"] = _write_historical_report(
+        summary, "basketball_manifest_reconciliation"
+    )
+
+    print("\n=== BASKETBALL MANIFEST RECONCILIATION ===", flush=True)
+    for item in results:
+        print(
+            f"  [{item['manifest_status']}] {item['league_id']}/{item['season']}: "
+            f"stored={item['stored_count']} valid={item['valid_count']} "
+            f"duplicates={item['duplicate_count']} "
+            f"phases={item['phase_counts']} "
+            f"regular={item['regular_season_games']}/{item['expected_min_regular_season_games']} "
+            f"coverage={item['completed_coverage_units']}/{item['expected_coverage_units']} "
+            f"blocker={item['exact_blocker']}",
+            flush=True,
+        )
+    print(
+        f"  manifests={len(results)} statuses={summary['status_counts']} "
+        f"phase_missing={summary['phase_missing_count']}",
+        flush=True,
+    )
     if summary.get("report_path"):
         print(f"  report: {summary['report_path']}", flush=True)
     return summary

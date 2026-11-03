@@ -831,3 +831,147 @@ No Neon database was read or modified. Remaining authoritative evidence gaps are
 historical rosters/coverage totals reported by the knowledge report, especially UCL, UEL, Nations
 League and the non-verified domestic seasons. Those gaps are reported, not guessed.
 
+
+
+## 21. Acquisition recovery and production reconciliation (final pass)
+
+### 21.1 What was corrected
+
+- **Football manifest audit could hide invalid data.** It treated every
+  `COMPLETE` label as `blocker=None`. The audit now checks the persisted rows
+  first: count reconciliation, per-row validation, duplicates, authoritative
+  participant universe, structural coverage and lifecycle. A `COMPLETE` manifest
+  that fails any check is reported as inconsistent and is never counted as a
+  pass. `valid_distinct_count` is now counted from valid identities rather than
+  derived by subtraction.
+- **NBA phase gaps had no manifest-level diagnosis.** A new read-only
+  `build_basketball_manifest_reconciliation()` reports, per NBA manifest, the
+  actual row count, source and phase counts, unclassified records by source,
+  invalid/duplicate identities, provider coverage units and statuses, the
+  independently established regular-season expectation, lifecycle and the first
+  exact blocker. Missing provider-native phase is reported as
+  `season_type_metadata_missing`; it is never folded into the regular season.
+- **The phase-recovery report only explained `espn_url` rows.** It now reports
+  every source, exact identity matches, phase counts, missing phase by source,
+  matched-but-unclassified records and non-ESPN phase gaps. An API-Basketball id
+  is never treated as an ESPN event identity, so it is never counted as
+  recoverable from ESPN evidence.
+- **Basketball sync now names the validation blocker.** When persisted
+  validation fails because records have no provider-native phase, the manifest
+  reason is `season_type_metadata_missing`; when the season total is unavailable
+  it is `expected_season_coverage_unavailable`; when the regular season is short
+  it is `regular_season_coverage_insufficient_<actual>_of_<expected>`. The generic
+  `api_error_during_acquisition` string is no longer the only explanation.
+- **Basketball persistence is batched.** One bounded pre-read per page feeds one
+  batched insert and one batched additive update. The merge contract is
+  unchanged: identity, date, scores, completed status and canonical team
+  identities are preserved, and conflicts are reported rather than overwritten.
+- **Provider outcomes use the full vocabulary.** `UNSUPPORTED_COVERAGE` now
+  identifies a 404/unsupported endpoint instead of collapsing it into a generic
+  failure. Access denial, rate limiting, timeouts, network errors and parser
+  failures remain distinct, and none is ever a valid empty result.
+
+### 21.2 Commands
+
+```bash
+python3 main.py --report-football-reconciliation
+python3 main.py --report-basketball-reconciliation
+python3 main.py --report-nba-phase-recovery --seasons 2019 2020 2021 2022 2023 2024 2025 2026
+python3 main.py --verify-historical-datasets --historical-queue --seasons 2019 2020 2021 2022 2023 2024 2025 2026
+```
+
+The reports are read-only. They write their JSON evidence under
+`data/historical_runs/` and do not change a manifest, a record or a provider
+counter.
+
+### 21.3 Local verification actually performed
+
+- `python -m py_compile` on `storage.py`, `historical_sync.py`,
+  `data_resolver.py`, `main.py` and `config.py`.
+- Seeded local SQLite smoke: an ESPN row with a verified phase plus one row with
+  no phase produced
+  `phase_counts={'regular_season': 1, 'unclassified': 1}`,
+  `phase_missing_by_source={'espn_url': 1}` and the exact blocker
+  `season_type_metadata_missing`. The phase-recovery report, with no network
+  call, reported the same source split and one missing ESPN phase.
+- Selected regression suites: `tests/test_phase1_reliability_knowledge.py`,
+  `tests/test_historical_sync.py`, `tests/test_storage.py` and
+  `tests/test_p0_p1_integrity_repair.py` -> **57 passed**.
+- `python main.py --help` parses and exposes both reconciliation commands.
+
+### 21.4 Production reconciliation requirements (ChatGPT / Neon only)
+
+No production Neon connection, SQL, migration or write was performed here. The
+following read-only checks are required to turn the production observations into
+a reconciled manifest table.
+
+1. **Football count discrepancy (23,110 earlier vs 19,698 on 3 November).** Run a
+   table count and identity decomposition, not a deletion assumption:
+
+   ```sql
+   SELECT count(*) AS raw_rows FROM historical_fixtures;
+   SELECT count(DISTINCT (source, fixture_id)) AS distinct_source_ids
+   FROM historical_fixtures;
+   SELECT source, count(*) AS rows, count(DISTINCT fixture_id) AS distinct_ids
+   FROM historical_fixtures GROUP BY source ORDER BY source;
+   SELECT league_id, season, count(*) AS rows
+   FROM historical_fixtures GROUP BY league_id, season
+   ORDER BY league_id, season;
+   ```
+
+   Then group by canonical identity
+   `(canonical_home_id, canonical_away_id, date_trunc('day', kickoff_at))` to
+   separate legitimate rows from pre-existing cross-provider duplicates. The
+   difference between raw rows and distinct logical fixtures is the
+   reconciliation gap; neither historical total is accepted as correct until
+   this decomposition is recorded.
+
+2. **All 96 football manifests.** Run
+   `python3 main.py --report-football-reconciliation` against Neon. For each
+   manifest compare `fixture_count` with the persisted count, `expected_team_ids_json`
+   with available canonical teams, and the recorded `provider_outcomes` with the
+   stored `source`/provenance values. The report's `exact_blocker` is the
+   database-side action; do not mark a manifest COMPLETE to clear it.
+
+3. **All 8 NBA manifests.** Run
+   `python3 main.py --report-basketball-reconciliation` and
+   `python3 main.py --report-nba-phase-recovery`. For each season capture:
+
+   ```sql
+   SELECT league_id, season, source, count(*) AS rows
+   FROM historical_basketball_games
+   WHERE league_id = 12
+   GROUP BY league_id, season, source
+   ORDER BY season, source;
+
+   SELECT league_id, season, count(*) AS missing_phase
+   FROM historical_basketball_games
+   WHERE league_id = 12
+     AND (raw_json->'provider_provenance'->>'season_type' IS NULL
+          OR raw_json->'provider_provenance'->>'season_type' IN ('', 'unclassified', 'unknown'))
+   GROUP BY league_id, season ORDER BY season;
+   ```
+
+   The exact ESPN `(source, game_id)` rows are enrichable by the normal
+   ESPN-first sync. Rows from another source require that source's own refresh or
+   reacquisition; they are not counted as recovered. The production total of
+   9,361 remains an observed input, not a recovery result, until this comparison
+   is run over the database.
+
+4. **Manifest/schema checks.** Confirm `historical_datasets` has 104 rows (96
+   football, 8 basketball), that every `provider_coverage_json` is valid JSON,
+   and that no `status='COMPLETE'` manifest has a count mismatch or a failed
+   persisted validator. Do not delete rows to make a count agree.
+
+### 21.5 Remaining external limitations
+
+- UCL, UEL, Nations League and the non-verified domestic editions still lack
+  authoritative participant universes and/or independently documented match
+  totals. Their datasets stay fail-closed and are not claimed complete.
+- No production run of the new reconciliation commands was possible here. The
+  reports must be run by ChatGPT/Neon against production.
+- The five-hour Run 42 remains unattributed: no acquisition-run id, workflow
+  timestamp or logs identify it. New runs now emit a unique `acq-*` id,
+  per-target timings, checkpoints and run reports; that does not retroactively
+  identify Run 42.
+- No live, prediction, backtest, grading, training or Telegram path was changed.

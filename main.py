@@ -2878,6 +2878,12 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--report-basketball-reconciliation",
+        action="store_true",
+        help="Reconcile every persisted basketball manifest and phase count (read-only).",
+    )
+
+    parser.add_argument(
         "--report-team-identity-conflicts",
         action="store_true",
         help="Report conflicting team identity mappings and proposed reconciliation (read-only).",
@@ -3027,6 +3033,14 @@ def main():
         if args.report_football_reconciliation:
             storage.init_db()
             historical_sync.build_football_manifest_reconciliation(
+                league_ids=[args.league] if args.league else None,
+                seasons=getattr(args, "seasons", None) or ([args.season] if args.season else None),
+            )
+            return 0
+
+        if args.report_basketball_reconciliation:
+            storage.init_db()
+            historical_sync.build_basketball_manifest_reconciliation(
                 league_ids=[args.league] if args.league else None,
                 seasons=getattr(args, "seasons", None) or ([args.season] if args.season else None),
             )

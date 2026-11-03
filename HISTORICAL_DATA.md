@@ -40,7 +40,7 @@ API-Football and football-data.org are **not** historical football fixture acqui
    - A successful HTTP request, a non-empty response, or the exhaustion of every approved provider never establishes complete historical coverage on its own.
 
 3. **DISTINCT PROVIDER OUTCOMES**:
-   - Each provider attempt records a distinct outcome: `SUCCESS`, `FAILED`, `MALFORMED`, `VALID_EMPTY`, `QUOTA_EXHAUSTED`, `INSUFFICIENT`.
+   - Each provider attempt records a distinct outcome: `SUCCESS`, `FAILED`, `MALFORMED`, `VALID_EMPTY`, `QUOTA_EXHAUSTED`, `INSUFFICIENT`, `ACCESS_DENIED`, `UNSUPPORTED_COVERAGE`, `RATE_LIMITED`, `TIMEOUT`, `NETWORK_ERROR`, `PARSER_ERROR`.
    - A provider failure does not prevent the next approved provider from being attempted, and an insufficient dataset stays `INCOMPLETE` even when every approved provider has been exhausted.
 
 4. **COMPETITION LIFECYCLE vs ACQUISITION STATE**:
@@ -128,6 +128,22 @@ To view past backtest run history:
 python3 main.py --backtest-history
 ```
 
+To reconcile manifests without writing to the database:
+```bash
+# Every football manifest, stored count, source, invalid/duplicate rows,
+# participant universe, structural coverage and exact blocker.
+python3 main.py --report-football-reconciliation
+
+# Every NBA manifest, source and phase breakdown, missing-phase records,
+# regular-season expectation, coverage units and exact blocker.
+python3 main.py --report-basketball-reconciliation
+
+# Exact persisted (source, event_id) comparison with fresh ESPN evidence.
+# The report is read-only; the normal ESPN-first sync applies enrichable phase
+# metadata and never infers a phase from a date.
+python3 main.py --report-nba-phase-recovery --seasons 2019 2020 2021 2022 2023 2024 2025 2026
+```
+
 ## Completion invariant
 
 A historical dataset can only be marked `COMPLETE` when all of the following hold.
@@ -174,6 +190,27 @@ competition with no declared window fails closed with lifecycle `UNKNOWN`.
 - A previously `COMPLETE` dataset whose lifecycle or coverage no longer verifies is
   marked `INCOMPLETE` with an accurate reason and resumed, without deleting valid
   records.
+
+## Persistence batching
+
+Football fixtures are inserted and enriched with one bounded read and batched
+`executemany` writes per page. Basketball games use the same pattern: one
+bounded pre-read per page, one batched insert for new `(source, game_id)` rows,
+and one batched update for additive metadata enrichment. A phase-recovery run
+over thousands of persisted NBA games therefore does not perform one query per
+game. The merge contract is unchanged: identity, date, scores and completed
+status are preserved; only missing or explicitly unclassified metadata is filled;
+conflicting values are reported and the stored value is kept.
+
+## Reconciliation status vocabulary
+
+A `COMPLETE` manifest is an assertion, not independent evidence. Both manifest
+reconciliation reports re-read the persisted rows and report an inconsistent
+`COMPLETE` claim as a blocker. Missing phase metadata is reported as
+`season_type_metadata_missing`; a missing regular-season total as
+`expected_season_coverage_unavailable`; a short regular season as
+`regular_season_coverage_insufficient`; and incomplete provider units as
+`provider_coverage_units_incomplete`. None of these is promoted to a pass.
 
 ## Queue budget behaviour
 

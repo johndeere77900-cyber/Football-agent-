@@ -1773,6 +1773,11 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
     Idempotent by ``(source, game_id)``: a game that already exists is enriched
     (missing verified provider metadata is added, valid date/scores are kept)
     instead of being discarded by a conflict-ignoring insert.
+
+    Inserts and metadata updates are each one batched statement per call. A page
+    of 1,400 ESPN games therefore costs a fixed number of round trips rather than
+    one per game; the caller can recover a season's phase metadata without
+    turning the database connection into the bottleneck.
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
@@ -1824,10 +1829,6 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
     conflict_counts = {}
 
     placeholder = "%s" if db_type == "postgres" else "?"
-    select_sql = (
-        "SELECT raw_json FROM historical_basketball_games "
-        f"WHERE source = {placeholder} AND game_id = {placeholder}"
-    )
     update_sql = (
         "UPDATE historical_basketball_games SET "
         f"game_date = {placeholder}, status_short = {placeholder}, "
@@ -1839,97 +1840,86 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
     )
 
     try:
-        # One bounded read for the whole page instead of one round trip per game,
-        # so a season-sized acquisition stays a small, fixed number of queries.
+        # One bounded read for the whole page. The batch write below uses the
+        # same pre-read to decide insert versus additive metadata enrichment.
         existing_raw_json = _fetch_existing_basketball_raw_json(
             conn, db_type, source, [gid for gid, _item in valid_games]
         )
 
+        insert_rows = []
+        update_rows = []
         for gid, item in valid_games:
-            row = (existing_raw_json[gid],) if gid in existing_raw_json else None
-
-            if row is None:
+            if gid not in existing_raw_json:
                 values = _basketball_row_values(item)
-                if db_type == "postgres":
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            """
-                            INSERT INTO historical_basketball_games (
-                                game_id, league_id, season, game_date, status_short,
-                                home_team_id, away_team_id, home_team, away_team,
-                                home_points, away_points, raw_json, source, fetched_at
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (source, game_id) DO NOTHING
-                            """,
-                            (
-                                gid, league_id, season, values["game_date"], values["status_short"],
-                                values["home_team_id"], values["away_team_id"], values["home_team"], values["away_team"],
-                                values["home_points"], values["away_points"], values["raw_json"], source, now_str,
-                            ),
-                        )
-                        did_insert = cur.rowcount == 1
-                else:
-                    cursor = conn.execute(
-                        """
-                        INSERT OR IGNORE INTO historical_basketball_games (
-                            game_id, league_id, season, game_date, status_short,
-                            home_team_id, away_team_id, home_team, away_team,
-                            home_points, away_points, raw_json, source, fetched_at
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            gid, league_id, season, values["game_date"], values["status_short"],
-                            values["home_team_id"], values["away_team_id"], values["home_team"], values["away_team"],
-                            values["home_points"], values["away_points"], values["raw_json"], source, now_str,
-                        ),
-                    )
-                    did_insert = cursor.rowcount == 1
+                insert_rows.append((
+                    gid, league_id, season, values["game_date"], values["status_short"],
+                    values["home_team_id"], values["away_team_id"], values["home_team"], values["away_team"],
+                    values["home_points"], values["away_points"], values["raw_json"], source, now_str,
+                ))
+                continue
 
-                if did_insert:
-                    inserted_count += 1
-                    continue
-
-                # A concurrent writer created the row between the read and the
-                # insert: re-read it and treat it as an enrichment target instead
-                # of losing the verified metadata.
-                if db_type == "postgres":
-                    with conn.cursor() as cur:
-                        cur.execute(select_sql, (source, gid))
-                        row = cur.fetchone()
-                else:
-                    row = conn.execute(select_sql, (source, gid)).fetchone()
-                if row is None:
-                    existing_unchanged += 1
-                    continue
-
-            existing_payload = _json_loads(row[0]) if row and row[0] else {}
+            raw_json_existing = existing_raw_json.get(gid)
+            existing_payload = _json_loads(raw_json_existing) if raw_json_existing else {}
+            if not isinstance(existing_payload, dict):
+                existing_payload = {}
             merged, added_fields, conflicts = merge_historical_basketball_game_metadata(existing_payload, item)
 
             for conflict in conflicts:
                 field = conflict.get("field")
-                conflict_counts[field] = conflict_counts.get(field, 0) + 1
+                if field:
+                    conflict_counts[field] = conflict_counts.get(field, 0) + 1
 
             if not added_fields:
                 existing_unchanged += 1
                 continue
 
             values = _basketball_row_values(merged)
-            update_params = (
+            update_rows.append((
                 values["game_date"], values["status_short"],
                 values["home_team_id"], values["away_team_id"],
                 values["home_team"], values["away_team"],
                 values["home_points"], values["away_points"],
                 values["raw_json"], now_str,
                 source, gid,
-            )
+            ))
+
+        if insert_rows:
             if db_type == "postgres":
                 with conn.cursor() as cur:
-                    cur.execute(update_sql, update_params)
+                    cur.executemany(
+                        """
+                        INSERT INTO historical_basketball_games (
+                            game_id, league_id, season, game_date, status_short,
+                            home_team_id, away_team_id, home_team, away_team,
+                            home_points, away_points, raw_json, source, fetched_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (source, game_id) DO NOTHING
+                        """,
+                        insert_rows,
+                    )
+                    inserted_count += max(int(cur.rowcount or 0), 0)
             else:
-                conn.execute(update_sql, update_params)
-            enriched_count += 1
+                cursor = conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO historical_basketball_games (
+                        game_id, league_id, season, game_date, status_short,
+                        home_team_id, away_team_id, home_team, away_team,
+                        home_points, away_points, raw_json, source, fetched_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    insert_rows,
+                )
+                inserted_count += max(int(cursor.rowcount or 0), 0)
+
+        if update_rows:
+            if db_type == "postgres":
+                with conn.cursor() as cur:
+                    cur.executemany(update_sql, update_rows)
+            else:
+                conn.executemany(update_sql, update_rows)
+            enriched_count += len(update_rows)
 
         conn.commit()
 
@@ -1950,6 +1940,7 @@ def save_historical_basketball_games(games, league_id, season, source="api_baske
         raise
     finally:
         conn.close()
+
 
 def save_prediction_snapshot(
     fixture_id,
