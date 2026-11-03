@@ -1172,7 +1172,15 @@ def validate():
                             f"{sport_key} league {league_id} season {season_year}: expected fixture count "
                             f"{expected_fixtures!r} does not match fixture_total {fixture_total!r}"
                         )
-                    if entry.get("coverage_format") == "double_round_robin" and fixture_total is not None:
+                    curtailed_edition = (
+                        facts.get("curtailed") is True
+                        or requirements.get("curtailed") is True
+                    )
+                    if (
+                        entry.get("coverage_format") == "double_round_robin"
+                        and fixture_total is not None
+                        and not curtailed_edition
+                    ):
                         calculated = len(participants) * (len(participants) - 1)
                         if fixture_total != calculated:
                             problems.append(

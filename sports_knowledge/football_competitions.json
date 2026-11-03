@@ -325,7 +325,14 @@
             15
           ]
         },
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-09",
+            "end": "2020-07-26",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
         "football_data_csv": {
@@ -418,7 +425,14 @@
             15
           ]
         },
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-16",
+            "end": "2020-07-19",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
         "football_data_csv": {
@@ -502,7 +516,14 @@
             15
           ]
         },
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-24",
+            "end": "2020-08-02",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
         "football_data_csv": {
@@ -591,7 +612,14 @@
             31
           ]
         },
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-16",
+            "end": "2020-06-27",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
         "football_data_csv": {
@@ -678,7 +706,14 @@
             15
           ]
         },
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-09",
+            "end": "2020-04-30",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
         "football_data_csv": {
@@ -762,7 +797,14 @@
             15
           ]
         },
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-02",
+            "end": "2020-04-24",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
         "football_data_csv": {
@@ -848,7 +890,14 @@
             15
           ]
         },
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-09",
+            "end": "2020-07-26",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
         "football_data_csv": {

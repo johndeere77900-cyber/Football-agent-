@@ -2291,7 +2291,8 @@
           "scope": "all_played_regular_season_matches",
           "requires_all_stages": true
         },
-        "edition_notes": "COVID-19 curtailed season. LFP terminated the season on 2020-04-28 (finalised 2020-04-30)."
+        "edition_notes": "COVID-19 curtailed season. LFP terminated the season on 2020-04-28 (finalised 2020-04-30).",
+        "curtailed": true
       }
     },
     "88": {
@@ -2651,7 +2652,8 @@
           "scope": "all_played_regular_season_matches",
           "requires_all_stages": true
         },
-        "edition_notes": "COVID-19 abandoned season. No champion was awarded; 232 of 306 matches were played."
+        "edition_notes": "COVID-19 abandoned season. No champion was awarded; 232 of 306 matches were played.",
+        "curtailed": true
       }
     },
     "94": {
