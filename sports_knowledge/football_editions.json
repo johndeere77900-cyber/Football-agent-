@@ -3703,6 +3703,23 @@
             "confidence": "provisional",
             "note": "FIFA 2022 World Cup qualification: confederation allocations and inter-confederation play-off structure."
           }
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Argentina",
+          "runner_up": "France",
+          "third_place": "Croatia",
+          "fourth_place": "Morocco",
+          "final": "Argentina 3-3 France (after extra time; Argentina won 4-2 on penalties)",
+          "final_date": "2022-12-18",
+          "venue": "Lusail Stadium, Lusail",
+          "notes": "Knockout outcome of the 2022 finals; the qualification-cycle group tables remain UNKNOWN in the qualification block.",
+          "evidence": {
+            "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "confirmed",
+            "note": "FIFA match centre for the 2022 final: Argentina beat France on penalties after a 3-3 draw; Croatia finished third, Morocco fourth."
+          }
         }
       },
       "2026": {
@@ -3813,6 +3830,23 @@
             "retrieved_at": "2026-11-03",
             "confidence": "provisional",
             "note": "FIFA 2026 World Cup qualification: expanded 48-team allocation, six confederation allocations and the six-team inter-confederation Play-Off Tournament for two places."
+          }
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Spain",
+          "runner_up": "Argentina",
+          "third_place": "England",
+          "fourth_place": "France",
+          "final": "Spain 1-0 Argentina (after extra time)",
+          "final_date": "2026-07-19",
+          "venue": "New York New Jersey Stadium",
+          "notes": "Final outcome of the 2026 finals. Group-stage tables, the 48-team roster and the full knockout results remain UNKNOWN in this catalogue; unverified social posts naming other finalists were discounted.",
+          "evidence": {
+            "source_url": "https://www.reuters.com/sports/soccer/torres-grabs-extra-time-winner-spain-beat-toothless-argentina-win-their-second-2026-07-19/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "confirmed",
+            "note": "Reuters, ABC News, Britannica and ESPN agree: Spain beat Argentina 1-0 after extra time on 19 July 2026, Ferran Torres scoring; England beat France for third place."
           }
         }
       }
@@ -3952,6 +3986,21 @@
           "expected_fixture_count": 51,
           "scope": "all_final_tournament_matches",
           "requires_all_stages": true
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Italy",
+          "runner_up": "England",
+          "final": "Italy 1-1 England (after extra time; Italy won 3-2 on penalties)",
+          "final_date": "2021-07-11",
+          "venue": "Wembley Stadium, London",
+          "notes": "EURO 2020 was played in 2021; no third-place match is staged, so no third or fourth placing is recorded.",
+          "evidence": {
+            "source_url": "https://www.uefa.com/uefaeuro/history/seasons/2020/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "confirmed",
+            "note": "UEFA EURO 2020 final: Italy beat England 3-2 on penalties after a 1-1 draw at Wembley."
+          }
         }
       },
       "2024": {

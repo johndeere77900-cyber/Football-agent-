@@ -275,6 +275,7 @@ def _edition_facts(competition, season):
         "qualification": None,
         "competition_access": None,
         "promotion_relegation": None,
+        "results": None,
         "promoted": [],
         "relegated": [],
         "renames": [],
@@ -358,6 +359,14 @@ def edition_promotion_relegation(sport, league_id, season):
     return _structure_block(
         sport, league_id, season, "promotion_relegation",
         "promotion_relegation_transition_not_evidenced",
+    )
+
+
+def edition_results(sport, league_id, season):
+    """Return the evidenced outcome of an edition (winner, final, placings)."""
+    return _structure_block(
+        sport, league_id, season, "results",
+        "competition_results_not_evidenced",
     )
 
 
@@ -770,6 +779,7 @@ def edition(sport, league_id, season):
         "qualification": facts.get("qualification"),
         "competition_access": facts.get("competition_access"),
         "promotion_relegation": facts.get("promotion_relegation"),
+        "results": facts.get("results"),
         "promoted": facts.get("promoted") or [],
         "relegated": facts.get("relegated") or [],
         "renames": facts.get("renames") or [],
@@ -1083,6 +1093,221 @@ def knowledge_gap_report(horizon=None, include_not_applicable=True):
     return rows
 
 
+def knowledge_recovery_states():
+    """Return the lifecycle states a recoverable knowledge fact can hold."""
+    return ("CONFIRMED", "PROVISIONAL", "ONGOING", "COMPLETED", "UNKNOWN", "CONFLICTED")
+
+
+def _recovery_state(record):
+    """Map one edition record onto a recovery lifecycle state."""
+    import datetime as _datetime
+
+    if record.get("is_future"):
+        return "PROVISIONAL"
+    results = record.get("results")
+    if isinstance(results, dict) and str(results.get("status") or "").upper() == "VERIFIED":
+        return "CONFIRMED"
+    start, end = record.get("start"), record.get("end")
+    today = _datetime.datetime.now(_datetime.timezone.utc).date().isoformat()
+    if isinstance(start, str) and isinstance(end, str) and start[:10] <= today <= end[:10]:
+        return "ONGOING"
+    if isinstance(end, str) and end[:10] < today:
+        return "COMPLETED"
+    if record.get("participant_status") == PARTICIPANT_STATUS_VERIFIED:
+        return "CONFIRMED"
+    return "UNKNOWN"
+
+
+def _recovery_source_hint(competition, gaps):
+    """Name the kind of authoritative page that would close each gap."""
+    hints = []
+    for gap in gaps:
+        if gap == "authoritative_participant_universe":
+            hints.append("official competition roster page")
+        elif gap == "format_specific_coverage_expectation":
+            hints.append("official format and fixture-calendar page")
+        elif gap == "edition_window":
+            hints.append("official fixture calendar")
+        elif gap == "future_horizon_exceeded":
+            hints.append("official draw and calendar after the current horizon")
+        else:
+            hints.append(str(gap))
+    url = None
+    evidence = competition.get("evidence")
+    if isinstance(evidence, list) and evidence and isinstance(evidence[0], dict):
+        url = evidence[0].get("source_url")
+    elif isinstance(evidence, dict):
+        url = evidence.get("source_url") or evidence.get("url")
+    return {"needed_sources": sorted(set(hints)), "competition_source_url": url}
+
+
+def knowledge_recovery_plan(sport="football", horizon=None):
+    """Bounded, read-only plan of missing or stale knowledge to recover.
+
+    Each row names what is missing, the state of the edition and the kind of
+    authoritative source required. It performs no network access and writes
+    nothing, so it is safe to run repeatedly.
+    """
+    plan = []
+    for row in knowledge_gap_report(horizon=horizon):
+        if row.get("sport") != sport:
+            continue
+        gaps = list(row.get("evidence_gaps") or [])
+        if not gaps:
+            continue
+        record = edition(sport, row.get("league_id"), row.get("season"))
+        competition = get_competition(sport, row.get("league_id")) or {}
+        plan.append(
+            {
+                "competition": row.get("competition"),
+                "league_id": row.get("league_id"),
+                "season": row.get("season"),
+                "state": _recovery_state(record),
+                "missing_facts": gaps,
+                "authorship": _recovery_source_hint(competition, gaps),
+                "recommended_action": row.get("recommended_action"),
+            }
+        )
+    return plan
+
+
+_UPDATE_BLOCKS = ("qualification", "competition_access", "promotion_relegation", "results")
+
+
+def _editions_path(sport):
+    filename = SPORT_EDITION_FILES.get(_normalize_sport(sport))
+    if not filename:
+        return None
+    return os.path.join(KNOWLEDGE_DIR, filename)
+
+
+def apply_knowledge_update(
+    sport,
+    league_id,
+    season,
+    block_key,
+    block,
+    retrieved_at,
+    confidence="provisional",
+    dry_run=True,
+):
+    """Validate one evidenced block and apply it without overwriting evidence.
+
+    The update is refused (and no file is written) when it would downgrade a
+    verified block, contradict an existing verified fact, or when the whole
+    catalogue would no longer validate. Refusals are returned with the reason so
+    the disagreement can be reviewed instead of silently replacing history.
+    """
+    result = {
+        "applied": False,
+        "dry_run": bool(dry_run),
+        "conflicts": [],
+        "problems": [],
+        "path": None,
+    }
+    if block_key not in _UPDATE_BLOCKS:
+        result["problems"].append(f"unsupported block {block_key!r}")
+        return result
+    if not isinstance(block, dict) or not block:
+        result["problems"].append("block must be a non-empty object")
+        return result
+
+    block = json.loads(json.dumps(block))
+    evidence = block.get("evidence")
+    if not isinstance(evidence, dict):
+        block["evidence"] = {
+            "source_url": block.get("source_url"),
+            "retrieved_at": retrieved_at,
+            "confidence": confidence,
+        }
+    else:
+        block["evidence"].setdefault("retrieved_at", retrieved_at)
+        block["evidence"].setdefault("confidence", confidence)
+    result["problems"].extend(_structure_evidence_problems(f"{sport} {league_id}/{season} {block_key}", block.get("evidence")))
+    if result["problems"]:
+        return result
+
+    path = _editions_path(sport)
+    result["path"] = path
+    if not path or not os.path.exists(path):
+        result["problems"].append("edition catalogue file is not available")
+        return result
+
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    editions = payload.get("editions")
+    if not isinstance(editions, dict):
+        result["problems"].append("catalogue has no editions object")
+        return result
+    holder = editions.setdefault(str(league_id), {})
+    record = holder.setdefault(str(season), {})
+    existing = record.get(block_key)
+
+    incoming_status = str(block.get("status") or "").upper()
+    if isinstance(existing, dict) and existing:
+        existing_status = str(existing.get("status") or "").upper()
+        verified_existing = existing_status in ("VERIFIED", "STRUCTURE_VERIFIED_ROUTES_PER_CLUB_UNKNOWN")
+        verified_incoming = incoming_status in ("VERIFIED", "STRUCTURE_VERIFIED_ROUTES_PER_CLUB_UNKNOWN")
+        if verified_existing and not verified_incoming:
+            result["conflicts"].append(
+                {
+                    "block": block_key,
+                    "reason": "refused_downgrade",
+                    "existing_status": existing_status,
+                    "incoming_status": incoming_status,
+                }
+            )
+            return result
+        if existing != block:
+            differing = [
+                field
+                for field in set(existing) | set(block)
+                if existing.get(field) != block.get(field) and field != "evidence"
+            ]
+            if verified_existing and verified_incoming and differing:
+                result["conflicts"].append(
+                    {
+                        "block": block_key,
+                        "reason": "conflicting_verified_facts",
+                        "fields": sorted(differing),
+                        "existing_status": existing_status,
+                        "incoming_status": incoming_status,
+                    }
+                )
+                return result
+
+    if dry_run:
+        result["applied"] = False
+        result["would_change"] = existing != block
+        return result
+
+    with open(path, "r", encoding="utf-8") as handle:
+        original_text = handle.read()
+    cache_key = _normalize_sport(sport)
+    record[block_key] = block
+    temporary = f"{path}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+    os.replace(temporary, path)
+    _CACHE.pop(cache_key, None)
+
+    problems = validate()
+    if problems:
+        # Restore the exact previous bytes: a refused update must leave the
+        # catalogue bit-for-bit unchanged.
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(original_text)
+        _CACHE.pop(cache_key, None)
+        result["problems"].extend(problems)
+        return result
+
+    _CACHE.pop(cache_key, None)
+    result["applied"] = True
+    result["changed_fields"] = sorted(set(existing or {}) ^ set(block))
+    return result
+
+
 def refresh_source(sport, source_id, retrieved_at, url=None, confidence=None):
     """
     Refresh one source's retrieval metadata without rewriting edition facts.
@@ -1167,6 +1392,14 @@ def prediction_context(sport, league_id, season, team_ids=None):
     }
 
 
+_RESULTS_STATUS = (
+    "VERIFIED",
+    "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+    "UNKNOWN",
+)
+
+_RESULTS_STATUS_WITH_WINNER = ("VERIFIED",)
+
 _QUALIFICATION_STRUCTURE_STATUS = {
     "STRUCTURE_VERIFIED",
     "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
@@ -1202,6 +1435,26 @@ def _season_structure_problems(sport, league_id, season, facts):
     """Validate qualification, access and promotion/relegation blocks."""
     problems = []
     base = f"{sport} league {league_id} season {season}"
+
+    results = facts.get("results")
+    if results is not None:
+        if not isinstance(results, dict):
+            problems.append(f"{base}: results is not an object")
+        else:
+            problems.extend(_structure_evidence_problems(f"{base} results", results.get("evidence")))
+            status = str(results.get("status") or "").upper()
+            if status not in _RESULTS_STATUS:
+                problems.append(f"{base}: results status {results.get("status")!r} is not a known value")
+            winner = results.get("winner")
+            runner_up = results.get("runner_up")
+            if status in _RESULTS_STATUS_WITH_WINNER and not (isinstance(winner, str) and winner.strip()):
+                problems.append(f"{base}: results status {status} requires an evidenced winner")
+            if winner and runner_up and _canonical_slug(winner) == _canonical_slug(runner_up):
+                problems.append(f"{base}: results winner and runner-up are the same team")
+            placings = [results.get("winner"), results.get("runner_up"), results.get("third_place"), results.get("fourth_place")]
+            slugs = [_canonical_slug(value) for value in placings if isinstance(value, str) and value.strip()]
+            if len(slugs) != len(set(slugs)):
+                problems.append(f"{base}: results placings contain a duplicate team")
 
     qualification = facts.get("qualification")
     if qualification is not None:

@@ -939,6 +939,7 @@ VALID_OPERATIONS = {
     "retrain",
     "config",
     "details",
+    "knowledge",
 }
 
 
@@ -1017,6 +1018,9 @@ def resolve_operation(text):
     if any(k in normalized for k in ("config", "configuration", "show config", "environment config")):
         return "config", {}
 
+    if is_knowledge_query(normalized):
+        return "knowledge", parse_operation_parameters("knowledge", raw_text)
+
     if any(k in normalized for k in ("detail", "details", "detailed data", "detailed info")):
         return "details", parse_operation_parameters("details", raw_text)
 
@@ -1078,6 +1082,10 @@ def parse_operation_parameters(operation, text):
         "sample": parse_quantity(normalized, default=20),
         "request_id": extracted_req_id,
     }
+
+    if operation == "knowledge":
+        params["knowledge_season"] = _knowledge_season_from_text(normalized)
+        params["competition_name"] = league_name
 
     if operation == "backtest":
         params["league_id"] = league_id or (config.ALLOWED_BASKETBALL_LEAGUE_IDS[0] if sport == "basketball" else config.ALLOWED_LEAGUE_IDS[0])
@@ -2106,6 +2114,554 @@ def handle_status_op():
     return f"{health_text}\n\n---\n\n{model_text}"
 
 
+
+
+# ============================================================================
+# SEASON-AWARE FOOTBALL KNOWLEDGE ANSWERS
+# ============================================================================
+#
+# These handlers are the only place where catalogue knowledge reaches the agent
+# answer. They read the same records the acquisition guard reads, so an edition
+# the catalogue marks UNKNOWN is answered as UNKNOWN instead of being inferred
+# from fixtures, from another season or from another competition.
+
+KNOWLEDGE_STRONG_TERMS = (
+    "qualified",
+    "qualification",
+    "qualifies",
+    "qualify",
+    "qualifying",
+    "promoted",
+    "promotion",
+    "relegated",
+    "relegation",
+    "retained",
+    "eliminated",
+    "allocation",
+    "what changed",
+    "group stage",
+    "league phase",
+    "missing knowledge",
+    "knowledge gaps",
+    "missing",
+)
+
+KNOWLEDGE_SOFT_TERMS = (
+    "playoff",
+    "play-off",
+    "playoffs",
+    "format",
+    "how did",
+    "route",
+    "entry",
+    "structure",
+    "which teams",
+    "which clubs",
+)
+
+KNOWLEDGE_EXCLUDED_TERMS = (
+    "predict",
+    "prediction",
+    "forecast",
+    "tip",
+    "pick",
+    "odds",
+    "betting",
+    "who will win",
+    "tonight",
+    "tomorrow",
+)
+
+
+def _knowledge_season_from_text(text):
+    """Return the first season year in the text, or None when unstated."""
+    normalized = normalize_text(text)
+    split = re.search(r"\b((?:19|20)\d{2})\s*(?:-|/)\s*(\d{2})\b", normalized)
+    if split:
+        return int(split.group(1))
+    plain = re.search(r"\b((?:19|20)\d{2})\b", normalized)
+    return int(plain.group(1)) if plain else None
+
+
+def is_knowledge_query(text):
+    """True when a message asks for historical competition knowledge."""
+    normalized = normalize_text(text)
+    if not normalized:
+        return False
+    if any(term in normalized for term in KNOWLEDGE_EXCLUDED_TERMS):
+        return False
+    _, league_id, _ = mentions_league(normalized)
+    has_year = bool(re.search(r"\b(?:19|20)\d{2}\b", normalized))
+    if any(term in normalized for term in KNOWLEDGE_STRONG_TERMS):
+        return league_id is not None or has_year
+    if "who won" in normalized or "won the" in normalized:
+        return league_id is not None or has_year
+    if league_id is not None and any(term in normalized for term in KNOWLEDGE_SOFT_TERMS):
+        return True
+    return False
+
+
+def _knowledge_intent(normalized, league_id):
+    """Classify a knowledge question into one supported answer shape."""
+    if any(term in normalized for term in ("what changed", "changed between", "difference between")):
+        return "change"
+    if any(term in normalized for term in ("promoted", "promotion", "relegated", "relegation", "retained")):
+        return "transition"
+    if any(term in normalized for term in ("missing", "gaps", "unknown", "what do you know", "stale")):
+        return "gaps"
+    if league_id in (2, 3) and any(
+        term in normalized for term in ("qualif", "route", "how did", "enter", "entry", "access")
+    ):
+        return "access"
+    if any(term in normalized for term in ("qualified", "qualification", "qualifies", "qualify", "allocation", "group")):
+        return "qualification"
+    if any(term in normalized for term in ("format", "league phase", "structure", "how many teams")):
+        return "format"
+    return "summary"
+
+
+def _knowledge_evidence_lines(evidence):
+    """Render provenance for one fact without inventing a missing source."""
+    lines = []
+    if isinstance(evidence, dict):
+        url = evidence.get("source_url") or evidence.get("url")
+        if not url:
+            return lines
+        meta = ", ".join(str(value) for value in (evidence.get("retrieved_at"), evidence.get("confidence")) if value)
+        lines.append(f"   source: {url}" + (f" ({meta})" if meta else ""))
+        note = evidence.get("note")
+        if note:
+            lines.append(f"   evidence: {note[:180]}")
+    elif isinstance(evidence, list):
+        for item in evidence:
+            for line in _knowledge_evidence_lines(item):
+                if line not in lines:
+                    lines.append(line)
+    return lines
+
+
+def _knowledge_team_candidates(record):
+    names = []
+    for participant in record.get("participants") or []:
+        if isinstance(participant, dict):
+            if participant.get("name"):
+                names.append(participant["name"])
+            names.extend(alias for alias in participant.get("aliases") or [] if isinstance(alias, str))
+        elif isinstance(participant, str):
+            names.append(participant)
+    transition = record.get("promotion_relegation")
+    if isinstance(transition, dict):
+        for key in ("promoted", "relegated", "retained_via_playoff"):
+            names.extend(value for value in transition.get(key) or [] if isinstance(value, str))
+    return names
+
+
+def _knowledge_detect_team(normalized, record):
+    candidates = sorted({name for name in _knowledge_team_candidates(record)}, key=len, reverse=True)
+    for name in candidates:
+        if re.search(rf"(?<![a-z]){re.escape(name.lower())}(?![a-z])", normalized):
+            return name
+    return None
+
+
+def _knowledge_latest_season(league_id, sport="football"):
+    """Newest catalogued season with evidenced structure, else the newest edition."""
+    import sports_knowledge
+
+    best_structured = None
+    for season in sports_knowledge.edition_years(sport, league_id):
+        record = sports_knowledge.edition(sport, league_id, season)
+        if any(
+            isinstance(record.get(key), dict) and record.get(key)
+            for key in ("qualification", "competition_access", "promotion_relegation")
+        ):
+            best_structured = season
+    if best_structured is not None:
+        return best_structured, True
+    years = sports_knowledge.edition_years(sport, league_id)
+    return (max(years) if years else None), False
+
+
+def _knowledge_header(record):
+    label = record.get("label") or record.get("season")
+    name = record.get("name") or f"competition {record.get('league_id')}"
+    return f"📚 *{name} {label}*"
+
+
+def _knowledge_window_line(record):
+    if record.get("status") == "KNOWN" and record.get("start") and record.get("end"):
+        return f"• Window: {record['start'][:10]} to {record['end'][:10]}"
+    if record.get("is_future"):
+        return "• Window: UNKNOWN (future edition, schedule not yet evidenced)"
+    return "• Window: UNKNOWN (no evidenced edition window)"
+
+
+def _knowledge_summary(record, team):
+    import sports_knowledge
+
+    lines = [_knowledge_header(record), _knowledge_window_line(record)]
+    if record.get("format_details"):
+        lines.append(f"• Format: {record['format_details']}")
+    if record.get("participant_status") == sports_knowledge.PARTICIPANT_STATUS_VERIFIED:
+        participants = record.get("participants") or []
+        names = [p.get("name") if isinstance(p, dict) else str(p) for p in participants]
+        lines.append(f"• Participants ({len(names)} verified): {', '.join(names)}")
+    else:
+        lines.append("• Participants: UNKNOWN (no verified roster for this edition)")
+    stages = record.get("stages") or []
+    if stages:
+        rendered = ", ".join(
+            f"{stage.get('name') or stage.get('id')} "
+            f"({stage.get('fixture_count')} fixture{'s' if stage.get('fixture_count') != 1 else ''})"
+            for stage in stages
+            if isinstance(stage, dict) and stage.get("fixture_count")
+        )
+        if rendered:
+            lines.append(f"• Stages: {rendered}")
+    qualification = record.get("qualification")
+    results_status = qualification.get("results_status") if isinstance(qualification, dict) else None
+    results = record.get("results")
+    if isinstance(results, dict) and results.get("winner"):
+        final_note = f" (final: {results['final']})" if results.get("final") else ""
+        lines.append(f"• Winner: {results['winner']}{final_note}")
+        if results.get("runner_up"):
+            lines.append(f"• Runner-up: {results['runner_up']}")
+        if results.get("third_place") or results.get("fourth_place"):
+            lines.append(
+                "• Also: "
+                + ", ".join(
+                    str(value)
+                    for value in (results.get("third_place"), results.get("fourth_place"))
+                    if value
+                )
+            )
+        lines.extend(_knowledge_evidence_lines(results.get("evidence")))
+    else:
+        lines.append(
+            f"• Results/standings: {results_status or 'UNKNOWN'} "
+            "(no evidenced result or table for this edition)"
+        )
+    if record.get("edition_notes"):
+        lines.append(f"• Note: {record['edition_notes']}")
+    lines.append(f"• Evidence status: {record.get('evidence_status')}")
+    lines.extend(_knowledge_evidence_lines(record.get("evidence")))
+    if team:
+        lines.extend(_knowledge_team_block(record, team))
+    return lines
+
+
+def _knowledge_team_block(record, team):
+    import sports_knowledge
+
+    context = sports_knowledge.team_season_context(
+        record.get("sport") or "football",
+        record.get("league_id"),
+        record.get("season"),
+        team,
+    )
+    lines = [f"\n🔎 *{team} in {record.get('label') or record.get('season')}*"]
+    if context.get("in_edition_roster") is not None:
+        lines.append(
+            "• Edition roster: "
+            + ("listed" if context["in_edition_roster"] else "not listed")
+        )
+    else:
+        lines.append("• Edition roster: UNKNOWN (roster not verified)")
+    movement = context.get("movement")
+    lines.append(f"• Movement: {movement.upper() if movement else 'UNKNOWN'}")
+    qualification = context.get("qualification")
+    if isinstance(qualification, dict):
+        lines.append(
+            "• Qualification: "
+            f"confederation {qualification.get('confederation') or 'UNKNOWN'}, "
+            f"status {qualification.get('status') or 'UNKNOWN'}, "
+            f"group {qualification.get('group') or 'UNKNOWN'} "
+            f"({qualification.get('group_status')})"
+        )
+    if context.get("reasons"):
+        lines.append(f"• Reasons: {', '.join(context['reasons'])}")
+    return lines
+
+
+def _knowledge_qualification(record, team):
+    import sports_knowledge
+
+    block = sports_knowledge.edition_qualification(
+        record.get("sport") or "football", record.get("league_id"), record.get("season")
+    )
+    if not block.get("available"):
+        lines = [
+            _knowledge_header(record),
+            f"• Qualification structure: UNKNOWN ({block.get('reason')})",
+        ]
+        if record.get("format_details"):
+            lines.append(f"• Known format only: {record['format_details']}")
+        return lines
+
+    lines = [_knowledge_header(record), f"• Status: {block.get('status')}"]
+    if block.get("scope"):
+        lines.append(f"• Cycle: {block['scope']}")
+    if block.get("finals_places") is not None:
+        basis = block.get("allocation_basis")
+        basis_note = ""
+        if basis == "includes_hosts":
+            basis_note = " (hosts counted inside the confederation allocation)"
+        elif basis == "hosts_separate":
+            basis_note = " (hosts qualify in addition)"
+        lines.append(
+            f"• Finals places: {block.get('finals_places')} = {block.get('direct_places')} direct "
+            f"+ {block.get('playoff_places')} play-off{basis_note}"
+        )
+    hosts = block.get("hosts_qualified") or []
+    if hosts:
+        lines.append(f"• Hosts: {', '.join(str(host) for host in hosts)}")
+    confederations = block.get("confederations") or {}
+    for code, entry in confederations.items():
+        if not isinstance(entry, dict):
+            continue
+        detail = f"• {code}: {entry.get('direct_places')} direct"
+        if entry.get("playoff_places"):
+            detail += f" + {entry.get('playoff_places')} play-off"
+        if entry.get("format"):
+            detail += f" — {str(entry['format'])[:170]}"
+        lines.append(detail)
+        qualified = entry.get("qualified_teams") or []
+        if qualified:
+            lines.append(f"   qualified: {', '.join(str(team_name) for team_name in qualified)}")
+    playoffs = block.get("playoffs")
+    if isinstance(playoffs, dict) and playoffs:
+        label = playoffs.get("name") or playoffs.get("format") or "play-offs"
+        lines.append(f"• Play-offs: {str(label)[:200]} ({playoffs.get('status', 'UNKNOWN')})")
+        if playoffs.get("qualified_teams"):
+            lines.append(f"   qualified: {', '.join(str(t) for t in playoffs['qualified_teams'])}")
+    if not any((entry or {}).get("qualified_teams") for entry in confederations.values()):
+        lines.append("• Qualified teams: UNKNOWN (no evidenced final list; results not invented)")
+    if team:
+        lines.extend(_knowledge_team_block(record, team))
+    lines.extend(_knowledge_evidence_lines(block.get("evidence")))
+    return lines
+
+
+def _knowledge_access(record):
+    import sports_knowledge
+
+    block = sports_knowledge.edition_competition_access(
+        record.get("sport") or "football", record.get("league_id"), record.get("season")
+    )
+    if not block.get("available"):
+        return [
+            _knowledge_header(record),
+            f"• Access routes: UNKNOWN ({block.get('reason')})",
+        ]
+    lines = [_knowledge_header(record), f"• Status: {block.get('status')}"]
+    if block.get("format"):
+        lines.append(f"• Format: {block['format']}")
+    if block.get("league_phase_clubs"):
+        lines.append(
+            f"• League phase: {block.get('league_phase_clubs')} clubs, "
+            f"{block.get('matches_per_club')} matches each"
+        )
+    advancement = block.get("advancement")
+    if isinstance(advancement, dict):
+        for key, target in advancement.items():
+            label = re.sub(r"\b(\d+) (\d+)\b", r"\1-\2", key.replace("_", " "))
+            lines.append(f"• {label}: {target}")
+    for route in block.get("routes") or []:
+        if isinstance(route, dict):
+            lines.append(f"• Route {route.get('id')}: {route.get('type')}")
+            lines.extend("  " + line for line in _knowledge_evidence_lines(route.get("evidence")))
+    lines.extend(_knowledge_evidence_lines(block.get("evidence")))
+    return lines
+
+
+def _knowledge_transition(record):
+    import sports_knowledge
+
+    block = sports_knowledge.edition_promotion_relegation(
+        record.get("sport") or "football", record.get("league_id"), record.get("season")
+    )
+    if not block.get("available"):
+        lines = [
+            _knowledge_header(record),
+            f"• Promotion/relegation transition: UNKNOWN ({block.get('reason')})",
+        ]
+        available = [
+            season
+            for season in sports_knowledge.edition_years("football", record.get("league_id"))
+            if isinstance(
+                sports_knowledge.edition("football", record.get("league_id"), season).get("promotion_relegation"),
+                dict,
+            )
+        ]
+        if available:
+            lines.append(f"• Evidenced transitions exist for: {', '.join(str(s) for s in available)}")
+        return lines
+
+    lines = [_knowledge_header(record), f"• Transition: {block.get('transition')} ({block.get('status')})"]
+    if block.get("division_teams"):
+        lines.append(f"• Division size: {block['division_teams']} clubs")
+    places = []
+    if block.get("automatic_promotion_places") is not None:
+        places.append(f"{block['automatic_promotion_places']} automatic promotion")
+    if block.get("promotion_playoff_places"):
+        places.append(f"{block['promotion_playoff_places']} promotion play-off")
+    if block.get("automatic_relegation_places") is not None:
+        places.append(f"{block['automatic_relegation_places']} automatic relegation")
+    if block.get("relegation_playoff_places"):
+        places.append(f"{block['relegation_playoff_places']} relegation play-off")
+    if places:
+        lines.append(f"• Places: {', '.join(places)}")
+    routes = block.get("promoted_routes") or {}
+    promoted = block.get("promoted") or []
+    if promoted:
+        rendered = ", ".join(
+            f"{club} ({routes.get(club, 'route not recorded')})" if routes else str(club) for club in promoted
+        )
+        lines.append(f"• Promoted in: {rendered}")
+    else:
+        lines.append("• Promoted in: none recorded")
+    relegated = block.get("relegated") or []
+    lines.append(f"• Relegated out: {', '.join(str(club) for club in relegated) if relegated else 'none recorded'}")
+    retained = block.get("retained_via_playoff") or []
+    if retained:
+        lines.append(f"• Retained via play-off: {', '.join(str(club) for club in retained)}")
+    for key, label in (("promotion_playoff", "Promotion play-off"), ("relegation_playoff", "Relegation play-off")):
+        outcome = block.get(key)
+        if isinstance(outcome, dict) and outcome.get("status") != "NOT_APPLICABLE":
+            parts = [
+                str(value)
+                for field, value in outcome.items()
+                if field not in ("status", "evidence_note") and value not in (None, "")
+            ]
+            if not parts:
+                parts = ["outcome not evidenced"]
+            lines.append(f"• {label}: {'; '.join(parts)} [{outcome.get('status')}]")
+    if block.get("route_status"):
+        lines.append(f"• Route status: {block['route_status']}")
+    lines.extend(_knowledge_evidence_lines(block.get("evidence")))
+    return lines
+
+
+def _knowledge_change(record, league_id, season):
+    import sports_knowledge
+
+    lines = [f"📚 *What changed around {record.get('name')} {record.get('label')}*"]
+    current = sports_knowledge.edition_promotion_relegation("football", league_id, season)
+    following = sports_knowledge.edition_promotion_relegation("football", league_id, season + 1)
+    rendered = False
+    for block, label in ((current, season), (following, season + 1)):
+        if not block.get("available"):
+            continue
+        rendered = True
+        lines.append(f"\n*Transition recorded on {label}*")
+        lines.extend(_knowledge_transition(
+            sports_knowledge.edition("football", league_id, label)
+        )[1:])
+    if not rendered:
+        lines.append(
+            "• No evidenced promotion/relegation transition covers this season "
+            f"(reason: {current.get('reason')}); nothing is inferred from rosters."
+        )
+    return lines
+
+
+def _knowledge_gaps(league_id, season):
+    import sports_knowledge
+
+    rows = [
+        row
+        for row in sports_knowledge.knowledge_gap_report()
+        if row.get("league_id") == league_id and (season is None or row.get("season") == season)
+    ]
+    lines = ["🧭 *KNOWLEDGE COVERAGE*"]
+    if not rows:
+        lines.append("• No catalogue row covers that competition/season.")
+        return lines
+    for row in rows[:8]:
+        status_bits = [
+            f"{label} {row.get(field)}"
+            for label, field in (
+                ("edition", "status"),
+                ("evidence", "evidence_status"),
+                ("participants", "participant_status"),
+            )
+            if row.get(field)
+        ]
+        lines.append(
+            f"• {row.get('competition') or league_id} {row.get('season')}: "
+            + (", ".join(status_bits) if status_bits else "no status recorded")
+        )
+        gaps = row.get("evidence_gaps") or []
+        if gaps:
+            lines.append(f"   missing: {', '.join(gaps)}")
+        action = row.get("recommended_action")
+        if action:
+            lines.append(f"   next: {str(action)[:200]}")
+    return lines
+
+
+def handle_knowledge_op(params):
+    """Answer a historical football knowledge question from the catalogue."""
+    import sports_knowledge
+
+    raw_text = params.get("raw_text", "")
+    normalized = normalize_text(raw_text)
+    _, league_id, league_sport = mentions_league(normalized)
+
+    if league_sport == "basketball" or (league_id is None and "nba" in normalized):
+        return (
+            "🏀 *BASKETBALL KNOWLEDGE*\n"
+            "• Basketball season knowledge is recorded for NBA editions only and is kept "
+            "separate from football retrieval.\n"
+            "• Ask a football question or use /coverage for supported competitions."
+        )
+
+    if league_id is None:
+        competitions = [
+            f"• {item.get('name')} ({item.get('league_id')})"
+            for item in sports_knowledge.list_competitions("football")
+        ]
+        return "\n".join(
+            ["📚 *SEASON-AWARE FOOTBALL KNOWLEDGE*", "• Supported competitions:"]
+            + competitions
+            + ["", "Ask e.g. `who qualified from UEFA for the world cup 2026` or "
+               "`which teams were promoted to the premier league 2024`."]
+        )
+
+    requested_season = params.get("knowledge_season")
+    if requested_season is None:
+        requested_season = _knowledge_season_from_text(normalized)
+    latest, has_structure = _knowledge_latest_season(league_id)
+    season = requested_season if requested_season is not None else latest
+    if season is None:
+        return "📚 *SEASON-AWARE FOOTBALL KNOWLEDGE*\n• No catalogued edition covers that competition."
+
+    record = sports_knowledge.edition("football", league_id, season)
+    intent = _knowledge_intent(normalized, league_id)
+    team = _knowledge_detect_team(normalized, record)
+
+    if intent == "gaps":
+        return "\n".join(_knowledge_gaps(league_id, None if requested_season is None else season))
+    if intent == "transition":
+        return "\n".join(_knowledge_transition(record))
+    if intent == "change":
+        return "\n".join(_knowledge_change(record, league_id, season))
+    if intent == "access":
+        return "\n".join(_knowledge_access(record))
+    if intent == "qualification":
+        return "\n".join(_knowledge_qualification(record, team))
+    if intent == "format":
+        return "\n".join(_knowledge_summary(record, team))
+
+    lines = _knowledge_summary(record, team)
+    if requested_season is None and not has_structure:
+        lines.append(
+            f"• No evidenced structure block exists for this competition yet; "
+            f"showing the newest catalogued edition ({latest}) only."
+        )
+    return "\n".join(lines)
+
+
 def handle_greeting_op():
     """Execute Prediction Agent Control Center greeting."""
     return (
@@ -2122,7 +2678,8 @@ def handle_greeting_op():
         "• `/data_status` — View dataset completion state\n"
         "• `/test` — Verification and test suite status\n"
         "• `/logs` & `/errors` — View activity & error logs\n"
-        "• `/config` — Safe environment configuration"
+        "• `/config` — Safe environment configuration\n"
+        "• `/knowledge` or `which teams qualified for the world cup 2022` — Season knowledge"
     )
 
 
@@ -2272,6 +2829,8 @@ def process_telegram_update(
             response_text = handle_config_op()
         elif operation == "retrain":
             response_text = handle_retrain_op()
+        elif operation == "knowledge":
+            response_text = handle_knowledge_op(params)
         elif operation == "greeting":
             response_text = handle_greeting_op()
         else:
