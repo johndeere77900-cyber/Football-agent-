@@ -35,7 +35,7 @@ def test_backtest_reads_from_storage_and_zero_api_calls(temp_db, monkeypatch):
         sample_fixture(6001 + i, f"2025-01-{i+1:02d}T15:00:00+00:00", home_id=(i%2)+1, away_id=(i%2)+3)
         for i in range(10)
     ]
-    storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    storage.save_historical_fixtures(fixtures, league_id=39, season=2025, source="football_data_csv")
     completion_helpers.mark_complete(league_id=39, season=2025, fixture_count=len(fixtures))
 
     def fail_if_called(*args, **kwargs):
@@ -72,7 +72,7 @@ def test_backtest_enrichment_uses_storage(temp_db, monkeypatch):
         sample_fixture(7001 + i, f"2025-01-{i+1:02d}T15:00:00+00:00", home_id=(i%2)+1, away_id=(i%2)+3)
         for i in range(10)
     ]
-    storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    storage.save_historical_fixtures(fixtures, league_id=39, season=2025, source="football_data_csv")
     completion_helpers.mark_complete(league_id=39, season=2025, fixture_count=len(fixtures))
 
     enrichment_map = {

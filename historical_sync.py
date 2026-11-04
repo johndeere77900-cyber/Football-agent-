@@ -370,11 +370,14 @@ def _is_historical_provider_complete(
 
     prov = page_source.strip().lower()
     supported_providers = {
+        "openfootball_json",
+        "openfootball_txt",
+        "openfootball_internationals",
+        "openligadb",
         "football_data_csv",
         "soccerdata",
         "soccerdata_fbref",
         "soccerdata_match_history",
-        "soccerdata_sofascore",
         "mixed",
     }
     if prov not in supported_providers:
@@ -383,6 +386,13 @@ def _is_historical_provider_complete(
     prov_meta = page_meta.get("provider_metadata") if isinstance(page_meta, dict) else {}
     if not isinstance(prov_meta, dict):
         prov_meta = {}
+
+    # Edition evidence is part of the completion decision. A missing route or an
+    # unverified participant/format/window fact must fail closed, not be treated
+    # as a successful empty or complete edition.
+    route = prov_meta.get("knowledge_provider_route")
+    if not isinstance(route, dict) or route.get("completion_allowed") is not True:
+        return False
 
     if prov_meta.get("is_partial") is True or prov_meta.get("is_complete") is False:
         return False
@@ -580,18 +590,28 @@ def sync_historical_fixtures(
         )
 
     if historical_budget is None:
-        # Football historical fixture acquisition itself is API-key free (direct
-        # Football-Data.co.uk CSV and SoccerData). The only API budget this path
-        # can consume is the optional API-Football statistical-enrichment
-        # backfill, which is bounded by the API-Football historical daily budget.
+        # Football historical fixture acquisition itself is API-key free
+        # (OpenFootball, OpenLigaDB, Football-Data.co.uk CSV and SoccerData). The
+        # only API budget this path can consume is the optional API-Football
+        # statistical-enrichment backfill, which is bounded by its own budget.
         historical_budget = int(getattr(config, "API_FOOTBALL_HISTORICAL_DAILY_BUDGET", 50))
 
     dataset_info = storage.get_historical_dataset_status(league_id, season)
     current_status = dataset_info["status"]
-    existing_before = dataset_info["fixture_count"] or storage.get_historical_fixture_count(league_id, season)
+    approved_sources = tuple(
+        getattr(config, "FOOTBALL_APPROVED_HISTORICAL_SOURCES", ())
+    )
+    existing_before = storage.get_historical_fixture_count(
+        league_id, season, sources=approved_sources
+    )
 
-    # Revalidate persisted fixture integrity and coverage before early return
-    stored_fixtures = storage.get_historical_fixtures(league_id, season, include_reconciliation_candidates=True)
+    # Revalidate only the approved physical cohort; legacy rows stay present but
+    # outside the new acquisition contract.
+    stored_fixtures = storage.get_historical_fixtures(
+        league_id, season,
+        include_reconciliation_candidates=True,
+        sources=approved_sources,
+    )
     if stored_fixtures and not refresh:
         exp_team_ids = data_resolver._get_authoritative_historical_team_ids(
             league_id, season, max_budget=historical_budget, allow_network=False
@@ -615,7 +635,25 @@ def sync_historical_fixtures(
         reval_lifecycle, reval_lifecycle_reason, _ = get_competition_lifecycle(
             "football", league_id, season, stored_fixtures, coverage=reval_coverage
         )
-        if reval_coverage.get("verified") is True and reval_lifecycle == COMPETITION_LIFECYCLE_COMPLETED:
+        route_completion_allowed = False
+        try:
+            import sports_knowledge
+
+            route_completion_allowed = (
+                sports_knowledge.provider_route("football", league_id, season).get("completion_allowed")
+                is True
+            )
+        except Exception as route_exc:
+            print(
+                f"Knowledge provider route unavailable during revalidation for league {league_id} season {season}: {route_exc}",
+                flush=True,
+            )
+
+        if (
+            reval_coverage.get("verified") is True
+            and reval_lifecycle == COMPETITION_LIFECYCLE_COMPLETED
+            and route_completion_allowed
+        ):
             storage.mark_historical_dataset_complete(
                 league_id,
                 season,
@@ -672,9 +710,10 @@ def sync_historical_fixtures(
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Approved football historical providers (in order): direct CSV, SoccerData
-    # FBref, SoccerData MatchHistory, SoccerData Sofascore. API-Football and
-    # football-data.org are not used on this path.
+    # Approved football historical providers (in order): OpenFootball JSON,
+    # OpenFootball TXT, OpenFootball internationals, OpenLigaDB, Football-Data
+    # CSV, SoccerData FBref, SoccerData MatchHistory. Sofascore is not attempted
+    # automatically. API-Football and football-data.org are not used on this path.
 
     quota_budget_stopped = False
     acquisition_failed = False
@@ -778,6 +817,18 @@ def sync_historical_fixtures(
             total_legacy_identity_overlap += save_result.get("legacy_identity_overlap", 0)
             total_duplicates_skipped += save_result.get("duplicates_skipped", 0)
             total_rejected_count += save_result.get("rejected_count", 0)
+            page_provider_metadata = (
+                (page_meta or {}).get("provider_metadata")
+                if isinstance(page_meta, dict) else {}
+            )
+            if isinstance(page_provider_metadata, dict):
+                page_rejected = page_provider_metadata.get("rejected_count")
+                if isinstance(page_rejected, int):
+                    total_rejected_count += page_rejected
+                else:
+                    for provider_attempt in page_provider_metadata.values():
+                        if isinstance(provider_attempt, dict):
+                            total_rejected_count += int(provider_attempt.get("rejected_count") or 0)
             total_db_write_duration += save_result.get("db_write_duration", 0.0)
             db_write_calls += 1
             total_identity_resolution_duration += float(
@@ -803,7 +854,9 @@ def sync_historical_fixtures(
                 all_rejection_reasons[r_reason] = all_rejection_reasons.get(r_reason, 0) + r_cnt
 
             pages_completed = current_page
-            current_stored_count = storage.get_historical_fixture_count(league_id, season)
+            current_stored_count = storage.get_historical_fixture_count(
+                league_id, season, sources=approved_sources
+            )
 
             # Update progress in manifest immediately
             safe_exp_pages = expected_pages if isinstance(expected_pages, int) and expected_pages > 0 else 1
@@ -874,7 +927,11 @@ def sync_historical_fixtures(
         safe_rejected_cnt = cum_rejected_cnt
         safe_empty_cnt = cum_empty_cnt
 
-    stored_fixtures_all = storage.get_historical_fixtures(league_id, season, include_reconciliation_candidates=True)
+    stored_fixtures_all = storage.get_historical_fixtures(
+        league_id, season,
+        include_reconciliation_candidates=True,
+        sources=approved_sources,
+    )
     db_coverage_pre = data_resolver._validate_historical_structural_coverage(
         stored_fixtures_all,
         season=season,
@@ -965,7 +1022,9 @@ def sync_historical_fixtures(
 
     total_consumed = 0
 
-    final_stored_count = storage.get_historical_fixture_count(league_id, season)
+    final_stored_count = storage.get_historical_fixture_count(
+        league_id, season, sources=approved_sources
+    )
 
     # Determine enrichment status
     all_stored_fixtures = storage.get_historical_fixtures(league_id, season, include_reconciliation_candidates=True)
@@ -1000,8 +1059,13 @@ def sync_historical_fixtures(
     else:
         enrichment_status = dataset_info.get("enrichment_status") or "NONE"
 
-    # Determine exact source semantics and re-read persisted fixtures for final structural validation
-    stored_fixtures_all = storage.get_historical_fixtures(league_id, season, include_reconciliation_candidates=True)
+    # Determine exact source semantics and re-read the approved cohort for final
+    # structural validation. Legacy records remain physically present.
+    stored_fixtures_all = storage.get_historical_fixtures(
+        league_id, season,
+        include_reconciliation_candidates=True,
+        sources=approved_sources,
+    )
 
     sources_found = set()
     for f in stored_fixtures_all:
@@ -1149,7 +1213,12 @@ def sync_historical_fixtures(
         elif not last_error_reason:
             if isinstance(db_coverage, dict) and db_coverage.get("verified") is not True:
                 last_error_reason = f"structural_coverage_failed_{db_coverage.get('reason')}"
-            elif page_source_val not in ("football_data_csv", "soccerdata_fbref", "soccerdata_match_history", "soccerdata_sofascore", "mixed"):
+            elif page_source_val not in (
+                "openfootball_json", "openfootball_txt",
+                "openfootball_internationals", "openligadb",
+                "football_data_csv", "soccerdata_fbref",
+                "soccerdata_match_history", "mixed",
+            ):
                 last_error_reason = "provider_coverage_incomplete"
             else:
                 last_error_reason = "acquisition_incomplete"
@@ -3080,6 +3149,14 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
     breakdown, duplicates, expected versus observed canonical teams, date range,
     provider diagnostics and the exact remaining blocker. Read-only: no manifest,
     record or status is changed.
+
+    Every manifest is reconciled against the approved historical acquisition
+    cohort (``config.FOOTBALL_APPROVED_HISTORICAL_SOURCES``) only. A legacy row in
+    the same league-season - for example an ``api_football`` record acquired under
+    the previous contract - stays physically present and is never deleted or
+    relabelled, but it is not part of what this manifest claims, so it cannot
+    produce a false count mismatch or invalidate structural coverage. The excluded
+    remainder is reported separately so both cohorts stay distinct.
     """
     from collections import Counter
 
@@ -3099,8 +3176,19 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
         if season_filter and ssn not in season_filter:
             continue
 
+        approved_sources = tuple(
+            getattr(config, "FOOTBALL_APPROVED_HISTORICAL_SOURCES", ())
+        )
+        # The manifest is a claim about the approved acquisition cohort, not about
+        # every row sharing its league-season. Legacy rows remain on disk and
+        # readable, but they are outside this contract: counting them would report
+        # a false manifest count mismatch and could fail structural coverage for
+        # records the manifest never claimed.
         fixtures = storage.get_historical_fixtures(
-            lid, ssn, include_reconciliation_candidates=True
+            lid,
+            ssn,
+            include_reconciliation_candidates=True,
+            sources=approved_sources,
         )
         physical_fixtures = [
             fixture for fixture in fixtures if isinstance(fixture, dict)
@@ -3110,6 +3198,13 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
             if not _is_legacy_duplicate_candidate(fixture)
         ]
         physical_stored_count = len(physical_fixtures)
+        # The all-source count stays available so the exclusion is auditable
+        # rather than silently applied: approved cohort vs physically present
+        # remainder. Nothing is deleted, rewritten or relabelled to produce it.
+        all_source_stored_count = storage.get_historical_fixture_count(lid, ssn)
+        excluded_unapproved_stored_count = max(
+            all_source_stored_count - physical_stored_count, 0
+        )
         annotated_candidate_count = physical_stored_count - len(fixture_list)
         source_counts = Counter()
         eligible_source_counts = Counter()
@@ -3303,6 +3398,9 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
             "manifest_fixture_count": manifest.get("fixture_count"),
             "stored_count": physical_stored_count,
             "physical_stored_count": physical_stored_count,
+            "all_source_stored_count": all_source_stored_count,
+            "excluded_unapproved_stored_count": excluded_unapproved_stored_count,
+            "approved_sources": list(approved_sources),
             "eligible_record_count": len(fixture_list),
             "eligible_logical_count": len(logical_identity_counts),
             "annotated_duplicate_candidates": annotated_candidate_count,
@@ -3362,6 +3460,9 @@ def build_football_manifest_reconciliation(league_ids=None, seasons=None) -> dic
         "stale_error_reason_count": sum(1 for item in results if item["stale_error_reason"]),
         "annotated_duplicate_candidate_count": sum(
             item["annotated_duplicate_candidates"] for item in results
+        ),
+        "excluded_unapproved_stored_count": sum(
+            item["excluded_unapproved_stored_count"] for item in results
         ),
         "unmarked_duplicate_group_count": sum(
             item["unmarked_duplicate_groups"] for item in results
@@ -4227,6 +4328,13 @@ def verify_persisted_historical_datasets(
     Independently verify persisted historical records and manifest statuses against actual DB state.
     Reconciles stored counts, distinct record IDs, date coverage, and structural integrity for football and basketball.
     Returns summary dict and prints a formatted report.
+
+    Football manifests are verified against the approved historical acquisition
+    cohort (``config.FOOTBALL_APPROVED_HISTORICAL_SOURCES``) only, matching the
+    cohort acquisition wrote. Legacy rows stay physically present but cannot
+    inflate distinct counts or invalidate acquisition completion; the all-source
+    count is reported alongside so the exclusion stays auditable. Basketball
+    verification is unchanged.
     """
     storage.init_db()
 
@@ -4278,6 +4386,9 @@ def verify_persisted_historical_datasets(
         manifest_count = status_info.get("fixture_count", 0)
 
         issues = []
+        # Only set by the football branch; basketball verification is unchanged.
+        all_source_stored_count = None
+        excluded_unapproved_stored_count = None
 
         if sp == "basketball":
             records = storage.get_historical_basketball_games(lid, ssn, include_storage_source=True)
@@ -4340,7 +4451,23 @@ def verify_persisted_historical_datasets(
                     issues.append("failed_basketball_structural_validation")
 
         else:
-            records = storage.get_historical_fixtures(lid, ssn, include_reconciliation_candidates=True)
+            approved_sources = tuple(
+                getattr(config, "FOOTBALL_APPROVED_HISTORICAL_SOURCES", ())
+            )
+            # The manifest describes the approved acquisition cohort. Legacy rows
+            # (for example `api_football`) stay physically present but must not
+            # inflate distinct counts or invalidate acquisition completion, so the
+            # audit reads the same cohort acquisition wrote.
+            records = storage.get_historical_fixtures(
+                lid,
+                ssn,
+                include_reconciliation_candidates=True,
+                sources=approved_sources,
+            )
+            all_source_stored_count = storage.get_historical_fixture_count(lid, ssn)
+            excluded_unapproved_stored_count = max(
+                all_source_stored_count - len(records), 0
+            )
             # Same rule for football: the declared competition window establishes
             # whether the season is still running. A season whose window has not
             # opened is not "in progress", and a season with no verifiable window is
@@ -4410,6 +4537,8 @@ def verify_persisted_historical_datasets(
             "manifest_status": manifest_status,
             "manifest_count": manifest_count,
             "actual_stored_count": actual_count,
+            "all_source_stored_count": all_source_stored_count,
+            "excluded_unapproved_stored_count": excluded_unapproved_stored_count,
             "distinct_records": distinct_count,
             "duplicate_count": actual_count - distinct_count,
             "date_range": f"{min_date} to {max_date}",

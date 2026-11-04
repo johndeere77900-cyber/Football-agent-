@@ -352,8 +352,10 @@ def test_sofascore_fallback_error_reporting_captured(mock_api_fb, mock_fd, mock_
 
     assert res["source"] == "none"
     meta = res.get("provider_metadata", {})
-    ss_meta = meta.get("soccerdata_sofascore", {}).get("raw_metadata", {})
-    assert ss_meta.get("status") == "SOURCE_FAILED" or "error" in ss_meta
+    # Sofascore is diagnostic-only: it is never in the automatic route, so it
+    # has no provider attempt or diagnostics to report here.
+    assert "soccerdata_sofascore" not in (meta.get("provider_outcomes") or {})
+    mock_sd_ss.assert_not_called()
 
 
 # Test D — football-data.org trustworthy complete metadata without quota exhaustion -> COMPLETE
@@ -497,8 +499,19 @@ def test_provider_execution_order_primary_before_secondary():
         call_order.append("football_data_org")
         return {"matches": [], "metadata": {}}
 
+    def mock_openfootball(*args, **kwargs):
+        call_order.append("openfootball")
+        return ("SOURCE_UNAVAILABLE", [], {})
+
+    def mock_fbref(*args, **kwargs):
+        call_order.append("soccerdata_fbref")
+        return ("SOURCE_UNAVAILABLE", [], {})
+
     resolver = DataResolver()
-    with patch("data_resolver._fetch_direct_csv_league_fixtures", side_effect=mock_csv), \
+    with patch("openfootball_provider.get_json_games", side_effect=mock_openfootball), \
+         patch("openfootball_provider.get_txt_games", side_effect=mock_openfootball), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", side_effect=mock_csv), \
+         patch("soccerdata_provider.get_fbref_games", side_effect=mock_fbref), \
          patch("soccerdata_provider.get_match_history_games", side_effect=mock_sd_mh), \
          patch("soccerdata_provider.get_sofascore_historical_games", side_effect=mock_sd_ss), \
          patch("api_football.get_league_fixtures_page", side_effect=mock_api_fb), \
@@ -508,9 +521,12 @@ def test_provider_execution_order_primary_before_secondary():
 
     assert res["source"] == "football_data_csv"
     assert len(res["fixtures"]) == 380
-    assert call_order == ["direct_csv"]
+    # The approved route attempts OpenFootball before CSV and stops at CSV; the
+    # retired secondary APIs are never consulted.
+    assert call_order[:3] == ["openfootball", "openfootball", "direct_csv"]
     assert "api_football" not in call_order
     assert "football_data_org" not in call_order
+    assert "soccerdata_fbref" not in call_order
 
 
 # Test J — Prove arbitrary counts (1, 10, 11, 50, 100) alone cannot cause COMPLETE without explicit provider metadata

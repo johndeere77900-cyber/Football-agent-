@@ -2865,19 +2865,51 @@ def list_historical_datasets(sport=None):
     return manifests
 
 
+def _approved_historical_sources(sport):
+    """
+    Return the source cohort a football manifest may describe.
+
+    Football historical completion, attribution and persisted-evidence validation
+    cover only the approved acquisition cohort. Legacy `api_football`,
+    `football_data_org` and umbrella `soccerdata` rows stay physically present but
+    can never satisfy, inflate or invalidate an approved dataset. Basketball has a
+    single writer contract, so it keeps its existing all-source behavior (`None`).
+    """
+    if str(sport or "").strip().lower() != "football":
+        return None
+    return tuple(getattr(config, "FOOTBALL_APPROVED_HISTORICAL_SOURCES", ()) or ())
+
+
 def _persisted_historical_record_count(sport, league_id, season):
-    """Return the record count the database actually holds for a dataset."""
+    """
+    Return the record count a dataset's manifest must describe.
+
+    For football this is the approved historical acquisition cohort, so a legacy
+    row can neither make an approved manifest look inconsistent nor let a caller
+    promote a dataset on records the approved contract never acquired.
+    """
     if sport == "basketball":
         return get_historical_basketball_game_count(league_id, season)
-    return get_historical_fixture_count(league_id, season)
+    return get_historical_fixture_count(
+        league_id, season, sources=_approved_historical_sources(sport)
+    )
 
 
 def _persisted_historical_records(sport, league_id, season):
-    """Return the persisted records for a dataset (the database is the source of truth)."""
+    """
+    Return the persisted records that justify a dataset's state.
+
+    The database remains the source of truth, but for football the approved
+    acquisition cohort is the only evidence a manifest may describe: legacy rows
+    stay physically present and are never validated, merged or counted here.
+    """
     if sport == "basketball":
         return get_historical_basketball_games(league_id, season, include_storage_source=True)
     return get_historical_fixtures(
-        league_id, season, include_reconciliation_candidates=True
+        league_id,
+        season,
+        include_reconciliation_candidates=True,
+        sources=_approved_historical_sources(sport),
     )
 
 
@@ -2894,21 +2926,55 @@ def derive_manifest_source(sport, league_id, season):
     records = _persisted_historical_records(sport, league_id, season)
     sources = set()
     for record in records if isinstance(records, list) else []:
-        if not isinstance(record, dict):
-            continue
-        if record.get("_storage_source"):
-            src = record.get("_storage_source")
-        else:
-            src = record.get("source")
-            if not src and isinstance(record.get("provider_provenance"), dict):
-                src = record["provider_provenance"].get("provider")
-        if isinstance(src, str) and src.strip():
-            sources.add(src.strip())
+        if isinstance(record, dict):
+            sources.update(_record_provider_names(record))
+    for label in ("mixed", "reconciled", "internal_db", "none", "unknown"):
+        sources.discard(label)
     if not sources:
         return None
     if len(sources) == 1:
         return next(iter(sources))
     return "mixed"
+
+
+def _record_provider_names(record):
+    """Return every provider that contributed to one persisted record.
+
+    The original owner, the writer label, enrichment providers and reconciled
+    field provenance all describe contribution. Attempted-but-empty providers are
+    absent by construction, so this never turns a failed attempt into attribution.
+    """
+    names = set()
+
+    def _add(value):
+        if isinstance(value, str) and value.strip():
+            names.add(value.strip())
+
+    _add(record.get("_storage_source"))
+    _add(record.get("source"))
+
+    provenance = record.get("provider_provenance")
+    if isinstance(provenance, dict):
+        _add(provenance.get("provider"))
+        for value in provenance.get("providers") or []:
+            _add(value)
+
+    native_ids = record.get("provider_fixture_ids")
+    if isinstance(native_ids, dict):
+        for value in native_ids:
+            _add(value)
+
+    field_provenance = record.get("field_provenance")
+    if isinstance(field_provenance, dict):
+        for value in field_provenance.values():
+            _add(value)
+
+    reconciliation = record.get("reconciliation_metadata")
+    if isinstance(reconciliation, dict):
+        for value in reconciliation.get("providers_used") or []:
+            _add(value)
+
+    return names
 
 
 def _verified_empty_coverage_units(provider_coverage):
@@ -2964,7 +3030,9 @@ def _validate_persisted_completion_evidence(
     persisted record is re-validated here, duplicate source-scoped identities are
     rejected, and the caller's provider coverage must be internally consistent and
     supported by a validated provider. Caller-supplied counts are never accepted
-    in place of persisted facts.
+    in place of persisted facts. For football the validated evidence is the
+    approved historical cohort, so legacy rows can neither pass nor fail an
+    approved dataset's validation.
     """
     records = _persisted_historical_records(sport, league_id, season)
     if not isinstance(records, list) or not records:
@@ -3043,7 +3111,9 @@ def mark_historical_dataset_complete(
     Storage-level completion invariants enforced (all of them must hold):
     - The persisted dataset exists and the supplied `fixture_count` equals the
       persisted record count; the database is the source of truth, so a caller can
-      never promote a dataset with a fabricated or stale count.
+      never promote a dataset with a fabricated or stale count. For football that
+      count is the approved historical acquisition cohort, so legacy rows can
+      neither satisfy nor inflate an approved dataset's completion.
     - Every persisted record independently passes the sport-specific validation
       (canonical team identities, valid kickoff, completed status, valid scores,
       unique source-scoped identities).
@@ -3106,12 +3176,14 @@ def mark_historical_dataset_complete(
         )
 
     # Persisted-data reconciliation: the manifest describes what the database
-    # actually holds for this sport/league/season.
+    # holds for this sport/league/season in the cohort the contract covers (the
+    # approved historical acquisition sources for football, all sources for
+    # basketball).
     persisted_count = _persisted_historical_record_count(sport, league_id, season)
     if persisted_count <= 0:
         raise ValueError(
             f"Cannot mark dataset COMPLETE: no persisted records for sport={sport}, "
-            f"league_id={league_id}, season={season}."
+            f"league_id={league_id}, season={season} in the approved historical cohort."
         )
     if fixture_count != persisted_count:
         raise ValueError(
@@ -3309,7 +3381,12 @@ def mark_historical_dataset_incomplete(
         if sport == "basketball":
             fixture_count = get_historical_basketball_game_count(league_id, season)
         else:
-            fixture_count = get_historical_fixture_count(league_id, season)
+            # The manifest records the approved cohort's size, never the physical
+            # total: an INCOMPLETE dataset holding only legacy rows reports 0
+            # approved records instead of adopting them.
+            fixture_count = get_historical_fixture_count(
+                league_id, season, sources=_approved_historical_sources(sport)
+            )
     else:
         fixture_count = _validate_non_negative_int(fixture_count, "fixture_count")
 
@@ -5379,6 +5456,10 @@ def get_team_identities_by_normalized_name(sport, normalized_name, league_id=Non
 
 
 _PROVENANCE_WRITER_SOURCES = (
+    "openfootball_json",
+    "openfootball_txt",
+    "openfootball_internationals",
+    "openligadb",
     "football_data_csv",
     "football_data_org",
     "soccerdata",
@@ -5410,10 +5491,13 @@ _FOOTBALL_APPROVED_IDENTITY_PROVIDERS = tuple(
         config,
         "FOOTBALL_APPROVED_HISTORICAL_PROVIDERS",
         (
+            "openfootball_json",
+            "openfootball_txt",
+            "openfootball_internationals",
+            "openligadb",
             "football_data_csv",
             "soccerdata_fbref",
             "soccerdata_match_history",
-            "soccerdata_sofascore",
         ),
     )
 )
@@ -5803,9 +5887,9 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
     identity_resolution_calls = 0
     t_identity_start = time.perf_counter()
 
-    def _resolve_team_identity(team_name, team_id):
+    def _resolve_team_identity(team_name, team_id, provider_name):
         nonlocal identity_cache_hits, identity_resolution_calls
-        provider_key = str(source).strip().lower()
+        provider_key = str(provider_name).strip().lower()
         provider_team_key = str(team_id).strip() if team_id is not None else ""
         cache_key = (
             provider_key,
@@ -5818,19 +5902,25 @@ def save_historical_fixtures(fixtures, league_id, season, source="api_football",
             return identity_cache[cache_key]
         identity_resolution_calls += 1
         canonical_id = team_identity.bootstrap_historical_team_identity(
-            team_name, source, team_id, league_id=league_id
+            team_name, provider_name, team_id, league_id=league_id
         )
         identity_cache[cache_key] = canonical_id
         return canonical_id
 
     resolved_fixtures = []
     for fid, item in valid_fixtures:
+        record_provider = _football_provider_name(item, source)
+        if str(source).strip().lower() == "mixed" and not _football_identity_allowed(record_provider):
+            rejected_count += 1
+            reason = "unapproved_mixed_record_provenance"
+            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+            continue
         h_id = item.get("teams", {}).get("home", {}).get("id")
         a_id = item.get("teams", {}).get("away", {}).get("id")
         h_name = item.get("teams", {}).get("home", {}).get("name", "")
         a_name = item.get("teams", {}).get("away", {}).get("name", "")
-        c_home = _resolve_team_identity(h_name, h_id)
-        c_away = _resolve_team_identity(a_name, a_id)
+        c_home = _resolve_team_identity(h_name, h_id, record_provider)
+        c_away = _resolve_team_identity(a_name, a_id, record_provider)
 
         if not c_home or not c_away:
             rejected_count += 1
@@ -6204,13 +6294,69 @@ def _historical_duplicate_candidate_predicate(db_type):
     )
 
 
-def get_historical_fixtures(league_id, season, include_reconciliation_candidates=False):
+def _historical_source_filter(sources, db_type):
+    """Return an optional SQL source cohort filter and its parameters."""
+    if sources is None:
+        return "", []
+    if isinstance(sources, str):
+        candidates = [sources]
+    elif isinstance(sources, (list, tuple, set, frozenset)):
+        candidates = list(sources)
+    else:
+        raise ValueError("sources must be a string, sequence, or None")
+    cleaned = []
+    for source in candidates:
+        text = str(source or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    if not cleaned:
+        return " AND 1 = 0", []
+    placeholder = "%s" if db_type == "postgres" else "?"
+    placeholders = ", ".join(placeholder for _ in cleaned)
+    # `mixed` is a writer label used when several approved providers contribute
+    # to one page. Admit such a row only when its record-level provider is in the
+    # requested approved cohort; legacy provenance stays excluded.
+    if db_type == "postgres":
+        provenance_provider = "COALESCE(raw_json #>> '{provider_provenance,provider}', '')"
+    else:
+        provenance_provider = "COALESCE(json_extract(raw_json, '$.provider_provenance.provider'), '')"
+    if db_type == "postgres":
+        providers_array = (
+            "COALESCE(raw_json::jsonb #> '{provider_provenance,providers}', '[]'::jsonb)"
+        )
+        provider_list_predicate = (
+            f"EXISTS (SELECT 1 FROM jsonb_array_elements_text({providers_array}) AS jp(value) "
+            f"WHERE jp.value IN ({placeholders}))"
+        )
+    else:
+        providers_array = "COALESCE(json_extract(raw_json, '$.provider_provenance.providers'), '[]')"
+        provider_list_predicate = (
+            f"EXISTS (SELECT 1 FROM json_each({providers_array}) AS jp WHERE jp.value IN ({placeholders}))"
+        )
+    predicate = (
+        f" AND (source IN ({placeholders}) OR "
+        f"(source = 'mixed' AND ({provenance_provider} IN ({placeholders}) "
+        f"OR {provider_list_predicate})))"
+    )
+    return predicate, cleaned + cleaned + cleaned
+
+
+def get_historical_fixtures(
+    league_id,
+    season,
+    include_reconciliation_candidates=False,
+    sources=None,
+):
     """
     Retrieve stored historical fixtures for a league and season.
 
     Deterministically ordered by kickoff_at ASC, fixture_id ASC.
     Reconstructs original API fixture structure from raw_json,
     attaching stored canonical_home_id and canonical_away_id.
+
+    ``sources=None`` preserves the original all-source retrieval. Passing an
+    explicit source sequence scopes the physical cohort without relabelling or
+    deleting any row (used by acquisition validation to exclude legacy records).
     """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
@@ -6221,30 +6367,32 @@ def get_historical_fixtures(league_id, season, include_reconciliation_candidates
         if include_reconciliation_candidates
         else f" AND {_historical_duplicate_candidate_predicate(db_type)}"
     )
+    source_predicate, source_params = _historical_source_filter(sources, db_type)
+    query_params = [league_id, season, *source_params]
 
     try:
         if db_type == "postgres":
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT raw_json, canonical_home_id, canonical_away_id
+                    SELECT raw_json, canonical_home_id, canonical_away_id, source
                     FROM historical_fixtures
-                    WHERE league_id = %s AND season = %s{candidate_predicate}
+                    WHERE league_id = %s AND season = %s{source_predicate}{candidate_predicate}
                     ORDER BY kickoff_at ASC, fixture_id ASC
                     """,
-                    (league_id, season),
+                    tuple(query_params),
                 )
                 rows = cur.fetchall()
         else:
             try:
                 rows = conn.execute(
                     f"""
-                    SELECT raw_json, canonical_home_id, canonical_away_id
+                    SELECT raw_json, canonical_home_id, canonical_away_id, source
                     FROM historical_fixtures
-                    WHERE league_id = ? AND season = ?{candidate_predicate}
+                    WHERE league_id = ? AND season = ?{source_predicate}{candidate_predicate}
                     ORDER BY kickoff_at ASC, fixture_id ASC
                     """,
-                    (league_id, season),
+                    tuple(query_params),
                 ).fetchall()
             except sqlite3.OperationalError:
                 conn.close()
@@ -6252,12 +6400,12 @@ def get_historical_fixtures(league_id, season, include_reconciliation_candidates
                 conn, _ = _connect()
                 rows = conn.execute(
                     f"""
-                    SELECT raw_json, canonical_home_id, canonical_away_id
+                    SELECT raw_json, canonical_home_id, canonical_away_id, source
                     FROM historical_fixtures
-                    WHERE league_id = ? AND season = ?{candidate_predicate}
+                    WHERE league_id = ? AND season = ?{source_predicate}{candidate_predicate}
                     ORDER BY kickoff_at ASC, fixture_id ASC
                     """,
-                    (league_id, season),
+                    tuple(query_params),
                 ).fetchall()
 
         fixtures = []
@@ -6268,6 +6416,12 @@ def get_historical_fixtures(league_id, season, include_reconciliation_candidates
                     payload["canonical_home_id"] = row[1]
                 if row[2]:
                     payload["canonical_away_id"] = row[2]
+                # Preserve the persisted writer label alongside the raw record.
+                # `source` inside raw_json describes record ownership; the column
+                # records which writer stored this row. Attribution must see both.
+                if len(row) > 3 and row[3]:
+                    payload["_storage_source"] = row[3]
+                    payload.setdefault("source", row[3])
                 fixtures.append(payload)
 
         return fixtures
@@ -6276,27 +6430,34 @@ def get_historical_fixtures(league_id, season, include_reconciliation_candidates
         conn.close()
 
 
-def get_historical_fixture_count(league_id, season):
-    """Get the count of stored historical fixtures for a league and season."""
+def get_historical_fixture_count(league_id, season, sources=None):
+    """
+    Get the count of stored historical fixtures for a league and season.
+
+    ``sources=None`` counts every physical row. An explicit source sequence counts
+    only that approved cohort; rows are never deleted or rewritten by this filter.
+    """
     league_id = _validate_positive_int(league_id, "league_id")
     season = _validate_positive_int(season, "season")
 
     conn, db_type = _connect()
+    source_predicate, source_params = _historical_source_filter(sources, db_type)
+    query_params = (league_id, season, *source_params)
 
     try:
         if db_type == "postgres":
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT COUNT(*) FROM historical_fixtures WHERE league_id = %s AND season = %s",
-                    (league_id, season),
+                    f"SELECT COUNT(*) FROM historical_fixtures WHERE league_id = %s AND season = %s{source_predicate}",
+                    query_params,
                 )
                 row = cur.fetchone()
                 return row[0] if row else 0
         else:
             try:
                 row = conn.execute(
-                    "SELECT COUNT(*) FROM historical_fixtures WHERE league_id = ? AND season = ?",
-                    (league_id, season),
+                    f"SELECT COUNT(*) FROM historical_fixtures WHERE league_id = ? AND season = ?{source_predicate}",
+                    query_params,
                 ).fetchone()
                 return row[0] if row else 0
             except sqlite3.OperationalError:
@@ -6304,8 +6465,8 @@ def get_historical_fixture_count(league_id, season):
                 init_db()
                 conn, _ = _connect()
                 row = conn.execute(
-                    "SELECT COUNT(*) FROM historical_fixtures WHERE league_id = ? AND season = ?",
-                    (league_id, season),
+                    f"SELECT COUNT(*) FROM historical_fixtures WHERE league_id = ? AND season = ?{source_predicate}",
+                    query_params,
                 ).fetchone()
                 return row[0] if row else 0
     finally:

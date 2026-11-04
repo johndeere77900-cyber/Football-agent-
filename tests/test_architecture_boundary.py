@@ -22,6 +22,29 @@ import team_identity
 from data_resolver import DataResolver, generate_synthetic_fixture_id, reconcile_fixture_records, _strict_fixture_match
 
 
+@pytest.fixture(autouse=True)
+def _block_live_providers(monkeypatch):
+    """Keep this boundary suite hermetic.
+
+    These tests exercise resolver fallbacks. Without explicit stubs a fallback
+    leg can reach a live provider (SoccerData in particular downloads whole
+    seasons), which makes the suite slow and can exhaust the CI runner's memory.
+    Each test still overrides the specific provider it is asserting on.
+    """
+    unavailable = lambda *args, **kwargs: ("SOURCE_UNAVAILABLE", [], {})
+    monkeypatch.setattr("soccerdata_provider.get_match_history_games", unavailable)
+    monkeypatch.setattr("soccerdata_provider.get_sofascore_historical_games", unavailable)
+    monkeypatch.setattr("soccerdata_provider.get_fbref_games", unavailable)
+    monkeypatch.setattr("soccerdata_provider.get_team_historical_matches", unavailable)
+    monkeypatch.setattr("api_football.get_fixtures_by_date", lambda *args, **kwargs: [])
+    monkeypatch.setattr("api_football.get_recent_form", lambda *args, **kwargs: [])
+    monkeypatch.setattr("api_football.get_head_to_head", lambda *args, **kwargs: [])
+    monkeypatch.setattr("api_football.get_team_statistics", lambda *args, **kwargs: None)
+    monkeypatch.setattr("football_data_api.get_competition_matches", lambda *args, **kwargs: {"matches": []})
+    monkeypatch.setattr("football_data_api.get_competition_standings", lambda *args, **kwargs: [])
+    monkeypatch.setattr("football_data_api.get_competition_teams", lambda *args, **kwargs: [])
+
+
 # Approved provider boundary files where direct provider invocations are permitted
 APPROVED_BOUNDARY_FILES = {
     "api_football.py",
@@ -487,6 +510,7 @@ def test_3_get_team_recent_matches_rejects_unresolved_historical_match():
 
     with patch("team_identity.resolve_canonical_team_id", side_effect=mock_resolve), \
          patch("team_identity.bootstrap_historical_team_identity", side_effect=fail_bootstrap), \
+         patch("soccerdata_provider.get_team_historical_matches", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
          patch("api_football.get_recent_form", return_value=unresolved_historical):
 
         matches = resolver.get_team_recent_matches(team_id=10, last=5, league_id=39, team_name="Known Team")
@@ -563,6 +587,7 @@ def test_6_get_head_to_head_rejects_unresolved_historical_match():
 
     with patch("team_identity.resolve_canonical_team_id", side_effect=mock_resolve), \
          patch("team_identity.bootstrap_historical_team_identity", side_effect=fail_bootstrap), \
+         patch("soccerdata_provider.get_sofascore_historical_games", return_value=("SOURCE_NOT_AVAILABLE", [], {})), \
          patch("api_football.get_head_to_head", return_value=unresolved_h2h):
 
         h2h = resolver.get_head_to_head(10, 20, last=5, home_team_name="Arsenal", away_team_name="Chelsea", fixture_date="2024-09-01T15:00:00+00:00", league_id=39)

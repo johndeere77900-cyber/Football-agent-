@@ -40,7 +40,7 @@ def mock_team_universe(monkeypatch):
     monkeypatch.setattr("data_resolver._get_authoritative_historical_team_ids", _mock_get_team_ids)
 
 
-def make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20):
+def make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20, provider="api_football"):
     teams = list(range(1, num_teams + 1))
     for tid in teams:
         cid = f"football_team_{league_id}_team_{tid}"
@@ -65,7 +65,7 @@ def make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20):
             "canonical_away_id": c_away,
             "goals": {"home": 2, "away": 1},
             "provider_provenance": {
-                "provider": "api_football",
+                "provider": provider,
                 "provider_type": "primary",
                 "provider_fixture_id": 1000 + i,
             },
@@ -78,9 +78,9 @@ def test_1_valid_complete_dataset_skips_acquisition(mock_page):
     """
     1. A genuinely valid COMPLETE football dataset skips acquisition and consumes zero API requests.
     """
-    fixtures = make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20)
-    storage.save_historical_fixtures(fixtures, 39, 2024, source="api_football", require_completed=True)
-    completion_helpers.mark_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+    fixtures = make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20, provider="football_data_csv")
+    storage.save_historical_fixtures(fixtures, 39, 2024, source="football_data_csv", require_completed=True)
+    completion_helpers.mark_complete(39, 2024, fixture_count=380, source="football_data_csv", expected_pages=2, pages_completed=2)
 
     report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
@@ -200,9 +200,9 @@ def test_7_valid_complete_dataset_remains_idempotent():
     """
     7. A valid COMPLETE dataset remains idempotent and does not refetch.
     """
-    fixtures = make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20)
-    storage.save_historical_fixtures(fixtures, 39, 2024, source="api_football", require_completed=True)
-    completion_helpers.mark_complete(39, 2024, fixture_count=380, source="api_football", expected_pages=2, pages_completed=2)
+    fixtures = make_valid_complete_fixtures(league_id=39, season=2024, num_teams=20, provider="football_data_csv")
+    storage.save_historical_fixtures(fixtures, 39, 2024, source="football_data_csv", require_completed=True)
+    completion_helpers.mark_complete(39, 2024, fixture_count=380, source="football_data_csv", expected_pages=2, pages_completed=2)
 
     with patch("data_resolver.DataResolver.get_league_fixtures_page") as mock_page:
         report1 = historical_sync.sync_historical_fixtures(league_id=39, season=2024)

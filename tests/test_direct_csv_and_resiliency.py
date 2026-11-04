@@ -96,7 +96,7 @@ class TestDirectCSVAndResiliency(unittest.TestCase):
         mock_csv.return_value = [{
             "fixture": {"id": 100, "date": "2024-08-16T12:00:00Z", "status": {"short": "FT"}},
             "league": {"id": 39, "season": 2024},
-            "teams": {"home": {"id": None, "name": "A"}, "away": {"id": None, "name": "B"}},
+            "teams": {"home": {"id": 1, "name": "A"}, "away": {"id": 2, "name": "B"}},
             "goals": {"home": 1, "away": 0},
             "canonical_home_id": "football_team_a",
             "canonical_away_id": "football_team_b",

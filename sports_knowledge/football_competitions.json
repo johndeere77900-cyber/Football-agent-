@@ -1,17 +1,21 @@
 {
   "schema_version": 2,
   "sport": "football",
-  "curated_at": "2026-11-01T00:00:00+00:00",
-  "description": "Curated football competition knowledge: identity, aliases, season/edition calendars, format, expected coverage shape and approved provider coverage. Facts carry a source URL, retrieval timestamp and confidence. Hypotheses are research notes and never drive acquisition or completion.",
+  "curated_at": "2026-11-03T00:00:00+00:00",
+  "description": "Curated football competition knowledge: identity, aliases, season/edition calendars, format, expected coverage shape and approved provider coverage. OpenFootball and OpenLigaDB mappings are limited to verified competition-season files; missing coverage is not universal support.",
   "approved_historical_acquisition_order": [
+    "openfootball_json",
+    "openfootball_txt",
+    "openfootball_internationals",
+    "openligadb",
     "football_data_csv",
     "soccerdata_fbref",
-    "soccerdata_match_history",
-    "soccerdata_sofascore"
+    "soccerdata_match_history"
   ],
   "excluded_from_historical_fixture_acquisition": [
     "api_football",
-    "football_data_org"
+    "football_data_org",
+    "soccerdata_sofascore"
   ],
   "sources": {
     "football_data_uk": {
@@ -61,6 +65,68 @@
       "url": "https://www.uefa.com/uefanationsleague/news/0298-1d6ef1acfaef-b54fcf1da859-1000--2026-27-uefa-nations-league-all-you-need-to-know/",
       "retrieved_at": "2026-11-01T00:00:00+00:00",
       "confidence": "high"
+    },
+    "openfootball_football_json": {
+      "name": "OpenFootball football.json",
+      "url": "https://github.com/openfootball/football.json",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "high",
+      "license": "CC0",
+      "format": "JSON"
+    },
+    "openfootball_champions_league": {
+      "name": "OpenFootball Champions League",
+      "url": "https://github.com/openfootball/champions-league",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "high",
+      "license": "CC0",
+      "format": "Football.TXT"
+    },
+    "openfootball_england": {
+      "name": "OpenFootball England",
+      "url": "https://github.com/openfootball/england",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "high",
+      "license": "CC0",
+      "format": "Football.TXT"
+    },
+    "openfootball_italy": {
+      "name": "OpenFootball Italy",
+      "url": "https://github.com/openfootball/italy",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "high",
+      "license": "CC0",
+      "format": "Football.TXT"
+    },
+    "openfootball_south_america": {
+      "name": "OpenFootball South America",
+      "url": "https://github.com/openfootball/south-america",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "high",
+      "license": "CC0",
+      "format": "Football.TXT"
+    },
+    "openfootball_internationals": {
+      "name": "OpenFootball internationals",
+      "url": "https://github.com/openfootball/internationals",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "high",
+      "license": "CC0",
+      "format": "Football.TXT"
+    },
+    "openligadb_api": {
+      "name": "OpenLigaDB API",
+      "url": "https://api.openligadb.de",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "high",
+      "license": "OpenLigaDB API terms; no API key required",
+      "format": "JSON"
+    },
+    "openligadb_docs": {
+      "name": "OpenLigaDB documentation",
+      "url": "https://api.openligadb.de/index.html",
+      "retrieved_at": "2026-11-03T00:00:00+00:00",
+      "confidence": "high"
     }
   },
   "providers": {
@@ -94,14 +160,149 @@
       "documentation_url": "https://soccerdata.readthedocs.io/en/stable/datasources/index.html",
       "upstream_url": "https://www.sofascore.com/",
       "coverage": "every configured football competition",
-      "access_note": "HTTP 403 was observed from a previous acquisition environment; an access denial is recorded as FAILED, never as an empty page."
+      "access_note": "HTTP 403 was observed from a previous acquisition environment; an access denial is recorded as FAILED, never as an empty page.",
+      "automatic_historical_acquisition": false,
+      "diagnostic_only": true,
+      "reason": "removed from automatic historical acquisition; retained for controlled health checks"
+    },
+    "openfootball_json": {
+      "kind": "direct_download",
+      "name": "OpenFootball football.json",
+      "repository_url": "https://github.com/openfootball/football.json",
+      "url_pattern": "https://raw.githubusercontent.com/openfootball/football.json/master/{season}/{competition_file}",
+      "data_format": "JSON",
+      "license": "CC0",
+      "coverage": "verified league/cup season files listed in competition provider_coverage",
+      "known_season_availability": {
+        "domestic_2019_2024_2026": "exact files checked for en.1/es.1/it.1/de.1/fr.1/nl.1/pt.1",
+        "uefa_champions_league": [
+          2019,
+          2024
+        ],
+        "uefa_champions_league_2026": "404; not enabled"
+      },
+      "limitations": [
+        "One file per competition-season; missing files are not universal coverage.",
+        "A non-empty file is not complete-season evidence.",
+        "Date-only timing is preserved and no UTC kickoff is inferred.",
+        "The 2024-25 Champions League file has 189 rows but one unscored final."
+      ]
+    },
+    "openfootball_txt": {
+      "kind": "direct_download",
+      "name": "OpenFootball Football.TXT",
+      "repositories": {
+        "champions-league": "https://github.com/openfootball/champions-league",
+        "england": "https://github.com/openfootball/england",
+        "italy": "https://github.com/openfootball/italy",
+        "south-america": "https://github.com/openfootball/south-america"
+      },
+      "url_pattern": "https://raw.githubusercontent.com/openfootball/{repository}/master/{path}",
+      "data_format": "Football.TXT",
+      "license": "CC0",
+      "coverage": "only mapped competitions with an existing authoritative league id",
+      "known_season_availability": {
+        "uefa_champions_league": [
+          2019,
+          2024
+        ],
+        "uefa_europa_league": [
+          2024
+        ],
+        "premier_league": [
+          2019,
+          2024,
+          2026
+        ],
+        "serie_a": [
+          2019,
+          2024,
+          2026
+        ],
+        "diagnostic_only_2024": [
+          "Conference League",
+          "EFL Cup",
+          "FA Cup",
+          "Coppa Italia",
+          "Copa Libertadores",
+          "Brasileirao"
+        ]
+      },
+      "limitations": [
+        "Conference League, EFL Cup, FA Cup, Coppa Italia, Libertadores and Brasileirao are parsed for diagnostics but not stored because no authoritative configured id exists.",
+        "Penalty-shootout scores are preserved from source facts but the pre-shootout result is used as the match score.",
+        "No universal competition coverage is claimed."
+      ]
+    },
+    "openfootball_internationals": {
+      "kind": "direct_download",
+      "name": "OpenFootball internationals",
+      "repository_url": "https://github.com/openfootball/internationals",
+      "url_pattern": "https://raw.githubusercontent.com/openfootball/internationals/master/{tournament_directory}/{year}_{tournament_slug}.txt",
+      "data_format": "Football.TXT",
+      "license": "CC0",
+      "coverage": "verified men senior international tournament files",
+      "known_season_availability": {
+        "fifa_world_cup": [
+          2022
+        ],
+        "uefa_euro": [
+          2020,
+          2024
+        ],
+        "uefa_nations_league": [
+          2018,
+          2019,
+          2020,
+          2021,
+          2022,
+          2023,
+          2024,
+          2025
+        ]
+      },
+      "limitations": [
+        "Men's full internationals only.",
+        "Full-time results include extra time but not penalty-shootout scores.",
+        "Shootout information identifies the winner, not the shootout score.",
+        "No reliable abandoned, annulled or awarded status.",
+        "Incomplete stage/round attribution.",
+        "International results alone do not prove tournament scheduling completeness.",
+        "EURO 2020 is requested as edition 2020 but read from the 2021 source file."
+      ]
+    },
+    "openligadb": {
+      "kind": "official_api",
+      "name": "OpenLigaDB",
+      "base_url": "https://api.openligadb.de",
+      "documentation_url": "https://api.openligadb.de/index.html",
+      "data_format": "JSON",
+      "api_key_required": false,
+      "rate_limit": "60 requests/minute/IP",
+      "discovery_endpoint": "/getavailableleagues/{season}",
+      "match_endpoint": "/getmatchdata/{leagueShortcut}/{season}",
+      "coverage": "only competitions whose exact shortcut is returned by season discovery",
+      "known_season_availability": {
+        "bundesliga": [
+          2024
+        ]
+      },
+      "limitations": [
+        "No competition or season is assumed to exist.",
+        "HTTP 200 with an empty match array is not acquisition success.",
+        "Only Bundesliga is enabled initially."
+      ]
     }
   },
   "competitions": [
     {
       "league_id": 39,
       "name": "Premier League",
-      "aliases": ["premier league", "english premier league", "epl"],
+      "aliases": [
+        "premier league",
+        "english premier league",
+        "epl"
+      ],
       "governing_body": "Premier League",
       "country": "England",
       "region": "Europe",
@@ -112,19 +313,85 @@
         "label": "split_year",
         "from": 2019,
         "to": 2026,
-        "window": {"start": [0, 8, 1], "end": [1, 6, 15]},
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window": {
+          "start": [
+            0,
+            8,
+            1
+          ],
+          "end": [
+            1,
+            6,
+            15
+          ]
+        },
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-09",
+            "end": "2020-07-26",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": true, "code": "E0"},
-        "soccerdata_fbref": {"supported": true, "code": "ENG-Premier League"},
-        "soccerdata_match_history": {"supported": true, "code": "ENG-Premier League"},
-        "soccerdata_sofascore": {"supported": true, "code": "ENG-Premier League"}
+        "football_data_csv": {
+          "supported": true,
+          "code": "E0"
+        },
+        "soccerdata_fbref": {
+          "supported": true,
+          "code": "ENG-Premier League"
+        },
+        "soccerdata_match_history": {
+          "supported": true,
+          "code": "ENG-Premier League"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "ENG-Premier League",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": true,
+          "code": "en.1.json",
+          "edition_availability": "exact file checked at request time"
+        },
+        "openfootball_txt": {
+          "supported": true,
+          "code": "1-premierleague.txt",
+          "repository": "england",
+          "edition_seasons": [
+            2019,
+            2024,
+            2026
+          ]
+        },
+        "openfootball_internationals": {
+          "supported": false,
+          "code": null,
+          "reason": "not an international tournament mapping"
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "double_round_robin", "value": null},
+      "expected_units": {
+        "type": "double_round_robin",
+        "value": null
+      },
       "evidence": [
-        {"source": "football_data_uk", "statement": "Division E0 CSV is published per season and carries the full season's results."},
-        {"source": "football_data_notes", "statement": "Division codes and season-code URL layout are documented in the provider notes."}
+        {
+          "source": "football_data_uk",
+          "statement": "Division E0 CSV is published per season and carries the full season's results."
+        },
+        {
+          "source": "football_data_notes",
+          "statement": "Division codes and season-code URL layout are documented in the provider notes."
+        }
       ],
       "hypotheses": [],
       "known_blockers": []
@@ -132,7 +399,10 @@
     {
       "league_id": 140,
       "name": "La Liga",
-      "aliases": ["la liga", "spanish la liga"],
+      "aliases": [
+        "la liga",
+        "spanish la liga"
+      ],
       "governing_body": "Liga Nacional de Futbol Profesional",
       "country": "Spain",
       "region": "Europe",
@@ -143,18 +413,76 @@
         "label": "split_year",
         "from": 2019,
         "to": 2026,
-        "window": {"start": [0, 8, 1], "end": [1, 6, 15]},
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window": {
+          "start": [
+            0,
+            8,
+            1
+          ],
+          "end": [
+            1,
+            6,
+            15
+          ]
+        },
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-16",
+            "end": "2020-07-19",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": true, "code": "SP1"},
-        "soccerdata_fbref": {"supported": true, "code": "ESP-La Liga"},
-        "soccerdata_match_history": {"supported": true, "code": "ESP-La Liga"},
-        "soccerdata_sofascore": {"supported": true, "code": "ESP-La Liga"}
+        "football_data_csv": {
+          "supported": true,
+          "code": "SP1"
+        },
+        "soccerdata_fbref": {
+          "supported": true,
+          "code": "ESP-La Liga"
+        },
+        "soccerdata_match_history": {
+          "supported": true,
+          "code": "ESP-La Liga"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "ESP-La Liga",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": true,
+          "code": "es.1.json",
+          "edition_availability": "exact file checked at request time"
+        },
+        "openfootball_txt": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball TXT competition mapping"
+        },
+        "openfootball_internationals": {
+          "supported": false,
+          "code": null,
+          "reason": "not an international tournament mapping"
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "double_round_robin", "value": null},
+      "expected_units": {
+        "type": "double_round_robin",
+        "value": null
+      },
       "evidence": [
-        {"source": "football_data_uk", "statement": "Division SP1 CSV is published per season."}
+        {
+          "source": "football_data_uk",
+          "statement": "Division SP1 CSV is published per season."
+        }
       ],
       "hypotheses": [],
       "known_blockers": []
@@ -162,7 +490,10 @@
     {
       "league_id": 135,
       "name": "Serie A",
-      "aliases": ["serie a", "italian serie a"],
+      "aliases": [
+        "serie a",
+        "italian serie a"
+      ],
       "governing_body": "Lega Serie A",
       "country": "Italy",
       "region": "Europe",
@@ -173,18 +504,81 @@
         "label": "split_year",
         "from": 2019,
         "to": 2026,
-        "window": {"start": [0, 8, 1], "end": [1, 6, 15]},
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window": {
+          "start": [
+            0,
+            8,
+            1
+          ],
+          "end": [
+            1,
+            6,
+            15
+          ]
+        },
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-24",
+            "end": "2020-08-02",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": true, "code": "I1"},
-        "soccerdata_fbref": {"supported": true, "code": "ITA-Serie A"},
-        "soccerdata_match_history": {"supported": true, "code": "ITA-Serie A"},
-        "soccerdata_sofascore": {"supported": true, "code": "ITA-Serie A"}
+        "football_data_csv": {
+          "supported": true,
+          "code": "I1"
+        },
+        "soccerdata_fbref": {
+          "supported": true,
+          "code": "ITA-Serie A"
+        },
+        "soccerdata_match_history": {
+          "supported": true,
+          "code": "ITA-Serie A"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "ITA-Serie A",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": true,
+          "code": "it.1.json",
+          "edition_availability": "exact file checked at request time"
+        },
+        "openfootball_txt": {
+          "supported": true,
+          "code": "1-seriea.txt",
+          "repository": "italy",
+          "edition_seasons": [
+            2019,
+            2024,
+            2026
+          ]
+        },
+        "openfootball_internationals": {
+          "supported": false,
+          "code": null,
+          "reason": "not an international tournament mapping"
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "double_round_robin", "value": null},
+      "expected_units": {
+        "type": "double_round_robin",
+        "value": null
+      },
       "evidence": [
-        {"source": "football_data_uk", "statement": "Division I1 CSV is published per season."}
+        {
+          "source": "football_data_uk",
+          "statement": "Division I1 CSV is published per season."
+        }
       ],
       "hypotheses": [],
       "known_blockers": []
@@ -192,7 +586,10 @@
     {
       "league_id": 78,
       "name": "Bundesliga",
-      "aliases": ["bundesliga", "german bundesliga"],
+      "aliases": [
+        "bundesliga",
+        "german bundesliga"
+      ],
       "governing_body": "Deutsche Fussball Liga",
       "country": "Germany",
       "region": "Europe",
@@ -203,18 +600,79 @@
         "label": "split_year",
         "from": 2019,
         "to": 2026,
-        "window": {"start": [0, 8, 1], "end": [1, 5, 31]},
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window": {
+          "start": [
+            0,
+            8,
+            1
+          ],
+          "end": [
+            1,
+            5,
+            31
+          ]
+        },
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-16",
+            "end": "2020-06-27",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": true, "code": "D1"},
-        "soccerdata_fbref": {"supported": true, "code": "GER-Bundesliga"},
-        "soccerdata_match_history": {"supported": true, "code": "GER-Bundesliga"},
-        "soccerdata_sofascore": {"supported": true, "code": "GER-Bundesliga"}
+        "football_data_csv": {
+          "supported": true,
+          "code": "D1"
+        },
+        "soccerdata_fbref": {
+          "supported": true,
+          "code": "GER-Bundesliga"
+        },
+        "soccerdata_match_history": {
+          "supported": true,
+          "code": "GER-Bundesliga"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "GER-Bundesliga",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": true,
+          "code": "de.1.json",
+          "edition_availability": "exact file checked at request time"
+        },
+        "openfootball_txt": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball TXT competition mapping"
+        },
+        "openfootball_internationals": {
+          "supported": false,
+          "code": null,
+          "reason": "not an international tournament mapping"
+        },
+        "openligadb": {
+          "supported": true,
+          "code": "bl1",
+          "edition_seasons": [
+            2024
+          ],
+          "discovery_required": true
+        }
       },
-      "expected_units": {"type": "double_round_robin", "value": null},
+      "expected_units": {
+        "type": "double_round_robin",
+        "value": null
+      },
       "evidence": [
-        {"source": "football_data_uk", "statement": "Division D1 CSV is published per season."}
+        {
+          "source": "football_data_uk",
+          "statement": "Division D1 CSV is published per season."
+        }
       ],
       "hypotheses": [],
       "known_blockers": []
@@ -222,7 +680,10 @@
     {
       "league_id": 61,
       "name": "Ligue 1",
-      "aliases": ["ligue 1", "french ligue 1"],
+      "aliases": [
+        "ligue 1",
+        "french ligue 1"
+      ],
       "governing_body": "Ligue de Football Professionnel",
       "country": "France",
       "region": "Europe",
@@ -233,18 +694,76 @@
         "label": "split_year",
         "from": 2019,
         "to": 2026,
-        "window": {"start": [0, 8, 1], "end": [1, 6, 15]},
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window": {
+          "start": [
+            0,
+            8,
+            1
+          ],
+          "end": [
+            1,
+            6,
+            15
+          ]
+        },
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-09",
+            "end": "2020-04-30",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": true, "code": "F1"},
-        "soccerdata_fbref": {"supported": true, "code": "FRA-Ligue 1"},
-        "soccerdata_match_history": {"supported": true, "code": "FRA-Ligue 1"},
-        "soccerdata_sofascore": {"supported": true, "code": "FRA-Ligue 1"}
+        "football_data_csv": {
+          "supported": true,
+          "code": "F1"
+        },
+        "soccerdata_fbref": {
+          "supported": true,
+          "code": "FRA-Ligue 1"
+        },
+        "soccerdata_match_history": {
+          "supported": true,
+          "code": "FRA-Ligue 1"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "FRA-Ligue 1",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": true,
+          "code": "fr.1.json",
+          "edition_availability": "exact file checked at request time"
+        },
+        "openfootball_txt": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball TXT competition mapping"
+        },
+        "openfootball_internationals": {
+          "supported": false,
+          "code": null,
+          "reason": "not an international tournament mapping"
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "double_round_robin", "value": null},
+      "expected_units": {
+        "type": "double_round_robin",
+        "value": null
+      },
       "evidence": [
-        {"source": "football_data_uk", "statement": "Division F1 CSV is published per season."}
+        {
+          "source": "football_data_uk",
+          "statement": "Division F1 CSV is published per season."
+        }
       ],
       "hypotheses": [],
       "known_blockers": []
@@ -252,7 +771,10 @@
     {
       "league_id": 88,
       "name": "Eredivisie",
-      "aliases": ["eredivisie", "dutch eredivisie"],
+      "aliases": [
+        "eredivisie",
+        "dutch eredivisie"
+      ],
       "governing_body": "Koninklijke Nederlandse Voetbalbond",
       "country": "Netherlands",
       "region": "Europe",
@@ -263,18 +785,77 @@
         "label": "split_year",
         "from": 2019,
         "to": 2026,
-        "window": {"start": [0, 8, 1], "end": [1, 6, 15]},
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window": {
+          "start": [
+            0,
+            8,
+            1
+          ],
+          "end": [
+            1,
+            6,
+            15
+          ]
+        },
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-02",
+            "end": "2020-04-24",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": true, "code": "N1"},
-        "soccerdata_fbref": {"supported": false, "code": null, "reason": "not present in soccerdata's FBref league mapping"},
-        "soccerdata_match_history": {"supported": true, "code": "NED-Eredivisie"},
-        "soccerdata_sofascore": {"supported": true, "code": "NED-Eredivisie"}
+        "football_data_csv": {
+          "supported": true,
+          "code": "N1"
+        },
+        "soccerdata_fbref": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in soccerdata's FBref league mapping"
+        },
+        "soccerdata_match_history": {
+          "supported": true,
+          "code": "NED-Eredivisie"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "NED-Eredivisie",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": true,
+          "code": "nl.1.json",
+          "edition_availability": "exact file checked at request time"
+        },
+        "openfootball_txt": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball TXT competition mapping"
+        },
+        "openfootball_internationals": {
+          "supported": false,
+          "code": null,
+          "reason": "not an international tournament mapping"
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "double_round_robin", "value": null},
+      "expected_units": {
+        "type": "double_round_robin",
+        "value": null
+      },
       "evidence": [
-        {"source": "football_data_uk", "statement": "Division N1 CSV is published per season."}
+        {
+          "source": "football_data_uk",
+          "statement": "Division N1 CSV is published per season."
+        }
       ],
       "hypotheses": [],
       "known_blockers": []
@@ -282,7 +863,11 @@
     {
       "league_id": 94,
       "name": "Primeira Liga",
-      "aliases": ["primeira liga", "portuguese primeira liga", "liga portugal"],
+      "aliases": [
+        "primeira liga",
+        "portuguese primeira liga",
+        "liga portugal"
+      ],
       "governing_body": "Liga Portuguesa de Futebol Profissional",
       "country": "Portugal",
       "region": "Europe",
@@ -293,18 +878,77 @@
         "label": "split_year",
         "from": 2019,
         "to": 2026,
-        "window": {"start": [0, 8, 1], "end": [1, 6, 15]},
-        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS."
+        "window": {
+          "start": [
+            0,
+            8,
+            1
+          ],
+          "end": [
+            1,
+            6,
+            15
+          ]
+        },
+        "window_evidence": "Domestic league season boundary declared in config.COMPETITION_SEASON_WINDOWS.",
+        "overrides": {
+          "2019": {
+            "start": "2019-08-09",
+            "end": "2020-07-26",
+            "evidence": "COVID-19-affected 2019-20 season window; exact start and end dates recorded in config.COMPETITION_SEASON_WINDOW_OVERRIDES."
+          }
+        }
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": true, "code": "P1"},
-        "soccerdata_fbref": {"supported": false, "code": null, "reason": "not present in soccerdata's FBref league mapping"},
-        "soccerdata_match_history": {"supported": true, "code": "POR-Primeira Liga"},
-        "soccerdata_sofascore": {"supported": true, "code": "POR-Primeira Liga"}
+        "football_data_csv": {
+          "supported": true,
+          "code": "P1"
+        },
+        "soccerdata_fbref": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in soccerdata's FBref league mapping"
+        },
+        "soccerdata_match_history": {
+          "supported": true,
+          "code": "POR-Primeira Liga"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "POR-Primeira Liga",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": true,
+          "code": "pt.1.json",
+          "edition_availability": "exact file checked at request time"
+        },
+        "openfootball_txt": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball TXT competition mapping"
+        },
+        "openfootball_internationals": {
+          "supported": false,
+          "code": null,
+          "reason": "not an international tournament mapping"
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "double_round_robin", "value": null},
+      "expected_units": {
+        "type": "double_round_robin",
+        "value": null
+      },
       "evidence": [
-        {"source": "football_data_uk", "statement": "Division P1 CSV is published per season."}
+        {
+          "source": "football_data_uk",
+          "statement": "Division P1 CSV is published per season."
+        }
       ],
       "hypotheses": [],
       "known_blockers": []
@@ -312,7 +956,11 @@
     {
       "league_id": 2,
       "name": "UEFA Champions League",
-      "aliases": ["champions league", "uefa champions league", "ucl"],
+      "aliases": [
+        "champions league",
+        "uefa champions league",
+        "ucl"
+      ],
       "governing_body": "UEFA",
       "country": null,
       "region": "Europe",
@@ -323,28 +971,95 @@
         "label": "split_year",
         "from": 2019,
         "to": 2026,
-        "window": {"start": [0, 7, 1], "end": [1, 6, 30]},
+        "window": {
+          "start": [
+            0,
+            7,
+            1
+          ],
+          "end": [
+            1,
+            6,
+            30
+          ]
+        },
         "window_evidence": "Qualifying begins in July; season boundary declared in config.COMPETITION_SEASON_WINDOWS."
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": false, "code": null, "reason": "no Football-Data.co.uk CSV division exists for this competition"},
-        "soccerdata_fbref": {"supported": false, "code": null, "reason": "not present in soccerdata's FBref league mapping"},
-        "soccerdata_match_history": {"supported": false, "code": null, "reason": "not present in the configured MatchHistory mapping"},
-        "soccerdata_sofascore": {"supported": true, "code": "INT-Champions League"}
+        "football_data_csv": {
+          "supported": false,
+          "code": null,
+          "reason": "no Football-Data.co.uk CSV division exists for this competition"
+        },
+        "soccerdata_fbref": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in soccerdata's FBref league mapping"
+        },
+        "soccerdata_match_history": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in the configured MatchHistory mapping"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "INT-Champions League",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": true,
+          "code": "uefa.cl.json",
+          "edition_seasons": [
+            2019,
+            2024
+          ]
+        },
+        "openfootball_txt": {
+          "supported": true,
+          "code": "cl.txt",
+          "repository": "champions-league",
+          "edition_seasons": [
+            2019,
+            2024
+          ]
+        },
+        "openfootball_internationals": {
+          "supported": false,
+          "code": null,
+          "reason": "not an international tournament mapping"
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "cup", "value": null, "reason": "knockout/league-phase hybrid; no fixed pair schedule"},
+      "expected_units": {
+        "type": "cup",
+        "value": null,
+        "reason": "knockout/league-phase hybrid; no fixed pair schedule"
+      },
       "evidence": [
-        {"source": "soccerdata_docs", "statement": "SoccerData exposes a Sofascore source for competitions absent from its FBref and MatchHistory mappings."}
+        {
+          "source": "soccerdata_docs",
+          "statement": "SoccerData exposes a Sofascore source for competitions absent from its FBref and MatchHistory mappings."
+        }
       ],
       "hypotheses": [],
       "known_blockers": [
-        "Only the Sofascore route is configured; when that route is access-restricted the competition remains INCOMPLETE with the exact provider outcome recorded."
+        "Edition-specific participant and completion evidence may be unavailable; OpenFootball results do not independently prove tournament completion.",
+        "Sofascore is diagnostic-only and is not attempted automatically."
       ]
     },
     {
       "league_id": 3,
       "name": "UEFA Europa League",
-      "aliases": ["europa league", "uefa europa league", "uel"],
+      "aliases": [
+        "europa league",
+        "uefa europa league",
+        "uel"
+      ],
       "governing_body": "UEFA",
       "country": null,
       "region": "Europe",
@@ -355,28 +1070,90 @@
         "label": "split_year",
         "from": 2019,
         "to": 2026,
-        "window": {"start": [0, 7, 1], "end": [1, 6, 30]},
+        "window": {
+          "start": [
+            0,
+            7,
+            1
+          ],
+          "end": [
+            1,
+            6,
+            30
+          ]
+        },
         "window_evidence": "Qualifying begins in July; season boundary declared in config.COMPETITION_SEASON_WINDOWS."
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": false, "code": null, "reason": "no Football-Data.co.uk CSV division exists for this competition"},
-        "soccerdata_fbref": {"supported": false, "code": null, "reason": "not present in soccerdata's FBref league mapping"},
-        "soccerdata_match_history": {"supported": false, "code": null, "reason": "not present in the configured MatchHistory mapping"},
-        "soccerdata_sofascore": {"supported": true, "code": "INT-Europa League"}
+        "football_data_csv": {
+          "supported": false,
+          "code": null,
+          "reason": "no Football-Data.co.uk CSV division exists for this competition"
+        },
+        "soccerdata_fbref": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in soccerdata's FBref league mapping"
+        },
+        "soccerdata_match_history": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in the configured MatchHistory mapping"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "INT-Europa League",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball JSON competition mapping"
+        },
+        "openfootball_txt": {
+          "supported": true,
+          "code": "el.txt",
+          "repository": "champions-league",
+          "edition_seasons": [
+            2024
+          ]
+        },
+        "openfootball_internationals": {
+          "supported": false,
+          "code": null,
+          "reason": "not an international tournament mapping"
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "cup", "value": null, "reason": "knockout/league-phase hybrid; no fixed pair schedule"},
+      "expected_units": {
+        "type": "cup",
+        "value": null,
+        "reason": "knockout/league-phase hybrid; no fixed pair schedule"
+      },
       "evidence": [
-        {"source": "soccerdata_docs", "statement": "SoccerData exposes a Sofascore source for competitions absent from its FBref and MatchHistory mappings."}
+        {
+          "source": "soccerdata_docs",
+          "statement": "SoccerData exposes a Sofascore source for competitions absent from its FBref and MatchHistory mappings."
+        }
       ],
       "hypotheses": [],
       "known_blockers": [
-        "Only the Sofascore route is configured; when that route is access-restricted the competition remains INCOMPLETE with the exact provider outcome recorded."
+        "Edition-specific participant and completion evidence may be unavailable; OpenFootball results do not independently prove tournament completion.",
+        "Sofascore is diagnostic-only and is not attempted automatically."
       ]
     },
     {
       "league_id": 5,
       "name": "UEFA Nations League",
-      "aliases": ["nations league", "uefa nations league"],
+      "aliases": [
+        "nations league",
+        "uefa nations league"
+      ],
       "governing_body": "UEFA",
       "country": null,
       "region": "Europe",
@@ -385,7 +1162,13 @@
       "edition_rule": {
         "type": "biennial_editions",
         "label": "split_year",
-        "editions": [2018, 2020, 2022, 2024, 2026],
+        "editions": [
+          2018,
+          2020,
+          2022,
+          2024,
+          2026
+        ],
         "overrides": {
           "2026": {
             "start": "2026-09-24T00:00:00+00:00",
@@ -395,25 +1178,81 @@
         }
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": false, "code": null, "reason": "no Football-Data.co.uk CSV division exists for this competition"},
-        "soccerdata_fbref": {"supported": false, "code": null, "reason": "not present in soccerdata's FBref league mapping"},
-        "soccerdata_match_history": {"supported": false, "code": null, "reason": "not present in the configured MatchHistory mapping"},
-        "soccerdata_sofascore": {"supported": true, "code": "INT-Nations League"}
+        "football_data_csv": {
+          "supported": false,
+          "code": null,
+          "reason": "no Football-Data.co.uk CSV division exists for this competition"
+        },
+        "soccerdata_fbref": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in soccerdata's FBref league mapping"
+        },
+        "soccerdata_match_history": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in the configured MatchHistory mapping"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "INT-Nations League",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball JSON competition mapping"
+        },
+        "openfootball_txt": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball TXT competition mapping"
+        },
+        "openfootball_internationals": {
+          "supported": true,
+          "code": "uefa_nations_league",
+          "edition_seasons": [
+            2018,
+            2019,
+            2020,
+            2021,
+            2022,
+            2023,
+            2024,
+            2025
+          ]
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "international", "value": null, "reason": "league phase plus finals; no fixed pair schedule"},
+      "expected_units": {
+        "type": "international",
+        "value": null,
+        "reason": "league phase plus finals; no fixed pair schedule"
+      },
       "evidence": [
-        {"source": "uefa_nations_league_2026_27", "statement": "The Nations League is staged in two-year editions; the 2026/27 edition's league phase runs 24 September - 17 November 2026."}
+        {
+          "source": "uefa_nations_league_2026_27",
+          "statement": "The Nations League is staged in two-year editions; the 2026/27 edition's league phase runs 24 September - 17 November 2026."
+        }
       ],
       "hypotheses": [],
       "known_blockers": [
-        "Earlier editions have no documented window in this repository, so their lifecycle fails closed with UNKNOWN instead of being assumed.",
-        "Only the Sofascore route is configured for this competition."
+        "Edition-specific participant and completion evidence may be unavailable; OpenFootball results do not independently prove tournament completion.",
+        "Sofascore is diagnostic-only and is not attempted automatically."
       ]
     },
     {
       "league_id": 1,
       "name": "FIFA World Cup",
-      "aliases": ["world cup", "fifa world cup"],
+      "aliases": [
+        "world cup",
+        "fifa world cup"
+      ],
       "governing_body": "FIFA",
       "country": null,
       "region": "International",
@@ -422,7 +1261,11 @@
       "edition_rule": {
         "type": "quadrennial_editions",
         "label": "calendar_year",
-        "editions": [2018, 2022, 2026],
+        "editions": [
+          2018,
+          2022,
+          2026
+        ],
         "overrides": {
           "2018": {
             "start": "2018-06-14T00:00:00+00:00",
@@ -442,14 +1285,63 @@
         }
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": false, "code": null, "reason": "no Football-Data.co.uk CSV division exists for this competition"},
-        "soccerdata_fbref": {"supported": true, "code": "INT-World Cup"},
-        "soccerdata_match_history": {"supported": false, "code": null, "reason": "not present in the configured MatchHistory mapping"},
-        "soccerdata_sofascore": {"supported": true, "code": "INT-World Cup"}
+        "football_data_csv": {
+          "supported": false,
+          "code": null,
+          "reason": "no Football-Data.co.uk CSV division exists for this competition"
+        },
+        "soccerdata_fbref": {
+          "supported": true,
+          "code": "INT-World Cup"
+        },
+        "soccerdata_match_history": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in the configured MatchHistory mapping"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "INT-World Cup",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball JSON competition mapping"
+        },
+        "openfootball_txt": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball TXT competition mapping"
+        },
+        "openfootball_internationals": {
+          "supported": true,
+          "code": "fifa_world_cup",
+          "edition_seasons": [
+            2022
+          ]
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "tournament", "value": null, "per_edition": {"2018": 64, "2022": 64}, "reason": "2026 expands to 104 matches; the total is not asserted until the edition's own records document it"},
+      "expected_units": {
+        "type": "tournament",
+        "value": null,
+        "per_edition": {
+          "2018": 64,
+          "2022": 64
+        },
+        "reason": "2026 expands to 104 matches; the total is not asserted until the edition's own records document it"
+      },
       "evidence": [
-        {"source": "fifa_wc_2022", "statement": "The 2022 World Cup was played from 20 November to 18 December 2022 with 32 teams and 64 matches."}
+        {
+          "source": "fifa_wc_2022",
+          "statement": "The 2022 World Cup was played from 20 November to 18 December 2022 with 32 teams and 64 matches."
+        }
       ],
       "hypotheses": [],
       "known_blockers": []
@@ -457,7 +1349,12 @@
     {
       "league_id": 4,
       "name": "UEFA European Championship",
-      "aliases": ["euro championship", "uefa euro championship", "european championship", "euros"],
+      "aliases": [
+        "euro championship",
+        "uefa euro championship",
+        "european championship",
+        "euros"
+      ],
       "governing_body": "UEFA",
       "country": null,
       "region": "Europe",
@@ -466,7 +1363,10 @@
       "edition_rule": {
         "type": "quadrennial_editions",
         "label": "calendar_year",
-        "editions": [2020, 2024],
+        "editions": [
+          2020,
+          2024
+        ],
         "overrides": {
           "2020": {
             "start": "2021-06-11T00:00:00+00:00",
@@ -481,14 +1381,66 @@
         }
       },
       "provider_coverage": {
-        "football_data_csv": {"supported": false, "code": null, "reason": "no Football-Data.co.uk CSV division exists for this competition"},
-        "soccerdata_fbref": {"supported": true, "code": "INT-European Championship"},
-        "soccerdata_match_history": {"supported": false, "code": null, "reason": "not present in the configured MatchHistory mapping"},
-        "soccerdata_sofascore": {"supported": true, "code": "INT-European Championship"}
+        "football_data_csv": {
+          "supported": false,
+          "code": null,
+          "reason": "no Football-Data.co.uk CSV division exists for this competition"
+        },
+        "soccerdata_fbref": {
+          "supported": true,
+          "code": "INT-European Championship"
+        },
+        "soccerdata_match_history": {
+          "supported": false,
+          "code": null,
+          "reason": "not present in the configured MatchHistory mapping"
+        },
+        "soccerdata_sofascore": {
+          "supported": false,
+          "code": "INT-European Championship",
+          "diagnostic_only": true,
+          "reason": "removed from automatic historical acquisition; diagnostic health checks only"
+        },
+        "openfootball_json": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball JSON competition mapping"
+        },
+        "openfootball_txt": {
+          "supported": false,
+          "code": null,
+          "reason": "no verified OpenFootball TXT competition mapping"
+        },
+        "openfootball_internationals": {
+          "supported": true,
+          "code": "uefa_euro",
+          "edition_seasons": [
+            2020,
+            2024
+          ],
+          "source_year_overrides": {
+            "2020": 2021
+          }
+        },
+        "openligadb": {
+          "supported": false,
+          "code": null,
+          "reason": "not an OpenLigaDB competition mapping"
+        }
       },
-      "expected_units": {"type": "tournament", "value": null, "per_edition": {"2020": 51, "2024": 51}},
+      "expected_units": {
+        "type": "tournament",
+        "value": null,
+        "per_edition": {
+          "2020": 51,
+          "2024": 51
+        }
+      },
       "evidence": [
-        {"source": "uefa_euro_2020", "statement": "EURO 2020 was played in 2021, so the season labelled 2020 is judged against its actual calendar year."}
+        {
+          "source": "uefa_euro_2020",
+          "statement": "EURO 2020 was played in 2021, so the season labelled 2020 is judged against its actual calendar year."
+        }
       ],
       "hypotheses": [],
       "known_blockers": []

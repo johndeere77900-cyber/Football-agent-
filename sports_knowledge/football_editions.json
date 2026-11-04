@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "sport": "football",
-  "curated_at": "2026-11-02T00:00:00+00:00",
+  "curated_at": "2026-11-03T00:00:00+00:00",
   "description": "Verified edition-level participant universes, formats, stages and promotion/relegation context. Missing editions are intentionally absent; absence means UNKNOWN, not an empty roster.",
   "sources": {
     "premier_league_tables": {
@@ -69,6 +69,84 @@
       "url": "https://www.uefa.com/euro2024/",
       "retrieved_at": "2026-11-02T00:00:00+00:00",
       "confidence": "high"
+    },
+    "fifa_wc26_qualified": {
+      "name": "FIFA — Qualified teams for the FIFA World Cup 2026",
+      "url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "fifa_wc26_playoff": {
+      "name": "FIFA — World Cup 2026 Play-Off Tournament",
+      "url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/qualifiers/play-off-tournament",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "uefa_euro24_qualifying": {
+      "name": "UEFA — EURO 2024 qualifying",
+      "url": "https://www.uefa.com/euro2024/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "uefa_nations_league": {
+      "name": "UEFA — Nations League format and EURO play-off access",
+      "url": "https://www.uefa.com/uefanationsleague/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "uefa_ucl_format": {
+      "name": "UEFA — Champions League league phase format",
+      "url": "https://www.uefa.com/uefachampionsleague/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "uefa_uel_format": {
+      "name": "UEFA — Europa League league phase format",
+      "url": "https://www.uefa.com/uefaeuropaleague/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "pl_2024_transition": {
+      "name": "Premier League — 2024/25 season club changes",
+      "url": "https://www.premierleague.com/en/news/4033069",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "laliga_2024_transition": {
+      "name": "LALIGA — promoted clubs for 2024/25",
+      "url": "https://www.laliga.com/en-US/news/rcd-espanyol-cd-leganes-and-real-valladolid-get-ready-for-the-step-up-to-laliga-ea-sports",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "seriea_2024_transition": {
+      "name": "Reuters — Parma and Como promoted to Serie A",
+      "url": "https://www.reuters.com/sports/soccer/parma-como-promoted-serie-2024-05-10/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "bundesliga_2024_transition": {
+      "name": "DW — St. Pauli follow Holstein Kiel in promotion to Bundesliga",
+      "url": "https://www.dw.com/en/st-pauli-follow-holstein-kiel-in-promotion-to-bundesliga/a-69055742",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "ligue1_2024_transition": {
+      "name": "Ligue 1 — Angers' return and the 2024/25 promoted clubs",
+      "url": "https://ligue1.com/en/articles/l1_article_543-angers-road-back-to-ligue-1-after-one-season-absence",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "eredivisie_2024_transition": {
+      "name": "Eredivisie — Willem II returns to the Eredivisie",
+      "url": "https://eredivisie.com/news/willem-ii-returns-to-the-eredivisie-after-two-seasons/",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
+    },
+    "primeira_liga_2024_transition": {
+      "name": "2024-25 Primeira Liga — promoted and relegated clubs",
+      "url": "https://en.wikipedia.org/wiki/2024%E2%80%9325_Primeira_Liga",
+      "retrieved_at": "2026-11-03",
+      "confidence": "provisional"
     }
   },
   "editions": {
@@ -337,6 +415,47 @@
           "expected_fixture_count": 380,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://www.premierleague.com/en/news/4033069",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Premier League 2024/25 club changes (promoted Leicester City, Ipswich Town, Southampton; relegated Burnley, Luton Town, Sheffield United)."
+          },
+          "division_teams": 20,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 3,
+          "relegation_playoff_places": 0,
+          "promoted": [
+            "Leicester City",
+            "Ipswich Town",
+            "Southampton"
+          ],
+          "promoted_routes": {
+            "Leicester City": "automatic",
+            "Ipswich Town": "automatic",
+            "Southampton": "playoff"
+          },
+          "relegated": [
+            "Burnley",
+            "Luton Town",
+            "Sheffield United"
+          ],
+          "promotion_playoff": {
+            "competition": "EFL Championship play-offs",
+            "winner": "Southampton",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "status": "NOT_APPLICABLE"
+          },
+          "lower_division": "EFL Championship",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       },
       "2019": {
@@ -1137,7 +1256,10 @@
         "fixture_total": 380,
         "participants": [
           {
-            "name": "Alavés"
+            "name": "Alavés",
+            "aliases": [
+              "Deportivo Alavés"
+            ]
           },
           {
             "name": "Athletic Bilbao",
@@ -1151,18 +1273,23 @@
             "name": "Atlético Madrid",
             "aliases": [
               "Atletico de Madrid",
-              "Ath Madrid"
+              "Ath Madrid",
+              "Club Atlético de Madrid"
             ],
             "canonical_id": "football_team_atletico_madrid"
           },
           {
-            "name": "Barcelona"
+            "name": "Barcelona",
+            "aliases": [
+              "FC Barcelona"
+            ]
           },
           {
             "name": "Celta Vigo",
             "aliases": [
               "Celta de Vigo",
-              "Celta"
+              "Celta",
+              "RC Celta de Vigo"
             ],
             "canonical_id": "football_team_celta_vigo"
           },
@@ -1170,57 +1297,96 @@
             "name": "Espanyol",
             "aliases": [
               "Espanyol de Barcelona",
-              "Espanol"
+              "Espanol",
+              "RCD Espanyol de Barcelona"
             ]
           },
           {
-            "name": "Getafe"
+            "name": "Getafe",
+            "aliases": [
+              "Getafe CF"
+            ]
           },
           {
-            "name": "Girona"
+            "name": "Girona",
+            "aliases": [
+              "Girona FC"
+            ]
           },
           {
-            "name": "Las Palmas"
+            "name": "Las Palmas",
+            "aliases": [
+              "UD Las Palmas"
+            ]
           },
           {
-            "name": "Leganés"
+            "name": "Leganés",
+            "aliases": [
+              "CD Leganés"
+            ]
           },
           {
-            "name": "Mallorca"
+            "name": "Mallorca",
+            "aliases": [
+              "RCD Mallorca"
+            ]
           },
           {
-            "name": "Osasuna"
+            "name": "Osasuna",
+            "aliases": [
+              "CA Osasuna"
+            ]
           },
           {
-            "name": "Rayo Vallecano"
+            "name": "Rayo Vallecano",
+            "aliases": [
+              "Rayo Vallecano de Madrid"
+            ]
           },
           {
             "name": "Real Betis",
             "aliases": [
-              "Betis"
+              "Betis",
+              "Real Betis Balompié"
             ],
             "canonical_id": "football_team_real_betis"
           },
           {
-            "name": "Real Madrid"
+            "name": "Real Madrid",
+            "aliases": [
+              "Real Madrid CF"
+            ]
           },
           {
             "name": "Real Sociedad",
             "aliases": [
-              "Sociedad"
+              "Sociedad",
+              "Real Sociedad de Fútbol"
             ]
           },
           {
-            "name": "Sevilla"
+            "name": "Sevilla",
+            "aliases": [
+              "Sevilla FC"
+            ]
           },
           {
-            "name": "Valencia"
+            "name": "Valencia",
+            "aliases": [
+              "Valencia CF"
+            ]
           },
           {
-            "name": "Valladolid"
+            "name": "Valladolid",
+            "aliases": [
+              "Real Valladolid CF"
+            ]
           },
           {
-            "name": "Villarreal"
+            "name": "Villarreal",
+            "aliases": [
+              "Villarreal CF"
+            ]
           }
         ],
         "participant_evidence": {
@@ -1243,6 +1409,47 @@
           "expected_fixture_count": 380,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://www.laliga.com/en-US/news/rcd-espanyol-cd-leganes-and-real-valladolid-get-ready-for-the-step-up-to-laliga-ea-sports",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "LALIGA 2024/25 club changes (promoted Leganés, Real Valladolid, Espanyol; relegated Cádiz, Almería, Granada)."
+          },
+          "division_teams": 20,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 3,
+          "relegation_playoff_places": 0,
+          "promoted": [
+            "Leganés",
+            "Real Valladolid",
+            "Espanyol"
+          ],
+          "promoted_routes": {
+            "Leganés": "automatic",
+            "Real Valladolid": "automatic",
+            "Espanyol": "playoff"
+          },
+          "relegated": [
+            "Cádiz",
+            "Almería",
+            "Granada"
+          ],
+          "promotion_playoff": {
+            "competition": "LALIGA HYPERMOTION play-offs",
+            "winner": "Espanyol",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "status": "NOT_APPLICABLE"
+          },
+          "lower_division": "LALIGA HYPERMOTION",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       },
       "2019": {
@@ -1398,7 +1605,7 @@
             "aliases": [
               "Verona"
             ],
-            "canonical_id": "football_team_hellas_verona"
+            "canonical_id": "football_team_verona"
           },
           {
             "name": "Inter Milan",
@@ -1480,49 +1687,81 @@
         "fixture_total": 380,
         "participants": [
           {
-            "name": "Atalanta"
+            "name": "Atalanta",
+            "aliases": [
+              "Atalanta BC"
+            ]
           },
           {
-            "name": "Bologna"
+            "name": "Bologna",
+            "aliases": [
+              "Bologna FC 1909"
+            ]
           },
           {
-            "name": "Cagliari"
+            "name": "Cagliari",
+            "aliases": [
+              "Cagliari Calcio"
+            ]
           },
           {
-            "name": "Como"
+            "name": "Como",
+            "aliases": [
+              "Como 1907"
+            ]
           },
           {
-            "name": "Empoli"
+            "name": "Empoli",
+            "aliases": [
+              "Empoli FC"
+            ]
           },
           {
-            "name": "Fiorentina"
+            "name": "Fiorentina",
+            "aliases": [
+              "ACF Fiorentina"
+            ]
           },
           {
-            "name": "Genoa"
+            "name": "Genoa",
+            "aliases": [
+              "Genoa CFC"
+            ]
           },
           {
             "name": "Hellas Verona",
             "aliases": [
-              "Verona"
+              "Verona",
+              "Hellas Verona FC"
             ],
-            "canonical_id": "football_team_hellas_verona"
+            "canonical_id": "football_team_verona"
           },
           {
             "name": "Inter Milan",
             "aliases": [
               "Inter",
-              "Internazionale"
+              "Internazionale",
+              "FC Internazionale Milano"
             ],
             "canonical_id": "football_team_inter_milan"
           },
           {
-            "name": "Juventus"
+            "name": "Juventus",
+            "aliases": [
+              "Juventus FC"
+            ]
           },
           {
-            "name": "Lazio"
+            "name": "Lazio",
+            "aliases": [
+              "SS Lazio"
+            ]
           },
           {
-            "name": "Lecce"
+            "name": "Lecce",
+            "aliases": [
+              "US Lecce"
+            ]
           },
           {
             "name": "AC Milan",
@@ -1532,25 +1771,46 @@
             "canonical_id": "football_team_ac_milan"
           },
           {
-            "name": "Monza"
+            "name": "Monza",
+            "aliases": [
+              "AC Monza"
+            ]
           },
           {
-            "name": "Napoli"
+            "name": "Napoli",
+            "aliases": [
+              "SSC Napoli"
+            ]
           },
           {
-            "name": "Parma"
+            "name": "Parma",
+            "aliases": [
+              "Parma Calcio 1913"
+            ]
           },
           {
-            "name": "Roma"
+            "name": "Roma",
+            "aliases": [
+              "AS Roma"
+            ]
           },
           {
-            "name": "Torino"
+            "name": "Torino",
+            "aliases": [
+              "Torino FC"
+            ]
           },
           {
-            "name": "Udinese"
+            "name": "Udinese",
+            "aliases": [
+              "Udinese Calcio"
+            ]
           },
           {
-            "name": "Venezia"
+            "name": "Venezia",
+            "aliases": [
+              "Venezia FC"
+            ]
           }
         ],
         "participant_evidence": {
@@ -1573,6 +1833,47 @@
           "expected_fixture_count": 380,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://www.reuters.com/sports/soccer/parma-como-promoted-serie-2024-05-10/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Serie A 2024/25 club changes (promoted Parma, Como, Venezia; relegated Frosinone, Sassuolo, Salernitana)."
+          },
+          "division_teams": 20,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 3,
+          "relegation_playoff_places": 0,
+          "promoted": [
+            "Parma",
+            "Como",
+            "Venezia"
+          ],
+          "promoted_routes": {
+            "Parma": "automatic",
+            "Como": "automatic",
+            "Venezia": "playoff"
+          },
+          "relegated": [
+            "Frosinone",
+            "Sassuolo",
+            "Salernitana"
+          ],
+          "promotion_playoff": {
+            "competition": "Serie B play-offs",
+            "winner": "Venezia",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "status": "NOT_APPLICABLE"
+          },
+          "lower_division": "Serie B",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       }
     },
@@ -1701,12 +2002,16 @@
         "fixture_total": 306,
         "participants": [
           {
-            "name": "Augsburg"
+            "name": "Augsburg",
+            "aliases": [
+              "FC Augsburg"
+            ]
           },
           {
             "name": "Bayer Leverkusen",
             "aliases": [
-              "Leverkusen"
+              "Leverkusen",
+              "Bayer 04 Leverkusen"
             ],
             "canonical_id": "football_team_bayer_leverkusen"
           },
@@ -1719,7 +2024,11 @@
             "canonical_id": "football_team_bayern_munich"
           },
           {
-            "name": "Bochum"
+            "name": "Bochum",
+            "aliases": [
+              "VfL Bochum 1848",
+              "VfL Bochum"
+            ]
           },
           {
             "name": "Borussia Dortmund",
@@ -1743,37 +2052,65 @@
             "canonical_id": "football_team_eintracht_frankfurt"
           },
           {
-            "name": "Freiburg"
+            "name": "Freiburg",
+            "aliases": [
+              "SC Freiburg"
+            ]
           },
           {
-            "name": "Heidenheim"
+            "name": "Heidenheim",
+            "aliases": [
+              "1. FC Heidenheim 1846"
+            ]
           },
           {
-            "name": "Hoffenheim"
+            "name": "Hoffenheim",
+            "aliases": [
+              "TSG 1899 Hoffenheim",
+              "TSG Hoffenheim"
+            ]
           },
           {
             "name": "Holstein Kiel"
           },
           {
-            "name": "Mainz"
+            "name": "Mainz",
+            "aliases": [
+              "1. FSV Mainz 05"
+            ]
           },
           {
             "name": "RB Leipzig"
           },
           {
-            "name": "St. Pauli"
+            "name": "St. Pauli",
+            "aliases": [
+              "FC St. Pauli 1910"
+            ]
           },
           {
-            "name": "Stuttgart"
+            "name": "Stuttgart",
+            "aliases": [
+              "VfB Stuttgart"
+            ]
           },
           {
-            "name": "Union Berlin"
+            "name": "Union Berlin",
+            "aliases": [
+              "1. FC Union Berlin"
+            ]
           },
           {
-            "name": "Werder Bremen"
+            "name": "Werder Bremen",
+            "aliases": [
+              "SV Werder Bremen"
+            ]
           },
           {
-            "name": "Wolfsburg"
+            "name": "Wolfsburg",
+            "aliases": [
+              "VfL Wolfsburg"
+            ]
           }
         ],
         "participant_evidence": {
@@ -1794,6 +2131,54 @@
           "expected_fixture_count": 306,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://www.dw.com/en/st-pauli-follow-holstein-kiel-in-promotion-to-bundesliga/a-69055742",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Bundesliga 2024/25 club changes (promoted St. Pauli, Holstein Kiel; relegated Cologne, Darmstadt; Bochum retained via the relegation play-off)."
+          },
+          "division_teams": 18,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 2,
+          "relegation_playoff_places": 1,
+          "promoted": [
+            "St. Pauli",
+            "Holstein Kiel"
+          ],
+          "promoted_routes": {
+            "St. Pauli": "automatic",
+            "Holstein Kiel": "automatic"
+          },
+          "relegated": [
+            "Cologne",
+            "Darmstadt"
+          ],
+          "retained_via_playoff": [
+            "Bochum"
+          ],
+          "promotion_playoff": {
+            "competition": "2. Bundesliga promotion play-off",
+            "winner": null,
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "competition": "Bundesliga relegation play-off",
+            "participants": [
+              "Bochum",
+              "Fortuna Düsseldorf"
+            ],
+            "outcome": "Bochum retained its Bundesliga place",
+            "status": "VERIFIED",
+            "evidence_note": "Bochum is listed in the verified 2024/25 Bundesliga participant roster."
+          },
+          "lower_division": "2. Bundesliga",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       }
     },
@@ -1912,22 +2297,40 @@
         "fixture_total": 306,
         "participants": [
           {
-            "name": "Angers"
+            "name": "Angers",
+            "aliases": [
+              "Angers SCO"
+            ]
           },
           {
-            "name": "Auxerre"
+            "name": "Auxerre",
+            "aliases": [
+              "AJ Auxerre"
+            ]
           },
           {
-            "name": "Brest"
+            "name": "Brest",
+            "aliases": [
+              "Stade Brestois 29"
+            ]
           },
           {
-            "name": "Le Havre"
+            "name": "Le Havre",
+            "aliases": [
+              "Le Havre AC"
+            ]
           },
           {
-            "name": "Lens"
+            "name": "Lens",
+            "aliases": [
+              "Racing Club de Lens"
+            ]
           },
           {
-            "name": "Lille"
+            "name": "Lille",
+            "aliases": [
+              "Lille OSC"
+            ]
           },
           {
             "name": "Lyon",
@@ -1945,45 +2348,69 @@
           {
             "name": "Monaco",
             "aliases": [
-              "AS Monaco"
+              "AS Monaco",
+              "AS Monaco FC"
             ]
           },
           {
-            "name": "Montpellier"
+            "name": "Montpellier",
+            "aliases": [
+              "Montpellier HSC"
+            ]
           },
           {
-            "name": "Nantes"
+            "name": "Nantes",
+            "aliases": [
+              "FC Nantes"
+            ]
           },
           {
-            "name": "Nice"
+            "name": "Nice",
+            "aliases": [
+              "OGC Nice"
+            ]
           },
           {
             "name": "Paris Saint-Germain",
             "aliases": [
               "Paris SG",
-              "PSG"
+              "PSG",
+              "Paris Saint-Germain FC"
             ],
             "canonical_id": "football_team_paris_saint_germain"
           },
           {
-            "name": "Reims"
+            "name": "Reims",
+            "aliases": [
+              "Stade de Reims"
+            ]
           },
           {
-            "name": "Rennes"
+            "name": "Rennes",
+            "aliases": [
+              "Stade Rennais FC 1901"
+            ]
           },
           {
             "name": "Saint-Étienne",
             "aliases": [
               "St Etienne",
-              "Saint Etienne"
+              "Saint Etienne",
+              "AS Saint-Étienne"
             ],
             "canonical_id": "football_team_st_etienne"
           },
           {
-            "name": "Strasbourg"
+            "name": "Strasbourg",
+            "aliases": [
+              "RC Strasbourg Alsace"
+            ]
           },
           {
-            "name": "Toulouse"
+            "name": "Toulouse",
+            "aliases": [
+              "Toulouse FC"
+            ]
           }
         ],
         "participant_evidence": {
@@ -2006,7 +2433,156 @@
           "expected_fixture_count": 306,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://ligue1.com/en/articles/l1_article_543-angers-road-back-to-ligue-1-after-one-season-absence",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Ligue 1 2024/25 club changes (promoted Auxerre, Angers, Saint-Étienne; relegated Metz, Lorient, Clermont)."
+          },
+          "division_teams": 18,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 3,
+          "relegation_playoff_places": 0,
+          "promoted": [
+            "Auxerre",
+            "Angers",
+            "Saint-Étienne"
+          ],
+          "promoted_routes": {
+            "Auxerre": "automatic",
+            "Angers": "automatic",
+            "Saint-Étienne": "playoff"
+          },
+          "relegated": [
+            "Metz",
+            "Lorient",
+            "Clermont"
+          ],
+          "promotion_playoff": {
+            "competition": "Ligue 2 play-offs / barrages",
+            "winner": "Saint-Étienne",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "status": "NOT_APPLICABLE"
+          },
+          "lower_division": "Ligue 2",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
+      },
+      "2019": {
+        "format_details": "20 clubs; season terminated after matchday 28; 279 of 380 matches played",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season (curtailed)",
+            "fixture_count": 279
+          }
+        ],
+        "fixture_total": 279,
+        "participants": [
+          {
+            "name": "Paris Saint-Germain",
+            "canonical_id": "football_team_paris_saint_germain"
+          },
+          {
+            "name": "Olympique Marseille",
+            "canonical_id": "football_team_marseille"
+          },
+          {
+            "name": "Stade Rennais",
+            "canonical_id": "football_team_rennes"
+          },
+          {
+            "name": "Lille OSC",
+            "canonical_id": "football_team_lille"
+          },
+          {
+            "name": "OGC Nice",
+            "canonical_id": "football_team_nice"
+          },
+          {
+            "name": "Stade de Reims",
+            "canonical_id": "football_team_reims"
+          },
+          {
+            "name": "Olympique Lyonnais",
+            "canonical_id": "football_team_lyon"
+          },
+          {
+            "name": "Montpellier HSC",
+            "canonical_id": "football_team_montpellier"
+          },
+          {
+            "name": "AS Monaco",
+            "canonical_id": "football_team_monaco"
+          },
+          {
+            "name": "RC Strasbourg",
+            "canonical_id": "football_team_strasbourg"
+          },
+          {
+            "name": "Angers SCO",
+            "canonical_id": "football_team_angers"
+          },
+          {
+            "name": "Girondins Bordeaux",
+            "canonical_id": "football_team_bordeaux"
+          },
+          {
+            "name": "FC Nantes",
+            "canonical_id": "football_team_nantes"
+          },
+          {
+            "name": "Stade Brestois 29",
+            "canonical_id": "football_team_brest"
+          },
+          {
+            "name": "FC Metz",
+            "canonical_id": "football_team_metz"
+          },
+          {
+            "name": "Dijon FCO",
+            "canonical_id": "football_team_dijon"
+          },
+          {
+            "name": "AS Saint-Étienne",
+            "canonical_id": "football_team_st_etienne"
+          },
+          {
+            "name": "Nîmes Olympique",
+            "canonical_id": "football_team_nimes"
+          },
+          {
+            "name": "Amiens SC",
+            "canonical_id": "football_team_amiens"
+          },
+          {
+            "name": "Toulouse FC",
+            "canonical_id": "football_team_toulouse"
+          }
+        ],
+        "participant_evidence": {
+          "source": "ligue1_standings",
+          "statement": "Final 2019-20 Ligue 1 club list from the official standings; the season was terminated after matchday 28 with 279 matches played."
+        },
+        "promoted": [],
+        "relegated": [],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 20,
+          "expected_fixture_count": 279,
+          "scope": "all_played_regular_season_matches",
+          "requires_all_stages": true
+        },
+        "edition_notes": "COVID-19 curtailed season. LFP terminated the season on 2020-04-28 (finalised 2020-04-30).",
+        "curtailed": true
       }
     },
     "88": {
@@ -2056,7 +2632,8 @@
             "name": "Heerenveen"
           },
           {
-            "name": "Heracles Almelo"
+            "name": "Heracles Almelo",
+            "canonical_id": "football_team_heracles"
           },
           {
             "name": "NEC Nijmegen",
@@ -2140,10 +2717,16 @@
         "fixture_total": 306,
         "participants": [
           {
-            "name": "Ajax"
+            "name": "Ajax",
+            "aliases": [
+              "AFC Ajax"
+            ]
           },
           {
-            "name": "Almere City"
+            "name": "Almere City",
+            "aliases": [
+              "Almere City FC"
+            ]
           },
           {
             "name": "AZ Alkmaar",
@@ -2153,7 +2736,10 @@
             "canonical_id": "football_team_az_alkmaar"
           },
           {
-            "name": "Feyenoord"
+            "name": "Feyenoord",
+            "aliases": [
+              "Feyenoord Rotterdam"
+            ]
           },
           {
             "name": "Fortuna Sittard",
@@ -2168,13 +2754,20 @@
             ]
           },
           {
-            "name": "Groningen"
+            "name": "Groningen",
+            "aliases": [
+              "FC Groningen"
+            ]
           },
           {
-            "name": "Heerenveen"
+            "name": "Heerenveen",
+            "aliases": [
+              "SC Heerenveen"
+            ]
           },
           {
-            "name": "Heracles Almelo"
+            "name": "Heracles Almelo",
+            "canonical_id": "football_team_heracles"
           },
           {
             "name": "NAC Breda"
@@ -2183,7 +2776,8 @@
             "name": "NEC Nijmegen",
             "aliases": [
               "Nijmegen",
-              "N.E.C."
+              "N.E.C.",
+              "NEC"
             ],
             "canonical_id": "football_team_nijmegen"
           },
@@ -2211,13 +2805,22 @@
             ]
           },
           {
-            "name": "Twente"
+            "name": "Twente",
+            "aliases": [
+              "FC Twente '65"
+            ]
           },
           {
-            "name": "Utrecht"
+            "name": "Utrecht",
+            "aliases": [
+              "FC Utrecht"
+            ]
           },
           {
-            "name": "Willem II"
+            "name": "Willem II",
+            "aliases": [
+              "Willem II Tilburg"
+            ]
           }
         ],
         "participant_evidence": {
@@ -2240,7 +2843,150 @@
           "expected_fixture_count": 306,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://eredivisie.com/news/willem-ii-returns-to-the-eredivisie-after-two-seasons/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Eredivisie 2024/25 club changes (promoted Willem II, Groningen, NAC Breda; relegated Vitesse, Volendam, Excelsior)."
+          },
+          "division_teams": 18,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 2,
+          "relegation_playoff_places": 1,
+          "promoted": [
+            "Willem II",
+            "Groningen",
+            "NAC Breda"
+          ],
+          "promoted_routes": {
+            "Willem II": "automatic",
+            "Groningen": "automatic",
+            "NAC Breda": "playoff"
+          },
+          "relegated": [
+            "Vitesse",
+            "Volendam",
+            "Excelsior"
+          ],
+          "promotion_playoff": {
+            "competition": "Eredivisie promotion/relegation play-offs",
+            "winner": "NAC Breda",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "competition": "Eredivisie promotion/relegation play-offs",
+            "loser": "Excelsior",
+            "status": "VERIFIED"
+          },
+          "lower_division": "Eerste Divisie",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
+      },
+      "2019": {
+        "format_details": "18 clubs; season abandoned after matchday 26; 232 of 306 matches played",
+        "stages": [
+          {
+            "id": "regular_season",
+            "name": "Regular season (abandoned)",
+            "fixture_count": 232
+          }
+        ],
+        "fixture_total": 232,
+        "participants": [
+          {
+            "name": "AFC Ajax",
+            "canonical_id": "football_team_ajax"
+          },
+          {
+            "name": "AZ Alkmaar",
+            "canonical_id": "football_team_az_alkmaar"
+          },
+          {
+            "name": "Feyenoord",
+            "canonical_id": "football_team_feyenoord"
+          },
+          {
+            "name": "PSV Eindhoven",
+            "canonical_id": "football_team_psv"
+          },
+          {
+            "name": "Willem II",
+            "canonical_id": "football_team_willem_ii"
+          },
+          {
+            "name": "FC Utrecht",
+            "canonical_id": "football_team_utrecht"
+          },
+          {
+            "name": "Vitesse",
+            "canonical_id": "football_team_vitesse"
+          },
+          {
+            "name": "Heracles Almelo",
+            "canonical_id": "football_team_heracles"
+          },
+          {
+            "name": "FC Groningen",
+            "canonical_id": "football_team_groningen"
+          },
+          {
+            "name": "sc Heerenveen",
+            "canonical_id": "football_team_heerenveen"
+          },
+          {
+            "name": "Sparta Rotterdam",
+            "canonical_id": "football_team_sparta_rotterdam"
+          },
+          {
+            "name": "FC Twente",
+            "canonical_id": "football_team_twente"
+          },
+          {
+            "name": "FC Emmen",
+            "canonical_id": "football_team_emmen"
+          },
+          {
+            "name": "VVV-Venlo",
+            "canonical_id": "football_team_vvv_venlo"
+          },
+          {
+            "name": "Fortuna Sittard",
+            "canonical_id": "football_team_fortuna_sittard"
+          },
+          {
+            "name": "RKC Waalwijk",
+            "canonical_id": "football_team_waalwijk"
+          },
+          {
+            "name": "PEC Zwolle",
+            "canonical_id": "football_team_zwolle"
+          },
+          {
+            "name": "ADO Den Haag",
+            "canonical_id": "football_team_den_haag"
+          }
+        ],
+        "participant_evidence": {
+          "source": "eredivisie_standings",
+          "statement": "Final 2019-20 Eredivisie club list from the official standings; the KNVB abandoned the season on 2020-04-24 with 232 matches played."
+        },
+        "promoted": [],
+        "relegated": [],
+        "renames": [],
+        "coverage_requirements": {
+          "expected_participant_count": 18,
+          "expected_fixture_count": 232,
+          "scope": "all_played_regular_season_matches",
+          "requires_all_stages": true
+        },
+        "edition_notes": "COVID-19 abandoned season. No champion was awarded; 232 of 306 matches were played.",
+        "curtailed": true
       }
     },
     "94": {
@@ -2358,62 +3104,106 @@
         "fixture_total": 306,
         "participants": [
           {
-            "name": "Arouca"
+            "name": "Arouca",
+            "aliases": [
+              "FC Arouca"
+            ]
           },
           {
             "name": "AVS"
           },
           {
-            "name": "Benfica"
+            "name": "Benfica",
+            "aliases": [
+              "Sport Lisboa e Benfica"
+            ]
           },
           {
-            "name": "Boavista"
+            "name": "Boavista",
+            "aliases": [
+              "Boavista FC"
+            ]
           },
           {
             "name": "Braga",
             "aliases": [
-              "Sp Braga"
+              "Sp Braga",
+              "Sporting Clube de Braga"
             ],
             "canonical_id": "football_team_sp_braga"
           },
           {
-            "name": "Casa Pia"
+            "name": "Casa Pia",
+            "aliases": [
+              "Casa Pia AC"
+            ]
           },
           {
-            "name": "Estoril"
+            "name": "Estoril",
+            "aliases": [
+              "GD Estoril Praia"
+            ]
           },
           {
-            "name": "Estrela Amadora"
+            "name": "Estrela Amadora",
+            "aliases": [
+              "CF Estrela da Amadora"
+            ]
           },
           {
-            "name": "Famalicão"
+            "name": "Famalicão",
+            "aliases": [
+              "FC Famalicão"
+            ]
           },
           {
-            "name": "Farense"
+            "name": "Farense",
+            "aliases": [
+              "SC Farense"
+            ]
           },
           {
-            "name": "Gil Vicente"
+            "name": "Gil Vicente",
+            "aliases": [
+              "Gil Vicente FC"
+            ]
           },
           {
-            "name": "Moreirense"
+            "name": "Moreirense",
+            "aliases": [
+              "Moreirense FC"
+            ]
           },
           {
-            "name": "Nacional"
+            "name": "Nacional",
+            "aliases": [
+              "CD Nacional"
+            ]
           },
           {
-            "name": "Porto"
+            "name": "Porto",
+            "aliases": [
+              "FC Porto"
+            ]
           },
           {
-            "name": "Rio Ave"
+            "name": "Rio Ave",
+            "aliases": [
+              "Rio Ave FC"
+            ]
           },
           {
-            "name": "Santa Clara"
+            "name": "Santa Clara",
+            "aliases": [
+              "CD Santa Clara"
+            ]
           },
           {
             "name": "Sporting CP",
             "aliases": [
               "Sporting Lisbon",
-              "Sp Lisbon"
+              "Sp Lisbon",
+              "Sporting Clube de Portugal"
             ],
             "canonical_id": "football_team_sporting_cp"
           },
@@ -2421,7 +3211,8 @@
             "name": "Vitória de Guimarães",
             "aliases": [
               "Guimaraes",
-              "Vitoria de Guimaraes"
+              "Vitoria de Guimaraes",
+              "Vitória Guimarães"
             ],
             "canonical_id": "football_team_guimaraes"
           }
@@ -2442,6 +3233,49 @@
           "expected_fixture_count": 306,
           "scope": "all_regular_season_matches",
           "requires_all_stages": true
+        },
+        "promotion_relegation": {
+          "status": "VERIFIED",
+          "transition": "2023-24 -> 2024-25",
+          "published_on": "2026-11-03",
+          "evidence": {
+            "source_url": "https://en.wikipedia.org/wiki/2024%E2%80%9325_Primeira_Liga",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "Primeira Liga 2024/25 club changes (promoted Santa Clara, Nacional, AVS; relegated Vizela, Chaves, Portimonense)."
+          },
+          "division_teams": 18,
+          "automatic_promotion_places": 2,
+          "promotion_playoff_places": 1,
+          "automatic_relegation_places": 2,
+          "relegation_playoff_places": 1,
+          "promoted": [
+            "Santa Clara",
+            "Nacional",
+            "AVS"
+          ],
+          "promoted_routes": {
+            "Santa Clara": "automatic",
+            "Nacional": "automatic",
+            "AVS": "playoff"
+          },
+          "relegated": [
+            "Vizela",
+            "Chaves",
+            "Portimonense"
+          ],
+          "promotion_playoff": {
+            "competition": "Liga Portugal 2 promotion play-off",
+            "winner": "AVS",
+            "status": "VERIFIED"
+          },
+          "relegation_playoff": {
+            "competition": "Primeira Liga relegation play-off",
+            "loser": "Portimonense",
+            "status": "VERIFIED"
+          },
+          "lower_division": "Liga Portugal 2",
+          "route_status": "PROMOTED_AND_RELEGATED_CLUBS_VERIFIED; PLAY-OFF ATTRIBUTION PROVISIONAL"
         }
       }
     },
@@ -2770,6 +3604,250 @@
           "expected_fixture_count": 64,
           "scope": "all_final_tournament_matches",
           "requires_all_stages": true
+        },
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+          "scope": "2020-2022 qualification cycle",
+          "allocation_basis": "hosts_separate",
+          "finals_places": 32,
+          "direct_places": 29,
+          "playoff_places": 2,
+          "hosts_qualified": [
+            "Qatar"
+          ],
+          "confederations": {
+            "AFC": {
+              "direct_places": 4,
+              "playoff_places": 1,
+              "format": "third round: two groups of six; group winners and runners-up qualify; two third-placed teams meet in a play-off for the inter-confederation route",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "AFC allocation for the 2022 cycle (4 direct + 1 play-off; hosts Qatar qualified automatically)."
+              }
+            },
+            "CAF": {
+              "direct_places": 5,
+              "playoff_places": 0,
+              "format": "third round: five two-legged ties; winners qualify",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "CAF allocation for the 2022 cycle (5 direct places)."
+              }
+            },
+            "CONCACAF": {
+              "direct_places": 3,
+              "playoff_places": 1,
+              "format": "final round: eight-team double round robin; top three qualify, fourth enters the inter-confederation play-off",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Concacaf allocation for the 2022 cycle (3 direct + 1 play-off)."
+              }
+            },
+            "CONMEBOL": {
+              "direct_places": 4,
+              "playoff_places": 1,
+              "format": "single ten-team double round robin; top four qualify, fifth enters the inter-confederation play-off",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "CONMEBOL allocation for the 2022 cycle (4 direct + 1 play-off)."
+              }
+            },
+            "OFC": {
+              "direct_places": 0,
+              "playoff_places": 1,
+              "format": "OFC qualifying tournament; winner enters the inter-confederation play-off",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "OFC allocation for the 2022 cycle (no direct place, 1 play-off place)."
+              }
+            },
+            "UEFA": {
+              "direct_places": 13,
+              "playoff_places": 0,
+              "format": "ten groups; group winners qualify; remaining places decided by the European play-offs",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "UEFA allocation for the 2022 cycle (13 places)."
+              }
+            }
+          },
+          "inter_confederation_playoff": {
+            "places": 2,
+            "routes": [
+              "AFC play-off winner",
+              "CONMEBOL fifth place",
+              "Concacaf fourth place",
+              "OFC winner"
+            ],
+            "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN"
+          },
+          "qualified_teams": [],
+          "eliminated_teams": [],
+          "results_status": "UNKNOWN",
+          "results_note": "Per-team group tables, match results and the final qualified list for the 2022 cycle are not enumerated here; the finals roster lives on the edition participant list.",
+          "evidence": {
+            "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "FIFA 2022 World Cup qualification: confederation allocations and inter-confederation play-off structure."
+          }
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Argentina",
+          "runner_up": "France",
+          "third_place": "Croatia",
+          "fourth_place": "Morocco",
+          "final": "Argentina 3-3 France (after extra time; Argentina won 4-2 on penalties)",
+          "final_date": "2022-12-18",
+          "venue": "Lusail Stadium, Lusail",
+          "notes": "Knockout outcome of the 2022 finals; the qualification-cycle group tables remain UNKNOWN in the qualification block.",
+          "evidence": {
+            "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/qatar2022/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "confirmed",
+            "note": "FIFA match centre for the 2022 final: Argentina beat France on penalties after a 3-3 draw; Croatia finished third, Morocco fourth."
+          }
+        }
+      },
+      "2026": {
+        "format_details": "48 teams; twelve groups of four, then a round of 32, round of 16, quarter-finals, semi-finals, third-place match and final (104 matches)",
+        "participant_status": "UNKNOWN",
+        "coverage_requirements": {},
+        "stages": [],
+        "edition_notes": "Expanded 48-team finals format introduced for 2026. The 48-team finals roster is not independently verified here; no fixture total is asserted.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+          "scope": "2023-2026 qualification cycle",
+          "allocation_basis": "includes_hosts",
+          "finals_places": 48,
+          "direct_places": 46,
+          "playoff_places": 2,
+          "hosts_qualified": [
+            "Canada",
+            "Mexico",
+            "United States"
+          ],
+          "confederations": {
+            "AFC": {
+              "direct_places": 8,
+              "playoff_places": 1,
+              "format": "third round: three groups of six; top two qualify; fourth round and a fifth-round decider allocate the remaining direct place and the play-off place",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: AFC has eight direct spots plus one Play-Off Tournament place."
+              }
+            },
+            "CAF": {
+              "direct_places": 9,
+              "playoff_places": 1,
+              "format": "nine groups; group winners qualify; the best runners-up contest a CAF play-off for the inter-confederation route",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: CAF has nine direct spots plus one Play-Off Tournament place."
+              }
+            },
+            "CONCACAF": {
+              "direct_places": 6,
+              "playoff_places": 2,
+              "format": "hosts Canada, Mexico and the United States qualified automatically; three final-round group winners qualify; two further teams enter the Play-Off Tournament",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/qualifiers/play-off-tournament",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: two Concacaf teams enter the Play-Off Tournament; Concacaf holds six direct places including the three hosts."
+              }
+            },
+            "CONMEBOL": {
+              "direct_places": 6,
+              "playoff_places": 1,
+              "format": "single ten-team double round robin; top six qualify, seventh enters the Play-Off Tournament",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: CONMEBOL has six direct spots plus one Play-Off Tournament place."
+              }
+            },
+            "OFC": {
+              "direct_places": 1,
+              "playoff_places": 1,
+              "format": "OFC qualifying tournament; winner qualifies directly, runner-up enters the Play-Off Tournament",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/qualifiers/play-off-tournament",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: OFC holds one direct place and one Play-Off Tournament place."
+              }
+            },
+            "UEFA": {
+              "direct_places": 16,
+              "playoff_places": 0,
+              "format": "twelve groups; group winners qualify; the four remaining places are decided by the European play-offs among the group runners-up",
+              "evidence": {
+                "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "FIFA: UEFA holds sixteen places."
+              }
+            }
+          },
+          "inter_confederation_playoff": {
+            "places": 2,
+            "participants": 6,
+            "routes": [
+              "AFC",
+              "CAF",
+              "CONMEBOL",
+              "OFC",
+              "Concacaf (two teams)"
+            ],
+            "host_window": "March 2026",
+            "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN"
+          },
+          "qualified_teams": [],
+          "eliminated_teams": [],
+          "results_status": "UNKNOWN",
+          "results_note": "Per-confederation group tables, match results and the final 48-team list are not enumerated here; the finals participants are recorded on the edition participant list once verified.",
+          "evidence": {
+            "source_url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/world-cup-2026-who-has-qualified",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "FIFA 2026 World Cup qualification: expanded 48-team allocation, six confederation allocations and the six-team inter-confederation Play-Off Tournament for two places."
+          }
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Spain",
+          "runner_up": "Argentina",
+          "third_place": "England",
+          "fourth_place": "France",
+          "final": "Spain 1-0 Argentina (after extra time)",
+          "final_date": "2026-07-19",
+          "venue": "New York New Jersey Stadium",
+          "notes": "Final outcome of the 2026 finals. Group-stage tables, the 48-team roster and the full knockout results remain UNKNOWN in this catalogue; unverified social posts naming other finalists were discounted.",
+          "evidence": {
+            "source_url": "https://www.reuters.com/sports/soccer/torres-grabs-extra-time-winner-spain-beat-toothless-argentina-win-their-second-2026-07-19/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "confirmed",
+            "note": "Reuters, ABC News, Britannica and ESPN agree: Spain beat Argentina 1-0 after extra time on 19 July 2026, Ferran Torres scoring; England beat France for third place."
+          }
         }
       }
     },
@@ -2908,6 +3986,21 @@
           "expected_fixture_count": 51,
           "scope": "all_final_tournament_matches",
           "requires_all_stages": true
+        },
+        "results": {
+          "status": "VERIFIED",
+          "winner": "Italy",
+          "runner_up": "England",
+          "final": "Italy 1-1 England (after extra time; Italy won 3-2 on penalties)",
+          "final_date": "2021-07-11",
+          "venue": "Wembley Stadium, London",
+          "notes": "EURO 2020 was played in 2021; no third-place match is staged, so no third or fourth placing is recorded.",
+          "evidence": {
+            "source_url": "https://www.uefa.com/uefaeuro/history/seasons/2020/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "confirmed",
+            "note": "UEFA EURO 2020 final: Italy beat England 3-2 on penalties after a 1-1 draw at Wembley."
+          }
         }
       },
       "2024": {
@@ -3040,6 +4133,193 @@
           "expected_fixture_count": 51,
           "scope": "all_final_tournament_matches",
           "requires_all_stages": true
+        },
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+          "scope": "2023-2024 qualification cycle",
+          "allocation_basis": "hosts_separate",
+          "finals_places": 24,
+          "direct_places": 20,
+          "playoff_places": 3,
+          "hosts_qualified": [
+            "Germany"
+          ],
+          "confederations": {
+            "UEFA": {
+              "direct_places": 20,
+              "playoff_places": 3,
+              "format": "ten groups; the top two in each group qualify (20); three further places are decided by the EURO play-offs, whose participants are selected through the Nations League rankings; hosts Germany qualified automatically",
+              "evidence": {
+                "source_url": "https://www.uefa.com/euro2024/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "UEFA EURO 2024 qualifying: ten groups with two direct qualifiers each, plus three play-off paths."
+              }
+            }
+          },
+          "qualified_teams": [],
+          "eliminated_teams": [],
+          "results_status": "UNKNOWN",
+          "results_note": "The 24-team finals roster is recorded on the edition participant list; per-group standings and play-off results are not enumerated here.",
+          "evidence": {
+            "source_url": "https://www.uefa.com/euro2024/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "UEFA EURO 2024 qualification format and host qualification."
+          }
+        }
+      }
+    },
+    "5": {
+      "2024": {
+        "format_details": "Four leagues (A-D) split into groups; League A group winners reach the finals; promotion and relegation between leagues; the league phase ranks teams for EURO and World Cup play-off access",
+        "participant_status": "UNKNOWN",
+        "coverage_requirements": {},
+        "stages": [],
+        "edition_notes": "2024/25 Nations League edition. Participant rosters and finals results are not independently verified here.",
+        "qualification": {
+          "status": "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+          "scope": "2024-25 edition",
+          "finals_places": null,
+          "direct_places": null,
+          "playoff_places": null,
+          "confederations": {
+            "UEFA": {
+              "direct_places": 0,
+              "playoff_places": 0,
+              "format": "four leagues (A-D) split into groups with promotion and relegation between leagues; League A group winners reach the finals; the league phase also ranks teams for EURO and World Cup play-off access",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefanationsleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "UEFA Nations League structure, promotion/relegation between leagues and qualification play-off access."
+              }
+            }
+          },
+          "results_status": "UNKNOWN",
+          "results_note": "Nations League standings, finals results and the derived play-off access list are not enumerated here; the edition window is declared separately.",
+          "evidence": {
+            "source_url": "https://www.uefa.com/uefanationsleague/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "UEFA Nations League format: leagues A-D, promotion/relegation and play-off access."
+          }
+        }
+      }
+    },
+    "2": {
+      "2024": {
+        "format_details": "36 clubs; single league phase of eight matches; top eight to the round of 16, 9-24 to knockout play-offs, 25-36 eliminated",
+        "participant_status": "UNKNOWN",
+        "coverage_requirements": {},
+        "stages": [],
+        "edition_notes": "2024/25 league-phase format. The 36-club roster is not independently verified here; acquisition completion stays fail-closed.",
+        "competition_access": {
+          "status": "STRUCTURE_VERIFIED_ROUTES_PER_CLUB_UNKNOWN",
+          "format": "league_phase",
+          "league_phase_clubs": 36,
+          "matches_per_club": 8,
+          "advancement": {
+            "league_phase_top_8": "round_of_16",
+            "league_phase_9_24": "knockout_play-offs",
+            "league_phase_25_36": "eliminated"
+          },
+          "routes": [
+            {
+              "id": "domestic_league_position",
+              "type": "league_position",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefachampionsleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Association places are allocated by domestic league position; exact per-country allocation for this season is not enumerated."
+              }
+            },
+            {
+              "id": "title_holder",
+              "type": "champions_path",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefachampionsleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "The competition title holder enters through the champions path."
+              }
+            },
+            {
+              "id": "qualifying_rounds",
+              "type": "preliminary_rounds",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefachampionsleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Clubs from lower-ranked associations enter through preliminary and qualifying rounds."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.uefa.com/uefachampionsleague/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "UEFA Champions League 2024/25 league-phase structure: 36 clubs, eight matches each, top eight to the round of 16, 9-24 to knockout play-offs."
+          }
+        }
+      }
+    },
+    "3": {
+      "2024": {
+        "format_details": "36 clubs; single league phase of eight matches; top eight to the round of 16, 9-24 to knockout play-offs, 25-36 eliminated",
+        "participant_status": "UNKNOWN",
+        "coverage_requirements": {},
+        "stages": [],
+        "edition_notes": "2024/25 league-phase format. The 36-club roster is not independently verified here; acquisition completion stays fail-closed.",
+        "competition_access": {
+          "status": "STRUCTURE_VERIFIED_ROUTES_PER_CLUB_UNKNOWN",
+          "format": "league_phase",
+          "league_phase_clubs": 36,
+          "matches_per_club": 8,
+          "advancement": {
+            "league_phase_top_8": "round_of_16",
+            "league_phase_9_24": "knockout_play-offs",
+            "league_phase_25_36": "eliminated"
+          },
+          "routes": [
+            {
+              "id": "domestic_league_position",
+              "type": "league_position",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefaeuropaleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Association places are allocated by domestic league position; exact per-country allocation for this season is not enumerated."
+              }
+            },
+            {
+              "id": "domestic_cup_winner",
+              "type": "domestic_cup_winner",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefaeuropaleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Domestic cup winners enter the Europa League route."
+              }
+            },
+            {
+              "id": "champions_league_qualifying_transfer",
+              "type": "transfer_from_other_competition",
+              "evidence": {
+                "source_url": "https://www.uefa.com/uefaeuropaleague/",
+                "retrieved_at": "2026-11-03",
+                "confidence": "provisional",
+                "note": "Clubs eliminated in Champions League qualifying transfer to the Europa League route."
+              }
+            }
+          ],
+          "evidence": {
+            "source_url": "https://www.uefa.com/uefaeuropaleague/",
+            "retrieved_at": "2026-11-03",
+            "confidence": "provisional",
+            "note": "UEFA Europa League 2024/25 league-phase structure: 36 clubs, eight matches each, top eight to the round of 16, 9-24 to knockout play-offs."
+          }
         }
       }
     }

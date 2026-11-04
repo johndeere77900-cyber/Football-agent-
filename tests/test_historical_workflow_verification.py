@@ -32,7 +32,9 @@ def test_verify_persisted_historical_datasets_football_and_basketball_pass(tmp_p
         "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
         "goals": {"home": 2, "away": 1},
     }
-    storage.save_historical_fixtures([valid_fixture], 39, 2024)
+    # Verified datasets are written by an approved historical acquisition source:
+    # legacy `api_football` rows are outside the approved cohort the manifest covers.
+    storage.save_historical_fixtures([valid_fixture], 39, 2024, source="football_data_csv")
 
     # Populate a valid basketball dataset (12, 2024)
     valid_game = {
@@ -48,7 +50,7 @@ def test_verify_persisted_historical_datasets_football_and_basketball_pass(tmp_p
     }
     storage.save_historical_basketball_games([valid_game], 12, 2024)
 
-    completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=1, sport="football", source="api_football")
+    completion_helpers.mark_complete(league_id=39, season=2024, fixture_count=1, sport="football", source="football_data_csv")
     completion_helpers.allow_synthetic_nba_season(monkeypatch, 2024, 1)
     completion_helpers.mark_complete(league_id=12, season=2024, fixture_count=1, sport="basketball", expected_pages=1, pages_completed=1)
 
@@ -75,7 +77,7 @@ def test_verify_persisted_historical_datasets_active_ongoing_season_incomplete_p
         "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
         "goals": {"home": 1, "away": 0},
     }
-    storage.save_historical_fixtures([active_fixture], 39, curr_season)
+    storage.save_historical_fixtures([active_fixture], 39, curr_season, source="football_data_csv")
     storage.mark_historical_dataset_incomplete(league_id=39, season=curr_season, fixture_count=1, sport="football")
 
     res = historical_sync.verify_persisted_historical_datasets(sport="football", league_id=39, season=curr_season)
@@ -96,7 +98,7 @@ def test_verify_persisted_historical_datasets_active_ongoing_season_incomplete_p
     c = conn.cursor()
     c.execute(
         "INSERT INTO historical_fixtures (fixture_id, source, league_id, season, kickoff_at, raw_json, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (10002, "soccerdata", 39, curr_season, dt_str, json.dumps(active_fixture), dt_str)
+        (10002, "soccerdata_fbref", 39, curr_season, dt_str, json.dumps(active_fixture), dt_str)
     )
     conn.commit()
     conn.close()
@@ -123,7 +125,9 @@ def test_verify_persisted_historical_datasets_fails_when_incomplete_for_past_sea
         "teams": {"home": {"id": 10, "name": "Arsenal"}, "away": {"id": 20, "name": "Chelsea"}},
         "goals": {"home": 2, "away": 1},
     }
-    storage.save_historical_fixtures([valid_fixture], 39, 2024)
+    # Verified datasets are written by an approved historical acquisition source:
+    # legacy `api_football` rows are outside the approved cohort the manifest covers.
+    storage.save_historical_fixtures([valid_fixture], 39, 2024, source="football_data_csv")
 
     # Manifest status is INCOMPLETE for past season 2024
     storage.mark_historical_dataset_incomplete(league_id=39, season=2024, fixture_count=1, sport="football")

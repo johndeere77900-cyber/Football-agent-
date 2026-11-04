@@ -67,8 +67,41 @@ HISTORICAL_KNOWLEDGE_START = 2019
 
 EVIDENCE_CONFIRMED = "CONFIRMED"
 EVIDENCE_PROVISIONAL = "PROVISIONAL"
+EVIDENCE_PARTIAL = "PARTIAL"
 EVIDENCE_UNKNOWN = "UNKNOWN"
 EVIDENCE_NOT_APPLICABLE = "NOT_APPLICABLE"
+
+# Required knowledge scope is deliberately independent of the acquisition
+# allow-list. The allow-list says what may be acquired; this registry says which
+# competitions the Phase 1 knowledge base is expected to describe. A required
+# competition missing from the catalogue must remain visible as a gap instead of
+# disappearing because it was never registered.
+REQUIRED_KNOWLEDGE_SCOPE = {
+    "football": {
+        1: "FIFA World Cup",
+        2: "UEFA Champions League",
+        3: "UEFA Europa League",
+        4: "UEFA European Championship",
+        5: "UEFA Nations League",
+        39: "Premier League",
+        61: "Ligue 1",
+        78: "Bundesliga",
+        88: "Eredivisie",
+        94: "Primeira Liga",
+        135: "Serie A",
+        140: "La Liga",
+    },
+    "basketball": {
+        12: "NBA",
+    },
+}
+
+
+def required_competition_scope(sport=None):
+    """Return the bounded required-competition registry for one sport."""
+    if sport is None:
+        return {key: dict(value) for key, value in REQUIRED_KNOWLEDGE_SCOPE.items()}
+    return dict(REQUIRED_KNOWLEDGE_SCOPE.get(_normalize_sport(sport), {}))
 
 _REQUIRED_COMPETITION_FIELDS = (
     "league_id",
@@ -272,6 +305,10 @@ def _edition_facts(competition, season):
         "canonical_participant_ids": [],
         "participant_status": PARTICIPANT_STATUS_UNKNOWN,
         "participant_evidence": None,
+        "qualification": None,
+        "competition_access": None,
+        "promotion_relegation": None,
+        "results": None,
         "promoted": [],
         "relegated": [],
         "renames": [],
@@ -303,6 +340,188 @@ def edition_stages(sport, league_id, season):
     record = edition(sport, league_id, season)
     stages = record.get("stages")
     return list(stages) if isinstance(stages, list) else []
+
+
+def _structure_block(sport, league_id, season, key, unavailable_reason):
+    """Return one optional structure block with an explicit availability flag."""
+    record = edition(sport, league_id, season)
+    block = record.get(key)
+    if not isinstance(block, dict) or not block:
+        return {
+            "available": False,
+            "reason": unavailable_reason,
+            "sport": record.get("sport"),
+            "league_id": record.get("league_id"),
+            "season": record.get("season"),
+            "competition": record.get("name"),
+        }
+    result = dict(block)
+    result["available"] = True
+    result.setdefault("status", EVIDENCE_UNKNOWN)
+    result["sport"] = record.get("sport")
+    result["league_id"] = record.get("league_id")
+    result["season"] = record.get("season")
+    result["competition"] = record.get("name")
+    result["edition_label"] = record.get("label")
+    return result
+
+
+def edition_qualification(sport, league_id, season):
+    """Return the evidenced qualification structure for an edition.
+
+    Absent evidence is reported as unavailable rather than inferred: a fixture
+    list, a provider response or a finals roster never proves how a competition
+    is qualified for.
+    """
+    return _structure_block(
+        sport, league_id, season, "qualification",
+        "qualification_structure_not_evidenced",
+    )
+
+
+def edition_competition_access(sport, league_id, season):
+    """Return the evidenced continental access routes for an edition."""
+    return _structure_block(
+        sport, league_id, season, "competition_access",
+        "competition_access_routes_not_evidenced",
+    )
+
+
+def edition_promotion_relegation(sport, league_id, season):
+    """Return the evidenced promotion/relegation transition for an edition."""
+    return _structure_block(
+        sport, league_id, season, "promotion_relegation",
+        "promotion_relegation_transition_not_evidenced",
+    )
+
+
+def edition_results(sport, league_id, season):
+    """Return the evidenced outcome of an edition (winner, final, placings)."""
+    return _structure_block(
+        sport, league_id, season, "results",
+        "competition_results_not_evidenced",
+    )
+
+
+def _entry_matches_team(entry, slug, canonical_id):
+    """Match a catalogue entry (name string or participant object) to a team."""
+    if isinstance(entry, str):
+        return _canonical_slug(entry) == slug
+    if isinstance(entry, dict):
+        names = [entry.get("name")] + list(entry.get("aliases") or [])
+        if canonical_id and entry.get("canonical_id") == canonical_id:
+            return True
+        return any(isinstance(name, str) and _canonical_slug(name) == slug for name in names)
+    return False
+
+
+def _first_matching_confederation(confederations, slug, canonical_id):
+    """Return the confederation code whose evidenced lists contain this team."""
+    for code, entry in (confederations or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        for key in ("teams", "qualified_teams", "playoff_teams", "eliminated_teams", "groups"):
+            values = entry.get(key) or []
+            if isinstance(values, dict):
+                nested = []
+                for group in values.values():
+                    if isinstance(group, dict):
+                        nested.extend(group.get("teams") or [])
+                    elif isinstance(group, list):
+                        nested.extend(group)
+                values = nested
+            for value in values:
+                if _entry_matches_team(value, slug, canonical_id):
+                    return code
+    return None
+
+
+def team_season_context(sport, league_id, season, team):
+    """Answer where one team stands in one edition, using evidenced facts only.
+
+    The result always separates what is known (roster membership, recorded
+    movement, recorded qualification status) from what is not. Missing evidence is
+    returned as ``None`` with an explicit reason; nothing is inferred from a
+    fixture list or from another season's rules.
+    """
+    record = edition(sport, league_id, season)
+    raw = str(team or "").strip()
+    result = {
+        "available": False,
+        "sport": record.get("sport"),
+        "league_id": record.get("league_id"),
+        "season": record.get("season"),
+        "competition": record.get("name"),
+        "team": raw,
+        "in_edition_roster": None,
+        "movement": None,
+        "qualification": None,
+        "reasons": [],
+    }
+    if not raw:
+        result["reason"] = "team_not_specified"
+        return result
+
+    prefix = f"{record.get('sport') or 'football'}_team_"
+    canonical_id = raw if raw.startswith(prefix) else None
+    slug = _canonical_slug(raw)
+
+    participants = record.get("participants") or []
+    if record.get("participant_status") == PARTICIPANT_STATUS_VERIFIED:
+        match = next((p for p in participants if _entry_matches_team(p, slug, canonical_id)), None)
+        result["in_edition_roster"] = match is not None
+        result["available"] = True
+        if match:
+            result["canonical_id"] = match.get("canonical_id")
+            canonical_id = match.get("canonical_id")
+            result["reasons"].append("listed_in_verified_edition_roster")
+    else:
+        result["reasons"].append("edition_roster_not_verified")
+
+    transition = record.get("promotion_relegation")
+    if isinstance(transition, dict):
+        result["available"] = True
+        for key, movement in (("promoted", "promoted"), ("relegated", "relegated"),
+                              ("retained_via_playoff", "retained_via_playoff")):
+            if any(_entry_matches_team(entry, slug, canonical_id) for entry in transition.get(key) or []):
+                result["movement"] = movement
+                result["reasons"].append(f"recorded_{movement}_in_{transition.get('transition')}")
+                break
+        if result["movement"] is None and result["in_edition_roster"] is True:
+            result["movement"] = "retained"
+            result["reasons"].append("retained_division")
+
+    qualification = record.get("qualification")
+    if isinstance(qualification, dict):
+        result["available"] = True
+        confederations = qualification.get("confederations") or {}
+        code = _first_matching_confederation(confederations, slug, canonical_id)
+        entry = confederations.get(code) if code else {}
+        status = None
+        if code:
+            if any(_entry_matches_team(t, slug, canonical_id) for t in entry.get("qualified_teams") or []):
+                status = "QUALIFIED"
+            elif any(_entry_matches_team(t, slug, canonical_id) for t in entry.get("eliminated_teams") or []):
+                status = "ELIMINATED"
+            elif any(_entry_matches_team(t, slug, canonical_id) for t in entry.get("playoff_teams") or []):
+                status = "PLAYOFF"
+            else:
+                status = "IN_CONTENTION_UNKNOWN"
+        result["qualification"] = {
+            "structure_status": qualification.get("status"),
+            "confederation": code,
+            "status": status,
+            "group": None,
+            "position": None,
+            "group_status": "group_assignment_not_evidenced",
+        }
+        result["reasons"].append("qualification_structure_evidenced" if code else "confederation_membership_not_evidenced")
+    else:
+        result["reasons"].append("qualification_structure_not_evidenced")
+
+    if not result["available"]:
+        result["reason"] = "no_evidenced_season_facts"
+    return result
 
 
 def participant_alias_entries(sport):
@@ -590,6 +809,10 @@ def edition(sport, league_id, season):
         "canonical_participant_ids": facts.get("canonical_participant_ids") or [],
         "participant_status": facts.get("participant_status") or PARTICIPANT_STATUS_UNKNOWN,
         "participant_evidence": facts.get("participant_evidence"),
+        "qualification": facts.get("qualification"),
+        "competition_access": facts.get("competition_access"),
+        "promotion_relegation": facts.get("promotion_relegation"),
+        "results": facts.get("results"),
         "promoted": facts.get("promoted") or [],
         "relegated": facts.get("relegated") or [],
         "renames": facts.get("renames") or [],
@@ -786,10 +1009,25 @@ def provider_route(sport, league_id, season):
     unsupported = {}
     for provider in order:
         declaration = coverage.get(provider)
-        if isinstance(declaration, dict) and declaration.get("supported") is True:
-            eligible.append(provider)
-        else:
+        if not isinstance(declaration, dict) or declaration.get("supported") is not True:
             unsupported[provider] = declaration.get("reason") if isinstance(declaration, dict) else "not_declared"
+            continue
+        edition_seasons = declaration.get("edition_seasons")
+        if isinstance(edition_seasons, (list, tuple, set)):
+            normalized = set()
+            for value in edition_seasons:
+                try:
+                    normalized.add(int(value))
+                except (TypeError, ValueError):
+                    continue
+            try:
+                requested = int(season)
+            except (TypeError, ValueError):
+                requested = None
+            if requested is None or requested not in normalized:
+                unsupported[provider] = "verified_edition_unavailable"
+                continue
+        eligible.append(provider)
     record = edition(key, league_id, season)
     gaps = record.get("evidence_gaps") or []
     return {
@@ -825,6 +1063,38 @@ def _recommended_knowledge_action(record, provider_support):
     return "complete the missing evidence before treating the edition as complete"
 
 
+def _edition_source_urls(record, competition=None):
+    """Collect the source URLs attached to every evidenced edition block."""
+    urls = []
+
+    def _add(url):
+        if isinstance(url, str) and url.strip() and url.strip() not in urls:
+            urls.append(url.strip())
+
+    evidence = record.get("participant_evidence")
+    if isinstance(evidence, dict):
+        _add(evidence.get("source_url"))
+    for key in (
+        "qualification", "competition_access", "promotion_relegation", "results",
+        "standings", "brackets", "awards",
+    ):
+        block = record.get(key)
+        if isinstance(block, dict):
+            block_evidence = block.get("evidence")
+            if isinstance(block_evidence, dict):
+                _add(block_evidence.get("source_url"))
+            for route in block.get("routes") or []:
+                if isinstance(route, dict) and isinstance(route.get("evidence"), dict):
+                    _add(route["evidence"].get("source_url"))
+    for stage in record.get("stages") or []:
+        if isinstance(stage, dict) and isinstance(stage.get("evidence"), dict):
+            _add(stage["evidence"].get("source_url"))
+    for fact in (competition or {}).get("evidence") or []:
+        if isinstance(fact, dict):
+            _add(fact.get("source_url"))
+    return urls
+
+
 def knowledge_gap_report(horizon=None, include_not_applicable=True):
     """
     Return a complete, refreshable evidence report for every configured edition.
@@ -832,13 +1102,21 @@ def knowledge_gap_report(horizon=None, include_not_applicable=True):
     The report covers every configured competition from
     ``HISTORICAL_KNOWLEDGE_START`` through the future horizon, plus explicitly
     documented editions outside that range (for example the 2018 World Cup).
-    Missing evidence is represented as an explicit gap; no participant list,
-    fixture total or provider route is inferred from acquired fixtures.
+    Required competitions missing from the catalogue remain visible as
+    ``competition_not_catalogued`` gaps instead of disappearing. Missing evidence
+    is represented as an explicit gap; no participant list, fixture total or
+    provider route is inferred from acquired fixtures.
     """
     horizon = int(horizon or KNOWLEDGE_FUTURE_HORIZON)
     rows = []
     for sport in SPORT_FILES:
-        for competition in list_competitions(sport):
+        competitions = list_competitions(sport)
+        catalogued_ids = {
+            int(competition.get("league_id"))
+            for competition in competitions
+            if isinstance(competition.get("league_id"), int)
+        }
+        for competition in competitions:
             league_id = int(competition.get("league_id"))
             documented = set(edition_years(sport, league_id, include_future=True, future_to=horizon) or [])
             seasons = set(range(HISTORICAL_KNOWLEDGE_START, horizon + 1)) | documented
@@ -853,13 +1131,6 @@ def knowledge_gap_report(horizon=None, include_not_applicable=True):
                     else None
                 )
                 expected = expected_coverage_units(sport, league_id, season)
-                source_urls = []
-                evidence = record.get("participant_evidence")
-                if isinstance(evidence, dict) and evidence.get("source_url"):
-                    source_urls.append(evidence.get("source_url"))
-                for fact in competition.get("evidence") or []:
-                    if isinstance(fact, dict) and fact.get("source_url") and fact.get("source_url") not in source_urls:
-                        source_urls.append(fact.get("source_url"))
                 rows.append(
                     {
                         "sport": sport,
@@ -880,12 +1151,295 @@ def knowledge_gap_report(horizon=None, include_not_applicable=True):
                         "stages": record.get("stages") or [],
                         "provider_order": provider_order(sport),
                         "provider_support": provider_support,
-                        "source_urls": source_urls,
+                        "source_urls": _edition_source_urls(record, competition),
                         "evidence_gaps": record.get("evidence_gaps") or [],
                         "recommended_action": _recommended_knowledge_action(record, provider_support),
                     }
                 )
+
+        for league_id, name in required_competition_scope(sport).items():
+            if league_id in catalogued_ids:
+                continue
+            for season in range(HISTORICAL_KNOWLEDGE_START, horizon + 1):
+                rows.append(
+                    {
+                        "sport": sport,
+                        "competition": name,
+                        "league_id": league_id,
+                        "season": season,
+                        "edition_label": str(season),
+                        "exists": None,
+                        "is_future": season > __import__("datetime").datetime.now(
+                            __import__("datetime").timezone.utc
+                        ).year,
+                        "lifecycle_window_status": STATUS_UNKNOWN,
+                        "evidence_status": EVIDENCE_UNKNOWN,
+                        "participant_status": PARTICIPANT_STATUS_UNKNOWN,
+                        "expected_participant_count": None,
+                        "expected_fixture_count": None,
+                        "fixture_total": None,
+                        "format": None,
+                        "coverage_format": None,
+                        "stages": [],
+                        "provider_order": provider_order(sport),
+                        "provider_support": {},
+                        "source_urls": [],
+                        "evidence_gaps": ["competition_not_catalogued"],
+                        "recommended_action": "catalogue the required competition identity and edition evidence before acquisition",
+                    }
+                )
     return rows
+
+
+def knowledge_recovery_states():
+    """Return the lifecycle states a recoverable knowledge fact can hold."""
+    return ("CONFIRMED", "PROVISIONAL", "PARTIAL", "ONGOING", "COMPLETED", "UNKNOWN", "CONFLICTED")
+
+
+def _recovery_state(record):
+    """Map one edition record onto a recovery lifecycle state.
+
+    Fact-level evidence and edition-level completeness are separate. A verified
+    result, roster or structure makes the record PARTIAL; only an edition with a
+    concluded window, a verified roster and a verified result is CONFIRMED. A
+    future edition stays PROVISIONAL even if one fact about it is known.
+    """
+    import datetime as _datetime
+
+    def _status(value):
+        return str((value or {}).get("status") or "").upper() if isinstance(value, dict) else ""
+
+    if (
+        _status(record.get("results")) == "CONFLICTED"
+        or _status(record.get("qualification")) == "CONFLICTED"
+        or _status(record.get("competition_access")) == "CONFLICTED"
+        or _status(record.get("promotion_relegation")) == "CONFLICTED"
+    ):
+        return "CONFLICTED"
+    if record.get("is_future"):
+        return "PROVISIONAL"
+
+    results_verified = _status(record.get("results")) == "VERIFIED"
+    participants_verified = record.get("participant_status") == PARTICIPANT_STATUS_VERIFIED
+    start, end = record.get("start"), record.get("end")
+    today = _datetime.datetime.now(_datetime.timezone.utc).date().isoformat()
+    concluded = isinstance(end, str) and end[:10] < today
+    ongoing = isinstance(start, str) and isinstance(end, str) and start[:10] <= today <= end[:10]
+
+    if results_verified and participants_verified and concluded:
+        return "CONFIRMED"
+    if ongoing:
+        return "ONGOING"
+    has_fact = any(
+        isinstance(record.get(key), (dict, list)) and bool(record.get(key))
+        for key in (
+            "results", "qualification", "competition_access", "promotion_relegation",
+            "stages", "standings", "brackets", "awards",
+        )
+    ) or participants_verified or bool(record.get("fixture_total"))
+    if has_fact:
+        return "PARTIAL"
+    return "UNKNOWN"
+
+
+def _recovery_source_hint(competition, gaps):
+    """Name the kind of authoritative page that would close each gap."""
+    hints = []
+    for gap in gaps:
+        if gap == "authoritative_participant_universe":
+            hints.append("official competition roster page")
+        elif gap == "format_specific_coverage_expectation":
+            hints.append("official format and fixture-calendar page")
+        elif gap == "edition_window":
+            hints.append("official fixture calendar")
+        elif gap == "future_horizon_exceeded":
+            hints.append("official draw and calendar after the current horizon")
+        else:
+            hints.append(str(gap))
+    url = None
+    evidence = competition.get("evidence")
+    if isinstance(evidence, list) and evidence and isinstance(evidence[0], dict):
+        url = evidence[0].get("source_url")
+    elif isinstance(evidence, dict):
+        url = evidence.get("source_url") or evidence.get("url")
+    return {"needed_sources": sorted(set(hints)), "competition_source_url": url}
+
+
+def knowledge_recovery_plan(sport="football", horizon=None):
+    """Bounded, read-only plan of missing or stale knowledge to recover.
+
+    Each row names what is missing, the state of the edition and the kind of
+    authoritative source required. It performs no network access and writes
+    nothing, so it is safe to run repeatedly.
+    """
+    plan = []
+    for row in knowledge_gap_report(horizon=horizon):
+        if row.get("sport") != sport:
+            continue
+        gaps = list(row.get("evidence_gaps") or [])
+        if not gaps:
+            continue
+        record = edition(sport, row.get("league_id"), row.get("season"))
+        competition = get_competition(sport, row.get("league_id")) or {}
+        plan.append(
+            {
+                "competition": row.get("competition"),
+                "league_id": row.get("league_id"),
+                "season": row.get("season"),
+                "state": _recovery_state(record),
+                "missing_facts": gaps,
+                "authorship": _recovery_source_hint(competition, gaps),
+                "recommended_action": row.get("recommended_action"),
+            }
+        )
+    return plan
+
+
+_UPDATE_BLOCKS = (
+    "qualification",
+    "competition_access",
+    "promotion_relegation",
+    "results",
+    "participants",
+    "stages",
+    "standings",
+    "brackets",
+    "awards",
+)
+
+
+def _editions_path(sport):
+    filename = SPORT_EDITION_FILES.get(_normalize_sport(sport))
+    if not filename:
+        return None
+    return os.path.join(KNOWLEDGE_DIR, filename)
+
+
+def apply_knowledge_update(
+    sport,
+    league_id,
+    season,
+    block_key,
+    block,
+    retrieved_at,
+    confidence="provisional",
+    dry_run=True,
+):
+    """Validate one evidenced block and apply it without overwriting evidence.
+
+    The update is refused (and no file is written) when it would downgrade a
+    verified block, contradict an existing verified fact, or when the whole
+    catalogue would no longer validate. Refusals are returned with the reason so
+    the disagreement can be reviewed instead of silently replacing history.
+    """
+    result = {
+        "applied": False,
+        "dry_run": bool(dry_run),
+        "conflicts": [],
+        "problems": [],
+        "path": None,
+    }
+    if block_key not in _UPDATE_BLOCKS:
+        result["problems"].append(f"unsupported block {block_key!r}")
+        return result
+    if not isinstance(block, dict) or not block:
+        result["problems"].append("block must be a non-empty object")
+        return result
+
+    block = json.loads(json.dumps(block))
+    evidence = block.get("evidence")
+    if not isinstance(evidence, dict):
+        block["evidence"] = {
+            "source_url": block.get("source_url"),
+            "retrieved_at": retrieved_at,
+            "confidence": confidence,
+        }
+    else:
+        block["evidence"].setdefault("retrieved_at", retrieved_at)
+        block["evidence"].setdefault("confidence", confidence)
+    result["problems"].extend(_structure_evidence_problems(f"{sport} {league_id}/{season} {block_key}", block.get("evidence")))
+    if result["problems"]:
+        return result
+
+    path = _editions_path(sport)
+    result["path"] = path
+    if not path or not os.path.exists(path):
+        result["problems"].append("edition catalogue file is not available")
+        return result
+
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    editions = payload.get("editions")
+    if not isinstance(editions, dict):
+        result["problems"].append("catalogue has no editions object")
+        return result
+    holder = editions.setdefault(str(league_id), {})
+    record = holder.setdefault(str(season), {})
+    existing = record.get(block_key)
+
+    incoming_status = str(block.get("status") or "").upper()
+    if isinstance(existing, dict) and existing:
+        existing_status = str(existing.get("status") or "").upper()
+        verified_existing = existing_status in ("VERIFIED", "STRUCTURE_VERIFIED_ROUTES_PER_CLUB_UNKNOWN")
+        verified_incoming = incoming_status in ("VERIFIED", "STRUCTURE_VERIFIED_ROUTES_PER_CLUB_UNKNOWN")
+        if verified_existing and not verified_incoming:
+            result["conflicts"].append(
+                {
+                    "block": block_key,
+                    "reason": "refused_downgrade",
+                    "existing_status": existing_status,
+                    "incoming_status": incoming_status,
+                }
+            )
+            return result
+        if existing != block:
+            differing = [
+                field
+                for field in set(existing) | set(block)
+                if existing.get(field) != block.get(field) and field != "evidence"
+            ]
+            if verified_existing and verified_incoming and differing:
+                result["conflicts"].append(
+                    {
+                        "block": block_key,
+                        "reason": "conflicting_verified_facts",
+                        "fields": sorted(differing),
+                        "existing_status": existing_status,
+                        "incoming_status": incoming_status,
+                    }
+                )
+                return result
+
+    if dry_run:
+        result["applied"] = False
+        result["would_change"] = existing != block
+        return result
+
+    with open(path, "r", encoding="utf-8") as handle:
+        original_text = handle.read()
+    cache_key = _normalize_sport(sport)
+    record[block_key] = block
+    temporary = f"{path}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+    os.replace(temporary, path)
+    _CACHE.pop(cache_key, None)
+
+    problems = validate()
+    if problems:
+        # Restore the exact previous bytes: a refused update must leave the
+        # catalogue bit-for-bit unchanged.
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(original_text)
+        _CACHE.pop(cache_key, None)
+        result["problems"].extend(problems)
+        return result
+
+    _CACHE.pop(cache_key, None)
+    result["applied"] = True
+    result["changed_fields"] = sorted(set(existing or {}) ^ set(block))
+    return result
 
 
 def refresh_source(sport, source_id, retrieved_at, url=None, confidence=None):
@@ -972,6 +1526,235 @@ def prediction_context(sport, league_id, season, team_ids=None):
     }
 
 
+_RESULTS_STATUS = (
+    "VERIFIED",
+    "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+    "UNKNOWN",
+)
+
+_RESULTS_STATUS_WITH_WINNER = ("VERIFIED",)
+
+_QUALIFICATION_STRUCTURE_STATUS = {
+    "STRUCTURE_VERIFIED",
+    "STRUCTURE_VERIFIED_RESULTS_UNKNOWN",
+    "UNKNOWN",
+    "NOT_APPLICABLE",
+}
+_COMPETITION_ACCESS_STATUS = {
+    "STRUCTURE_VERIFIED",
+    "STRUCTURE_VERIFIED_ROUTES_PER_CLUB_UNKNOWN",
+    "UNKNOWN",
+    "NOT_APPLICABLE",
+}
+_PROMOTION_RELEGATION_STATUS = {"VERIFIED", "PARTIAL", "UNKNOWN", "NOT_APPLICABLE"}
+_CONFEDERATION_CODES = ("AFC", "CAF", "CONCACAF", "CONMEBOL", "OFC", "UEFA")
+
+
+def _structure_evidence_problems(label, evidence):
+    """Every structure fact must carry its own source, date and confidence."""
+    if not isinstance(evidence, dict):
+        return [f"{label}: evidence is missing"]
+    problems = []
+    for field in ("source_url", "retrieved_at", "confidence"):
+        if not isinstance(evidence.get(field), str) or not str(evidence.get(field)).strip():
+            problems.append(f"{label}: evidence is missing {field}")
+    return problems
+
+
+def _int_places(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _season_structure_problems(sport, league_id, season, facts):
+    """Validate qualification, access and promotion/relegation blocks."""
+    problems = []
+    base = f"{sport} league {league_id} season {season}"
+
+    results = facts.get("results")
+    if results is not None:
+        if not isinstance(results, dict):
+            problems.append(f"{base}: results is not an object")
+        else:
+            problems.extend(_structure_evidence_problems(f"{base} results", results.get("evidence")))
+            status = str(results.get("status") or "").upper()
+            if status not in _RESULTS_STATUS:
+                problems.append(f"{base}: results status {results.get("status")!r} is not a known value")
+            winner = results.get("winner")
+            runner_up = results.get("runner_up")
+            if status in _RESULTS_STATUS_WITH_WINNER and not (isinstance(winner, str) and winner.strip()):
+                problems.append(f"{base}: results status {status} requires an evidenced winner")
+            if winner and runner_up and _canonical_slug(winner) == _canonical_slug(runner_up):
+                problems.append(f"{base}: results winner and runner-up are the same team")
+            placings = [results.get("winner"), results.get("runner_up"), results.get("third_place"), results.get("fourth_place")]
+            slugs = [_canonical_slug(value) for value in placings if isinstance(value, str) and value.strip()]
+            if len(slugs) != len(set(slugs)):
+                problems.append(f"{base}: results placings contain a duplicate team")
+
+    qualification = facts.get("qualification")
+    if qualification is not None:
+        if not isinstance(qualification, dict):
+            problems.append(f"{base}: qualification is not an object")
+        else:
+            problems.extend(_structure_evidence_problems(f"{base} qualification", qualification.get("evidence")))
+            status = str(qualification.get("status") or "").upper()
+            if status not in _QUALIFICATION_STRUCTURE_STATUS:
+                problems.append(f"{base}: qualification status {qualification.get('status')!r} is not a known value")
+            finals = qualification.get("finals_places")
+            direct = qualification.get("direct_places")
+            playoff = qualification.get("playoff_places")
+            for label, value in (("finals_places", finals), ("direct_places", direct), ("playoff_places", playoff)):
+                if value is not None and not _int_places(value):
+                    problems.append(f"{base}: qualification {label} {value!r} is invalid")
+            basis = qualification.get("allocation_basis")
+            if basis not in (None, "includes_hosts", "hosts_separate"):
+                problems.append(f"{base}: qualification allocation_basis {basis!r} is not a known value")
+            host_count = len(qualification.get("hosts_qualified") or [])
+            if _int_places(finals) and _int_places(direct) and _int_places(playoff):
+                allocated = direct + playoff + (host_count if basis == "hosts_separate" else 0)
+                if allocated != finals:
+                    problems.append(
+                        f"{base}: qualification places total {allocated} (direct {direct} + play-off {playoff} "
+                        f"+ hosts {host_count if basis == 'hosts_separate' else 0}) != finals {finals}"
+                    )
+            confederations = qualification.get("confederations")
+            if confederations is not None:
+                if not isinstance(confederations, dict) or not confederations:
+                    problems.append(f"{base}: qualification confederations is not a non-empty object")
+                else:
+                    total_direct = 0
+                    total_playoff = 0
+                    complete = True
+                    for code, entry in confederations.items():
+                        if code not in _CONFEDERATION_CODES:
+                            problems.append(f"{base}: unknown confederation {code!r}")
+                            complete = False
+                            continue
+                        if not isinstance(entry, dict):
+                            problems.append(f"{base}: confederation {code} is not an object")
+                            complete = False
+                            continue
+                        problems.extend(
+                            _structure_evidence_problems(f"{base} confederation {code}", entry.get("evidence"))
+                        )
+                        entry_direct = entry.get("direct_places")
+                        entry_playoff = entry.get("playoff_places")
+                        if _int_places(entry_direct):
+                            total_direct += entry_direct
+                        else:
+                            complete = False
+                        if _int_places(entry_playoff):
+                            total_playoff += entry_playoff
+                        else:
+                            complete = False
+                    if complete and _int_places(direct) and total_direct != direct:
+                        problems.append(
+                            f"{base}: confederation direct places sum to {total_direct}, not {direct}"
+                        )
+            for key in ("qualified_teams", "eliminated_teams"):
+                value = qualification.get(key)
+                if value is not None and not isinstance(value, list):
+                    problems.append(f"{base}: qualification {key} is not a list")
+            if qualification.get("results_status") not in (None, "UNKNOWN", "VERIFIED"):
+                problems.append(f"{base}: qualification results_status is not a known value")
+
+    access = facts.get("competition_access")
+    if access is not None:
+        if not isinstance(access, dict):
+            problems.append(f"{base}: competition_access is not an object")
+        else:
+            problems.extend(_structure_evidence_problems(f"{base} competition_access", access.get("evidence")))
+            status = str(access.get("status") or "").upper()
+            if status not in _COMPETITION_ACCESS_STATUS:
+                problems.append(f"{base}: competition_access status {access.get('status')!r} is not a known value")
+            routes = access.get("routes")
+            if not isinstance(routes, list) or not routes:
+                problems.append(f"{base}: competition_access routes is not a non-empty list")
+            else:
+                seen_routes = set()
+                for route in routes:
+                    if not isinstance(route, dict):
+                        problems.append(f"{base}: competition_access route is not an object")
+                        continue
+                    route_id = str(route.get("id") or "").strip()
+                    if not route_id:
+                        problems.append(f"{base}: competition_access route has no id")
+                    elif route_id in seen_routes:
+                        problems.append(f"{base}: duplicate competition_access route {route_id!r}")
+                    seen_routes.add(route_id)
+                    if not str(route.get("type") or "").strip():
+                        problems.append(f"{base}: competition_access route {route_id!r} has no type")
+                    problems.extend(
+                        _structure_evidence_problems(
+                            f"{base} competition_access route {route_id!r}", route.get("evidence")
+                        )
+                    )
+
+    transition = facts.get("promotion_relegation")
+    if transition is not None:
+        if not isinstance(transition, dict):
+            problems.append(f"{base}: promotion_relegation is not an object")
+        else:
+            problems.extend(
+                _structure_evidence_problems(f"{base} promotion_relegation", transition.get("evidence"))
+            )
+            status = str(transition.get("status") or "").upper()
+            if status not in _PROMOTION_RELEGATION_STATUS:
+                problems.append(f"{base}: promotion_relegation status {transition.get('status')!r} is not a known value")
+            if not isinstance(transition.get("transition"), str) or not transition.get("transition").strip():
+                problems.append(f"{base}: promotion_relegation transition is missing")
+            promoted = transition.get("promoted") or []
+            relegated = transition.get("relegated") or []
+            for label, values in (("promoted", promoted), ("relegated", relegated)):
+                if not isinstance(values, list):
+                    problems.append(f"{base}: promotion_relegation {label} is not a list")
+                    continue
+                canonical = set()
+                for entry in values:
+                    name = entry if isinstance(entry, str) else (entry.get("name") if isinstance(entry, dict) else None)
+                    if not isinstance(name, str) or not name.strip():
+                        problems.append(f"{base}: promotion_relegation {label} entry has no name")
+                        continue
+                    slug = _canonical_slug(name)
+                    if slug in canonical:
+                        problems.append(f"{base}: duplicate {label} club {name!r}")
+                    canonical.add(slug)
+            both = {
+                _canonical_slug(entry if isinstance(entry, str) else entry.get("name"))
+                for entry in promoted
+                if isinstance(entry, (str, dict))
+            } & {
+                _canonical_slug(entry if isinstance(entry, str) else entry.get("name"))
+                for entry in relegated
+                if isinstance(entry, (str, dict))
+            }
+            both.discard("")
+            if both:
+                problems.append(f"{base}: clubs both promoted and relegated: {sorted(both)}")
+            automatic_promotion = transition.get("automatic_promotion_places")
+            promotion_playoff = transition.get("promotion_playoff_places")
+            automatic_relegation = transition.get("automatic_relegation_places")
+            relegation_playoff = transition.get("relegation_playoff_places")
+            for label, value in (
+                ("automatic_promotion_places", automatic_promotion),
+                ("promotion_playoff_places", promotion_playoff),
+                ("automatic_relegation_places", automatic_relegation),
+                ("relegation_playoff_places", relegation_playoff),
+            ):
+                if value is not None and not _int_places(value):
+                    problems.append(f"{base}: promotion_relegation {label} {value!r} is invalid")
+            if _int_places(automatic_promotion) and _int_places(promotion_playoff) and isinstance(promoted, list):
+                if len(promoted) > automatic_promotion + promotion_playoff:
+                    problems.append(
+                        f"{base}: {len(promoted)} promoted clubs exceed the {automatic_promotion + promotion_playoff} available places"
+                    )
+            if _int_places(automatic_relegation) and _int_places(relegation_playoff) and isinstance(relegated, list):
+                if len(relegated) > automatic_relegation + relegation_playoff:
+                    problems.append(
+                        f"{base}: {len(relegated)} relegated clubs exceed the {automatic_relegation + relegation_playoff} available places"
+                    )
+    return problems
+
+
 def validate():
     """
     Validate every catalogue file and its consistency with ``config``.
@@ -1016,6 +1799,17 @@ def validate():
 
         allowed_ids = set(getattr(config, "ALLOWED_LEAGUE_IDS", []) if sport_key == "football" else getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", []))
         alias_map = getattr(config, "LEAGUE_NAME_TO_ID", {}) if sport_key == "football" else {}
+
+        catalogued_ids = {
+            int(entry.get("league_id"))
+            for entry in list_competitions(sport_key)
+            if isinstance(entry.get("league_id"), int)
+        }
+        for required_id, required_name in required_competition_scope(sport_key).items():
+            if required_id not in catalogued_ids:
+                problems.append(
+                    f"{sport_key} league {required_id}: required competition {required_name!r} is not catalogued"
+                )
 
         for entry in list_competitions(sport_key):
             league_id = entry.get("league_id")
@@ -1068,6 +1862,8 @@ def validate():
                 if not isinstance(facts, dict):
                     problems.append(f"{sport_key} league {league_id} season {season_year}: edition record is not an object")
                     continue
+
+                problems.extend(_season_structure_problems(sport_key, league_id, season_year, facts))
 
                 status = str(facts.get("participant_status") or PARTICIPANT_STATUS_UNKNOWN).upper()
                 participants = facts.get("participants") or []
@@ -1157,7 +1953,15 @@ def validate():
                             f"{sport_key} league {league_id} season {season_year}: expected fixture count "
                             f"{expected_fixtures!r} does not match fixture_total {fixture_total!r}"
                         )
-                    if entry.get("coverage_format") == "double_round_robin" and fixture_total is not None:
+                    curtailed_edition = (
+                        facts.get("curtailed") is True
+                        or requirements.get("curtailed") is True
+                    )
+                    if (
+                        entry.get("coverage_format") == "double_round_robin"
+                        and fixture_total is not None
+                        and not curtailed_edition
+                    ):
                         calculated = len(participants) * (len(participants) - 1)
                         if fixture_total != calculated:
                             problems.append(

@@ -141,7 +141,7 @@ def test_canonical_backtest_with_complete_dataset_zero_api_calls(tmp_path, monke
         for i in range(10)
     ]
 
-    storage.save_historical_fixtures(fixtures, league_id=39, season=2025)
+    storage.save_historical_fixtures(fixtures, league_id=39, season=2025, source="football_data_csv")
     completion_helpers.mark_complete(league_id=39, season=2025, fixture_count=len(fixtures))
 
     def fail_if_called(*args, **kwargs):

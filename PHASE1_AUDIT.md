@@ -1068,3 +1068,358 @@ SQL/migrations, manifest changes and data repair.
   remain external investigations.
 - UCL/UEL/Nations League/domestic participant universes and documented totals
   remain unavailable; no totals were invented.
+
+---
+
+## 14. Acquisition integrity update (2026-11-03) — providers, source cohort, route
+
+Branch: `feature/historical-football-acquisition-integrity`
+Base: `main` at `7dc9fe83101c876898a5174cf3125fc536d73ada`
+
+This section supersedes the earlier four-provider route described in sections 1-13;
+the earlier sections are retained as the audit trail for that branch.
+
+### 14.1 Runtime route
+
+`config.FOOTBALL_APPROVED_HISTORICAL_PROVIDERS` and
+`sports_knowledge/football_competitions.json::approved_historical_acquisition_order`
+now contain exactly:
+
+`openfootball_json -> openfootball_txt -> openfootball_internationals -> openligadb -> football_data_csv -> soccerdata_fbref -> soccerdata_match_history`
+
+`DataResolver.get_league_fixtures_page()` calls those providers in that order,
+after checking competition/edition eligibility through
+`sports_knowledge.provider_route()`. Sofascore is not in the automatic route.
+Its catalogue entry remains diagnostic-only. If the knowledge route cannot be
+loaded or disagrees with `config`, the route fails closed with
+`knowledge_provider_route_unavailable` / `knowledge_provider_order_mismatch`.
+
+### 14.2 New adapters
+
+- `openfootball_provider.py` implements OpenFootball JSON, Football.TXT club
+  competitions and men's senior internationals. It preserves exact source URLs,
+  repositories, source commits where available, requested season, retrieval
+  time, native/derived ids and source facts. JSON/TXT fixtures without native
+  ids use deterministic indexed SHA-256 ids; OpenLigaDB keeps its native
+  `matchID`.
+- `openligadb_provider.py` discovers the exact season shortcut through
+  `getavailableleagues/{season}`, caches discovery per acquisition run, paces
+  requests to 60/minute, selects the full-time result row, preserves
+  `matchIsFinished`, goals and result types, and uses UTC timestamps.
+- Date-only sources are stored as technical midnight UTC with
+  `date_precision="date"`, `kickoff_time_known`, local time where available and
+  `timezone_known=false`. No UTC kickoff is inferred.
+- Unscored/future fixtures are not marked completed. UCL JSON 2024 has 189 rows
+  but only 188 completed because the final is unscored in that file.
+
+### 14.3 Verified direct coverage
+
+OpenFootball JSON (2019-20, 2024-25, 2026-27 exact files checked):
+
+| Competition | 2019 | 2024 | 2026 |
+|---|---:|---:|---:|
+| Premier League | 380 | 380 | 45 |
+| La Liga | 380 | 370 | 64 |
+| Serie A | 380 | 370 | 50 |
+| Bundesliga | 306 | 306 | 33 |
+| Ligue 1 | 279 | 306 | 41 |
+| Eredivisie | 232 | 306 | 62 |
+| Primeira Liga | 306 | 306 | 58 |
+| Champions League JSON | 119 | 188 completed of 189 | 404, not enabled |
+
+Ligue 1 2019-20 (279) and Eredivisie 2019-20 (232) are legitimate curtailed
+seasons and validate as complete against their authoritative roster and recorded
+season exception. La Liga/Serie A 2024-25 files contain 370 of 380 rows, so they
+do not complete from JSON alone and correctly fall through to the next eligible source (Football-Data CSV for La Liga; Football.TXT then CSV for Serie A).
+The 2026-27 files are in progress and do not validate as complete.
+
+OpenFootball Football.TXT 2024-25: Champions League 189, Europa League 189,
+Premier League 380, Serie A 380. Diagnostic-only exact files: Conference League
+153, EFL Cup 93, FA Cup 123, Coppa Italia 45, Copa Libertadores 155,
+Brasileiro 380. The last six are not stored because no authoritative competition
+id is configured.
+
+OpenFootball internationals: Nations League 2024 158 matches / 54 teams, EURO
+2024 51 / 24, EURO 2020 51 / 24, World Cup 2022 64 / 32. EURO and World Cup
+validate as complete against catalogue participant universes and documented
+totals. Nations League remains unverified because its edition participant/format
+evidence is not in the catalogue; it returns fixtures with `is_complete=false`.
+UCL/UEL remain `completion_allowed=false` for lack of an authoritative edition
+participant universe, even though the source files contain the expected 189
+matches.
+
+OpenLigaDB Bundesliga 2024-25: exact shortcut `bl1`, 306 native-id fixtures,
+halftime and fulltime rows preserved, validates as complete. Season discovery is
+cached per run.
+
+### 14.4 Storage and integrity
+
+`get_historical_fixtures()` / `get_historical_fixture_count()` accept optional
+`sources=`; `sources=None` still returns/counts every physical row. Approved
+cohort reads accept `mixed` writer rows only when record-level provenance names
+an approved provider. Direct SQLite verification: 306 approved Bundesliga rows
+validate while 2 legacy `api_football` rows remain physically present; the
+all-source caller sees 308 and the approved cohort sees 306. Native fixture ids
+are unchanged by the filter. `save_historical_fixtures()` now resolves identity
+from the record's own provider, not the `mixed` writer label, and rejects
+unapproved record provenance in a `mixed` batch.
+
+Bundesliga 2024-25 stage exclusion: the two SV Elversberg relegation-playoff
+fixtures are excluded from regular-season coverage (306 + 2 excluded) without
+deleting or rewriting them.
+
+### 14.5 Provider outcomes and retries
+
+`_classify_provider_attempt_outcome()` now distinguishes `PROVIDER_UNAVAILABLE`
+(configuration/credential missing), `UNSUPPORTED_COVERAGE`, `ACCESS_DENIED`,
+`RATE_LIMITED`, `TIMEOUT`, `NETWORK_ERROR` and `PARSER_ERROR`, preserving the
+provider error and HTTP status. `soccerdata_provider._attempt_timeout_budget()`
+divides the remaining shared deadline across remaining attempts: a 15-second,
+two-attempt budget allocates 7.5s + 7.5s rather than 15s + 0s.
+
+### 14.6 Remaining gaps
+
+- No authoritative participant universe is configured for UCL, UEL, Nations
+  League 2024, Conference League, FA Cup, EFL Cup, Coppa Italia, Libertadores or
+  Brasileirao. No totals or participants were invented; those datasets fail
+  closed for completion until official edition rosters and totals are recorded.
+- OpenFootball JSON 2024-25 La Liga/Serie A and all 2026-27 domestic files are
+  incomplete by source and do not complete on their own.
+- OpenFootball JSON UCL 2026 is a 404 and remains disabled; TXT enables only the
+  exact 2019 and 2024 files that were checked.
+- No API-Football historical provider, alias, fallback, credential requirement or
+  legacy-record merge was added.
+- No production Neon access, migration, deletion or record rewrite was performed.
+
+---
+
+## 23. Integration sweep (2026-11-03) — CI SIGKILL diagnosis, hermetic tests, comprehensive basketball knowledge
+
+### 23.1 CI failure was a runner OOM kill, not a test result
+
+PR #55's CI run `41639327368` (head `517c2ad`) completed with **exit code 137** after
+about 8m31s. 137 is SIGKILL; the workflow step is `python -m pytest tests -v`.
+No pytest summary was produced, so no pass/fail count can be quoted from that run.
+The check-run annotation only records `Process completed with exit code 137`.
+
+Local reproduction found the cause: `tests/test_architecture_boundary.py` exercised
+resolver fallback legs that reached live SoccerData downloads. The three slowest
+tests were 55.73s, 29.45s and 27.23s, and the suite visibly stalled inside
+`soccerdata_provider.get_match_history_games` / `get_sofascore_historical_games`
+(`subprocess.Popen` -> `_communicate`). Those downloads are unbounded in memory on
+a CI runner, which is consistent with a SIGKILL rather than an assertion failure.
+
+Correction: the boundary suite now installs autouse stubs for every live provider
+entry point it can reach (SoccerData MatchHistory/FBref/Sofascore/team history,
+API-Football and football-data.org), while each test still overrides the provider it
+asserts on. `tests/test_architecture_boundary.py` now runs **22 passed in 2.86s**
+(previously 118.69s), and the live-network tests 3 and 6 are explicitly stubbed.
+No assertion was weakened and the static architecture-boundary check is unchanged.
+
+### 23.2 Provider-route contract updates
+
+The approved route is the seven-provider order (`openfootball_json`,
+`openfootball_txt`, `openfootball_internationals`, `openligadb`,
+`football_data_csv`, `soccerdata_fbref`, `soccerdata_match_history`). Two tests still
+asserted the retired four-provider order:
+
+- `tests/test_zero_network_and_provider_order.py` now mocks every approved stage,
+  proves the early stop at the first sufficient provider, asserts the approved
+  execution order, and keeps the retired API-Football / football-data.org providers
+  off the historical path.
+- `tests/test_phase1_reliability_knowledge.py::test_approved_provider_orders_are_unchanged`
+  now records the seven-provider order.
+
+`DataResolver.get_league_fixtures_page()` also served page 2 of a COMPLETE dataset
+through the provider route instead of the read-first page. The read-first branch now
+runs for every page and returns the fixtures for page 1 and an empty page for page > 1,
+without a provider call.
+
+### 23.3 Approved-cohort test fixtures
+
+Backtest tests persisted synthetic fixtures with no provider provenance, so the
+default legacy `api_football` source put them outside the approved historical cohort
+introduced by this PR; `mark_historical_dataset_complete()` then correctly refused
+the dataset. The fixtures now declare the approved `football_data_csv` source.
+The completion guard was **not** relaxed: a dataset with only legacy rows still fails
+closed. Five backtest suites now pass: **43 passed in 3.37s**.
+
+### 23.4 Comprehensive basketball knowledge
+
+`sports_knowledge/basketball_editions.json` now carries, for every NBA edition
+2019-2026:
+
+- competition access: `NOT_APPLICABLE` with the evidenced explanation that the NBA is
+  a closed 30-franchise league (route `franchise_membership`);
+- promotion/relegation: `NOT_APPLICABLE`, no promoted/relegated clubs;
+- qualification: a 16-team postseason (12 direct + 4 play-in) for 2020-2026, and the
+  documented conditional 2020-bubble play-in for 2019-20;
+- results: verified champions, runners-up and Finals series scores for 2019-20 through
+  2024-25; 2025-26 is `STRUCTURE_VERIFIED_RESULTS_UNKNOWN`; 2026-27 is `UNKNOWN`.
+  No unplayed result is invented.
+
+`telegram_bot.handle_knowledge_op()` now answers NBA champion, qualification, access,
+transition and results questions from those evidenced records instead of refusing
+basketball. `sports_knowledge.validate()` returns `[]`.
+
+### 23.5 Verification performed
+
+- `tests/test_phase1_reliability_knowledge.py` + `tests/test_telegram_bot.py`:
+  **53 passed** (includes the new NBA knowledge and agent tests).
+- Backtest suites: **43 passed**.
+- Zero-network/provider-order + boundary suites: **27 passed**.
+- Targeted coverage/data-resolver route tests: **6 passed**.
+- `python -m py_compile` on `data_resolver.py` and `telegram_bot.py`; catalogue
+  validation clean.
+
+### 23.6 Remaining failures (not claimed as fixed)
+
+A full parallel run still reports failures in legacy tests that assume the retired
+acquisition chain (notably `tests/test_data_resolver.py::test_F_soccerdata_with_complete_metadata_complete`
+and `tests/test_data_resolver.py::test_sofascore_fallback_error_reporting_captured`,
+which still expect SoccerData/Sofascore to be in the automatic route). Those tests
+were not rewritten in this sweep; no assertion was deleted or relaxed, and no
+production guard was weakened to accommodate them. The full run did not produce a
+final summary because the pytest session stalled in teardown (xdist controller did
+not exit), so this section does not quote a total pass/fail count.
+
+
+#### 23.6.1 Failing nodes in the recorded JUnit sweep
+
+- `tests.test_coverage_fallback_scenarios::test_scenario_1_fd_zero_fixtures_triggers_match_history`
+- `tests.test_direct_csv_and_resiliency.TestDirectCSVAndResiliency::test_direct_csv_provider_used_without_secondary_api`
+- `tests.test_historical_completion_integrity::test_1_valid_complete_dataset_skips_acquisition`
+- `tests.test_historical_hardening::test_complete_dataset_zero_api_calls`
+- `tests.test_historical_hardening::test_backtest_fails_if_api_football_called`
+- `tests.test_historical_completion_integrity::test_7_valid_complete_dataset_remains_idempotent`
+- `tests.test_coverage_fallback_scenarios::test_fd_partial_plus_mh_partial_plus_sofascore_complete_yields_is_complete_true`
+- `tests.test_historical_sync::test_historical_sync_saves_fixtures`
+- `tests.test_historical_sync::test_historical_sync_repeated_runs_are_idempotent`
+- `tests.test_efficiency_and_telegram::test_next_n_spans_multiple_dates_and_horizon_reporting`
+- `tests.test_historical_sync::test_historical_sync_refresh_forces_reacquisition`
+- `tests.test_historical_sync::test_sync_historical_fixtures_season_guards`
+- `tests.test_historical_sync::test_unplayed_fixtures_not_persisted`
+- `tests.test_data_resolver::test_sofascore_fallback_error_reporting_captured`
+- `tests.test_historical_sync::test_ongoing_season_not_marked_complete`
+- `tests.test_historical_sync::test_provider_failure_falls_through_without_secondary_api`
+- `tests.test_historical_sync::test_insufficient_data_preserves_records_and_stays_incomplete`
+- `tests.test_historical_sync::test_ongoing_2026_fixtures_handled_by_status`
+- `tests.test_data_resolver::test_F_soccerdata_with_complete_metadata_complete`
+- `tests.test_data_resolver::test_provider_execution_order_primary_before_secondary`
+- `tests.test_p0_p1_integrity_repair::test_pre_acquisition_quota_exhaustion_preserves_manifest_fields_football_and_basketball`
+- `tests.test_p0_p1_integrity_repair::test_empty_page_acquisition_scenarios_football_and_basketball`
+- `tests.test_historical_hardening::test_enrichment_quota_ceiling_stops_batches`
+- `tests.test_historical_ingestion_integrity::test_req15_malformed_fixture_cannot_cause_complete`
+- `tests.test_historical_ingestion_integrity::test_req16_manifest_fixture_count_equals_actual_stored`
+- `tests.test_historical_ingestion_integrity::test_req17_database_first_backtest_behavior`
+- `tests.test_historical_ingestion_integrity::test_req18_normal_backtest_makes_zero_api_calls`
+- `tests.test_historical_ingestion_integrity::test_req19_football_historical_makes_zero_api_football_calls`
+- `tests.test_provider_neutral_identity::test_12_zero_fixtures_fallback_marks_dataset_incomplete`
+- `tests.test_resume_queue_and_cli::test_resume_from_incomplete_checkpoint`
+- `tests.test_rolling_backtest_window::test_existing_single_season_backtest_compatibility`
+- `tests.test_resume_queue_and_cli::test_changed_expected_page_count_fails_closed`
+- `tests.test_sports_knowledge_editions::test_provider_route_filters_unsupported_competition_providers`
+- `tests.test_soccerdata_provider::test_sofascore_not_used_when_match_history_returns_usable_data`
+- `tests.test_soccerdata_provider::test_soccerdata_reached_when_fd_returns_structurally_incomplete_dataset`
+- `tests.test_phase3_production_integration::test_football_backtest_database_first_e2e`
+- `tests.test_phase3_production_integration::test_backtest_actual_calibration_order`
+- `tests.test_database_first_production::test_insufficient_data_no_fabrication`
+
+No production Neon connection, SQL, migration, deletion or record rewrite was
+performed. The 23,110 vs 19,698 production count decomposition remains outside this
+change and reserved for ChatGPT.
+
+Final parallel sweep record: **695 passed, 38 failed, 0 skipped** (JUnit report, 733 tests). Three of those 38 were fixed after the report was written (both coverage-fallback scenarios and the data-resolver provider-order test), all verified passing in targeted runs; the page-2 read-first fix predates this run. The remaining failures are pre-existing legacy-chain tests that this sweep did not rewrite; they are listed in 23.6.1 and are not claimed fixed.
+
+---
+
+## 24. Full-suite green verification and Phase 1 contract closure (2026-11-03)
+
+The remaining legacy-chain failures from §23.6 are resolved. The final recorded run was:
+
+```
+python -m pytest tests -q -n 4 --dist loadfile \
+  --junitxml=/tmp/results4.xml -p no:seleniumbase -p no:cacheprovider
+```
+
+Result: **740 passed in 72.30s**, exit status 0, JUnit written. The 740 tests are the
+733-test sweep plus seven new regression tests for the contracts below. No test was
+skipped, deleted, or weakened to obtain this result.
+
+### 24.1 Attribution and persistence
+
+- `storage.get_historical_fixtures()` now selects the persisted `source` column and
+  exposes it as `_storage_source`, separately from the record's own `source`.
+  Attribution can distinguish the original owner from the writer that stored the row.
+- `storage.derive_manifest_source()` now derives contributors from every persisted
+  contribution field: the writer label, `provider_provenance.provider`,
+  `provider_provenance.providers`, `provider_fixture_ids`, `field_provenance`, and
+  `reconciliation_metadata.providers_used`. Reconciliation labels such as `mixed`
+  are never reported as providers. Empty datasets still return `None`.
+- The approved-source SQL filter now admits a `mixed` row when its persisted
+  `provider_provenance.providers` list contains an approved provider, not only when
+  its single `provider` field does. Legacy rows remain physically present and
+  outside the approved cohort.
+- Provider rows rejected by structural validation are counted in the router
+  metadata. `historical_sync` aggregates them into `rejected_count`, so a malformed
+  provider row can no longer disappear from the report or allow a COMPLETE label.
+  A verified-coverage route branch now also refuses completion when any provider row
+  was rejected.
+- Added regression coverage for persisted writer source, mixed-provider manifests,
+  rejected-row propagation, and basketball provider/blocker preservation.
+
+### 24.2 Knowledge scope and lifecycle
+
+- Added `REQUIRED_KNOWLEDGE_SCOPE`, a bounded required-competition registry
+  independent of `ALLOWED_LEAGUE_IDS`. `knowledge_gap_report()` now emits explicit
+  `competition_not_catalogued` rows for required competitions absent from the
+  catalogue, and `validate()` reports them instead of silently omitting them.
+- `_recovery_state()` now separates fact-level evidence from edition completeness.
+  A verified result or roster alone yields PARTIAL; CONFIRMED requires a concluded
+  window plus verified roster and result. CONFLICTED and PROVISIONAL remain
+  explicit.
+- `_UPDATE_BLOCKS` now covers participants, stages, standings, brackets and awards
+  in addition to qualification, access, promotion/relegation and results. Existing
+  evidence, downgrade, conflict and byte-exact rollback guards are unchanged.
+- Gap reporting now retains source URLs from result, qualification, access,
+  promotion/relegation, standings, brackets, awards, stages and participant
+  evidence, rather than only participant/competition evidence.
+
+### 24.3 Test-contract corrections
+
+- Legacy acquisition modules now receive scoped autouse stubs for the new
+  OpenFootball/OpenLigaDB stages (and SoccerData where the module does not test the
+  adapter itself). This keeps ordinary suites offline and prevents provider timeout
+  from masquerading as an assertion failure. The SoccerData adapter suite keeps its
+  own real mocks and passes 26/26.
+- Tests that intended an approved completed dataset now persist the approved
+  `football_data_csv` writer/source instead of legacy `api_football` rows. The
+  completion guard was not relaxed: legacy-only datasets still fail closed.
+- Stale Sofascore expectations were replaced with the approved contract: Sofascore
+  is diagnostic-only and is never called as an automatic historical fallback.
+- Provider-route tests assert the approved seven-provider order and the actual
+  competition-specific eligible subset, rather than requiring every provider for
+  every competition.
+
+### 24.4 Constraints and outstanding boundaries
+
+No production Neon connection, schema change, SQL, migration, deletion or record
+rewrite was performed. `main` remains at `7dc9fe8`; PR #55 remains open and
+unmerged. The 23,110 vs 19,698 production-count decomposition remains reserved for
+ChatGPT's Neon work.
+
+
+### 24.5 CI command hardening
+
+CI run #234 (head `5ffeaf6`) remained in the test step well beyond the local
+sequential runtime. The workflow still invoked plain `python -m pytest tests -v`,
+which leaves the SeleniumBase plugin active and had no job-level timeout. The
+verified hermetic command is now used in CI:
+
+```
+python -m pytest tests -v -n 4 --dist loadfile -p no:seleniumbase
+```
+
+The job also has a 30-minute timeout, so a future hang cannot consume an unbounded
+runner again. This does not skip any test: the full 740-test suite passes with the
+same flags locally.

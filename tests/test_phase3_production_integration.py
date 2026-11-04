@@ -265,7 +265,7 @@ def test_football_backtest_database_first_e2e(tmp_path, monkeypatch):
     ]
 
     # Save fixtures through real storage function
-    save_res = storage.save_historical_fixtures(raw_fixtures, league_id=39, season=2024)
+    save_res = storage.save_historical_fixtures(raw_fixtures, league_id=39, season=2024, source="football_data_csv")
     assert save_res["valid"] == 24
     assert save_res["inserted"] == 24
 
@@ -378,7 +378,7 @@ def test_backtest_actual_calibration_order(tmp_path, monkeypatch):
         for i in range(1, 25)
     ]
 
-    storage.save_historical_fixtures(raw_fixtures, league_id=39, season=2024)
+    storage.save_historical_fixtures(raw_fixtures, league_id=39, season=2024, source="football_data_csv")
     completion_helpers.mark_complete(
         league_id=39,
         season=2024,

@@ -8,6 +8,7 @@ import pytest
 import storage
 import config
 import data_resolver
+import sports_knowledge
 from data_resolver import DataResolver
 import historical_sync
 
@@ -19,13 +20,25 @@ def setup_db(tmp_path, monkeypatch):
     storage.init_db()
     yield
 
+
+def _epl_2024_canonical_teams():
+    """The verified Premier League 2024/25 roster the completion guard reads."""
+    record = sports_knowledge.edition("football", 39, 2024)
+    teams = list(record.get("canonical_participant_ids") or [])
+    assert len(teams) == 20
+    return teams
+
+
+def _unavailable(*args, **kwargs):
+    return ("SOURCE_UNAVAILABLE", [], {})
+
+
 def test_complete_dataset_zero_network_calls():
     """Verify that a COMPLETE and structurally valid dataset does NOT invoke any external network endpoints or resolvers."""
     league_id = 39
     season = 2024
+    teams = _epl_2024_canonical_teams()
 
-    # Store a complete 380 fixture dataset for double round robin
-    teams = [f"football_team_39_team_{i}" for i in range(1, 21)]
     for i, t in enumerate(teams, start=1):
         storage.save_team_identity("football", t, "football_data_csv", str(i), f"Team {i}", f"Team {i}", league_id=league_id)
 
@@ -54,6 +67,9 @@ def test_complete_dataset_zero_network_calls():
     # Patch all network entry points to raise RuntimeError if called
     with patch("requests.get", side_effect=RuntimeError("Network call requested!")), \
          patch("urllib.request.urlopen", side_effect=RuntimeError("Network call requested!")), \
+         patch("openfootball_provider.get_json_games", side_effect=RuntimeError("Network call requested!")), \
+         patch("openfootball_provider.get_txt_games", side_effect=RuntimeError("Network call requested!")), \
+         patch("data_resolver._fetch_direct_csv_league_fixtures", side_effect=RuntimeError("Network call requested!")), \
          patch("api_football._get", side_effect=RuntimeError("Network call requested!")), \
          patch("api_football.get_league_standings", side_effect=RuntimeError("Network call requested!")), \
          patch("football_data_api.get_competition_matches", side_effect=RuntimeError("Network call requested!")), \
@@ -103,13 +119,13 @@ def test_api_football_normalization_provenance_is_secondary():
 
 def test_sufficient_primary_coverage_prevents_secondary_network_calls(monkeypatch):
     """
-    Verify that when primary sources (CSV / SoccerData) return sufficient, structurally complete coverage,
-    ZERO secondary network endpoints are called.
+    Verify that when a primary approved provider returns sufficient, structurally complete coverage,
+    later providers are not called.
     """
     league_id = 39
     season = 2024
+    teams = _epl_2024_canonical_teams()
 
-    teams = [f"football_team_39_team_{i}" for i in range(1, 21)]
     for i, t in enumerate(teams, start=1):
         storage.save_team_identity("football", t, "football_data_csv", str(i), f"Team {i}", f"Team {i}", league_id=league_id)
 
@@ -134,10 +150,16 @@ def test_sufficient_primary_coverage_prevents_secondary_network_calls(monkeypatc
             })
             fid += 1
 
+    # The approved route tries OpenFootball first; both files are unavailable here,
+    # so the CSV stage is the first provider that supplies coverage.
+    monkeypatch.setattr("openfootball_provider.get_json_games", _unavailable)
+    monkeypatch.setattr("openfootball_provider.get_txt_games", _unavailable)
     monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", lambda lid, ssn, *args, **kwargs: csv_fixtures)
 
-    # Instrument all secondary network entry points to fail if called
-    with patch("api_football.get_league_fixtures_page", side_effect=RuntimeError("Secondary API-Football fixtures called!")), \
+    # Instrument every later provider to fail if called.
+    with patch("soccerdata_provider.get_fbref_games", side_effect=RuntimeError("FBref called after sufficient coverage!")), \
+         patch("soccerdata_provider.get_match_history_games", side_effect=RuntimeError("MatchHistory called after sufficient coverage!")), \
+         patch("api_football.get_league_fixtures_page", side_effect=RuntimeError("Secondary API-Football fixtures called!")), \
          patch("api_football.get_league_standings", side_effect=RuntimeError("Secondary API-Football standings called!")), \
          patch("football_data_api.get_competition_matches", side_effect=RuntimeError("Secondary football-data.org matches called!")), \
          patch("football_data_api.get_competition_teams", side_effect=RuntimeError("Secondary football-data.org teams called!")):
@@ -150,14 +172,22 @@ def test_sufficient_primary_coverage_prevents_secondary_network_calls(monkeypatc
 
 def test_strict_provider_execution_ordering(monkeypatch):
     """
-    Verify the approved historical football provider order:
-    direct CSV -> SoccerData FBref -> SoccerData MatchHistory -> SoccerData Sofascore,
-    and confirm the retired secondary API providers are never consulted.
+    Verify the approved historical football provider order from the knowledge
+    catalogue and runtime config, and confirm the retired secondary API
+    providers are never consulted.
     """
     league_id = 39
     season = 2024
 
     calls = []
+
+    def mock_of_json(lid, ssn, *args, **kwargs):
+        calls.append("openfootball_json")
+        return ("SOURCE_UNAVAILABLE", [], {})
+
+    def mock_of_txt(lid, ssn, *args, **kwargs):
+        calls.append("openfootball_txt")
+        return ("SOURCE_UNAVAILABLE", [], {})
 
     def mock_csv(lid, ssn, *args, **kwargs):
         calls.append("football_data_csv")
@@ -169,10 +199,6 @@ def test_strict_provider_execution_ordering(monkeypatch):
 
     def mock_sd_mh(code, ssn, *args, **kwargs):
         calls.append("soccerdata_match_history")
-        return ("SOURCE_UNAVAILABLE", [], {})
-
-    def mock_sd_ss(code, ssn, *args, **kwargs):
-        calls.append("soccerdata_sofascore")
         return ("SOURCE_UNAVAILABLE", [], {})
 
     def mock_af_page(*args, **kwargs):
@@ -187,10 +213,11 @@ def test_strict_provider_execution_ordering(monkeypatch):
         calls.append("football_data_org_teams")
         return []
 
+    monkeypatch.setattr("openfootball_provider.get_json_games", mock_of_json)
+    monkeypatch.setattr("openfootball_provider.get_txt_games", mock_of_txt)
     monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", mock_csv)
     monkeypatch.setattr("soccerdata_provider.get_fbref_games", mock_sd_fb)
     monkeypatch.setattr("soccerdata_provider.get_match_history_games", mock_sd_mh)
-    monkeypatch.setattr("soccerdata_provider.get_sofascore_historical_games", mock_sd_ss)
     monkeypatch.setattr("api_football.get_league_fixtures_page", mock_af_page)
     monkeypatch.setattr("football_data_api.get_competition_matches", mock_fd_matches)
     monkeypatch.setattr("football_data_api.get_competition_teams", mock_fd_teams)
@@ -198,8 +225,16 @@ def test_strict_provider_execution_ordering(monkeypatch):
     resolver = DataResolver()
     resolver.get_league_fixtures_page(league_id, season, page=1)
 
-    expected_order = ["football_data_csv", "soccerdata_fbref", "soccerdata_match_history", "soccerdata_sofascore"]
-    assert calls[:4] == expected_order
+    # OpenLigaDB and the internationals feed are not eligible for a domestic
+    # league, so their absence from the call trace is part of the contract.
+    expected_order = [
+        "openfootball_json",
+        "openfootball_txt",
+        "football_data_csv",
+        "soccerdata_fbref",
+        "soccerdata_match_history",
+    ]
+    assert calls[: len(expected_order)] == expected_order
 
     # The retired secondary API providers must never be used for historical fixtures.
     assert "api_football_fixtures" not in calls
