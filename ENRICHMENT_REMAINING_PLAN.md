@@ -107,9 +107,12 @@ so `football_data_csv` cannot supply them. Evidence gathered this run:
 - OpenFootball, OpenLigaDB and the internationals repository never carried match
   statistics; they supply results only.
 
-Conclusion: under the current approved provider set these 2,065 fixtures have no
-genuine statistics source. Closing this needs a NEW verified provider, which must be
-approved with the evidence below before any use:
+Conclusion: the previously blocked competitions 1-5 are recoverable through the newly
+verified `espn_soccer_summary` source (see `APPROVED_DATA_SOURCES.md`). It supplies shots,
+shots on target, corners, cards, possession, fouls, offsides and saves, but not xG and not
+player statistics. A measured reconciliation pass matched 47% of sampled fixtures on
+exact dates, so a +-1 day window plus name reconciliation and a dry-run review is
+mandatory before any write. Approval criteria below still apply to any further source:
 
 1. Identity: provider publishes stable match ids or (date, both teams, competition,
    season) that reconcile exactly against stored fixtures.
@@ -146,7 +149,9 @@ overtime), and roughly 25-30 player rows. Observed on the 847 completed games:
   `python football_csv_enrichment.py --leagues 78,94,135,61,88,140,39 --seasons 2019 2020 2024 2025 2026 --apply`
   The dry-run already proved the matching logic: it planned and wrote 482 rows
   (Premier League 2023 210 + Serie A 2024 272) with zero ambiguous matches.
-- Competitions 1-5 remain blocked pending a new approved source (Section 4).
+- Competitions 1-5 are no longer blocked: they are recoverable via
+  `espn_soccer_summary` subject to identity reconciliation. See
+  `APPROVED_DATA_SOURCES.md` for the evidence and the per-season match rates.
 - Series A 2024 still shows 108 unmatched fixtures; Premier League 2024 38 and
   2025 40 remain unmatched. These CSV rows carry no counterpart fixture, so they
   cannot be enriched without new acquisition evidence, not by inference.
