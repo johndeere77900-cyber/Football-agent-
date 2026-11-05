@@ -127,3 +127,52 @@ Diagnosis from inspecting the failures directly (this is evidence, not inference
 - **Player-level football statistics** for competitions 1–5: ESPN soccer returns none and no approved source covers them.
 - **Possession for already-enriched domestic fixtures**: the CSV provider does not publish it.
 - **Champions League 2022/2024 qualifying rounds**: provider slug unverified, so those fixtures remain unmatched rather than guessed.
+
+## 8. Expansion cycle: qualifying-round slugs and alias reconciliation
+
+Added after §2.1 was written. This supersedes the Champions League / Europa League
+conclusion in §2.1: those competitions are now recoverable.
+
+**New endpoints verified**
+
+- `.../soccer/uefa.champions_qual/scoreboard?dates=YYYYMMDD` — 6 events on 2024-07-09
+  (the same date the main slug returned 0), 2 events on 2022-06-21.
+- `.../soccer/uefa.europa_qual/scoreboard?dates=YYYYMMDD` — 6 events on 2024-07-11.
+
+**Matching method that fixed the failures**
+
+1. Query both the main and the qualifying slug for the fixture date ±1 day.
+2. Apply a team-alias canon: `psv`→`psveindhoven`, `unionsg`/`unionstgilloise`→
+   `unionsaintgilloise`, `slbenfica`/`benfica`→`benfica`, `qarabagagdam`/`fkqarabag`→
+   `qarabag`, `dortmund`→`borussiadortmund`, `inter`→`internazionale`,
+   `sportingcp`→`sporting`.
+3. Accept both home/away orientations.
+4. Require the final score to agree before accepting a match.
+
+**Measured result on 192 sampled missing fixtures**
+
+| League-season | Probed | Matched | Score-confirmed | Rate |
+|---|---|---|---|---|
+| UCL 2019 | 24 | 9 | 9 | 38% |
+| UCL 2022 | 24 | 21 | 21 | 88% |
+| UCL 2024 | 24 | 23 | 23 | 96% |
+| UCL 2025 | 24 | 18 | 18 | 75% |
+| UCL 2026 | 24 | 17 | 17 | 71% |
+| UEL 2022 | 24 | 19 | 19 | 79% |
+| UEL 2023 | 24 | 19 | 19 | 79% |
+| UEL 2024 | 24 | 23 | 23 | 96% |
+| **Total** | **192** | **149** | **149** | **78%** |
+
+Zero score conflicts. Up from 0–17% for these competitions in §2.1.
+
+**Rejected in this cycle:** `api.balldontlie.io/v1/games` HTTP 401 (key required);
+`rsssf.org` HTTP 404 for the probed archive; `eu-football.info` HTTP 200 with an empty
+body; `11v11.com` and `wildstat.com` HTTP 403 (Cloudflare); the openfootball
+champions-league raw path HTTP 404. Conference League slug guesses returned HTTP 200
+with zero events, which is inconclusive rather than proof of absence.
+
+**Basketball:** re-checked against ESPN and **no games are missing** — 81 of 81 sampled
+games across ten dates matched once the UTC-vs-local date offset was accounted for. The
+outstanding basketball work is statistics for 8,737 games, not fixtures. The
+basketball-reference schedule page serves only 54 game ids, so it is a spot-check
+source, not a complete schedule feed.
