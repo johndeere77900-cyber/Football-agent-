@@ -176,3 +176,65 @@ games across ten dates matched once the UTC-vs-local date offset was accounted f
 outstanding basketball work is statistics for 8,737 games, not fixtures. The
 basketball-reference schedule page serves only 54 game ids, so it is a spot-check
 source, not a complete schedule feed.
+
+## 9. Additional routes verified (November 2026 cycle)
+
+Full evidence: `SOURCE_VERIFICATION_2026-11.md`. Corrected totals:
+`RECOVERY_TOTALS_AND_PLAN.md`.
+
+**UEFA official match API — VERIFIED**
+
+`GET https://match.uefa.com/v5/matches?competitionId=<id>&seasonYear=<year>&limit=500&offset=0`
+returns complete match lists with scores, phases and stadiums. Competition IDs:
+`1` Champions League, `14` Europa League, `3` European Championship, `9` Super Cup,
+`28` Women's Champions League. Conference League and Nations League were not found in
+IDs 1-40 or 2019-2022. Several fields are intermittently plain strings rather than
+objects, so every access must be type-guarded.
+
+Measured against our fixtures: Europa League 2022/23, 2023/24 and 2024/25 match
+175/175, 175/175 and 269/269 (100%); Champions League 2022/23 matches 212/214 (99.1%)
+and 2024/25 279/279 (100%). This supersedes the earlier conclusion that these
+competitions were largely unrecoverable — the previously reported "missing" counts
+were the counts we hold.
+
+Genuine gaps, proven absent (no rows on the corresponding dates): Champions League
+qualifying 2019/20 (91) and 2025/26 (95), and European Championship qualifying for the
+2020 cycle (262) and 2024 cycle (239), since only the 51 finals matches per cycle are
+stored.
+
+**FIFA calendar API — VERIFIED**
+
+`GET https://api.fifa.com/api/v3/calendar/matches?idCompetition=17&idSeason=255711&count=500&language=en`
+returns 64 World Cup 2022 matches with scores and stages; all 64 match our records,
+confirming that competition is complete.
+
+**Domestic feeds — VERIFIED, nothing to recover**
+
+- `https://www.football-data.co.uk/mmz4281/<season>/<div>.csv` — 306/306 (Bundesliga
+  2024/25), 380/380 (Serie A 2019/20), 306/306 (Primeira 2019/20), 380/380 (La Liga
+  2024/25), zero conflicts.
+- `https://api.openligadb.de/getmatchdata/bl1/2024` — 306/306, zero conflicts.
+- `https://raw.githubusercontent.com/openfootball/football.json/...` — 200, but the
+  probed files carry no scores; schedule source only.
+
+**Basketball — VERIFIED**
+
+Monthly pages are the complete index:
+`https://www.basketball-reference.com/leagues/NBA_2024_games-<month>.html` yields
+**1,319** unique game ids for 2023/24 (the single season page yields only 54 — an
+earlier pagination artefact, not limited coverage).
+
+`https://www.basketball-reference.com/boxscores/<id>.html` returns team basic and
+advanced tables, player lines (`mp`, `fg`, `trb`, `ast`, `stl`, `blk`, `tov`, `pts`,
+`plus_minus`, `game_score`) and per-quarter/per-half splits — covering team, player
+and period statistics in one request. **Constraint:** basketball-reference terms
+prohibit automated scraping, so this needs clearance before bulk use; the ESPN
+summary route already in use carries no such restriction.
+
+`https://raw.githubusercontent.com/shufinskiy/nba_data/main/list_data.txt` returns 514
+archive entries (play-by-play, 1996/97 onwards); contents were not parsed, so it is
+partially verified.
+
+**Rejected:** `match.uefa.com/v5/competitions` (404), `cdn.nba.com` static JSON (403),
+`data.nba.net` (DNS failure), `stats.nba.com` (timeout), `api.balldontlie.io/v2`
+(401), TheSportsDB key `3` (403, permanently disabled — key `123` works).

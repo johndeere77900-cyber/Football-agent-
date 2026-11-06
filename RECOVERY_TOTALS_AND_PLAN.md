@@ -1,124 +1,105 @@
-# Recovery Totals and Ranked Plan (Expansion Cycle)
+# Recovery Totals and Ranked Plan
 
-Scope: additional recovery routes for missing historical fixtures and games.
-No production writes were made in this cycle; every probe was read-only.
+Status: **corrected** after the November 2026 verification cycle. Figures previously
+in this file (2,065 international fixtures "missing", 4,268 total) were wrong: those
+numbers were counts of rows we **hold**, not gaps. Everything below is measured
+against the live source or explicitly labelled as an estimate.
 
-## 1. New sources and methods discovered
+Evidence: [SOURCE_VERIFICATION_2026-11.md](SOURCE_VERIFICATION_2026-11.md).
+No production writes were made.
 
-| # | Route | Classification |
+## 1. Football — measured inventory
+
+### 1.1 Competitions verified complete (nothing to recover)
+
+| Competition | Season | Source | Matched | Result |
+|---|---|---|---|---|
+| Champions League | 2022/23 | 214 | 212 | 99.1% (1 conflict) |
+| Champions League | 2024/25 | 279 | 279 | 100% |
+| Europa League | 2022/23 | 175 | 175 | 100% |
+| Europa League | 2023/24 | 175 | 175 | 100% |
+| Europa League | 2024/25 | 269 | 269 | 100% |
+| World Cup | 2022 | 64 | 64 | 100% (FIFA API) |
+| Bundesliga | 2024/25 | 306 | 306 | 100% (two independent feeds) |
+| Serie A | 2019/20 | 380 | 380 | 100% |
+| Primeira Liga | 2019/20 | 306 | 306 | 100% |
+| La Liga | 2024/25 | 380 | 380 | 100% |
+
+### 1.2 Genuine gaps, verified absent and available
+
+| Competition | Season | Missing | Why | Source |
+|---|---|---|---|---|
+| European Championship qualifying | 2024 cycle | 239 | Dataset stores finals only (51) | UEFA v5 `competitionId=3` |
+| European Championship qualifying | 2020 cycle | 262 | Dataset stores finals only (51) | UEFA v5 `competitionId=3` |
+| Champions League qualifying | 2019/20 | 91 | No July/August 2019 rows | UEFA v5 `competitionId=1` |
+| Champions League qualifying | 2025/26 | 95 | No July/August 2025 rows | UEFA v5 `competitionId=1` |
+| **Football total** | | **687** | | |
+
+Domestic gap: **0** on every league-season tested. The earlier 2,203 domestic figure
+is withdrawn.
+
+### 1.3 Identified data-integrity defects (not missing records)
+
+- **6 Euro 2020 finals with home/away inverted** (e.g. `Spain 5-0 Slovakia` held
+  where UEFA has `Slovakia 0-5 Spain`).
+- **1 shootout convention mismatch**: `2026-05-30 Paris 1-1 Arsenal` held as
+  `PSG 5-4 Arsenal`. Our record appears to carry the penalty result; the source
+  reports the 120-minute score. A convention decision is required before any import.
+- **Alias gaps**: without a canon, Champions League 2022/23 appeared to be 84%
+  matched instead of 99.1%. Matching defects masquerade as missing data.
+
+### 1.4 Not measured this cycle
+
+- **Nations League** (162 + 188 rows held): competition ID not found in UEFA v5, so
+  completeness is unverified.
+- **Conference League**: not present in UEFA v5 IDs 1–40 or 2019–2022; no route found
+  and no fixtures held, so there is nothing to reconcile yet.
+- Remaining domestic leagues beyond the four verified.
+
+## 2. Basketball — measured inventory
+
+| Category | Count | Status |
 |---|---|---|
-| 1 | ESPN **qualifying-round slugs** (`uefa.champions_qual`, `uefa.europa_qual`) | **Verified and recommended** |
-| 2 | **Team alias canon** map (PSV, Union SG, Benfica, Qarabag, Dortmund, Inter, Sporting) | **Verified and recommended** (method, not a source) |
-| 3 | **Home/away swap + score-confirmation gating** | **Verified and recommended** (method) |
-| 4 | basketball-reference season schedule page | Partially usable (54 of ~1,230 games parseable) |
-| 5 | balldontlie v1 API | Rejected this cycle (HTTP 401, key required) |
-| 6 | ESPN NBA scoreboard re-check | **Verified**: no missing games |
+| Games held | 9,584 | Complete — 0 missing (81/81 sample) |
+| Games with team statistics | 847 | 2 rows each |
+| Games with player statistics | 847 | ~26 rows each |
+| Games with period scores | 847 | 10 rows each (4 quarters + OT, both teams) |
+| Games missing statistics | **8,737** | Recoverable |
 
-## 2. Exact endpoints investigated
+Estimated volume if all 8,737 are completed (estimate, not measured): ~17,474 team
+rows, ~227,000 player rows, ~87,370 period rows.
 
-Verified working:
+### 2.1 Verified basketball statistics sources
 
-- `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions_qual/scoreboard?dates=YYYYMMDD`
-- `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.europa_qual/scoreboard?dates=YYYYMMDD`
-- `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard?dates=YYYYMMDD` (main competition)
-- `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=YYYYMMDD`
-- `https://www.basketball-reference.com/leagues/NBA_2024_games.html` (partial)
-
-Rejected this cycle:
-
-- `https://api.balldontlie.io/v1/games` → HTTP **401** Unauthorized
-- `https://www.rsssf.org/tablesc/champ2024.html` → HTTP **404**
-- `https://eu-football.info/_matches.php?id=17000` → HTTP 200, **empty body**
-- `https://www.11v11.com/competitions/uefa-champions-league/2024/` → HTTP **403** (Cloudflare)
-- `https://wildstat.com/` → HTTP **403** (Cloudflare)
-- `https://raw.githubusercontent.com/openfootball/champions-league/master/2019-20/champions-league.txt` → HTTP **404** (path does not exist)
-- Conference League slug guesses `uefa.europa.conf`, `uefa.conference`, `uefa.europa_conf`, `uefa.conference_qual` → HTTP 200 but **0 events**; inconclusive, no Conference League fixtures are in our dataset
-
-## 3. Evidence of returned historical fixtures
-
-- `uefa.champions_qual` on **2024-07-09** returned **6 events** where the main `uefa.champions` slug returned **0**. These are exactly the qualifying ties our dataset holds (Panevezys–HJK, Hamrun–Lincoln Red Imps, Santa Coloma–Ballkani).
-- `uefa.champions_qual` on **2022-06-21** returned **2 events**, matching our La Fiorita–Inter Escaldes and Levadia–Vikingur records.
-- `uefa.europa_qual` on **2024-07-11** returned **6 events**.
-- ESPN NBA scoreboard on each sampled date returned the full slate (3–13 games), all of which we already hold.
-
-## 4. Match and reconciliation rates (football)
-
-192 sampled fixtures, both slugs, ±1 day window, alias canon, home/away both orientations, score confirmation:
-
-| League | Season | Probed | Matched | Score-confirmed | Rate |
-|---|---|---|---|---|---|
-| Champions League | 2019 | 24 | 9 | 9 | 38% |
-| Champions League | 2022 | 24 | 21 | 21 | 88% |
-| Champions League | 2024 | 24 | 23 | 23 | 96% |
-| Champions League | 2025 | 24 | 18 | 18 | 75% |
-| Champions League | 2026 | 24 | 17 | 17 | 71% |
-| Europa League | 2022 | 24 | 19 | 19 | 79% |
-| Europa League | 2023 | 24 | 19 | 19 | 79% |
-| Europa League | 2024 | 24 | 23 | 23 | 96% |
-| **Total** | | **192** | **149** | **149** | **78%** |
-
-Compared with the previous cycle (main slug only, exact date, 0.86 threshold): overall 47%, with Champions League at 0–17%. **The qualifying slug plus aliases is the difference.**
-
-Conflicts: **0**. No sampled fixture produced contradictory score evidence. Uncertain matches stay unresolved by construction, because a fixture is accepted only when both teams and the score agree.
-
-## 5. Football: competition-by-competition recoverability
-
-| Competition | Seasons missing | Missing fixtures | Measured rate | Est. recoverable |
+| Source | Team | Player | Period | Constraint |
 |---|---|---|---|---|
-| FIFA World Cup | 2022 | 128 | 100% | 128 |
-| Champions League | 2019–2026 | 866 | 38–96% | ~683 |
-| Europa League | 2022–2024 | 619 | 79–96% | ~534 |
-| UEFA Euro | 2020, 2024 | 102 | 52–100% | ~78 |
-| Nations League | 2020, 2024 | 350 | 82–93% | ~308 |
-| **International total** | | **2,065** | **78%** | **~1,731** |
-| Domestic (7 divisions) | 38 league-seasons | 2,203 | CSV-only | 482 already applied; remainder unmatched |
+| ESPN summary (current implementation) | yes | yes | yes | None; already proven on 847 games |
+| basketball-reference box scores | yes (+ advanced) | yes | yes (quarters and halves) | **Terms prohibit automated scraping** — clearance required |
+| shufinskiy/nba_data | play-by-play archives | indirect | via events | Contents unparsed; licence unverified |
 
-Separate football total: **2,065 international fixtures, ~1,731 recoverable (84%)**; domestic recovery remains limited to fixtures that have a real CSV counterpart.
+## 3. Ranked recovery plan
 
-## 6. Basketball: season-by-season coverage
+1. **European Championship qualifying — 501 matches.** Largest measured pool, fully
+   verified in the source and fully absent here. UEFA v5 `competitionId=3`,
+   `seasonYear` 2020 and 2024.
+2. **Champions League qualifying — 186 matches.** 2019/20 (91) and 2025/26 (95).
+   UEFA v5 `competitionId=1`, same seasons.
+3. **Basketball statistics — 8,737 games.** Use the existing ESPN summary route;
+   basketball-reference is the fallback only if its terms are cleared.
+4. **Nations League verification.** Find the competition ID, then measure; do not
+   assume a gap exists.
+5. **Conference League route.** Needs a different provider; nothing to reconcile until
+   such fixtures exist.
+6. **Data-integrity repairs** (6 inverted Euro fixtures, 1 shootout convention):
+   small in volume, high in correctness value, and must precede any import that would
+   otherwise duplicate or contradict them.
 
-| Season | Games held | Enriched | Outstanding | Missing games found |
-|---|---|---|---|---|
-| 2019 | 1,218 | 847 | 371 | 0 |
-| 2020 | 1,226 | 0 | 1,226 | 0 |
-| 2021 | 1,390 | 0 | 1,390 | 0 |
-| 2022 | 1,389 | 0 | 1,389 | 0 |
-| 2023 | 1,393 | 0 | 1,393 | 0 |
-| 2024 | 1,397 | 0 | 1,397 | 0 |
-| 2025 | 1,397 | 0 | 1,397 | 0 |
-| 2026 | 174 | 0 | 174 | 0 |
-| **Total** | **9,584** | **847** | **8,737** | **0** |
+## 4. Superseded claims
 
-Separate basketball total: **0 missing games** (81 of 81 sampled games across ten dates matched, 100%), and **8,737 games needing statistics**, all recoverable through the existing ESPN summary route.
-
-An earlier measurement in this cycle reported 60 "missing" games at 25.9%. That was my own error: `game_date` is stored in UTC while ESPN lists local dates, so evening games shifted a day. With a ±1 day window the result is 100% matched.
-
-## 7. Duplicate and conflict findings
-
-- No duplicate fixtures were created by any probe (read-only).
-- No score conflicts among 149 confirmed football matches.
-- Basketball: no conflicting game identities; the only apparent gaps were timezone artefacts.
-- basketball-reference ids (54 parsed) all correspond to games we already hold; nothing new recovered there.
-
-## 8. Sources verified and recommended
-
-1. **ESPN qualifying slugs** — recommended for acquisition; converts 0–17% to 71–96% on UCL and 79–96% on Europa League.
-2. **Alias canon + swap + score gating** — recommended as the mandatory matching method for all ESPN football batches.
-3. **ESPN NBA summary** — recommended; no missing games, statistics coverage proven on 847 games.
-
-## 9. Remaining records that cannot currently be recovered
-
-- **Champions League 2019 qualifying**: only 38% matched. That date (2019-08-07) in our data contains fixtures that did not occur then (Juventus–Lyon, Man City–Real Madrid), so those records need a source-level date audit before they can ever match.
-- **~334 international fixtures** that fail the score-confirmed match test even with aliases and both slugs.
-- **Domestic fixtures without a CSV counterpart** (186 already proven unmatched; the rest needs re-acquisition, not enrichment).
-- **xG** for all competitions (StatsBomb only to UCL 2018/19, unapproved).
-- **Player-level football statistics** for competitions 1–5 (ESPN soccer returns none).
-
-## 10. Ranked recovery plan (by expected records recovered)
-
-1. **ESPN football batch with qualifying slugs + aliases** (~1,731 international fixtures): highest yield, measured, no licence question. Requires your authorisation to write.
-2. **Basketball statistics batches** (8,737 games): capability already implemented and proven on 847.
-3. **Date-integrity audit** of Champions League 2019 records: unlocks the 38% remainder and prevents false matches.
-4. **StatsBomb 2018/19 UCL xG**: needs coverage measurement and licence decision; small volume, unique xG value.
-5. **Domestic CSV re-acquisition**: only after confirming which fixtures legitimately have no CSV row.
-6. **basketball-reference**: spot verification only; schedule page serves 54 games, not a full season.
+| Previous claim | Corrected finding |
+|---|---|
+| 2,065 international fixtures missing | 687 genuinely absent |
+| 2,203 domestic fixtures missing | 0 on tested feeds |
+| Champions League/Europa broadly unmatched (47%) | 99–100% matched with alias canon |
+| 60 basketball games missing (25.9%) | 0 missing; UTC/local date artefact |
+| basketball-reference exposes only 54 game ids | 1,319 via monthly pages |
