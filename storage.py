@@ -6682,7 +6682,7 @@ def save_historical_enrichment(enriched_fixtures, source="api_football"):
     """
     valid_sources = (
         "api_football", "football_data_org", "football_data_csv",
-        "soccerdata", "reconciled",
+        "soccerdata", "reconciled", "espn_soccer_summary",
     )
     source_str = str(source).strip().lower()
     if source_str not in valid_sources:
