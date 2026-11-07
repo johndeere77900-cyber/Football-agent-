@@ -25,6 +25,7 @@ import argparse
 import difflib
 import json
 import os
+import re
 import sys
 import time
 import urllib.parse
@@ -61,6 +62,15 @@ FIELD_MAP = {
 # Qualifying rounds are published as separate ESPN competitions, so they are
 # searched as additional candidates when the main competition has no match.
 EXTRA_SLUGS = {2: ("uefa.champions_qual",), 3: ("uefa.europa_qual",), 4: ("uefa.euroq",)}
+# Competition names the summary header must report before statistics are accepted.
+# The "all" scoreboard mixes men's, women's and youth competitions that can repeat a
+# team pairing and scoreline on the same date.
+EXPECTED_COMPETITION = {
+    1: ("world cup",), 2: ("champions league",), 3: ("europa league",),
+    4: ("european championship",), 5: ("nations league",),
+    39: ("premier league",), 140: ("laliga", "la liga"), 135: ("serie a",),
+    78: ("bundesliga",), 61: ("ligue 1",), 88: ("eredivisie",), 94: ("liga portugal",),
+}
 MIN_NAME_SCORE = 0.80
 
 
@@ -99,6 +109,22 @@ def name_score(left, right):
     short, long = sorted((a.replace(" ", ""), b.replace(" ", "")), key=len)
     if len(short) >= 3 and short in long:
         return 0.95
+    # Provider feeds shorten club names ("Athletic Bilbao" vs "Athletic Club"), so a
+    # distinctive shared word counts as agreement. Four-letter words are excluded
+    # because they are common filler ("real", "club") that would pair different clubs.
+    tokens_a = {t for t in re.split(r"[^a-z0-9]+", a) if len(t) >= 4}
+    tokens_b = {t for t in re.split(r"[^a-z0-9]+", b) if len(t) >= 4}
+    if tokens_a & tokens_b:
+        return 0.85
+    # Feeds abbreviate the same club ("Barça" / "Barcelona", "Bara" after accent
+    # stripping), so a shared prefix of at least four characters counts when the two
+    # words differ substantially in length (the prefix is a real stem, not a shared
+    # filler word).
+    for left in tokens_a:
+        for right in tokens_b:
+            shared = os.path.commonprefix([left, right])
+            if len(shared) >= 5 or (len(shared) >= 4 and abs(len(left) - len(right)) >= 3):
+                return 0.85
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
@@ -240,6 +266,9 @@ def work(fixture):
     """Fetch the scoreboard and summary for one fixture; parse off the main thread."""
     slugs = [ESPN_LEAGUES[fixture["league_id"]]]
     slugs.extend(EXTRA_SLUGS.get(fixture["league_id"], ()))
+    # The "all" scoreboard lists every competition on a date, which covers
+    # qualifying rounds published under competition ids the other slugs miss.
+    slugs.append("all")
     base = datetime.fromisoformat(fixture["kickoff_date"])
     # A late kick-off can land on the previous or next date in the provider's
     # scoreboard calendar, so the neighbouring days are checked too. The match is
@@ -261,6 +290,11 @@ def work(fixture):
         payload = cached_json(path, url)
     except Exception as exc:
         return fixture, None, f"summary_error:{type(exc).__name__}"
+    header = ((payload.get("header") or {}).get("league") or {}).get("name") or ""
+    competition = header.lower()
+    wanted = EXPECTED_COMPETITION.get(fixture["league_id"], ())
+    if "women" in competition or not any(token in competition for token in wanted):
+        return fixture, None, "competition_mismatch"
     stats = parse_summary(payload)
     item = build_item(fixture, event, stats)
     return fixture, item, (None if item else "no_published_statistics")
@@ -286,7 +320,8 @@ def main(argv=None):
     print(json.dumps({"pending": len(pending), "source": SOURCE}), flush=True)
 
     counters = {"matched": 0, "written": 0, "no_matching_espn_event": 0,
-                "no_published_statistics": 0, "summary_error": 0}
+                "no_published_statistics": 0, "summary_error": 0,
+                "competition_mismatch": 0}
     buffer = []
     started = time.time()
 

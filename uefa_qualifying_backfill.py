@@ -39,11 +39,11 @@ TIMEOUT = 40
 BASE = "https://match.uefa.com/v5/matches"
 
 # Stored league id -> official UEFA competition id.
-COMPETITIONS = {2: 1, 4: 3}
+COMPETITIONS = {2: 1, 3: 14, 4: 3}
 
 # (league_id, season) pairs whose qualifying rounds are missing. Season is the
 # stored season, which for these competitions is the starting year.
-TARGETS = [(2, 2019), (2, 2025), (4, 2020), (4, 2024)]
+TARGETS = [(2, 2019), (2, 2025), (3, 2025), (4, 2020), (4, 2024)]
 
 
 def as_dict(value):
@@ -194,7 +194,7 @@ def main(argv=None):
         competition_id = COMPETITIONS[league_id]
         # UEFA labels a Champions League season by the year it ends (2019/20 is
         # seasonYear 2020) while a European Championship uses its finals year.
-        uefa_season = season + 1 if league_id == 2 else season
+        uefa_season = season + 1 if league_id in (2, 3) else season
         try:
             matches = fetch_competition_season(competition_id, uefa_season)
         except Exception as exc:
