@@ -248,3 +248,132 @@ Their `enrichment_status` is currently `NONE` while the rows are demonstrably en
 single `--apply` run aligns status, enrichment status and reason for all seven. No manual
 status edit is needed and none was made here.
 
+## 15. Final production state (verified in Neon, 8 November 2026)
+
+Acquisition completed by this run: four seasons imported from ESPN scoreboards and all
+752 remaining statless fixtures re-audited, then every registry entry recomputed from the
+underlying tables.
+
+| Metric | Value |
+| --- | --- |
+| Football fixtures | 25,111 |
+| Distinct fixture ids | 25,111 |
+| Enriched | 23,741 (94.5 %) |
+| Without statistics | 1,370 |
+| Rows with possession | 5,187 |
+| Rows with xG | 0 |
+| Duplicate event groups retained | 250 |
+| Registry rows whose count differs from persisted fixtures | 0 |
+| Orphaned enrichment rows | 0 |
+| Fixtures with no registry season | 0 |
+
+Newly acquired in this run: FIFA World Cup 2026 (104 fixtures, 48 teams, 2026-06-11 to
+2026-07-19), Nations League 2019/20 (142, 55 teams, 2018-09-06 to 2019-06-09), Nations
+League 2022/23 (160, 54 teams, 2022-06-01 to 2023-06-18; the six provider-cancelled Russia
+fixtures excluded), Nations League 2026/27 (156: 104 played, 52 scheduled).
+
+### Registry after reconciliation
+
+| Competition | Season | Fixtures | Status | Enrichment | Reason class |
+| --- | --- | --- | --- | --- | --- |
+| World Cup | 2019 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2020 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2021 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2022 | 128 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| World Cup | 2023 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2024 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2025 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2026 | 104 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| Champions League | 2019 | 340 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2020 | 176 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2021 | 218 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2022 | 214 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2023 | 214 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2024 | 279 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2025 | 470 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2026 | 54 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2019 | 511 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2020 | 360 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2021 | 175 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2022 | 175 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2023 | 175 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2024 | 269 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2025 | 271 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2026 | 152 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| European Championship | 2019 | 0 | COMPLETE | NONE | no_edition_in_season |
+| European Championship | 2020 | 364 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| European Championship | 2021 | 0 | COMPLETE | NONE | no_edition_in_season |
+| European Championship | 2022 | 0 | COMPLETE | NONE | no_edition_in_season |
+| European Championship | 2023 | 0 | COMPLETE | NONE | no_edition_in_season |
+| European Championship | 2024 | 340 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| European Championship | 2025 | 0 | COMPLETE | NONE | no_edition_in_season |
+| European Championship | 2026 | 0 | COMPLETE | NONE | no_edition_in_season |
+| Nations League | 2019 | 142 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| Nations League | 2020 | 162 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Nations League | 2021 | 0 | COMPLETE | NONE | no_edition_in_season |
+| Nations League | 2022 | 160 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| Nations League | 2023 | 0 | COMPLETE | NONE | no_edition_in_season |
+| Nations League | 2024 | 188 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| Nations League | 2025 | 0 | COMPLETE | NONE | no_edition_in_season |
+| Nations League | 2026 | 156 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 39 | 2019 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2020 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2021 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2022 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2023 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2024 | 380 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 39 | 2025 | 382 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2026 | 99 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2019 | 279 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2020 | 488 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2021 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2022 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2023 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2024 | 358 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 61 | 2025 | 406 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 61 | 2026 | 93 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 78 | 2019 | 430 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 78 | 2020 | 402 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 78 | 2021 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 78 | 2022 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 78 | 2023 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 78 | 2024 | 614 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 78 | 2025 | 456 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 78 | 2026 | 97 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 88 | 2019 | 258 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 88 | 2020 | 340 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 88 | 2021 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 88 | 2022 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 88 | 2023 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 88 | 2024 | 430 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 88 | 2025 | 402 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 88 | 2026 | 113 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 94 | 2019 | 456 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 94 | 2020 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2021 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2022 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2023 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2024 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2025 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2026 | 81 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2019 | 618 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 135 | 2020 | 520 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2021 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2022 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2023 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2024 | 380 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 135 | 2025 | 454 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2026 | 103 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2019 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2020 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2021 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2022 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2023 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2024 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2025 | 488 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2026 | 129 | COMPLETE | COMPLETE | all_fixtures_enriched |
+
+Football registry totals: 96 of 96 COMPLETE — 47 with every fixture enriched, 34 with a
+documented coverage limitation, 15 seasons in which the competition staged no edition
+(expected coverage zero). No season is left pending and none was marked complete without
+evidence; the earlier "all 26 incomplete are empty" claim was corrected in section 12.

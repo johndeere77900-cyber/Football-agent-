@@ -6,8 +6,10 @@ that reflects verified reality:
 
   COMPLETE  every acquired fixture is either enriched or individually
             investigated, with the investigation recorded in the audit evidence
-  INCOMPLETE  nothing was acquired for the season, or fixtures remain that the
-            audit did not classify
+  COMPLETE (no edition)  the competition staged no edition in that season, so
+            expected coverage is zero; recorded as complete with that reason
+  INCOMPLETE  nothing was acquired for a season that should hold fixtures, or
+            fixtures remain that the audit did not classify
 
 Every statless fixture is attributed to one of two documented categories using
 the per-fixture audit evidence:
@@ -34,6 +36,16 @@ RECOVERY = os.path.join(".api_cache", "reports", "audit_recovery.json")
 BASKETBALL_AUDIT = os.path.join(".api_cache", "reports", "basketball_gap_audit.json")
 SEASON_IN_PROGRESS_AS_OF = "2026-11-07"
 
+# Seasons in which each international competition actually staged an edition,
+# keyed by our season label. A registered season outside this set has zero
+# expected fixtures: it is verified complete, not a data gap.
+EDITION_YEARS = {
+    1: {2022, 2026},                     # FIFA World Cup
+    4: {2020, 2024},                     # UEFA European Championship
+    5: {2019, 2020, 2022, 2024, 2026},   # UEFA Nations League
+}
+COMPETITION_NAME = {1: "FIFA World Cup", 4: "UEFA European Championship", 5: "UEFA Nations League"}
+
 
 def load(path):
     if not os.path.exists(path):
@@ -52,6 +64,20 @@ def football_counts(cur):
          GROUP BY 1, 2
     """)
     return {(r[0], r[1]): {"fixtures": r[2], "enriched": r[3]} for r in cur.fetchall()}
+
+
+PLAYED_STATUSES = {"FT", "AET", "PEN", "Full Time", "Final", "Final "}
+
+
+def statless_statuses(cur):
+    """Match status of every fixture that carries no enrichment row."""
+    cur.execute("""
+        SELECT f.fixture_id, COALESCE(f.status_short, '')
+          FROM historical_fixtures f
+          LEFT JOIN historical_fixture_enrichment e ON e.fixture_id = f.fixture_id
+         WHERE e.fixture_id IS NULL
+    """)
+    return dict(cur.fetchall())
 
 
 def statless_by_season(cur):
@@ -106,6 +132,7 @@ def main() -> int:
         with conn.cursor() as cur:
             counts = football_counts(cur)
             statless = statless_by_season(cur)
+            statuses = statless_statuses(cur)
             cur.execute("SELECT league_id, season FROM historical_datasets WHERE sport='football'")
             registered = cur.fetchall()
 
@@ -113,6 +140,8 @@ def main() -> int:
                 info = counts.get((league_id, season), {"fixtures": 0, "enriched": 0})
                 missing = statless.get((league_id, season), [])
                 no_stats, no_event, unclassified = 0, 0, 0
+                unplayed = sum(1 for fixture_id in missing
+                               if statuses.get(fixture_id) not in PLAYED_STATUSES)
                 for fixture_id in missing:
                     record = verdicts.get(fixture_id)
                     if record is None:
@@ -123,20 +152,38 @@ def main() -> int:
                         no_event += 1
 
                 if info["fixtures"] == 0:
-                    status, complete = "INCOMPLETE", 0
-                    reason = "no_fixtures_persisted"
+                    editions = EDITION_YEARS.get(league_id)
+                    if editions is not None and season not in editions:
+                        status, complete = "COMPLETE", 1
+                        reason = (f"no_edition_in_season: no {COMPETITION_NAME[league_id]} was "
+                                  f"scheduled in {season}; expected coverage is zero "
+                                  f"(editions held: {', '.join(str(y) for y in sorted(editions))})")
+                    else:
+                        status, complete = "INCOMPLETE", 0
+                        reason = "no_fixtures_persisted"
                 elif unclassified:
                     status, complete = "INCOMPLETE", 0
                     reason = f"{unclassified} fixtures uninvestigated"
                 elif missing:
                     status, complete = "COMPLETE", 1
                     reason = (f"complete_with_documented_coverage_limitation: "
-                              f"{no_stats} fixtures have an ESPN event with no published "
-                              f"statistics, {no_event} have no ESPN event on date +/-1 day; "
-                              f"evidence .api_cache/reports/statless_fixture_audit.json")
+                              f"{unplayed} fixtures are unplayed (status not final, statistics "
+                              f"not applicable), {no_stats - unplayed} played fixtures have an "
+                              f"ESPN event with no published statistics, {no_event} have no ESPN "
+                              f"event on date +/-1 day; evidence "
+                              f".api_cache/reports/statless_fixture_audit.json")
                 else:
                     status, complete = "COMPLETE", 1
                     reason = None
+
+                if info["fixtures"] == 0:
+                    enrichment = "NONE"
+                elif info["enriched"] >= info["fixtures"]:
+                    enrichment = "COMPLETE"
+                elif info["enriched"]:
+                    enrichment = "PARTIAL"
+                else:
+                    enrichment = "NONE"
 
                 coverage = {
                     "fixtures_persisted": info["fixtures"],
@@ -144,6 +191,7 @@ def main() -> int:
                     "fixtures_without_statistics": len(missing),
                     "statless_espn_event_without_statistics": no_stats,
                     "statless_no_espn_event": no_event,
+                    "statless_not_yet_played": unplayed,
                     "evidence": ".api_cache/reports/statless_fixture_audit.json",
                     "verified_at": now,
                 }
@@ -151,16 +199,16 @@ def main() -> int:
                     "status": status, "fixtures": info["fixtures"],
                     "enriched": info["enriched"], "statless": len(missing),
                     "no_stats": no_stats, "no_event": no_event,
-                    "unclassified": unclassified,
+                    "unclassified": unclassified, "enrichment": enrichment,
                 }
                 if args.apply:
                     cur.execute("""
                         UPDATE historical_datasets
                            SET status=%s, fixture_count=%s, acquisition_complete=%s,
-                               error_reason=%s, updated_at=%s,
+                               enrichment_status=%s, error_reason=%s, updated_at=%s,
                                provider_coverage_json = COALESCE(provider_coverage_json, '{}'::jsonb) || %s::jsonb
                          WHERE sport='football' AND league_id=%s AND season=%s
-                    """, (status, info["fixtures"], complete, reason, now,
+                    """, (status, info["fixtures"], complete, enrichment, reason, now,
                           json.dumps({"enrichment_verification": coverage}), league_id, season))
 
             games = basketball_counts(cur)
