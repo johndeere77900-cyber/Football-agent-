@@ -200,3 +200,51 @@ league 5 to `uefa.nations` in the ESPN league table, then import with the UEFA i
 duplicate guard (normalised names + UTC date). Nations League 2026 has no published events
 yet and should be re-probed after the next international window.
 
+## 14. Fixture acquisition path for the three recoverable seasons
+
+`espn_fixture_import.py` (new) builds fixtures for competitions the UEFA API cannot
+attribute. It reads one competition scoreboard per calendar day, requires the
+scoreboard's own competition name (`FIFA World Cup`, `UEFA Nations League`), keys
+fixtures deterministically from the ESPN event id, and refuses to report coverage
+when any day failed to fetch — a silent failure was previously undercounting the
+World Cup as 74 of 104.
+
+Dry-run measurements over the full tournament windows:
+
+| Dataset | Window(s) | Events | Insertable | Notes |
+| --- | --- | --- | --- | --- |
+| World Cup 2026 (league 1) | 2026-06-11..2026-07-19 | 104 | 104 | matches the 48-team, 104-match format exactly |
+| Nations League 2019 (league 5) | 2018-09-06..2018-11-20, 2019-06-05..2019-06-10 | 142 | 142 | group stage plus 2018/19 finals |
+| Nations League 2022 (league 5) | 2022-06-01..2022-06-15, 2022-09-20..2022-09-28, 2023-06-14..2023-06-19 | 166 | 160 | 6 Russia fixtures are provider-cancelled (0-0, status Canceled) and are excluded, not invented |
+| Nations League 2026 (league 5) | 2026-09-01..2026-10-15, 2026-11-01..2026-11-20 | 156 | 156 | 104 completed, 52 scheduled; earlier "unavailable" finding was a date-format defect in the probe |
+
+The Nations League 2026/27 season is published after all: the earlier zero-event result
+came from querying `dates=2026-09-05` (hyphenated), which ESPN answers with an empty body.
+
+Apply commands, reserved for the database owner:
+
+```
+python espn_fixture_import.py --slug fifa.world --league 1 --season 2026 \
+  --window 2026-06-11:2026-07-19 --apply
+python espn_fixture_import.py --slug uefa.nations --league 5 --season 2019 \
+  --window 2018-09-06:2018-11-20 --window 2019-06-05:2019-06-10 --apply
+python espn_fixture_import.py --slug uefa.nations --league 5 --season 2022 \
+  --window 2022-06-01:2022-06-15 --window 2022-09-20:2022-09-28 \
+  --window 2023-06-14:2023-06-19 --apply
+python espn_fixture_import.py --slug uefa.nations --league 5 --season 2026 \
+  --window 2026-09-01:2026-10-15 --window 2026-11-01:2026-11-20 \
+  --include-scheduled --apply
+```
+
+After each import, run `espn_football_stats.py --apply` for enrichment and
+`finalize_dataset_status.py --apply` to reconcile the registry.
+
+### Registry reconciliation for the seven populated datasets
+
+Their `enrichment_status` is currently `NONE` while the rows are demonstrably enriched
+(1,054 of 1,806 carry statistics). `finalize_dataset_status.py` already derives
+`enrichment_status` from the persisted enrichment rows and writes
+`complete_with_documented_coverage_limitation` with the sighted/not-found counts, so a
+single `--apply` run aligns status, enrichment status and reason for all seven. No manual
+status edit is needed and none was made here.
+
