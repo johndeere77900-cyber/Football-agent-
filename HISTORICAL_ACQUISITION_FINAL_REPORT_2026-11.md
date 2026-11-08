@@ -1,6 +1,19 @@
 # Historical acquisition - final verified report (7 November 2026)
 
 Neon project `dark-hall-82163232`, database `neondb`, production branch `br-long-mountain-b5zwly7k`.
+## 0. Final state (re-verified after the last import)
+
+| Metric | Value |
+| --- | --- |
+| Fixtures persisted | 24,549 |
+| Fixtures with statistics | 23,182 |
+| Fixtures without statistics | 1,367 |
+| Rows with possession | 4,628 |
+| Football rows still at 00:00 | 1,272 |
+
+UEFA season coverage after the import: Champions League 2019: 340, 2020: 176, 2021: 218, 2022: 214, 2023: 214, 2024: 279, 2025: 470, 2026: 54;
+Europa League 2019: 511, 2020: 360, 2021: 175, 2022: 175, 2023: 175, 2024: 269, 2025: 271, 2026: 152.
+
 All figures come from live SQL against that database.
 
 ## 1. Headline
