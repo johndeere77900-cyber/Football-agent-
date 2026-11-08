@@ -43,7 +43,9 @@ COMPETITIONS = {2: 1, 3: 14, 4: 3}
 
 # (league_id, season) pairs whose qualifying rounds are missing. Season is the
 # stored season, which for these competitions is the starting year.
-TARGETS = [(2, 2019), (2, 2025), (3, 2025), (4, 2020), (4, 2024)]
+TARGETS = [(2, 2019), (2, 2020), (2, 2021), (2, 2023), (2, 2025),
+           (3, 2019), (3, 2020), (3, 2021), (3, 2025), (3, 2026),
+           (4, 2020), (4, 2024)]
 
 
 def as_dict(value):

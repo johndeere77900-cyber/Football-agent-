@@ -125,6 +125,15 @@ def name_score(left, right):
             shared = os.path.commonprefix([left, right])
             if len(shared) >= 5 or (len(shared) >= 4 and abs(len(left) - len(right)) >= 3):
                 return 0.85
+    # Transliterations and provider spellings differ by a letter or two without
+    # sharing an exact token ("Diddeleng" / "Dudelange", "Qarabag" / "Qarabağ"),
+    # so a close token match counts as agreement too. The score must still be
+    # identical and the summary header must still name the right competition.
+    for left in tokens_a:
+        for right in tokens_b:
+            if min(len(left), len(right)) >= 5 and difflib.SequenceMatcher(
+                    None, left, right).ratio() >= 0.72:
+                return 0.80
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
