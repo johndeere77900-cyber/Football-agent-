@@ -676,11 +676,7 @@ def _recent_feature(
 
     match_count = len(goals_for)
 
-    if matches and league_id is not None and season is not None:
-        try:
-            storage.save_historical_fixtures(matches, league_id, season, cutoff=fixture_date, require_completed=True)
-        except Exception:
-            pass
+    # Historical acquisition retired: recent-form lookups never persist provider fixtures.
 
     return {
         "matches": match_count,
@@ -1126,6 +1122,21 @@ def _insufficient_prediction(
     }
 
 
+def _load_active_calibrator(sport, league_id=None, season=None, cutoff_timestamp=None):
+    """Load the promoted calibrator, or None when no version is active."""
+    try:
+        import calibration
+
+        return calibration.load_active_calibrator(
+            sport=sport,
+            league_id=league_id,
+            season=season,
+            cutoff_timestamp=cutoff_timestamp,
+        )
+    except Exception:
+        return None
+
+
 def predict_fixture(
     fixture,
     league_avg_goals,
@@ -1212,13 +1223,8 @@ def predict_fixture(
 
     cutoff = fixture_data.get("date")
 
-    # PERMANENT ACCUMULATION: Always store newly discovered fixture payload in permanent database (require_completed=True)
-    try:
-        storage.save_historical_fixtures([fixture], league["id"], league["season"], source=provider_name, require_completed=True)
-        if fixture.get("statistics"):
-            storage.save_historical_enrichment([fixture], source=provider_name)
-    except Exception as exc:
-        print(f"Warning: Raw fixture persistence error: {exc}")
+    # Historical acquisition retired: predictions only read history. New completed
+    # matches are persisted exclusively by the verified live-match lifecycle.
 
     # DATABASE FIRST: Retrieve team-centric history directly from stored database using canonical IDs
     home_db_matches = storage.get_team_historical_fixtures(c_home_id, cutoff=cutoff, limit=30)
@@ -1397,6 +1403,7 @@ def predict_fixture(
             features,
             elo_probabilities=elo_probabilities,
             elo_weight=config.ELO_BLEND_WEIGHT,
+            calibrator=_load_active_calibrator("football", league["id"], league["season"], now_utc),
             prediction_timestamp=now_utc,
             data_cutoff_timestamp=now_utc,
             fixture_id=fixture_data["id"],
@@ -1409,6 +1416,18 @@ def predict_fixture(
         raise ValueError(
             "prediction_engine returned an invalid result."
         )
+
+    # Immutable snapshot payload: the exact features and Elo inputs supplied to
+    # the model, never a later reconstruction of database state.
+    prediction["model_inputs"] = {
+        "features": dict(features),
+        "elo_probabilities": dict(elo_probabilities) if elo_probabilities is not None else None,
+        "elo_weight": config.ELO_BLEND_WEIGHT,
+        "prediction_timestamp": now_utc,
+        "data_cutoff_timestamp": now_utc,
+        "model_version": getattr(config, "MODEL_VERSION", None),
+        "feature_version": getattr(config, "FEATURE_VERSION", None),
+    }
 
     prov_meta = provider_meta or {}
     provenance_info = {
@@ -1983,6 +2002,16 @@ def run_daily(
                 ),
                 prediction_context=prediction_context,
                 prediction_record=rec,
+                features=(
+                    rec.get("model_inputs", {}).get("features")
+                    if isinstance(rec.get("model_inputs"), dict)
+                    else rec.get("features")
+                ),
+                model_inputs=rec.get("model_inputs"),
+                idempotency_key=(
+                    f"football:{prediction['fixture_id']}:{prediction_context}:"
+                    f"{prediction['date']}:{time_utils.format_utc_iso(datetime.now(timezone.utc))[:16]}"
+                ),
             )
 
             storage.save_prediction_snapshot(
@@ -2500,6 +2529,12 @@ def run_daily_basketball(
                     game,
                     prediction_timestamp=now_utc,
                     data_cutoff_timestamp=now_utc,
+                    calibrator=_load_active_calibrator(
+                        "basketball",
+                        league_id,
+                        game.get("league", {}).get("season") if isinstance(game.get("league"), dict) else None,
+                        now_utc,
+                    ),
                 )
             )
 
@@ -2524,6 +2559,9 @@ def run_daily_basketball(
                 confidence=prediction["confidence"],
                 prediction_context=prediction_context,
                 prediction_record=prediction,
+                features=prediction.get("model_inputs"),
+                model_inputs=prediction.get("model_inputs"),
+                idempotency_key=f"basketball:{prediction['game_id']}:{prediction_context}:{now_utc[:16]}",
             )
 
             storage.save_prediction_snapshot(
@@ -2944,12 +2982,56 @@ def build_parser():
         help="Dump raw API response.",
     )
 
+    parser.add_argument(
+        "--autonomous",
+        choices=["cycle", "discover", "prematch", "live", "verify-results", "grade", "learn"],
+        help="Run an autonomous live-match lifecycle stage and exit.",
+    )
+
+    parser.add_argument(
+        "--horizon-days",
+        type=int,
+        default=14,
+        help="Rolling discovery horizon in days (default 14).",
+    )
+
     return parser
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
+
+    if getattr(args, "autonomous", None):
+        import json as _json
+        import live_lifecycle
+
+        storage.init_db()
+        stage = args.autonomous
+        horizon = int(getattr(args, "horizon_days", 14) or 14)
+        if stage == "discover":
+            result = live_lifecycle.discover(horizon_days=horizon)
+        elif stage == "prematch":
+            result = live_lifecycle.prematch()
+        elif stage == "live":
+            result = live_lifecycle.monitor()
+        elif stage == "verify-results":
+            result = live_lifecycle.verify_results()
+        elif stage == "grade":
+            result = live_lifecycle.grade()
+        elif stage == "learn":
+            result = live_lifecycle.learn()
+        else:
+            result = {
+                "discover": live_lifecycle.discover(horizon_days=horizon),
+                "prematch": live_lifecycle.prematch(),
+                "live": live_lifecycle.monitor(),
+                "verify-results": live_lifecycle.verify_results(),
+                "grade": live_lifecycle.grade(),
+                "learn": live_lifecycle.learn(),
+            }
+        print(_json.dumps(result, indent=2, default=str))
+        return 0
 
     try:
         # Validate numeric CLI arguments before dispatch.
@@ -3075,87 +3157,14 @@ def main():
                 return 1
             return 0
 
-        if args.historical_queue:
-            storage.init_db()
-
-            summary = historical_sync.run_historical_queue(
-                seasons=getattr(args, "seasons", None),
-                season=args.season,
-                with_enrichment=args.with_enrichment,
-                refresh=args.refresh,
+        if args.historical_queue or args.historical_sync:
+            print(
+                "ERROR: historical acquisition is retired. New completed matches may only "
+                "be added through the verified live-match lifecycle "
+                "(--autonomous). Historical reads, validation and reports remain available.",
+                file=sys.stderr,
             )
-
-            if isinstance(summary, dict) and summary.get("interrupted"):
-                print(
-                    f"Historical queue was interrupted ({summary.get('interrupt_signal')}); "
-                    "committed records and checkpoints were preserved.",
-                    file=sys.stderr,
-                )
-                return 130
-
-            reports = summary.get("reports", []) if isinstance(summary, dict) else []
-            incomplete_count = sum(
-                1 for r in reports
-                if isinstance(r, dict) and r.get("status") != "COMPLETE"
-            )
-            if incomplete_count > 0:
-                print(
-                    f"Historical queue finished with {incomplete_count} incomplete dataset(s) out of {len(reports)}.",
-                    file=sys.stderr,
-                )
-                return 1
-
-            return 0
-
-        if args.historical_sync:
-            sport = args.sport or "football"
-            league_id = args.league or (config.ALLOWED_BASKETBALL_LEAGUE_IDS[0] if sport == "basketball" else config.ALLOWED_LEAGUE_IDS[0])
-            storage.init_db()
-
-            seasons_list = getattr(args, "seasons", None)
-            if seasons_list and isinstance(seasons_list, (list, tuple)):
-                reports = []
-                for ssn in seasons_list:
-                    if sport == "basketball":
-                        rep = historical_sync.sync_historical_basketball_games(
-                            league_id=league_id, season=ssn, refresh=args.refresh
-                        )
-                    else:
-                        rep = historical_sync.sync_historical_fixtures(
-                            league_id=league_id, season=ssn, with_enrichment=args.with_enrichment, refresh=args.refresh
-                        )
-                    reports.append(rep)
-
-                incomplete_count = sum(
-                    1 for r in reports if not isinstance(r, dict) or r.get("status") != "COMPLETE"
-                )
-                if incomplete_count > 0:
-                    print(
-                        f"Historical sync ended with {incomplete_count} incomplete dataset(s) out of {len(reports)}. Exiting with code 1.",
-                        file=sys.stderr,
-                    )
-                    return 1
-                return 0
-
-            season = args.season or (datetime.now(timezone.utc).year - 1)
-            if sport == "basketball":
-                report = historical_sync.sync_historical_basketball_games(
-                    league_id=league_id,
-                    season=season,
-                    refresh=args.refresh,
-                )
-            else:
-                report = historical_sync.sync_historical_fixtures(
-                    league_id=league_id,
-                    season=season,
-                    with_enrichment=args.with_enrichment,
-                    refresh=args.refresh,
-                )
-
-            if not isinstance(report, dict) or report.get("status") != "COMPLETE":
-                print(f"Historical sync ended with status '{report.get('status', 'FAILED')}' (non-COMPLETE). Exiting with code 1.", file=sys.stderr)
-                return 1
-            return 0
+            return 2
 
         if args.dataset_status:
             sport = args.sport or "football"

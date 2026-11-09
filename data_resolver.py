@@ -2758,37 +2758,7 @@ class DataResolver:
                     logger.warning(f"Rejected unresolved candidate fixture (id={fid}) in get_fixtures_for_date: {rejection_reason}")
 
         if reconciled_fixtures:
-            # Persist newly reconciled fixtures permanently into PostgreSQL if season is known
-            try:
-                for rf in reconciled_fixtures:
-                    lid = rf.get("league", {}).get("id") or league_id
-                    ssn = rf.get("league", {}).get("season")
-                    if lid and ssn:
-                        storage.save_historical_fixtures([rf], lid, ssn, source=rf.get("provider_provenance", {}).get("provider", "api_football"), require_completed=True)
-                        if rf.get("statistics"):
-                            enrichment_record = dict(rf)
-                            reconciliation_metadata = enrichment_record.get("reconciliation_metadata", {})
-                            has_reconciliation_provenance = (
-                                isinstance(reconciliation_metadata, dict)
-                                and reconciliation_metadata.get("is_reconciled") is True
-                            )
-
-                            if has_reconciliation_provenance:
-                                field_provenance = enrichment_record.get("field_provenance", {})
-                                enrichment_record["enrichment_provenance"] = {
-                                    "record_type": "reconciled",
-                                    "fields": {
-                                        key: value
-                                        for key, value in field_provenance.items()
-                                        if key.startswith("stats_")
-                                    },
-                                }
-                                storage.save_historical_enrichment([enrichment_record], source="reconciled")
-                            else:
-                                prov_source = enrichment_record.get("provider_provenance", {}).get("provider", "api_football")
-                                storage.save_historical_enrichment([enrichment_record], source=prov_source)
-            except Exception as exc:
-                logger.warning(f"Error persisting reconciled fixtures to DB: {exc}")
+            # Historical acquisition retired: reconciled fixtures are returned in memory only.
 
             primary_prov = reconciled_fixtures[0].get("provider_provenance", {}).get("provider", "api_football")
             if "soccerdata" in primary_prov:
@@ -2963,7 +2933,7 @@ class DataResolver:
                                 records.append(norm)
                                 valid_to_save.append(norm)
                     if valid_to_save and league_id and season:
-                        storage.save_historical_fixtures(valid_to_save, league_id, season, source="api_football", require_completed=True)
+                        pass  # Historical acquisition retired: recent-form results are not persisted.
             except Exception as exc:
                 logger.warning(f"API-Football recent form query failed for team {team_id}: {exc}")
 
@@ -2981,7 +2951,7 @@ class DataResolver:
                                 records.append(norm)
                                 valid_to_save.append(norm)
                     if valid_to_save and league_id and season:
-                        storage.save_historical_fixtures(valid_to_save, league_id, season, source="soccerdata", require_completed=True)
+                        pass  # Historical acquisition retired: recent-form results are not persisted.
             except Exception as exc:
                 logger.warning(f"SoccerData recent matches query failed for team {team_name}: {exc}")
 
@@ -3595,10 +3565,11 @@ class DataResolver:
                                 if key.startswith("stats_")
                             },
                         }
-                        storage.save_historical_enrichment([record_copy], source="reconciled")
+                        pass  # Historical acquisition retired: enrichment stays in memory.
                     else:
                         prov_source = record_copy.get("provider_provenance", {}).get("provider", "api_football")
-                        storage.save_historical_enrichment([record_copy], source=prov_source)
+                        # Historical acquisition retired: enrichment stays in memory.
+                        _ = prov_source
             except Exception as exc:
                 logger.warning(f"Error saving enriched fixtures to DB: {exc}")
 
@@ -3855,10 +3826,7 @@ class DataResolver:
                                 lid = norm.get("league", {}).get("id") or league_id
                                 ssn = norm.get("league", {}).get("season")
                                 if lid and ssn and isinstance(lid, int) and lid > 0:
-                                    try:
-                                        storage.save_historical_fixtures([norm], lid, ssn, source="api_football", require_completed=True)
-                                    except Exception:
-                                        pass
+                                    pass  # Historical acquisition retired: H2H results are not persisted.
             except Exception as exc:
                 logger.warning(f"Primary provider get_head_to_head failed for {home_id} vs {away_id}: {exc}")
 
@@ -3889,7 +3857,7 @@ class DataResolver:
                             h2h_matches.append(norm)
                             ssn = norm.get("league", {}).get("season")
                             if league_id and ssn:
-                                storage.save_historical_fixtures([norm], league_id, ssn, source="soccerdata", require_completed=True)
+                                pass  # Historical acquisition retired: H2H results are not persisted.
 
         sorted_h2h = sorted(h2h_matches, key=lambda x: str(x.get("fixture", {}).get("date", "") or ""), reverse=True)
         return sorted_h2h[:last]

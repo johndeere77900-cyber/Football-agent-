@@ -452,3 +452,32 @@ def grade_fixture_markets(
             fixture,
         ),
     }
+def grade_basketball_markets(game: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Settle basketball markets on official final points, including overtime.
+
+    Uses the centralized basketball policy: only FT/AOT are final and the
+    stored total already includes overtime. A live or incomplete score is never
+    settleable.
+    """
+    status = historical_match_policy.get_status_short(game, sport="basketball")
+    finished = historical_match_policy.is_finished_match(game, sport="basketball")
+    points = historical_match_policy.get_basketball_match_points(game)
+
+    if points is None or not finished:
+        return {
+            "status": status,
+            "settleable": False,
+            "moneyline": None,
+            "total_points": None,
+            "final_points": None,
+        }
+
+    home, away = points
+    return {
+        "status": status,
+        "settleable": True,
+        "moneyline": {"home_win": home > away, "away_win": away > home, "draw": False},
+        "total_points": {"total": home + away},
+        "final_points": {"home": home, "away": away},
+    }

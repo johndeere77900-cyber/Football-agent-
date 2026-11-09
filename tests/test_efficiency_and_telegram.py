@@ -312,26 +312,43 @@ def test_zero_real_api_calls_enforced(monkeypatch):
 
 def test_workflow_schedule_safety_no_autonomous_predictions():
     """
-    Prove that no GitHub Actions workflow YAML file in the repository contains active cron schedule triggers.
-    Sport's Edge is strictly non-autonomous and only executes predictions when explicitly requested by the user.
+    Autonomous scheduling is authorised only for the Phase 2 lifecycle workflow.
+
+    Manual workflows must stay manual, the retired historical acquisition
+    workflow must no longer invoke acquisition, and the autonomous workflow must
+    define schedules, manual recovery dispatch and concurrency protection.
     """
     import os
-    import glob
 
     workflows_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".github", "workflows")
     if not os.path.exists(workflows_dir):
         pytest.skip(".github/workflows directory not found")
 
-    yaml_files = glob.glob(os.path.join(workflows_dir, "*.yml")) + glob.glob(os.path.join(workflows_dir, "*.yaml"))
-    assert yaml_files, "No workflow YAML files found in .github/workflows/"
+    manual_workflows = ["daily.yml", "historical.yml", "backtest.yml", "telegram_webhook.yml", "test.yml"]
+    for filename in manual_workflows:
+        filepath = os.path.join(workflows_dir, filename)
+        if not os.path.exists(filepath):
+            continue
+        with open(filepath, "r", encoding="utf-8") as handle:
+            content = handle.read()
+        assert "schedule:" not in content, f"Manual workflow '{filename}' must not define a schedule trigger."
+        assert "cron:" not in content, f"Manual workflow '{filename}' must not define a cron trigger."
 
-    for filepath in yaml_files:
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
+    autonomous_path = os.path.join(workflows_dir, "autonomous.yml")
+    assert os.path.exists(autonomous_path), "The autonomous lifecycle workflow is missing."
+    with open(autonomous_path, "r", encoding="utf-8") as handle:
+        autonomous = handle.read()
+    assert "schedule:" in autonomous and "cron:" in autonomous
+    assert "workflow_dispatch:" in autonomous, "Autonomous workflow must keep manual recovery dispatch."
+    assert "concurrency:" in autonomous, "Autonomous workflow must define concurrency protection."
+    assert "--autonomous" in autonomous
 
-        filename = os.path.basename(filepath)
-        assert "schedule:" not in content, f"Workflow '{filename}' contains an active 'schedule:' trigger! Autonomous predictions are strictly prohibited."
-        assert "cron:" not in content, f"Workflow '{filename}' contains an active 'cron:' schedule! Autonomous predictions are strictly prohibited."
+    historical_path = os.path.join(workflows_dir, "historical.yml")
+    if os.path.exists(historical_path):
+        with open(historical_path, "r", encoding="utf-8") as handle:
+            historical = handle.read()
+        assert "--historical-sync" not in historical
+        assert "--historical-queue" not in historical
 
 
 def test_telegram_control_center_extended_operations():

@@ -344,3 +344,254 @@ def apply_calibration_layer(
             "calibration_timestamp": calib_ts if status == "APPLIED" else None,
         },
     }
+# ---------------------------------------------------------------------------
+# Phase 2: active calibrator loading and controlled promotion
+# ---------------------------------------------------------------------------
+
+import datetime as _dt
+import math as _math
+
+
+def _calibrated_probabilities(sample, sport, calibrator):
+    """Probabilities actually used for a decision, after calibration if any."""
+    raw = sample.get("raw_probabilities") or {}
+    if str(sport).lower() == "football":
+        market = raw.get("match_result") if isinstance(raw, dict) else None
+        if not isinstance(market, dict):
+            return None
+        probs = {k: market.get(k) for k in ("home_win", "draw", "away_win")}
+        if any(not isinstance(v, (int, float)) for v in probs.values()):
+            return None
+        probs = {k: float(v) for k, v in probs.items()}
+        if calibrator is not None:
+            try:
+                calibrated = calibrator.calibrate_1x2(probs)
+                total = sum(float(v) for v in calibrated.values())
+                if total > 0:
+                    probs = {k: float(v) / total for k, v in calibrated.items()}
+            except Exception:
+                pass
+        return probs
+
+    market = raw.get("moneyline") if isinstance(raw, dict) else None
+    if not isinstance(market, dict):
+        return None
+    p_home = market.get("home_win")
+    if not isinstance(p_home, (int, float)) or isinstance(p_home, bool):
+        return None
+    if calibrator is not None:
+        try:
+            p_home = float(calibrator.calibrate(float(p_home)))
+        except Exception:
+            p_home = float(p_home)
+    return {"home_win": float(p_home), "away_win": 1.0 - float(p_home)}
+
+
+def evaluate_predictions(samples, sport, calibrator=None):
+    """Brier score, log loss and expected calibration error on graded samples."""
+    rows = []
+    for sample in samples:
+        probs = _calibrated_probabilities(sample, sport, calibrator)
+        actual = sample.get("actual")
+        if not probs or actual not in probs:
+            continue
+        rows.append((probs, actual))
+    if not rows:
+        return {"count": 0, "brier": None, "log_loss": None, "ece": None}
+
+    brier_total = 0.0
+    logloss_total = 0.0
+    bin_conf = [[] for _ in range(10)]
+    bin_hit = [[] for _ in range(10)]
+
+    for probs, actual in rows:
+        brier_total += sum((p - (1.0 if key == actual else 0.0)) ** 2 for key, p in probs.items())
+        p_actual = max(min(float(probs[actual]), 1.0 - 1e-12), 1e-12)
+        logloss_total += -_math.log(p_actual)
+        top_key = max(probs, key=probs.get)
+        confidence = float(probs[top_key])
+        idx = min(9, max(0, int(confidence * 10)))
+        bin_conf[idx].append(confidence)
+        bin_hit[idx].append(1.0 if top_key == actual else 0.0)
+
+    count = len(rows)
+    ece = 0.0
+    for idx in range(10):
+        if bin_conf[idx]:
+            ece += abs(sum(bin_conf[idx]) / len(bin_conf[idx]) - sum(bin_hit[idx]) / len(bin_hit[idx])) * (
+                len(bin_conf[idx]) / count
+            )
+
+    return {
+        "count": count,
+        "brier": brier_total / count,
+        "log_loss": logloss_total / count,
+        "ece": ece,
+    }
+
+
+def load_active_calibrator(sport, league_id=None, season=None, cutoff_timestamp=None):
+    """
+    Load the promoted calibrator for a sport/competition scope.
+
+    Returns None when nothing has been promoted, so a prediction never claims
+    calibration that was not actually applied. The calibrator is rebuilt
+    deterministically from verified, graded samples strictly before the cutoff.
+    """
+    try:
+        import lifecycle_storage
+    except Exception:
+        return None
+
+    scopes = ["all"]
+    if league_id is not None:
+        scopes.insert(0, f"league_{league_id}")
+
+    active = None
+    for scope in scopes:
+        active = lifecycle_storage.get_active_calibration(str(sport).lower(), scope)
+        if active:
+            break
+    if not active or not cutoff_timestamp:
+        return None
+
+    samples = lifecycle_storage.get_graded_samples(str(sport).lower(), before=cutoff_timestamp)
+    calibrator = train_walk_forward_calibrator(samples, cutoff_timestamp, sport=str(sport).lower())
+    if calibrator is not None:
+        try:
+            setattr(calibrator, "calibration_version", active.get("calibration_version"))
+        except Exception:
+            pass
+    return calibrator
+
+
+def rollback_calibration(sport, scope, reason, cutoff_timestamp=None):
+    """Restore the previous active calibration version after a regression."""
+    import lifecycle_storage
+
+    current = lifecycle_storage.get_active_calibration(sport, scope)
+    if not current:
+        return {"status": "no_active_version"}
+    previous_version = current.get("rollback_reference")
+    if not previous_version:
+        return {"status": "no_rollback_target"}
+    previous = lifecycle_storage.get_calibration_version(sport, scope, previous_version)
+    if not previous:
+        return {"status": "rollback_target_missing"}
+    lifecycle_storage.save_calibration_version({**current, "status": "retired"})
+    lifecycle_storage.save_calibration_version({**previous, "status": "active"})
+    return {"status": "rolled_back", "restored": previous_version, "reason": reason}
+
+
+def evaluate_and_promote(sport="football", cutoff_timestamp=None, scope="all", min_train=20, min_eval=10):
+    """
+    Walk-forward candidate evaluation with controlled promotion and rollback.
+
+    A candidate is promoted only when it improves Brier score against the
+    active baseline on strictly later, verified outcomes and clears the minimum
+    evaluation sample threshold. Every decision is persisted with its metrics
+    and the previous version is retained as the rollback reference.
+    """
+    import lifecycle_storage
+
+    cutoff = cutoff_timestamp or format_utc_iso(_dt.datetime.now(_dt.timezone.utc))
+    samples = lifecycle_storage.get_graded_samples(str(sport).lower(), before=cutoff)
+
+    if len(samples) < min_train + min_eval:
+        record = lifecycle_storage.save_calibration_version(
+            {
+                "sport": sport,
+                "competition_scope": scope,
+                "model_version": getattr(config, "MODEL_VERSION", None),
+                "calibration_version": f"{sport}-cal-{cutoff[:10]}-insufficient",
+                "training_cutoff": cutoff,
+                "training_sample_count": len(samples),
+                "evaluation_metrics": {"reason": "insufficient_verified_samples", "count": len(samples)},
+                "status": "rejected",
+                "dataset_identity": f"{sport}_graded_snapshots",
+            }
+        )
+        return {
+            "sport": sport,
+            "status": "rejected",
+            "reason": "insufficient_verified_samples",
+            "count": len(samples),
+            "version": record.get("calibration_version"),
+        }
+
+    split = max(min_train, int(len(samples) * 0.8))
+    train, test = samples[:split], samples[split:]
+    train_cutoff = train[-1]["timestamp"]
+    candidate = train_walk_forward_calibrator(train, train_cutoff, sport=sport)
+
+    if candidate is None:
+        record = lifecycle_storage.save_calibration_version(
+            {
+                "sport": sport,
+                "competition_scope": scope,
+                "model_version": getattr(config, "MODEL_VERSION", None),
+                "calibration_version": f"{sport}-cal-{cutoff[:10]}-untrainable",
+                "training_cutoff": train_cutoff,
+                "training_sample_count": len(train),
+                "evaluation_metrics": {"reason": "calibrator_not_trainable"},
+                "status": "rejected",
+                "dataset_identity": f"{sport}_graded_snapshots",
+            }
+        )
+        return {
+            "sport": sport,
+            "status": "rejected",
+            "reason": "calibrator_not_trainable",
+            "version": record.get("calibration_version"),
+        }
+
+    baseline_metrics = evaluate_predictions(test, sport, None)
+    candidate_metrics = evaluate_predictions(test, sport, candidate)
+
+    active = lifecycle_storage.get_active_calibration(sport, scope)
+    active_brier = None
+    if active and isinstance(active.get("evaluation_metrics"), dict):
+        active_brier = active["evaluation_metrics"].get("brier")
+    baseline_brier = active_brier if isinstance(active_brier, (int, float)) else baseline_metrics.get("brier")
+
+    promote = (
+        isinstance(candidate_metrics.get("brier"), float)
+        and candidate_metrics.get("count", 0) >= min_eval
+        and isinstance(baseline_brier, float)
+        and candidate_metrics["brier"] <= baseline_brier - 1e-4
+    )
+
+    version = f"{sport}-cal-{train_cutoff[:10]}-n{len(train)}"
+    lifecycle_storage.save_calibration_version(
+        {
+            "sport": sport,
+            "competition_scope": scope,
+            "model_version": getattr(config, "MODEL_VERSION", None),
+            "calibration_version": version,
+            "training_cutoff": train_cutoff,
+            "training_sample_count": len(train),
+            "evaluation_metrics": {
+                **candidate_metrics,
+                "baseline_brier": baseline_brier,
+                "raw_brier": baseline_metrics.get("brier"),
+                "evaluated_at": cutoff,
+            },
+            "status": "active" if promote else "candidate",
+            "promoted_at": cutoff if promote else None,
+            "rollback_reference": (active or {}).get("calibration_version") if promote else None,
+            "dataset_identity": f"{sport}_graded_snapshots",
+        }
+    )
+
+    if not promote and active and isinstance(active_brier, float) and isinstance(baseline_metrics.get("brier"), float):
+        if baseline_metrics["brier"] > active_brier * 1.10 + 0.01:
+            rollback = rollback_calibration(sport, scope, "active_version_degraded", cutoff)
+            return {"sport": sport, "status": "rolled_back", "version": version, "rollback": rollback}
+
+    return {
+        "sport": sport,
+        "status": "promoted" if promote else "candidate_kept",
+        "version": version,
+        "metrics": candidate_metrics,
+        "baseline_brier": baseline_brier,
+    }

@@ -2070,13 +2070,22 @@ def save_prediction_snapshot(
     ev=None,
     uncertainty_state=None,
     prediction_record=None,
+    idempotency_key=None,
+    lifecycle_id=None,
+    model_inputs=None,
 ):
     """
     Save an immutable prediction snapshot into prediction_snapshots table.
 
     Does NOT enforce unique constraint on fixture_id so multiple predictions
     for the same fixture are archived over time.
+
+    When an idempotency key, lifecycle reference or model-input payload is
+    supplied, the persisted-cycle path is used: one snapshot per prediction
+    cycle, carrying the actual model inputs.
     """
+    if idempotency_key is not None or lifecycle_id is not None or model_inputs is not None:
+        return save_prediction_snapshot_cycle(dict(locals()))
     fixture_id = _validate_positive_int(fixture_id, "fixture_id")
     now_str = _utc_now()
     if prediction_timestamp is None:
@@ -7455,3 +7464,215 @@ def get_historical_enrichment(fixture_ids, source=None):
 
     finally:
         conn.close()
+# ---------------------------------------------------------------------------
+# Phase 2: immutable prediction cycles and verified live results
+# ---------------------------------------------------------------------------
+
+def _snapshot_id_by_key(conn, db_type, key):
+    ph = "%s" if db_type == "postgres" else "?"
+    sql = f"SELECT id FROM prediction_snapshots WHERE idempotency_key = {ph}"
+    if db_type == "postgres":
+        with conn.cursor() as cur:
+            cur.execute(sql, (key,))
+            row = cur.fetchone()
+        return row[0] if row else None
+    row = conn.execute(sql, (key,)).fetchone()
+    return row[0] if row else None
+
+
+def save_prediction_snapshot_cycle(params):
+    """
+    Persist one immutable prediction cycle.
+
+    The idempotency key is unique, so a retry with the same key returns the
+    existing snapshot id instead of inserting a duplicate. The actual
+    model-input payload is stored alongside the prediction and is never
+    updated afterwards.
+    """
+    import lifecycle_storage
+
+    lifecycle_storage.ensure_schema()
+
+    fixture_id = _validate_positive_int(params.get("fixture_id"), "fixture_id")
+    now_str = _utc_now()
+    prediction_timestamp = params.get("prediction_timestamp") or now_str
+    sport = _validate_text(params.get("sport") or "football", "sport").lower()
+    league_id = _validate_optional_positive_int(params.get("league_id"), "league_id")
+    season = _validate_optional_positive_int(params.get("season"), "season")
+    rec = params.get("prediction_record") if isinstance(params.get("prediction_record"), dict) else {}
+
+    model_version = params.get("model_version") or rec.get("model_version") or getattr(config, "MODEL_VERSION", "v3.0.0")
+    feature_version = params.get("feature_version") or rec.get("feature_version") or getattr(config, "FEATURE_VERSION", "v3.0.0")
+    calibration_version = params.get("calibration_version") or rec.get("calibration_version") or getattr(config, "CALIBRATION_VERSION", "v3.0.0")
+    quality_gate = params.get("quality_gate") or rec.get("quality_gate") or "PASS"
+    reason_codes = params.get("reason_codes") if params.get("reason_codes") is not None else rec.get("reason_codes", [])
+    edge = params.get("edge") if params.get("edge") is not None else rec.get("edge")
+    ev = params.get("ev") if params.get("ev") is not None else rec.get("ev")
+    uncertainty_state = params.get("uncertainty_state") or (
+        rec.get("uncertainty", {}).get("state") if isinstance(rec.get("uncertainty"), dict) else None
+    )
+
+    markets_data = params.get("markets") or rec.get("markets") or rec.get("raw_probabilities") or {}
+    model_inputs = params.get("model_inputs")
+    if model_inputs is None:
+        model_inputs = rec.get("model_inputs")
+
+    features_data = params.get("features")
+    if features_data is None:
+        if isinstance(model_inputs, dict) and "features" in model_inputs:
+            features_data = model_inputs.get("features")
+        elif rec.get("feature_snapshot"):
+            features_data = rec.get("feature_snapshot")
+
+    markets_json_str = _json_dumps(markets_data, "markets")
+    features_json_str = _json_dumps(features_data, "features") if features_data is not None else None
+    model_inputs_json_str = _json_dumps(model_inputs, "model_inputs") if model_inputs is not None else None
+    confidence_json_str = (
+        _json_dumps(params.get("confidence"), "confidence")
+        if params.get("confidence") is not None
+        else (_json_dumps(rec.get("confidence"), "confidence") if rec.get("confidence") else None)
+    )
+    reasons_json_str = _json_dumps(reason_codes, "reason_codes") if reason_codes is not None else None
+    odds_json_str = (
+        _json_dumps(params.get("odds_comparison"), "odds_comparison")
+        if params.get("odds_comparison") is not None
+        else None
+    )
+
+    key = params.get("idempotency_key")
+    lifecycle_id = params.get("lifecycle_id")
+
+    values = (
+        fixture_id,
+        prediction_timestamp,
+        params.get("kickoff_at"),
+        sport,
+        league_id,
+        season,
+        params.get("canonical_home_id"),
+        params.get("canonical_away_id"),
+        params.get("home_team"),
+        params.get("away_team"),
+        params.get("prediction_context") or "PRE_MATCH",
+        model_version,
+        feature_version,
+        calibration_version,
+        params.get("data_cutoff_timestamp"),
+        markets_json_str,
+        features_json_str,
+        confidence_json_str,
+        quality_gate,
+        reasons_json_str,
+        odds_json_str,
+        edge,
+        ev,
+        uncertainty_state,
+        now_str,
+        key,
+        lifecycle_id,
+        model_inputs_json_str,
+    )
+
+    columns = (
+        "fixture_id, prediction_timestamp, kickoff_at, sport, league_id, season, "
+        "canonical_home_id, canonical_away_id, home_team, away_team, prediction_context, "
+        "model_version, feature_version, calibration_version, data_cutoff_timestamp, "
+        "markets_json, features_json, confidence_json, quality_gate, reason_codes_json, "
+        "odds_comparison_json, edge, ev, uncertainty_state, created_at, "
+        "idempotency_key, lifecycle_id, model_inputs_json"
+    )
+
+    conn, db_type = _connect()
+    try:
+        if key:
+            existing = _snapshot_id_by_key(conn, db_type, key)
+            if existing is not None:
+                return existing
+
+        if db_type == "postgres":
+            placeholders = ", ".join(["%s"] * len(values))
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"INSERT INTO prediction_snapshots ({columns}) VALUES ({placeholders}) RETURNING id",
+                    values,
+                )
+                row = cur.fetchone()
+                snapshot_id = row[0] if row else None
+            conn.commit()
+        else:
+            placeholders = ", ".join(["?"] * len(values))
+            cur = conn.execute(
+                f"INSERT INTO prediction_snapshots ({columns}) VALUES ({placeholders})",
+                values,
+            )
+            snapshot_id = cur.lastrowid
+            conn.commit()
+        return snapshot_id
+    except Exception:
+        conn.rollback()
+        if key:
+            try:
+                existing = _snapshot_id_by_key(conn, db_type, key)
+            except Exception:
+                existing = None
+            if existing is not None:
+                return existing
+        raise
+    finally:
+        conn.close()
+
+
+def save_verified_live_result(*, lifecycle_id, sport, fixture, evidence, source=None):
+    """
+    Narrow persistence operation for a tracked, verified final result.
+
+    This is the only agent path allowed to add a completed match to historical
+    knowledge. It requires a tracked lifecycle record in a verified stage, a
+    resolved competition identity and explicit final-result evidence. It is
+    idempotent through the existing storage integrity checks and refuses
+    conflicting results instead of overwriting them.
+    """
+    import lifecycle_storage
+
+    if not isinstance(fixture, dict):
+        return {"saved": False, "reason": "invalid_fixture_payload"}
+    if not isinstance(evidence, dict) or not evidence.get("status"):
+        return {"saved": False, "reason": "missing_result_evidence"}
+
+    row = lifecycle_storage.get_lifecycle(lifecycle_id)
+    if row is None:
+        return {"saved": False, "reason": "untracked_lifecycle"}
+    if str(row.get("sport")) != str(sport).lower():
+        return {"saved": False, "reason": "sport_mismatch"}
+    if row.get("stage") not in ("FINAL_RESULT_VERIFIED", "PREDICTION_GRADED", "HISTORICAL_RECORD_UPDATED"):
+        return {"saved": False, "reason": "lifecycle_not_verified"}
+
+    league = fixture.get("league") or {}
+    league_id = league.get("id") or row.get("league_id")
+    season = league.get("season") or row.get("season")
+    if not league_id or not season:
+        return {"saved": False, "reason": "missing_competition_identity"}
+
+    authorised = set(getattr(config, "ALLOWED_LEAGUE_IDS", [])) | set(getattr(config, "ALLOWED_BASKETBALL_LEAGUE_IDS", []))
+    if authorised and int(league_id) not in authorised:
+        return {"saved": False, "reason": "competition_not_authorised"}
+
+    provider = source or row.get("provider") or ("api_football" if sport == "football" else "api_basketball")
+    if str(sport).lower() == "football":
+        result = save_historical_fixtures([fixture], league_id, season, source=provider, require_completed=True)
+    else:
+        result = save_historical_basketball_games([fixture], league_id, season, source=provider, require_completed=True)
+
+    if not isinstance(result, dict):
+        return {"saved": False, "reason": "unexpected_storage_result"}
+
+    conflicts = result.get("metadata_conflicts") or {}
+    if result.get("rejected_count") or conflicts:
+        return {"saved": False, "reason": "conflicting_or_rejected_result", "detail": result}
+
+    return {
+        "saved": True,
+        "provider": provider,
+        "inserted": result.get("inserted"),
+        "evidence_retrieved_at": evidence.get("retrieved_at"),
+    }

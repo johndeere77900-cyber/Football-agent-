@@ -1,221 +1,81 @@
-name: Historical Data Acquisition
+name: Historical Dataset Verification (Read-Only)
+
+# Historical acquisition is retired. This workflow no longer acquires, rebuilds,
+# repairs or backfills anything; it verifies datasets that already exist.
+# Manual dispatch only.
 
 on:
   workflow_dispatch:
     inputs:
-      run_queue:
-        description: 'Run full historical queue (all football leagues + basketball 12)'
-        required: false
-        type: boolean
-        default: true
-
       sport:
-        description: 'Sport (for single dataset sync)'
-        required: false
-        default: 'football'
+        description: "Sport"
+        required: true
+        default: "football"
         type: choice
         options:
           - football
           - basketball
-
       league_id:
-        description: 'League ID (for single dataset sync)'
-        required: false
-        default: '39'
-
+        description: "League ID"
+        required: true
+        default: "39"
       seasons:
-        description: 'Season year(s), e.g. "2020", "2020 2021 2022"'
-        required: false
-        default: ''
+        description: 'Season year(s), e.g. "2024" or "2023 2024"'
+        required: true
+        default: "2024"
 
-      season:
-        description: 'Backward-compatible single-year season option (e.g. 2024)'
-        required: false
-        default: ''
-
-      with_enrichment:
-        description: 'Fetch statistical enrichment (corners/cards)'
-        required: false
-        type: boolean
-        default: false
-
-      refresh:
-        description: 'Force dataset re-fetch even if COMPLETE'
-        required: false
-        type: boolean
-        default: false
+permissions:
+  contents: read
 
 jobs:
-  acquire_historical:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Parse and Validate Season Parameters
-        id: parse_seasons
-        env:
-          RAW_SEASONS_INPUT: ${{ inputs.seasons }}
-          RAW_SEASON_INPUT: ${{ inputs.season }}
-          RUN_QUEUE_INPUT: ${{ inputs.run_queue }}
         run: |
           set -euo pipefail
-          RAW_SEASONS="$RAW_SEASONS_INPUT"
-          RAW_SEASON="$RAW_SEASON_INPUT"
-          RUN_QUEUE="$RUN_QUEUE_INPUT"
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
 
-          if [ -n "$RAW_SEASONS" ]; then
-            SELECTED_INPUT="$RAW_SEASONS"
-          elif [ -n "$RAW_SEASON" ]; then
-            SELECTED_INPUT="$RAW_SEASON"
-          elif [ "$RUN_QUEUE" = "true" ]; then
-            SELECTED_INPUT="2019 2020 2021 2022 2023 2024 2025 2026"
-          else
-            SELECTED_INPUT="2024"
-          fi
-
-          # Trim leading/trailing whitespace and normalize internal whitespace
-          CLEAN_SEASONS=$(echo "$SELECTED_INPUT" | xargs)
-
-          if [ -z "$CLEAN_SEASONS" ]; then
-            echo "ERROR: Supplied season input is empty."
-            exit 1
-          fi
-
-          VALIDATED_SEASONS=""
-          for YR in $CLEAN_SEASONS; do
-            if ! [[ "$YR" =~ ^[0-9]{4}$ ]]; then
-              echo "ERROR: Invalid season year '$YR'. Must be a 4-digit year between 1900 and 2100."
-              exit 1
-            fi
-            if [ "$YR" -lt 1900 ] || [ "$YR" -gt 2100 ]; then
-              echo "ERROR: Season year '$YR' out of allowed range [1900, 2100]."
-              exit 1
-            fi
-            VALIDATED_SEASONS="$VALIDATED_SEASONS $YR"
-          done
-
-          VALIDATED_SEASONS=$(echo "$VALIDATED_SEASONS" | xargs)
-          FIRST_SEASON=$(echo "$VALIDATED_SEASONS" | awk '{print $1}')
-
-          echo "seasons_arg=$VALIDATED_SEASONS" >> $GITHUB_OUTPUT
-          echo "first_season=$FIRST_SEASON" >> $GITHUB_OUTPUT
-          echo "Validated seasons: '$VALIDATED_SEASONS'"
-
-      - name: Verify credentials
+      - name: Verify persisted historical datasets (read-only)
         env:
-          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "$NEON_DATABASE_URL" ]; then
-            echo "ERROR: NEON_DATABASE_URL secret is missing."
-            exit 1
-          fi
-          echo "Football historical acquisition uses the direct Football-Data.co.uk CSV and SoccerData providers; no football API key is required."
-          if [ -n "$API_BASKETBALL_KEY" ]; then
-            echo "API_BASKETBALL_KEY secret is present for the basketball API-Basketball fallback (ESPN scoreboards are used first and need no key)."
-          else
-            echo "NOTICE: API_BASKETBALL_KEY secret is missing. Basketball acquisition will rely on ESPN scoreboards only; the API-Basketball fallback will report UNAVAILABLE."
-          fi
-
-      - name: Historical Data Sync
-        id: sync
-        timeout-minutes: 300
-        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           REQUIRE_NEON: "true"
-          ENVIRONMENT: "production"
-          INPUT_RUN_QUEUE: ${{ inputs.run_queue }}
+          ENVIRONMENT: production
           INPUT_SPORT: ${{ inputs.sport }}
           INPUT_LEAGUE_ID: ${{ inputs.league_id }}
-          INPUT_SEASONS_ARG: ${{ steps.parse_seasons.outputs.seasons_arg }}
-          INPUT_WITH_ENRICHMENT: ${{ inputs.with_enrichment }}
-          INPUT_REFRESH: ${{ inputs.refresh }}
+          INPUT_SEASONS: ${{ inputs.seasons }}
         run: |
-          set +e
-          if [ "$INPUT_RUN_QUEUE" = "true" ]; then
-            ARGS=("--historical-queue" "--seasons")
-            for YR in $INPUT_SEASONS_ARG; do
-              ARGS+=("$YR")
-            done
-          else
-            ARGS=("--historical-sync" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--seasons")
-            for YR in $INPUT_SEASONS_ARG; do
-              ARGS+=("$YR")
-            done
-          fi
+          set -euo pipefail
+          read -r -a SEASON_ARGS <<< "$INPUT_SEASONS"
+          python3 main.py --verify-historical-datasets \
+            --sport "$INPUT_SPORT" \
+            --league "$INPUT_LEAGUE_ID" \
+            --seasons "${SEASON_ARGS[@]}"
 
-          if [ "$INPUT_WITH_ENRICHMENT" = "true" ]; then
-            ARGS+=("--with-enrichment")
-          fi
-          if [ "$INPUT_REFRESH" = "true" ]; then
-            ARGS+=("--refresh")
-          fi
-
-          python3 main.py "${ARGS[@]}"
-          SYNC_EXIT=$?
-          echo "sync_exit=$SYNC_EXIT" >> $GITHUB_OUTPUT
-          exit $SYNC_EXIT
-
-      - name: Verify Persisted Historical Datasets
-        if: always() && steps.sync.outcome != 'skipped'
-        id: verify
-        timeout-minutes: 60
+      - name: Show dataset status (read-only)
         env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           REQUIRE_NEON: "true"
-          ENVIRONMENT: "production"
-          INPUT_RUN_QUEUE: ${{ inputs.run_queue }}
+          ENVIRONMENT: production
           INPUT_SPORT: ${{ inputs.sport }}
           INPUT_LEAGUE_ID: ${{ inputs.league_id }}
-          INPUT_SEASONS_ARG: ${{ steps.parse_seasons.outputs.seasons_arg }}
+          INPUT_SEASONS: ${{ inputs.seasons }}
         run: |
-          set +e
-          if [ "$INPUT_RUN_QUEUE" = "true" ]; then
-            ARGS=("--verify-historical-datasets" "--historical-queue" "--seasons")
-            for YR in $INPUT_SEASONS_ARG; do
-              ARGS+=("$YR")
-            done
-          else
-            ARGS=("--verify-historical-datasets" "--sport" "$INPUT_SPORT" "--league" "$INPUT_LEAGUE_ID" "--seasons")
-            for YR in $INPUT_SEASONS_ARG; do
-              ARGS+=("$YR")
-            done
-          fi
-
-          python3 main.py "${ARGS[@]}"
-          VERIFY_EXIT=$?
-
-          SYNC_EXIT="${{ steps.sync.outputs.sync_exit }}"
-          if [ -z "$SYNC_EXIT" ]; then
-            echo "ERROR: Historical Data Sync did not publish sync_exit; outcome=${{ steps.sync.outcome }}"
-            exit 1
-          fi
-          if [ "$SYNC_EXIT" != "0" ]; then
-            echo "ERROR: Historical Data Sync step failed with exit code $SYNC_EXIT"
-            exit "$SYNC_EXIT"
-          fi
-          if [ "$VERIFY_EXIT" != "0" ]; then
-            echo "ERROR: Verify Persisted Historical Datasets step failed with exit code $VERIFY_EXIT"
-            exit "$VERIFY_EXIT"
-          fi
-
-      - name: Upload acquisition diagnostics and partial run reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: historical-acquisition-${{ github.run_id }}-${{ github.run_attempt }}
-          path: data/historical_runs/
-          if-no-files-found: warn
-          retention-days: 14
+          set -euo pipefail
+          FIRST_SEASON="${INPUT_SEASONS%% *}"
+          python3 main.py --dataset-status \
+            --sport "$INPUT_SPORT" \
+            --league "$INPUT_LEAGUE_ID" \
+            --season "$FIRST_SEASON"

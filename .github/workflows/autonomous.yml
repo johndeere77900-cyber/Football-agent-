@@ -1,0 +1,175 @@
+name: Autonomous Match Lifecycle
+
+# Scheduled execution only runs from the repository's default branch, so these
+# schedules stay inert on a feature branch. They must not be merged and relied
+# upon until ChatGPT has reviewed the workflow and the Phase 2 migrations.
+#
+# The manual daily workflow (daily.yml) is preserved unchanged for manual
+# prediction, grading, Telegram and dashboard runs.
+
+on:
+  schedule:
+    # Live monitoring: approximately five minutes.
+    - cron: "*/5 * * * *"
+    # Pre-match pipeline: discovery, preparation, prediction, results, grading.
+    - cron: "*/20 * * * *"
+    # Daily controlled learning evaluation.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Lifecycle stage to run"
+        required: true
+        default: "cycle"
+        type: choice
+        options:
+          - cycle
+          - discover
+          - prematch
+          - live
+          - verify-results
+          - grade
+          - learn
+      horizon_days:
+        description: "Rolling discovery horizon in days"
+        required: false
+        default: "14"
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+  ENVIRONMENT: production
+
+jobs:
+  live:
+    name: Live monitoring
+    if: github.event_name == 'schedule' || inputs.stage == 'live' || inputs.stage == 'cycle'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: autonomous-live
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+      - name: Poll tracked live matches
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
+        run: |
+          set -euo pipefail
+          python3 main.py --autonomous live
+
+  prematch:
+    name: Discovery and pre-match snapshots
+    if: github.event_name == 'schedule' || inputs.stage == 'discover' || inputs.stage == 'prematch' || inputs.stage == 'cycle'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: autonomous-prematch
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+      - name: Discover fixtures (rolling 14-day horizon)
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
+        run: |
+          set -euo pipefail
+          python3 main.py --autonomous discover --horizon-days "${{ inputs.horizon_days || '14' }}"
+      - name: Generate pre-match predictions and snapshots
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
+        run: |
+          set -euo pipefail
+          python3 main.py --autonomous prematch
+
+  results:
+    name: Result verification and grading
+    if: github.event_name == 'schedule' || inputs.stage == 'verify-results' || inputs.stage == 'grade' || inputs.stage == 'cycle'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: autonomous-results
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+      - name: Verify final results and update historical knowledge
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
+        run: |
+          set -euo pipefail
+          python3 main.py --autonomous verify-results
+      - name: Grade every eligible snapshot
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
+        run: |
+          set -euo pipefail
+          python3 main.py --autonomous grade
+
+  learning:
+    name: Controlled learning evaluation
+    if: github.event_name == 'schedule' || inputs.stage == 'learn' || inputs.stage == 'cycle'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: autonomous-learning
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+      - name: Evaluate and promote calibration candidates
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          REQUIRE_NEON: "true"
+        run: |
+          set -euo pipefail
+          python3 main.py --autonomous learn

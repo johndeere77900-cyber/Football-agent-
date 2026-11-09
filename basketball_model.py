@@ -241,6 +241,28 @@ def predict_game(
             away_stats = basketball_api.get_team_statistics(away_id, league_id, season)
 
     home_for, home_against = _extract_scoring(home_stats)
+
+    _stats_source = (
+        "override"
+        if (home_stats_override is not None and away_stats_override is not None)
+        else "historical_or_provider"
+    )
+    _model_inputs_payload = {
+        "home_stats": home_stats,
+        "away_stats": away_stats,
+        "stats_source": _stats_source,
+        "historical_sample_count": int(home_stats.get("matches", 0) or 0)
+        if isinstance(home_stats, dict)
+        else 0,
+        "home_scoring": {"for": home_for, "against": home_against},
+        "away_scoring": {"for": away_for, "against": away_against},
+        "prediction_timestamp": prediction_timestamp,
+        "data_cutoff_timestamp": data_cutoff_timestamp or game.get("date"),
+        "model_version": getattr(config, "MODEL_VERSION", None),
+        "feature_version": getattr(config, "FEATURE_VERSION", None),
+        "calibration_version": getattr(config, "CALIBRATION_VERSION", None),
+    }
+
     away_for, away_against = _extract_scoring(away_stats)
 
     if home_for is None or home_against is None:
@@ -324,6 +346,7 @@ def predict_game(
         contract["status"] = "INVALID_PROBABILITY"
         contract["insufficient_data"] = True
         contract["reason"] = f"Model probability validation error: {exc}"
+        contract.setdefault("model_inputs", _model_inputs_payload)
         return contract
 
     if prediction_timestamp is None and data_cutoff_timestamp is None:
@@ -397,6 +420,7 @@ def predict_game(
             contract["status"] = "INVALID_CALIBRATED_PROBABILITY"
             contract["insufficient_data"] = True
             contract["reason"] = f"Calibrated probability validation error: {exc}"
+            contract.setdefault("model_inputs", _model_inputs_payload)
             return contract
     elif calib_meta["calibration_status"] == "ERROR":
         calibrated_markets = {}
@@ -514,6 +538,8 @@ def predict_game(
             "source": "sports_knowledge",
             "evidence_status": "UNKNOWN",
         }
+
+    contract.setdefault("model_inputs", _model_inputs_payload)
 
     return contract
 
