@@ -245,6 +245,7 @@ def main(argv=None):
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--league", type=int, default=None)
     parser.add_argument("--season", type=int, default=None)
+    parser.add_argument("--newest-first", action="store_true")
     args = parser.parse_args(argv)
 
     conn, _ = storage._connect()
@@ -259,6 +260,7 @@ def main(argv=None):
     if args.season:
         where.append("season=%s")
         params.append(args.season)
+    order = "DESC" if args.newest_first else "ASC"
     cur.execute(f"""
         SELECT f.fixture_id, f.league_id, f.season,
                to_char(f.kickoff_at::timestamptz at time zone 'utc','YYYY-MM-DD') AS day,
@@ -267,7 +269,7 @@ def main(argv=None):
           FROM historical_fixtures f
           LEFT JOIN historical_fixture_enrichment e ON e.fixture_id = f.fixture_id
          WHERE {' AND '.join(where)}
-         ORDER BY f.kickoff_at
+         ORDER BY f.kickoff_at {order}
     """, params)
     fixtures = [dict(zip(("fixture_id", "league_id", "season", "day", "home_team", "away_team",
                           "home_goals", "away_goals", "have_possession", "have_xg"), row))
@@ -314,6 +316,12 @@ def main(argv=None):
             continue
         if fixture["have_possession"] is not None and fixture["have_xg"] is not None:
             _stats["already_complete"] += 1
+            continue
+        # FotMob publishes xG only from the 2020/21 season onwards, so a fixture from
+        # before that is complete once possession is present; without this it would be
+        # re-fetched on every pass.
+        if fixture["have_possession"] is not None and fixture["day"] < "2020-01-01":
+            _stats["pre_xg_era"] += 1
             continue
         plans.append((fixture, best))
 

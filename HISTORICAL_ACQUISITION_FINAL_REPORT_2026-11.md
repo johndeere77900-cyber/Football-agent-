@@ -377,3 +377,59 @@ Football registry totals: 96 of 96 COMPLETE — 47 with every fixture enriched, 
 documented coverage limitation, 15 seasons in which the competition staged no edition
 (expected coverage zero). No season is left pending and none was marked complete without
 evidence; the earlier "all 26 incomplete are empty" claim was corrected in section 12.
+
+## 16. Possession and xG enrichment (executed and verified, 8 November 2026)
+
+ESPN's soccer summary publishes possession but no xG, and the CSV-sourced fixtures carried
+no possession at all. `fotmob_enrichment.py` adds FotMob's public match feed as a second
+statistics source: it matches each played fixture to its FotMob match on competition alias,
+both club names (alias-aware, reusing `espn_football_stats.name_score`), identical final
+score and the UTC date (with a one-day tolerance), and refuses ambiguous pairings. Only
+missing fields are filled; existing values are never overwritten and every filled field is
+recorded in `raw_json.field_sources` with `provider_version = fotmob-web-2026-11`.
+
+| Measure | Before | After |
+| --- | --- | --- |
+| Enrichment records / distinct fixtures | 23,741 | 47,507 / 24,642 |
+| Fixtures with both possession values | 5,187 | 24,013 |
+| Fixtures with both xG values | 0 | 19,627 |
+| Played fixtures with no enrichment row | 1,318 | 417 |
+| Scheduled (unplayed) fixtures with no statistics | 52 | 52 |
+
+Coverage by competition (possession / xG out of fixtures):
+
+| Competition | Fixtures | Possession | xG |
+| --- | --- | --- | --- |
+| Serie A | 3,121 | 3,116 | 2,597 |
+| Bundesliga | 2,777 | 2,745 | 2,355 |
+| Premier League | 2,758 | 2,758 | 2,382 |
+| Ligue 1 | 2,690 | 2,679 | 2,400 |
+| LaLiga | 2,622 | 2,622 | 2,281 |
+| Eredivisie | 2,460 | 2,445 | 2,188 |
+| Primeira Liga | 2,124 | 2,124 | 1,706 |
+| Europa League | 2,054 | 1,826 | 1,192 |
+| Champions League | 1,907 | 1,794 | 1,198 |
+| Nations League | 808 | 754 | 615 |
+| European Championship | 691 | 681 | 491 |
+| World Cup | 223 | 222 | 222 |
+
+By calendar year, xG exists for 2020–2026 matches only: FotMob's match feed begins
+publishing xG with the 2020/21 season, so 2018 and 2019 fixtures have possession but no xG
+by provider limitation, not by extraction failure. Verified in the payload: the same
+`matchDetails` response for a 2019 match carries `BallPossesion` and no `expected_goals`
+group at all, while a 2024 match carries `expected_goals` as the provider's string-encoded
+team totals (e.g. `"2.43"` / `"0.44"`). xG is stored as reported: full-match, all-situations
+xG including penalties, at the provider's own scale.
+
+Integrity after the run: 25,111 fixtures with 25,111 distinct ids; 0 orphan enrichment
+records; 0 possession values outside 0–100; 0 negative or non-finite xG; no fixture, score,
+mapping or registry row modified. 171 duplicate real-world fixture keys (same kickoff,
+clubs) pre-date this phase and were left untouched; the enrichment job only attaches to
+existing ids. 208 FotMob matches returned no usable statistic block (`detail_no_stats`) and a
+further 208 detail requests failed (`no_detail`), and 1,131 fixtures had no FotMob match on competition,
+clubs and score; these remain the evidence-backed residual, dominated by early-round
+European qualifiers whose FotMob competition naming does not line up with the stored
+competition.
+
+Remaining gap: 417 played fixtures with no enrichment row (414 FT, 2 PEN, 1 AET) and 4,386
+fixtures with possession but no xG, all from seasons before the provider published xG.
