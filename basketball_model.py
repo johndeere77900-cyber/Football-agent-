@@ -216,9 +216,13 @@ def predict_game(
     if isinstance(season, bool) or not isinstance(season, int) or season <= 0:
         raise ValueError("Invalid season.")
 
+    _home_source = "provider"
+    _away_source = "provider"
+
     if home_stats_override is not None and away_stats_override is not None:
         home_stats = home_stats_override
         away_stats = away_stats_override
+        _home_source = _away_source = "override"
     else:
         import storage
         import historical_basketball_features
@@ -233,27 +237,30 @@ def predict_game(
             if h_reconstructed is not None and a_reconstructed is not None:
                 home_stats = h_reconstructed
                 away_stats = a_reconstructed
+                _home_source = _away_source = "historical_reconstruction"
             else:
                 home_stats = basketball_api.get_team_statistics(home_id, league_id, season)
                 away_stats = basketball_api.get_team_statistics(away_id, league_id, season)
+                _home_source = _away_source = "provider"
         else:
             home_stats = basketball_api.get_team_statistics(home_id, league_id, season)
             away_stats = basketball_api.get_team_statistics(away_id, league_id, season)
+            _home_source = _away_source = "provider"
 
     home_for, home_against = _extract_scoring(home_stats)
 
-    _stats_source = (
-        "override"
-        if (home_stats_override is not None and away_stats_override is not None)
-        else "historical_or_provider"
-    )
+    away_for, away_against = _extract_scoring(away_stats)
+
+    # Captured after both scoring pairs are resolved: the previous ordering
+    # referenced away_for before assignment and could raise UnboundLocalError.
     _model_inputs_payload = {
         "home_stats": home_stats,
         "away_stats": away_stats,
-        "stats_source": _stats_source,
-        "historical_sample_count": int(home_stats.get("matches", 0) or 0)
-        if isinstance(home_stats, dict)
-        else 0,
+        "stats_source": {"home": _home_source, "away": _away_source},
+        "historical_sample_count": {
+            "home": int(home_stats.get("matches", 0) or 0) if isinstance(home_stats, dict) else 0,
+            "away": int(away_stats.get("matches", 0) or 0) if isinstance(away_stats, dict) else 0,
+        },
         "home_scoring": {"for": home_for, "against": home_against},
         "away_scoring": {"for": away_for, "against": away_against},
         "prediction_timestamp": prediction_timestamp,
@@ -262,8 +269,6 @@ def predict_game(
         "feature_version": getattr(config, "FEATURE_VERSION", None),
         "calibration_version": getattr(config, "CALIBRATION_VERSION", None),
     }
-
-    away_for, away_against = _extract_scoring(away_stats)
 
     if home_for is None or home_against is None:
         return _insufficient_prediction(game, "Missing or invalid home-team scoring statistics.")

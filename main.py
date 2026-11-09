@@ -2561,7 +2561,10 @@ def run_daily_basketball(
                 prediction_record=prediction,
                 features=prediction.get("model_inputs"),
                 model_inputs=prediction.get("model_inputs"),
-                idempotency_key=f"basketball:{prediction['game_id']}:{prediction_context}:{now_utc[:16]}",
+                idempotency_key=(
+                    f"basketball:{prediction['game_id']}:{prediction_context}:"
+                    f"{prediction.get('date') or now_utc[:10]}"
+                ),
             )
 
             storage.save_prediction_snapshot(

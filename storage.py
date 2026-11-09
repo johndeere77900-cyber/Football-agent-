@@ -7491,6 +7491,10 @@ def save_prediction_snapshot_cycle(params):
     """
     import lifecycle_storage
 
+    key = params.get("idempotency_key")
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("An idempotency_key is required for cycle-based prediction snapshots.")
+
     lifecycle_storage.ensure_schema()
 
     fixture_id = _validate_positive_int(params.get("fixture_id"), "fixture_id")
@@ -7539,7 +7543,6 @@ def save_prediction_snapshot_cycle(params):
         else None
     )
 
-    key = params.get("idempotency_key")
     lifecycle_id = params.get("lifecycle_id")
 
     values = (
@@ -7639,6 +7642,30 @@ def save_verified_live_result(*, lifecycle_id, sport, fixture, evidence, source=
     if not isinstance(evidence, dict) or not evidence.get("status"):
         return {"saved": False, "reason": "missing_result_evidence"}
 
+    # Independent evidence validation: never rely on the caller's stage alone.
+    from historical_match_policy import (
+        get_basketball_match_points,
+        get_football_match_goals,
+        get_status_short,
+        is_finished_match,
+    )
+
+    sport_clean = str(sport).lower()
+    status = get_status_short(fixture, sport=sport_clean)
+    if not status or status != str(evidence.get("status")):
+        return {"saved": False, "reason": "evidence_status_mismatch"}
+    if not is_finished_match(fixture, sport=sport_clean):
+        return {"saved": False, "reason": "result_not_final"}
+
+    if sport_clean == "football":
+        payload_fixture_id = (fixture.get("fixture") or {}).get("id")
+        if get_football_match_goals(fixture) is None:
+            return {"saved": False, "reason": "missing_final_goals"}
+    else:
+        payload_fixture_id = fixture.get("id")
+        if get_basketball_match_points(fixture) is None:
+            return {"saved": False, "reason": "missing_final_points"}
+
     row = lifecycle_storage.get_lifecycle(lifecycle_id)
     if row is None:
         return {"saved": False, "reason": "untracked_lifecycle"}
@@ -7646,6 +7673,16 @@ def save_verified_live_result(*, lifecycle_id, sport, fixture, evidence, source=
         return {"saved": False, "reason": "sport_mismatch"}
     if row.get("stage") not in ("FINAL_RESULT_VERIFIED", "PREDICTION_GRADED", "HISTORICAL_RECORD_UPDATED"):
         return {"saved": False, "reason": "lifecycle_not_verified"}
+    if str(payload_fixture_id) != str(row.get("provider_fixture_id")):
+        return {"saved": False, "reason": "fixture_identity_mismatch"}
+
+    teams = fixture.get("teams") or {}
+    home_payload_id = (teams.get("home") or {}).get("id")
+    away_payload_id = (teams.get("away") or {}).get("id")
+    if evidence.get("home_id") is not None and str(evidence.get("home_id")) != str(home_payload_id):
+        return {"saved": False, "reason": "home_identity_mismatch"}
+    if evidence.get("away_id") is not None and str(evidence.get("away_id")) != str(away_payload_id):
+        return {"saved": False, "reason": "away_identity_mismatch"}
 
     league = fixture.get("league") or {}
     league_id = league.get("id") or row.get("league_id")

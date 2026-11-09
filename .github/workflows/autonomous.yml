@@ -1,20 +1,15 @@
 name: Autonomous Match Lifecycle
 
-# Scheduled execution only runs from the repository's default branch, so these
-# schedules stay inert on a feature branch. They must not be merged and relied
-# upon until ChatGPT has reviewed the workflow and the Phase 2 migrations.
-#
-# The manual daily workflow (daily.yml) is preserved unchanged for manual
-# prediction, grading, Telegram and dashboard runs.
+# Schedules are gated on the repository variable AUTONOMOUS_SCHEDULES_ENABLED.
+# They stay disabled until ChatGPT has applied the reviewed production
+# migrations and the user authorises activation. Manual dispatch is always
+# available for each stage.
 
 on:
   schedule:
-    # Live monitoring: approximately five minutes.
-    - cron: "*/5 * * * *"
-    # Pre-match pipeline: discovery, preparation, prediction, results, grading.
-    - cron: "*/20 * * * *"
-    # Daily controlled learning evaluation.
-    - cron: "17 3 * * *"
+    - cron: "*/5 * * * *"    # live monitoring only
+    - cron: "*/20 * * * *"   # discovery/pre-match and result verification/grading
+    - cron: "17 3 * * *"     # controlled learning only
   workflow_dispatch:
     inputs:
       stage:
@@ -45,7 +40,9 @@ env:
 jobs:
   live:
     name: Live monitoring
-    if: github.event_name == 'schedule' || inputs.stage == 'live' || inputs.stage == 'cycle'
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '*/5 * * * *' && vars.AUTONOMOUS_SCHEDULES_ENABLED == 'true')
+      || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'live' || inputs.stage == 'cycle'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -73,7 +70,9 @@ jobs:
 
   prematch:
     name: Discovery and pre-match snapshots
-    if: github.event_name == 'schedule' || inputs.stage == 'discover' || inputs.stage == 'prematch' || inputs.stage == 'cycle'
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '*/20 * * * *' && vars.AUTONOMOUS_SCHEDULES_ENABLED == 'true')
+      || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'discover' || inputs.stage == 'prematch' || inputs.stage == 'cycle'))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     concurrency:
@@ -111,7 +110,9 @@ jobs:
 
   results:
     name: Result verification and grading
-    if: github.event_name == 'schedule' || inputs.stage == 'verify-results' || inputs.stage == 'grade' || inputs.stage == 'cycle'
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '*/20 * * * *' && vars.AUTONOMOUS_SCHEDULES_ENABLED == 'true')
+      || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'verify-results' || inputs.stage == 'grade' || inputs.stage == 'cycle'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -127,7 +128,7 @@ jobs:
           set -euo pipefail
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
-      - name: Verify final results and update historical knowledge
+      - name: Verify final results, grade and update historical knowledge
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
@@ -136,19 +137,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 main.py --autonomous verify-results
-      - name: Grade every eligible snapshot
-        env:
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-          API_BASKETBALL_KEY: ${{ secrets.API_BASKETBALL_KEY }}
-          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-          REQUIRE_NEON: "true"
-        run: |
-          set -euo pipefail
-          python3 main.py --autonomous grade
 
   learning:
     name: Controlled learning evaluation
-    if: github.event_name == 'schedule' || inputs.stage == 'learn' || inputs.stage == 'cycle'
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '17 3 * * *' && vars.AUTONOMOUS_SCHEDULES_ENABLED == 'true')
+      || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'learn' || inputs.stage == 'cycle'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -173,3 +167,4 @@ jobs:
         run: |
           set -euo pipefail
           python3 main.py --autonomous learn
+

@@ -455,8 +455,11 @@ def load_active_calibrator(sport, league_id=None, season=None, cutoff_timestamp=
     if not active or not cutoff_timestamp:
         return None
 
-    samples = lifecycle_storage.get_graded_samples(str(sport).lower(), before=cutoff_timestamp)
-    calibrator = train_walk_forward_calibrator(samples, cutoff_timestamp, sport=str(sport).lower())
+    # Rebuild from the version's own training cutoff, not from all outcomes
+    # available at the current prediction time.
+    training_cutoff = active.get("training_cutoff") or cutoff_timestamp
+    samples = lifecycle_storage.get_graded_samples(str(sport).lower(), before=training_cutoff)
+    calibrator = train_walk_forward_calibrator(samples, training_cutoff, sport=str(sport).lower())
     if calibrator is not None:
         try:
             setattr(calibrator, "calibration_version", active.get("calibration_version"))
@@ -548,10 +551,19 @@ def evaluate_and_promote(sport="football", cutoff_timestamp=None, scope="all", m
     baseline_metrics = evaluate_predictions(test, sport, None)
     candidate_metrics = evaluate_predictions(test, sport, candidate)
 
+    # Candidate and active must be compared on the same evaluation samples.
     active = lifecycle_storage.get_active_calibration(sport, scope)
-    active_brier = None
-    if active and isinstance(active.get("evaluation_metrics"), dict):
-        active_brier = active["evaluation_metrics"].get("brier")
+    active_calibrator = None
+    if active and active.get("training_cutoff"):
+        prior = lifecycle_storage.get_graded_samples(str(sport).lower(), before=active["training_cutoff"])
+        active_calibrator = train_walk_forward_calibrator(prior, active["training_cutoff"], sport=str(sport).lower())
+
+    active_metrics = (
+        evaluate_predictions(test, sport, active_calibrator)
+        if active_calibrator is not None
+        else (baseline_metrics if active else None)
+    )
+    active_brier = active_metrics.get("brier") if isinstance(active_metrics, dict) else None
     baseline_brier = active_brier if isinstance(active_brier, (int, float)) else baseline_metrics.get("brier")
 
     promote = (
@@ -560,6 +572,10 @@ def evaluate_and_promote(sport="football", cutoff_timestamp=None, scope="all", m
         and isinstance(baseline_brier, float)
         and candidate_metrics["brier"] <= baseline_brier - 1e-4
     )
+
+    if promote and active and active.get("calibration_version") != version:
+        # One active version per scope.
+        lifecycle_storage.save_calibration_version({**active, "status": "retired"})
 
     version = f"{sport}-cal-{train_cutoff[:10]}-n{len(train)}"
     lifecycle_storage.save_calibration_version(
@@ -583,8 +599,8 @@ def evaluate_and_promote(sport="football", cutoff_timestamp=None, scope="all", m
         }
     )
 
-    if not promote and active and isinstance(active_brier, float) and isinstance(baseline_metrics.get("brier"), float):
-        if baseline_metrics["brier"] > active_brier * 1.10 + 0.01:
+    if not promote and active and isinstance(active_brier, float) and isinstance(active_metrics, dict):
+        if isinstance(active_metrics.get("brier"), float) and active_metrics["brier"] > active_brier * 1.10 + 0.01:
             rollback = rollback_calibration(sport, scope, "active_version_degraded", cutoff)
             return {"sport": sport, "status": "rolled_back", "version": version, "rollback": rollback}
 

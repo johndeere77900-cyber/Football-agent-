@@ -28,6 +28,10 @@ import storage
 SCHEMA_READY = False
 
 
+class Phase2SchemaMissing(RuntimeError):
+    """Raised when production PostgreSQL lacks the reviewed Phase 2 schema."""
+
+
 def _now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat()
 
@@ -63,113 +67,38 @@ def ensure_schema() -> None:
     conn, db_type = storage._connect()
     try:
         if db_type == "postgres":
+            # Production schema is owned by ChatGPT. The application validates
+            # that the reviewed migration has been applied and never executes
+            # PostgreSQL DDL, so startup cannot silently change the database.
+            required = {
+                "prediction_snapshots": {"idempotency_key", "lifecycle_id", "model_inputs_json"},
+                "live_match_lifecycle": {"prediction_cycle_key"},
+                "live_match_observations": set(),
+                "prediction_grading_ledger": set(),
+                "model_calibration_versions": set(),
+            }
+            missing = []
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS live_match_lifecycle (
-                        lifecycle_id TEXT PRIMARY KEY,
-                        sport TEXT NOT NULL,
-                        canonical_fixture_key TEXT NOT NULL,
-                        provider TEXT,
-                        provider_fixture_id TEXT,
-                        league_id BIGINT,
-                        season INTEGER,
-                        home_team_id TEXT,
-                        away_team_id TEXT,
-                        kickoff_at TEXT,
-                        stage TEXT NOT NULL,
-                        provider_status TEXT,
-                        first_discovered_at TEXT NOT NULL,
-                        last_processed_at TEXT,
-                        retry_count INTEGER NOT NULL DEFAULT 0,
-                        next_retry_at TEXT,
-                        error_state TEXT,
-                        error_class TEXT,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        UNIQUE (sport, canonical_fixture_key)
+                for table, columns in required.items():
+                    cur.execute("SELECT to_regclass(%s)", (f"public.{table}",))
+                    if cur.fetchone()[0] is None:
+                        missing.append(table)
+                        continue
+                    cur.execute(
+                        "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+                        (table,),
                     )
-                    """
+                    present = {row[0] for row in cur.fetchall()}
+                    missing.extend(f"{table}.{column}" for column in sorted(columns - present))
+            if missing:
+                raise Phase2SchemaMissing(
+                    "Phase 2 PostgreSQL schema is missing or out of date ("
+                    + ", ".join(missing)
+                    + "). Apply the reviewed migration migrations/phase2_lifecycle_postgres.sql "
+                    "before running the lifecycle; the application never creates PostgreSQL schema."
                 )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS live_match_observations (
-                        id BIGSERIAL PRIMARY KEY,
-                        lifecycle_id TEXT NOT NULL,
-                        provider TEXT NOT NULL,
-                        provider_fixture_id TEXT,
-                        observation_timestamp TEXT NOT NULL,
-                        lifecycle_context TEXT NOT NULL,
-                        provider_status TEXT,
-                        observed_fields_json JSONB,
-                        payload_json JSONB,
-                        parser_version TEXT,
-                        provenance_json JSONB,
-                        observation_key TEXT NOT NULL UNIQUE,
-                        created_at TEXT NOT NULL
-                    )
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS prediction_grading_ledger (
-                        id BIGSERIAL PRIMARY KEY,
-                        snapshot_id BIGINT,
-                        lifecycle_id TEXT,
-                        sport TEXT NOT NULL,
-                        market TEXT NOT NULL,
-                        predicted_output_json JSONB,
-                        actual_outcome_json JSONB,
-                        settlement_status TEXT NOT NULL,
-                        settlement_rules_version TEXT,
-                        result_provenance_json JSONB,
-                        graded_at TEXT NOT NULL,
-                        grading_key TEXT NOT NULL UNIQUE
-                    )
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS model_calibration_versions (
-                        id BIGSERIAL PRIMARY KEY,
-                        sport TEXT NOT NULL,
-                        competition_scope TEXT NOT NULL,
-                        model_version TEXT,
-                        calibration_version TEXT NOT NULL,
-                        training_cutoff TEXT,
-                        training_sample_count INTEGER,
-                        evaluation_metrics_json JSONB,
-                        status TEXT NOT NULL,
-                        promoted_at TEXT,
-                        rollback_reference TEXT,
-                        dataset_identity TEXT,
-                        created_at TEXT NOT NULL,
-                        UNIQUE (sport, competition_scope, calibration_version)
-                    )
-                    """
-                )
-                cur.execute("ALTER TABLE prediction_snapshots ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
-                cur.execute("ALTER TABLE prediction_snapshots ADD COLUMN IF NOT EXISTS lifecycle_id TEXT")
-                cur.execute("ALTER TABLE prediction_snapshots ADD COLUMN IF NOT EXISTS model_inputs_json JSONB")
-                cur.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_pred_snapshots_idem ON prediction_snapshots (idempotency_key) WHERE idempotency_key IS NOT NULL"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_lifecycle ON prediction_snapshots (lifecycle_id)"
-                )
-                cur.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_lifecycle_sport_fixture ON live_match_lifecycle (sport, canonical_fixture_key)"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_lifecycle_stage ON live_match_lifecycle (sport, stage)"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_observations_lifecycle ON live_match_observations (lifecycle_id, observation_timestamp)"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_grading_snapshot ON prediction_grading_ledger (snapshot_id)"
-                )
-            conn.commit()
+            SCHEMA_READY = True
+            return
         else:
             conn.execute(
                 """
@@ -261,6 +190,7 @@ def ensure_schema() -> None:
                 ("model_inputs_json", "TEXT"),
             ):
                 storage._ensure_column_sqlite(conn, "prediction_snapshots", column, ctype)
+            storage._ensure_column_sqlite(conn, "live_match_lifecycle", "prediction_cycle_key", "TEXT")
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_pred_snapshots_idem ON prediction_snapshots (idempotency_key) WHERE idempotency_key IS NOT NULL"
             )
@@ -303,6 +233,7 @@ _LIFECYCLE_FIELDS = (
     "error_class",
     "created_at",
     "updated_at",
+    "prediction_cycle_key",
 )
 
 
@@ -348,6 +279,7 @@ def upsert_lifecycle(record: Dict[str, Any]) -> Dict[str, Any]:
             None,
             now,
             now,
+            record.get("prediction_cycle_key"),
         )
         if db_type == "postgres":
             with conn.cursor() as cur:
@@ -358,8 +290,8 @@ def upsert_lifecycle(record: Dict[str, Any]) -> Dict[str, Any]:
                         provider_fixture_id, league_id, season, home_team_id,
                         away_team_id, kickoff_at, stage, provider_status,
                         first_discovered_at, last_processed_at, retry_count,
-                        next_retry_at, error_state, error_class, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        next_retry_at, error_state, error_class, created_at, updated_at, prediction_cycle_key
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (sport, canonical_fixture_key) DO NOTHING
                     """,
                     values,
@@ -373,8 +305,8 @@ def upsert_lifecycle(record: Dict[str, Any]) -> Dict[str, Any]:
                     provider_fixture_id, league_id, season, home_team_id,
                     away_team_id, kickoff_at, stage, provider_status,
                     first_discovered_at, last_processed_at, retry_count,
-                    next_retry_at, error_state, error_class, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    next_retry_at, error_state, error_class, created_at, updated_at, prediction_cycle_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
@@ -430,8 +362,13 @@ def get_lifecycle_by_fixture(sport: str, canonical_fixture_key: str) -> Optional
         conn.close()
 
 
-def update_lifecycle(lifecycle_id: str, **updates) -> Optional[Dict[str, Any]]:
-    """Advance a lifecycle record. Unknown fields are ignored."""
+def update_lifecycle(lifecycle_id: str, expected_stage: Optional[str] = None, **updates) -> Optional[Dict[str, Any]]:
+    """
+    Update a lifecycle record.
+
+    ``expected_stage`` makes the write conditional so two workers cannot both
+    apply the same transition. Returns None when the condition no longer holds.
+    """
     ensure_schema()
     allowed = {
         "stage",
@@ -445,28 +382,55 @@ def update_lifecycle(lifecycle_id: str, **updates) -> Optional[Dict[str, Any]]:
         "provider_fixture_id",
         "home_team_id",
         "away_team_id",
+        "prediction_cycle_key",
     }
     fields = {k: v for k, v in updates.items() if k in allowed}
     fields["updated_at"] = _now()
-    if "last_processed_at" not in fields and ("stage" in fields):
+    if "last_processed_at" not in fields and "stage" in fields:
         fields["last_processed_at"] = fields["updated_at"]
 
     conn, db_type = storage._connect()
     try:
         ph = "%s" if db_type == "postgres" else "?"
         assignments = ", ".join(f"{name} = {ph}" for name in fields)
+        conditions = f"lifecycle_id = {ph}"
         params = list(fields.values()) + [lifecycle_id]
-        sql = f"UPDATE live_match_lifecycle SET {assignments} WHERE lifecycle_id = {ph}"
+        if expected_stage is not None:
+            conditions += f" AND stage = {ph}"
+            params.append(expected_stage)
+        sql = f"UPDATE live_match_lifecycle SET {assignments} WHERE {conditions}"
         if db_type == "postgres":
             with conn.cursor() as cur:
                 cur.execute(sql, params)
+                changed = cur.rowcount
             conn.commit()
         else:
-            conn.execute(sql, params)
+            changed = conn.execute(sql, params).rowcount
             conn.commit()
+        if expected_stage is not None and changed == 0:
+            return None
     finally:
         conn.close()
     return get_lifecycle(lifecycle_id)
+
+
+def transition_lifecycle(lifecycle_id: str, to_stage: str, from_stages=None, **fields):
+    """Move a lifecycle to ``to_stage`` only from an allowed current stage."""
+    row = get_lifecycle(lifecycle_id)
+    if row is None:
+        return None
+    if from_stages and row.get("stage") not in from_stages:
+        return None
+    fields["stage"] = to_stage
+    return update_lifecycle(lifecycle_id, expected_stage=row.get("stage"), **fields)
+
+
+def get_latest_final_observation(lifecycle_id: str) -> Optional[Dict[str, Any]]:
+    """Most recent durable verified-result observation for a lifecycle."""
+    for observation in get_observations(lifecycle_id, limit=20):
+        if observation.get("lifecycle_context") == "final_result" and isinstance(observation.get("payload"), dict):
+            return observation
+    return None
 
 
 def list_lifecycles(
@@ -860,8 +824,13 @@ def get_graded_samples(sport, before=None, limit=5000):
     ensure_schema()
     conn, db_type = storage._connect()
     ph = "%s" if db_type == "postgres" else "?"
-    clauses = ["s.sport = " + ph, "g.settlement_status IN ('WON', 'LOST')"]
-    params = [str(sport).lower()]
+    primary_market = "match_result" if str(sport).lower() == "football" else "moneyline"
+    clauses = [
+        "s.sport = " + ph,
+        "g.settlement_status IN ('WON', 'LOST')",
+        "g.market = " + ph,
+    ]
+    params = [str(sport).lower(), primary_market]
     if before:
         clauses.append("s.prediction_timestamp < " + ph)
         params.append(before)
@@ -883,7 +852,11 @@ def get_graded_samples(sport, before=None, limit=5000):
         conn.close()
 
     samples = []
+    seen_snapshots = set()
     for row in rows:
+        if row[0] in seen_snapshots:
+            continue
+        seen_snapshots.add(row[0])
         markets = _loads(row[2]) or {}
         actual = _loads(row[3]) or {}
         result = None

@@ -60,3 +60,28 @@ def test_verify_historical_datasets_returns_exit_code_0_on_successful_verificati
     monkeypatch.setattr("sys.argv", ["main.py", "--verify-historical-datasets", "--league", "39", "--season", "2020"])
     exit_code = main.main()
     assert exit_code == 0
+
+
+def test_retired_historical_acquisition_rejects_execution():
+    """Agent-initiated acquisition must fail explicitly instead of doing work."""
+    with pytest.raises(historical_sync.HistoricalAcquisitionRetired):
+        historical_sync.sync_historical_fixtures(39, 2024)
+    with pytest.raises(historical_sync.HistoricalAcquisitionRetired):
+        historical_sync.sync_historical_basketball_games(12, 2024)
+    with pytest.raises(historical_sync.HistoricalAcquisitionRetired):
+        historical_sync.run_historical_queue(season=2024)
+
+
+def test_read_only_historical_verification_remains_functional(monkeypatch):
+    """Retiring acquisition must not remove read-only verification."""
+    calls = {}
+
+    def fake_verify(**kwargs):
+        calls.update(kwargs)
+        return {"success": True}
+
+    monkeypatch.setattr(historical_sync, "verify_persisted_historical_datasets", fake_verify)
+    monkeypatch.setattr("sys.argv", ["main.py", "--verify-historical-datasets", "--league", "39", "--season", "2020"])
+
+    assert main.main() == 0
+    assert calls, "read-only verification was not invoked"
