@@ -510,3 +510,71 @@ competitions where the provider does not publish xG at all. No credentialed stat
 provider is configured in this environment, Understat now serves a script-only shell with no
 xG data, and FBref and Sofascore reject automated requests with 403, so no second xG source
 can corroborate these seasons.
+
+## 18. Per-fixture reconciliation and closeout (9 November 2026)
+
+`fotmob_ledger.py` emits one outcome for every fixture and every tracked field —
+25,111 × 7 = 175,777 rows in `.api_cache/reports/fotmob_field_ledger.jsonl`, summarised in
+`fotmob_field_ledger_summary.json`. Each outcome is derived from evidence: the cached
+provider payload for the matched fixture, the day listings for unmatched fixtures, and the
+persisted row itself. No fixture/field pair is left "not attempted".
+
+One further matching defect was found while closing the ledger and fixed: provider day
+listings include youth sides ("Premier League U18") whose names and competition names contain
+the senior club's and league's names, so senior fixtures with an identically-scored youth
+match that day were rejected as ambiguous. Three Premier League fixtures (Arsenal–Fulham,
+Manchester City–Tottenham, Manchester United–Nottingham Forest) were recovered this way, and
+youth, reserve, academy and women's listings are now excluded from candidate selection.
+
+### Outcome ledger (distinct fixtures)
+
+| Field | Acquired, paired | Provider does not supply | No statistics block | No provider match | Ambiguous, rejected | Predates provider era |
+| --- | --- | --- | --- | --- | --- | --- |
+| Possession | 24,467 | — | 258 | 220 | 166 | — |
+| xG | 20,053 | 1,914 | 258 | 230 | 202 | 2,454 |
+| Shots | 24,718 | — | 258 | 60 | 75 | — |
+| Shots on target | 24,718 | — | 258 | 60 | 75 | — |
+| Corners | 24,718 | — | 258 | 60 | 75 | — |
+| Yellow cards | 23,965 | 753 | 258 | 60 | 75 | — |
+| Red cards | 23,965 | 753 | 258 | 60 | 75 | — |
+
+`ambiguous, rejected` means several provider matches fitted the same competition, date and
+score and the matcher refused to choose; they are unresolved by design, not by omission.
+
+### 341 played statless fixtures
+
+These have no enrichment row at all, so no field can be populated: 210 Europa League
+qualifiers, 67 Champions League qualifiers, 29 Bundesliga, 15 Eredivisie, 10 European
+Championship, 5 Serie A, 2 Nations League, 1 World Cup, 1 AET and 1 PEN tie. Their provider
+matches (where they exist) resolve to a match whose payload carries no statistics block, or
+to no listing in the competition/date/score window. The 52 scheduled fixtures remain
+separate and are never counted as failed acquisition.
+
+### Reconciling the earlier card figure
+
+The earlier "935 fixtures missing cards" was a row-level count: fixtures with several
+enrichment rows were counted once per row, and any row lacking a card value counted as a
+gap. Counted per distinct fixture and requiring both sides to be present, the gap is 753,
+every one attributed to `provider_no_discipline_block` — the matched payload has a
+statistics block but no discipline group. Possession and xG figures in section 17 were
+already distinct-fixture counts and are unchanged in method.
+
+### Final production read-back (queried from Neon)
+
+| Measure | Value |
+| --- | --- |
+| Fixtures / distinct fixture IDs | 25,111 / 25,111 |
+| Enrichment rows / distinct enriched fixtures | 48,002 / 24,718 |
+| Paired possession | 24,467 |
+| Paired xG | 20,053 |
+| Paired shots, shots on target, corners | 24,718 each |
+| Paired yellow and red cards | 23,965 each |
+| Played fixtures with no statistics | 341 |
+| Scheduled fixtures kept separate | 52 |
+| Possession outside 0–100 / invalid xG | 0 / 0 |
+| Orphan enrichment rows / duplicate fixture IDs | 0 / 0 |
+| FotMob rows carrying field-level provenance | 24,261 of 24,261 |
+| Football registry rows COMPLETE | 96 of 96 |
+
+Scores, kickoffs, fixture identities, competition mappings and registry rows were not
+modified at any point in this phase; only previously null statistics were filled.

@@ -247,6 +247,20 @@ def parse_detail(match_id):
     }
 
 
+# Youth, reserve and women's sides share the senior club's name and often the senior
+# competition's name in the provider listing ("Premier League U18"). They are different
+# teams, so they can never satisfy a senior fixture.
+NON_SENIOR = ("u18", "u19", "u20", "u21", "u23", "youth", "reserve", "women", "ladies",
+              "academy", "friendly")
+
+
+def side_kind(name):
+    text = norm(name)
+    marks = re.findall(r"u\d{2}", text)
+    marks += [word for word in NON_SENIOR if word in text]
+    return tuple(sorted(set(marks)))
+
+
 def same_club(left, right):
     """Provider spellings differ, so reuse the project's alias-aware comparison.
 
@@ -255,6 +269,8 @@ def same_club(left, right):
     allowed as a second opinion. Score, date and competition must still agree and an
     ambiguous pairing is rejected, so a loose name only ever narrows the candidates.
     """
+    if side_kind(left) != side_kind(right):
+        return False
     if norm(left) == norm(right):
         return True
     if espn.name_score(left, right) >= 0.72:
@@ -292,6 +308,8 @@ def main(argv=None):
     parser.add_argument("--season", type=int, default=None)
     parser.add_argument("--newest-first", action="store_true")
     parser.add_argument("--only-missing-possession", action="store_true")
+    parser.add_argument("--fixture-ids", default=None,
+                        help="comma separated fixture ids to process in isolation")
     args = parser.parse_args(argv)
 
     conn, _ = storage._connect()
@@ -311,6 +329,10 @@ def main(argv=None):
     if args.season:
         where.append("season=%s")
         params.append(args.season)
+    if args.fixture_ids:
+        ids = [int(x) for x in args.fixture_ids.split(",") if x.strip()]
+        where.append("f.fixture_id = ANY(%s)")
+        params.append(ids)
     order = "DESC" if args.newest_first else "ASC"
     cur.execute(f"""
         SELECT f.fixture_id, f.league_id, f.season,
@@ -359,7 +381,10 @@ def main(argv=None):
         for delta in (0, 1, -1):
             probe = (day + datetime.timedelta(days=delta)).isoformat()
             for match in indexes.get(probe, {}).values():
-                if aliases and not any(alias in (match["league"] or "") for alias in aliases):
+                league_name = match["league"] or ""
+                if aliases and not any(alias in league_name for alias in aliases):
+                    continue
+                if any(word in league_name for word in NON_SENIOR):
                     continue
                 try:
                     if (int(fixture["home_goals"]), int(fixture["away_goals"])) != (
