@@ -20,10 +20,10 @@
  "fixtures": 25111,
  "gaps_by_league": {
   "1": {
-   "red_cards:no_provider_match": 1
+   "xg:evidence_missing_request_not_attempted": 1
   },
   "135": {
-   "red_cards:no_provider_match": 5
+   "red_cards:no_provider_match": 3
   },
   "140": {
    "xg:provider_does_not_supply_field": 1
@@ -38,7 +38,7 @@
    "xg:provider_predates_xg_era": 376
   },
   "4": {
-   "red_cards:no_provider_match": 10
+   "red_cards:evidence_missing_request_not_attempted": 2
   },
   "5": {
    "xg:provider_does_not_supply_field": 1
@@ -53,7 +53,7 @@
    "xg:provider_predates_xg_era": 257
   },
   "94": {
-   "xg:no_provider_match": 131
+   "xg:evidence_missing_request_not_attempted": 22
   }
  },
  "generated_for": "historical enrichment closeout",
@@ -74,47 +74,54 @@
  "outcomes_by_field": {
   "corners": {
    "acquired_verified": 24718,
-   "ambiguous_match_rejected": 75,
-   "no_provider_match": 60,
+   "ambiguous_match_rejected": 63,
+   "evidence_missing_request_not_attempted": 23,
+   "no_provider_match": 49,
    "provider_no_statistics_block": 258
   },
   "possession": {
    "acquired_verified": 24467,
-   "ambiguous_match_rejected": 166,
-   "no_provider_match": 220,
+   "ambiguous_match_rejected": 147,
+   "evidence_missing_request_not_attempted": 49,
+   "no_provider_match": 190,
    "provider_no_statistics_block": 258
   },
   "red_cards": {
    "acquired_verified": 23965,
-   "ambiguous_match_rejected": 75,
-   "no_provider_match": 60,
+   "ambiguous_match_rejected": 63,
+   "evidence_missing_request_not_attempted": 23,
+   "no_provider_match": 49,
    "provider_no_discipline_block": 753,
    "provider_no_statistics_block": 258
   },
   "shots": {
    "acquired_verified": 24718,
-   "ambiguous_match_rejected": 75,
-   "no_provider_match": 60,
+   "ambiguous_match_rejected": 63,
+   "evidence_missing_request_not_attempted": 23,
+   "no_provider_match": 49,
    "provider_no_statistics_block": 258
   },
   "shots_on_target": {
    "acquired_verified": 24718,
-   "ambiguous_match_rejected": 75,
-   "no_provider_match": 60,
+   "ambiguous_match_rejected": 63,
+   "evidence_missing_request_not_attempted": 23,
+   "no_provider_match": 49,
    "provider_no_statistics_block": 258
   },
   "xg": {
    "acquired_verified": 20053,
-   "ambiguous_match_rejected": 187,
-   "no_provider_match": 215,
+   "ambiguous_match_rejected": 167,
+   "evidence_missing_request_not_attempted": 62,
+   "no_provider_match": 173,
    "provider_does_not_supply_field": 726,
    "provider_no_statistics_block": 258,
    "provider_predates_xg_era": 3672
   },
   "yellow_cards": {
    "acquired_verified": 23965,
-   "ambiguous_match_rejected": 75,
-   "no_provider_match": 60,
+   "ambiguous_match_rejected": 63,
+   "evidence_missing_request_not_attempted": 23,
+   "no_provider_match": 49,
    "provider_no_discipline_block": 753,
    "provider_no_statistics_block": 258
   }

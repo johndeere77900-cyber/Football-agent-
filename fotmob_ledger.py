@@ -110,21 +110,25 @@ def stat_keys(match_id):
 def local_match_state(fixture):
     """Classify a fixture with no matched id using cached day listings.
 
-    A day whose listing cache does not exist is missing evidence, not proof that the
-    provider listed no such match, so the two are reported separately.
+    All three expected listings (fixture day, next day, previous day) are tracked
+    independently. A missing or unreadable listing means the search window is incomplete,
+    so the fixture is reported as missing evidence rather than as a confirmed no-match.
     """
     day = datetime.date.fromisoformat(fixture["day"])
     aliases = fm.LEAGUE_ALIASES.get(fixture["league_id"], ())
     strong, weak, checked = [], [], []
+    missing, unreadable = [], []
     for delta in (0, 1, -1):
         probe = (day + datetime.timedelta(days=delta)).isoformat().replace("-", "")
         path = os.path.join(DAY_CACHE, f"{probe}.json")
         if not os.path.exists(path):
+            missing.append(f"cache_missing:day/{probe}.json")
             continue
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
         except (OSError, ValueError):
+            unreadable.append(f"cache_unreadable:day/{probe}.json")
             continue
         checked.append(f"cache:day/{probe}.json")
         for league in payload.get("leagues") or []:
@@ -156,8 +160,10 @@ def local_match_state(fixture):
                     strong.append(similarity)
                 else:
                     weak.append(similarity)
-    evidence = ";".join(checked) or f"cache_missing:day/{day.strftime('%Y%m%d')}.json"
-    if not checked:
+    evidence = ";".join(checked + missing + unreadable)
+    # A "no match" verdict needs the whole three-day search window to be evidenced: one
+    # readable listing cannot stand in for the two days it did not see.
+    if missing or unreadable or len(checked) != 3:
         return "evidence_missing", evidence
     if strong or (len(weak) == 1 and weak[0] >= 0.55):
         return "would_match_now", evidence

@@ -611,9 +611,13 @@ Corrected xG outcomes across 25,111 fixtures:
 | `no_provider_match` | 215 |
 | `ambiguous_match_rejected` | 187 |
 
-The 3,672 is every season-2019-or-earlier fixture without xG, including the 1,047 from
-January–June 2020; the 726 remaining are 2020+ fixtures whose payload has a statistics block
-but no `expected_goals` group (Champions League and Europa League listed above).
+The 3,672 is every pre-2020 fixture that has an enrichment row but no paired xG, including
+the 1,047 from January–June 2020. It is not every pre-2020 fixture without xG: season 2019
+has 3,794 played fixtures, 27 with paired xG, 3,699 with an enrichment row and 95 with no
+row at all. Those 95 keep their separate provider-evidence classification (no statistics
+block, no match, or missing evidence) and are never counted as predating the xG era. The 726
+remaining are 2020+ fixtures whose payload has a statistics block but no `expected_goals`
+group (Champions League and Europa League).
 
 ### Missing evidence is no longer reported as a confirmed absence
 
@@ -648,8 +652,8 @@ ignored `.api_cache/`.
 | `not_attempted` entries | 0 |
 | `evidence_missing_request_not_attempted` entries | 0 |
 | `request_failed` entries | 0 |
-| Possession acquired / gap | 24,467 / 644 (258 no block, 220 no match, 166 ambiguous) |
-| xG acquired / gap | 20,053 / 5,058 (3,672 era, 726 not supplied, 258 no block, 215 no match, 187 ambiguous) |
+| Possession acquired / gap | 24,467 / 644 (258 no block, 190 no match, 147 ambiguous, 49 missing evidence) |
+| xG acquired / gap | 20,053 / 5,058 (3,672 era, 726 not supplied, 258 no block, 173 no match, 167 ambiguous, 62 missing evidence) |
 | Shots, shots on target, corners | 24,718 acquired each; 393 without any statistics row |
 | Yellow / red cards | 23,965 each; 753 `provider_no_discipline_block` |
 | Played statless fixtures / scheduled | 341 / 52 (kept separate) |
@@ -657,3 +661,58 @@ ignored `.api_cache/`.
 
 These totals match the production read-back recorded in section 18; no database writes were
 made for this correction.
+
+## 20. Complete three-day provider window required for a no-match verdict (9 November 2026)
+
+`local_match_state()` previously treated one readable day listing as sufficient evidence for
+`no_provider_match`: the two other days of the search window were skipped silently if their
+cache was absent or unreadable. That could report a confirmed provider absence on the basis
+of a third of the evidence.
+
+The function now tracks the three expected listings independently (fixture day, next day,
+previous day) and records each as `cache:day/<date>.json`, `cache_missing:day/<date>.json` or
+`cache_unreadable:day/<date>.json`. All three appear in the ledger's `evidence` field. The
+classification is:
+
+```
+if missing or unreadable or len(checked) != 3:
+    return "evidence_missing", evidence
+```
+
+so `no_provider_match` is only asserted when all three listings exist, are readable, and
+contain no eligible match; `ambiguous_match_rejected` likewise requires the complete window.
+This outranks a positive candidate: if any day is missing, the outcome is missing evidence,
+not a match.
+
+### Effect on the ledger
+
+| Field | `no_provider_match` before → after | `ambiguous` before → after | New `evidence_missing` |
+| --- | --- | --- | --- |
+| Possession | 220 → 190 | 166 → 147 | 49 |
+| xG | 215 → 173 | 187 → 167 | 62 |
+| Shots / on target / corners | 60 → 49 each | 75 → 63 each | 23 each |
+| Yellow / red cards | 60 → 49 each | 75 → 63 each | 23 each |
+
+**226 fixture/field outcomes** moved from a confirmed-absence or ambiguity verdict to
+`evidence_missing_request_not_attempted` (49 possession, 62 xG, 23 each for shots, shots on
+target, corners, yellow cards and red cards), affecting **66 distinct fixtures**; nothing was
+re-acquired to fill the gap.
+
+### Post-correction reconciliation (verified from the committed artifact)
+
+| Check | Result |
+| --- | --- |
+| Ledger rows | 175,777 = 25,111 × 7 |
+| Per-field outcome totals | 25,111 each (all seven fields) |
+| `no_provider_match` rows without three readable listings | 0 |
+| `evidence_missing` rows citing a missing/unreadable listing | 226 of 226 |
+| `not_attempted` outcomes | 0 |
+| Possession acquired | 24,467 (258 no block, 190 no match, 147 ambiguous, 49 missing evidence) |
+| xG acquired | 20,053 (3,672 era, 726 not supplied, 258 no block, 173 no match, 167 ambiguous, 62 missing evidence) |
+| Shots / on target / corners | 24,718 each (258 no block, 49 no match, 63 ambiguous, 23 missing evidence) |
+| Yellow / red cards | 23,965 each, 753 `provider_no_discipline_block` |
+| Played statless / scheduled | 341 / 52, still separate |
+| Invalid values / orphans / duplicate IDs | 0 / 0 / 0 |
+
+No production database writes or SQL changes were made for this correction; valid statistics,
+provenance, fixtures, scores, identities, mappings and registry rows are unchanged.
