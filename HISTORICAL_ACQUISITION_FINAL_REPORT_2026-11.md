@@ -578,3 +578,82 @@ already distinct-fixture counts and are unchanged in method.
 
 Scores, kickoffs, fixture identities, competition mappings and registry rows were not
 modified at any point in this phase; only previously null statistics were filled.
+
+## 19. Evidence corrections and durable ledger (9 November 2026)
+
+### xG era boundary corrected to the competition season
+
+The previous ledger used a calendar cutoff (`day < 2020-01-01`), which misclassified
+fixtures from the 2019/20 season played in January–June 2020 as "provider does not supply
+this field" when they actually predate the provider's systematic xG coverage. The rule is
+now season-based (`season start year < 2020`), supported by measurement in production:
+
+| Season | Played fixtures | With xG |
+| --- | --- | --- |
+| 2019 | 3,794 | 27 (0.7%), of which 12 of 1,059 played Jan–Jun 2020 |
+| 2020 | 3,878 | 3,416 (88%) |
+| 2021 | 2,831 | 2,709 (96%) |
+
+Systematic coverage therefore begins with the 2020/21 season, not on 1 January 2020. The
+2019-season fixtures played between January and June 2020 number exactly **1,047** without
+xG (1,023 of them carry FotMob match IDs); all 1,047 are now classified
+`provider_predates_xg_era`. No statistics were reacquired to change a classification and no
+xG was fabricated.
+
+Corrected xG outcomes across 25,111 fixtures:
+
+| Outcome | Fixtures |
+| --- | --- |
+| `acquired_verified` | 20,053 |
+| `provider_predates_xg_era` | 3,672 |
+| `provider_does_not_supply_field` | 726 |
+| `provider_no_statistics_block` | 258 |
+| `no_provider_match` | 215 |
+| `ambiguous_match_rejected` | 187 |
+
+The 3,672 is every season-2019-or-earlier fixture without xG, including the 1,047 from
+January–June 2020; the 726 remaining are 2020+ fixtures whose payload has a statistics block
+but no `expected_goals` group (Champions League and Europa League listed above).
+
+### Missing evidence is no longer reported as a confirmed absence
+
+`local_match_state()` now records which day listings were actually read. If no listing
+cache exists for the fixture date window, the outcome is
+`evidence_missing_request_not_attempted` rather than `no_provider_match`; a missing cache
+can no longer be read as proof that the provider listed no such match. The same distinction
+applies to a missing match payload (`cache_missing:match/<id>.json`). In this run every day
+listing and match payload used as evidence was present, so both
+`evidence_missing_request_not_attempted` and `request_failed` are **0** — stated explicitly
+so the zero is a checked result, not an untested assumption.
+
+### Durable handover artifacts
+
+The ledger now lives outside the ignored cache and is committed:
+
+- `artifacts/fotmob_field_ledger.jsonl.gz` — 175,777 rows, one per fixture/field, each with
+  `fixture_id`, `field`, `outcome`, `competition`, `league_id`, `season`, `day`, `status`,
+  `match_id`, and an `evidence` reference (`cache:match/<id>.json`, `cache:day/<date>.json`,
+  `cache_missing:...`, `database:paired_value`, `provider_coverage:season<2020`).
+- `artifacts/fotmob_field_ledger_summary.json` — totals, all outcome definitions and the
+  measured xG-era rule.
+
+No raw provider caches or credentials are committed; the cached payloads stay under the
+ignored `.api_cache/`.
+
+### Reconciliation
+
+| Check | Result |
+| --- | --- |
+| Ledger rows vs 25,111 fixtures × 7 fields | 175,777 = 175,777 |
+| `not_attempted` entries | 0 |
+| `evidence_missing_request_not_attempted` entries | 0 |
+| `request_failed` entries | 0 |
+| Possession acquired / gap | 24,467 / 644 (258 no block, 220 no match, 166 ambiguous) |
+| xG acquired / gap | 20,053 / 5,058 (3,672 era, 726 not supplied, 258 no block, 215 no match, 187 ambiguous) |
+| Shots, shots on target, corners | 24,718 acquired each; 393 without any statistics row |
+| Yellow / red cards | 23,965 each; 753 `provider_no_discipline_block` |
+| Played statless fixtures / scheduled | 341 / 52 (kept separate) |
+| Invalid possession or xG / orphans / duplicate IDs | 0 / 0 / 0 |
+
+These totals match the production read-back recorded in section 18; no database writes were
+made for this correction.

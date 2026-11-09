@@ -1,0 +1,123 @@
+{
+ "acquired_paired_by_field": {
+  "corners": 24718,
+  "possession": 24467,
+  "red_cards": 23965,
+  "shots": 24718,
+  "shots_on_target": 24718,
+  "xg": 20053,
+  "yellow_cards": 23965
+ },
+ "fields": [
+  "possession",
+  "xg",
+  "shots",
+  "shots_on_target",
+  "corners",
+  "yellow_cards",
+  "red_cards"
+ ],
+ "fixtures": 25111,
+ "gaps_by_league": {
+  "1": {
+   "red_cards:no_provider_match": 1
+  },
+  "135": {
+   "red_cards:no_provider_match": 5
+  },
+  "140": {
+   "xg:provider_does_not_supply_field": 1
+  },
+  "2": {
+   "red_cards:provider_no_statistics_block": 35
+  },
+  "3": {
+   "red_cards:provider_no_statistics_block": 170
+  },
+  "39": {
+   "xg:provider_predates_xg_era": 376
+  },
+  "4": {
+   "red_cards:no_provider_match": 10
+  },
+  "5": {
+   "xg:provider_does_not_supply_field": 1
+  },
+  "61": {
+   "xg:provider_predates_xg_era": 275
+  },
+  "78": {
+   "xg:provider_predates_xg_era": 422
+  },
+  "88": {
+   "xg:provider_predates_xg_era": 257
+  },
+  "94": {
+   "xg:no_provider_match": 131
+  }
+ },
+ "generated_for": "historical enrichment closeout",
+ "ledger_rows": 175777,
+ "outcome_definitions": {
+  "acquired_verified": "paired home and away value persisted",
+  "ambiguous_match_rejected": "multiple provider matches fitted equally well; refused",
+  "evidence_missing_request_not_attempted": "day listing or match payload absent from cache; absence of a match is not established",
+  "no_provider_match": "a cached day listing was read and holds no eligible match",
+  "not_played": "fixture not played",
+  "provider_does_not_supply_field": "cached payload has statistics but no key for this field",
+  "provider_no_discipline_block": "cached payload has statistics but no cards group",
+  "provider_no_statistics_block": "matched provider fixture has no statistics block",
+  "provider_predates_xg_era": "season predates the provider's 2020/21 xG coverage",
+  "provider_value_missing_in_payload": "key present but no usable numeric value",
+  "request_failed": "provider request made and failed"
+ },
+ "outcomes_by_field": {
+  "corners": {
+   "acquired_verified": 24718,
+   "ambiguous_match_rejected": 75,
+   "no_provider_match": 60,
+   "provider_no_statistics_block": 258
+  },
+  "possession": {
+   "acquired_verified": 24467,
+   "ambiguous_match_rejected": 166,
+   "no_provider_match": 220,
+   "provider_no_statistics_block": 258
+  },
+  "red_cards": {
+   "acquired_verified": 23965,
+   "ambiguous_match_rejected": 75,
+   "no_provider_match": 60,
+   "provider_no_discipline_block": 753,
+   "provider_no_statistics_block": 258
+  },
+  "shots": {
+   "acquired_verified": 24718,
+   "ambiguous_match_rejected": 75,
+   "no_provider_match": 60,
+   "provider_no_statistics_block": 258
+  },
+  "shots_on_target": {
+   "acquired_verified": 24718,
+   "ambiguous_match_rejected": 75,
+   "no_provider_match": 60,
+   "provider_no_statistics_block": 258
+  },
+  "xg": {
+   "acquired_verified": 20053,
+   "ambiguous_match_rejected": 187,
+   "no_provider_match": 215,
+   "provider_does_not_supply_field": 726,
+   "provider_no_statistics_block": 258,
+   "provider_predates_xg_era": 3672
+  },
+  "yellow_cards": {
+   "acquired_verified": 23965,
+   "ambiguous_match_rejected": 75,
+   "no_provider_match": 60,
+   "provider_no_discipline_block": 753,
+   "provider_no_statistics_block": 258
+  }
+ },
+ "xg_era_rule": "season start year < 2020; measured: 2019 season 27/3,794 with xG (12/1,059 in Jan-Jun 2020) vs 2020 season 3,416/3,878"
+}
