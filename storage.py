@@ -534,6 +534,22 @@ def init_db():
                     cur.execute(
                         f"ALTER TABLE historical_fixture_enrichment ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
                     )
+
+                cur.execute(
+                    """
+                    DO $$
+                    BEGIN
+                        IF (
+                            SELECT data_type FROM information_schema.columns
+                            WHERE table_name = 'historical_fixture_enrichment'
+                              AND column_name = 'field_mask'
+                        ) = 'jsonb' THEN
+                            EXECUTE 'ALTER TABLE historical_fixture_enrichment '
+                                    'ALTER COLUMN field_mask TYPE TEXT USING field_mask::text';
+                        END IF;
+                    END $$;
+                    """
+                )
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS historical_datasets (
@@ -6666,7 +6682,7 @@ def save_historical_enrichment(enriched_fixtures, source="api_football"):
     """
     valid_sources = (
         "api_football", "football_data_org", "football_data_csv",
-        "soccerdata", "reconciled",
+        "soccerdata", "reconciled", "espn_soccer_summary",
     )
     source_str = str(source).strip().lower()
     if source_str not in valid_sources:

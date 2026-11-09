@@ -1,0 +1,718 @@
+# Historical acquisition - final verified report (7 November 2026)
+
+Neon project `dark-hall-82163232`, database `neondb`, production branch `br-long-mountain-b5zwly7k`.
+## 0. Final state (re-verified after the last import)
+
+| Metric | Value |
+| --- | --- |
+| Fixtures persisted | 24,549 |
+| Fixtures with statistics | 23,182 |
+| Fixtures without statistics | 1,367 |
+| Rows with possession | 4,628 |
+| Football rows still at 00:00 | 1,272 |
+
+UEFA season coverage after the import: Champions League 2019: 340, 2020: 176, 2021: 218, 2022: 214, 2023: 214, 2024: 279, 2025: 470, 2026: 54;
+Europa League 2019: 511, 2020: 360, 2021: 175, 2022: 175, 2023: 175, 2024: 269, 2025: 271, 2026: 152.
+
+All figures come from live SQL against that database.
+
+## 1. Headline
+
+| Metric | Value |
+| --- | --- |
+| Fixtures (distinct ids) | 24,397 |
+| Fixtures with statistics | 22,898 (93.9 %) |
+| Fixtures without statistics | 1,499 |
+| Rows with possession | 4,344 |
+| Rows with xG | 0 |
+| Duplicate event groups retained | 250 |
+| Basketball games | 9,584 |
+
+## 2. Competitions and seasons
+
+| Competition | Season | Fixtures |
+| --- | --- | --- |
+| World Cup | 2022 | 128 |
+| Champions League | 2019 | 340 |
+| Champions League | 2020 | 176 |
+| Champions League | 2021 | 218 |
+| Champions League | 2022 | 214 |
+| Champions League | 2023 | 214 |
+| Champions League | 2024 | 279 |
+| Champions League | 2025 | 470 |
+| Champions League | 2026 | 54 |
+| Europa League | 2019 | 511 |
+| Europa League | 2020 | 360 |
+| Europa League | 2021 | 175 |
+| Europa League | 2022 | 175 |
+| Europa League | 2023 | 175 |
+| Europa League | 2024 | 269 |
+| Europa League | 2025 | 271 |
+| European Championship | 2020 | 364 |
+| European Championship | 2024 | 340 |
+| Nations League | 2020 | 162 |
+| Nations League | 2024 | 188 |
+
+Domestic leagues carried by football-data CSVs (league ids 39, 61, 78, 88, 94, 135, 140) are complete for every season in the registry.
+
+## 3. Acquired, expected, unavailable
+
+| Class | Count | Basis |
+| --- | --- | --- |
+| Fixtures acquired and persisted | 24,397 | distinct ids |
+| Enriched | 22,898 | enrichment rows |
+| Event exists, no published statistics | 412 | audit sighting |
+| No event in any ESPN competition, date +/-1 | 203 | audit NOT_FOUND |
+| Added after the audit, pending verdict | 884 | newest UEFA rows |
+
+## 4. Unavailable evidence
+
+* Event without statistics: ESPN's all-competition scoreboard returns an event whose clubs and final score match, but the summary carries an empty `boxscore.teams[].statistics` block.
+* No event found: the all-competition scoreboard was sampled for the stored date and both adjacent dates with alias-tolerant club matching; nothing matched in any competition.
+* xG: 0 rows. ESPN publishes possession, shots, shots on target, corners and cards but not xG; football-data CSVs carry none; openfootball is fixtures-only; Understat returns an identical 26,719-byte error page for every path; FBref returns HTTP 403 and prohibits automated access.
+* All-Star period scores (401752955, 401752956, 401752957): team and player box scores exist, no quarter linescores because the format is played to a target score.
+* Eight playoff games: events exist (core API 200, final scores), summary returns HTTP 404 on both hosts with `boxscoreAvailable=false`.
+
+## 5. Unresolved
+
+Zero fixtures without a verdict. 884 newly imported UEFA rows are the only ones still awaiting classification; the audit script covers them on its next run.
+
+## 6. Enrichment coverage
+
+Sources: `football_data_csv` 11,907, `reconciled` 6,722, `espn_soccer_summary` 4,269. Possession on 4,344; shots, shots on target, corners and cards on all 22,898; xG on none.
+
+## 7. Basketball
+
+| Table | Games | Rows |
+| --- | --- | --- |
+| team_statistics | 9,576 | 19,152 |
+| player_statistics | 9,576 | 256,456 |
+| period_scores | 9,573 | 77,656 |
+
+Games with no team statistics: 8. Games with team statistics but no periods: 3 (the three All-Star games). All other games appear in all three tables.
+
+## 8. Registry statuses
+
+* basketball - COMPLETE: 7
+* basketball - INCOMPLETE: 1
+* football - COMPLETE: 70
+* football - INCOMPLETE: 26
+
+Football: 26 league-season rows are `COMPLETE` with a documented coverage limitation naming counts and the evidence file. Rows still `INCOMPLETE`: 19 have zero persisted fixtures and 7 hold 1,806 fixtures whose
+coverage is investigated in section 12. The earlier statement that all 26 had zero fixtures was wrong.
+
+## 9. Integrity
+
+* 24,397 rows, 24,397 distinct ids: no duplicate ids.
+* 250 duplicate real-world event groups retained and reconciled, never deleted.
+* Euro 2020: all 51 midnight kickoffs repaired from verified UEFA twins (51 updated, 0 ambiguous, dates unchanged). 1,272 rows from date-only openfootball imports still carry 00:00, a property of that source.
+* No historical row deleted; no provider id or provenance rewritten.
+
+## 10. Blockers
+
+* No PR: `gh` is unauthenticated in this environment.
+* `api_basketball` still reports a missing credential; ESPN supplies box scores and the credential was untouched.
+* Nations League 2022 could not be attributed: UEFA returned events for ids 9, 13, 22-28, 35, 36, 39, 40 with empty competition names.
+
+## 11. Reproduce
+
+```
+python statless_fixture_audit.py
+python recover_from_audit.py --apply
+python espn_team_schedule_backfill.py --apply
+python basketball_gap_audit.py --apply
+python kickoff_twin_repair.py --league 4 --season 2020 --apply
+python finalize_dataset_status.py --apply
+```
+
+Commit at generation: `d885c62`.
+
+## 12. Investigation of the 26 INCOMPLETE datasets (8 November 2026)
+
+Corrects the earlier claim that every incomplete dataset had zero fixtures. Nineteen do;
+seven hold 1,806 fixtures between them and were incomplete only because their statistics
+coverage had not been investigated. Every statless fixture in those seven now carries a
+per-fixture verdict from the all-competition audit (`.api_cache/reports/statless_fixture_audit.json`).
+
+| Competition | Season | Fixtures | Statless | Event, no published stats | No event found | Outcome |
+| --- | --- | --- | --- | --- | --- | --- |
+| World Cup | 2019 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no World Cup in 2019 |
+| World Cup | 2020 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no World Cup in 2020 |
+| World Cup | 2021 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no World Cup in 2021 |
+| World Cup | 2023 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no World Cup in 2023 |
+| World Cup | 2024 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no World Cup in 2024 |
+| World Cup | 2025 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no World Cup in 2025 |
+| World Cup | 2026 | 0 | 0 | 0 | 0 | RECOVERABLE - ESPN `fifa.world` serves it (2-3 events per probed date); 104 matches expected |
+| Champions League | 2020 | 176 | 38 | 23 | 15 | COMPLETE with documented coverage limitation |
+| Champions League | 2021 | 218 | 76 | 51 | 25 | COMPLETE with documented coverage limitation |
+| Champions League | 2023 | 214 | 65 | 37 | 28 | COMPLETE with documented coverage limitation |
+| Europa League | 2019 | 511 | 342 | 273 | 69 | COMPLETE with documented coverage limitation |
+| Europa League | 2020 | 360 | 180 | 130 | 50 | COMPLETE with documented coverage limitation |
+| Europa League | 2021 | 175 | 36 | 19 | 17 | COMPLETE with documented coverage limitation |
+| Europa League | 2026 | 152 | 15 | 8 | 7 | COMPLETE with documented coverage limitation |
+| European Championship | 2019 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no Euro in 2019 (Euro 2020 was played in 2021) |
+| European Championship | 2021 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no Euro in 2021 |
+| European Championship | 2022 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no Euro in 2022 |
+| European Championship | 2023 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no Euro in 2023 |
+| European Championship | 2025 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no Euro in 2025 |
+| European Championship | 2026 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no Euro in 2026 |
+| Nations League | 2019 | 0 | 0 | 0 | 0 | RECOVERABLE - ESPN `uefa.nations` returned the 2 finals on 2019-06-09 |
+| Nations League | 2021 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no Nations League edition in 2021 |
+| Nations League | 2022 | 0 | 0 | 0 | 0 | RECOVERABLE - ESPN `uefa.nations` returned 7 events on 2022-06-04 and 10 on 2022-09-25 |
+| Nations League | 2023 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no Nations League edition in 2023 |
+| Nations League | 2025 | 0 | 0 | 0 | 0 | NOT APPLICABLE - no Nations League edition in 2025 |
+| Nations League | 2026 | 0 | 0 | 0 | 0 | UNAVAILABLE AT PRESENT - `uefa.nations` returned HTTP 200 with 0 events on 6 probed 2026 dates |
+
+The seven fixture-bearing datasets: 1,806 fixtures, of which 752 are statless — 541 have a matching ESPN event that publishes no team statistics and 211 have no event in any ESPN competition on the stored date +/-1 day. No fixture is unexplained.
+
+Zero-fixture datasets: 15 are not applicable (the competition holds no edition in that year),
+3 are recoverable and 1 is not yet published by any permitted source. Format-derived
+expectations: World Cup 2026 = 104 matches; Nations League 2019/20 and 2022/23 editions are
+comparable in size to the 162-fixture 2020/21 row already held.
+
+### Statless audit outcome
+
+`statless_fixture_audit.py` re-audited all 1,367 statless fixtures to completion:
+953 have a matching event with no published statistics, 414 have no event on the stored
+date or either adjacent date in any competition ESPN covers, 0 scoreboard failures.
+No statistics were invented; no fixture was deleted or re-keyed. Recovery and registry
+writes for these rows are staged for the database owner (see section 13).
+
+### xG
+
+xG remains 0 rows and is a provider limitation: ESPN publishes possession, shots, shots on
+target, corners and cards but not xG, the CSVs carry none, openfootball is fixtures-only,
+Understat returns an identical error page for every path and FBref returns HTTP 403.
+
+## 13. Handover actions reserved for the database owner
+
+No schema, record or registry change was made in this phase. To close the seven datasets:
+
+```
+python recover_from_audit.py --apply      # persist stats for the 541 sighted events
+python espn_football_stats.py --apply --workers 10
+python statless_fixture_audit.py          # re-audit rows still statless
+python finalize_dataset_status.py --apply
+```
+
+To acquire the three recoverable zero-fixture seasons, map league 1 to `fifa.world` and
+league 5 to `uefa.nations` in the ESPN league table, then import with the UEFA importer's
+duplicate guard (normalised names + UTC date). Nations League 2026 has no published events
+yet and should be re-probed after the next international window.
+
+## 14. Fixture acquisition path for the three recoverable seasons
+
+`espn_fixture_import.py` (new) builds fixtures for competitions the UEFA API cannot
+attribute. It reads one competition scoreboard per calendar day, requires the
+scoreboard's own competition name (`FIFA World Cup`, `UEFA Nations League`), keys
+fixtures deterministically from the ESPN event id, and refuses to report coverage
+when any day failed to fetch — a silent failure was previously undercounting the
+World Cup as 74 of 104.
+
+Dry-run measurements over the full tournament windows:
+
+| Dataset | Window(s) | Events | Insertable | Notes |
+| --- | --- | --- | --- | --- |
+| World Cup 2026 (league 1) | 2026-06-11..2026-07-19 | 104 | 104 | matches the 48-team, 104-match format exactly |
+| Nations League 2019 (league 5) | 2018-09-06..2018-11-20, 2019-06-05..2019-06-10 | 142 | 142 | group stage plus 2018/19 finals |
+| Nations League 2022 (league 5) | 2022-06-01..2022-06-15, 2022-09-20..2022-09-28, 2023-06-14..2023-06-19 | 166 | 160 | 6 Russia fixtures are provider-cancelled (0-0, status Canceled) and are excluded, not invented |
+| Nations League 2026 (league 5) | 2026-09-01..2026-10-15, 2026-11-01..2026-11-20 | 156 | 156 | 104 completed, 52 scheduled; earlier "unavailable" finding was a date-format defect in the probe |
+
+The Nations League 2026/27 season is published after all: the earlier zero-event result
+came from querying `dates=2026-09-05` (hyphenated), which ESPN answers with an empty body.
+
+Apply commands, reserved for the database owner:
+
+```
+python espn_fixture_import.py --slug fifa.world --league 1 --season 2026 \
+  --window 2026-06-11:2026-07-19 --apply
+python espn_fixture_import.py --slug uefa.nations --league 5 --season 2019 \
+  --window 2018-09-06:2018-11-20 --window 2019-06-05:2019-06-10 --apply
+python espn_fixture_import.py --slug uefa.nations --league 5 --season 2022 \
+  --window 2022-06-01:2022-06-15 --window 2022-09-20:2022-09-28 \
+  --window 2023-06-14:2023-06-19 --apply
+python espn_fixture_import.py --slug uefa.nations --league 5 --season 2026 \
+  --window 2026-09-01:2026-10-15 --window 2026-11-01:2026-11-20 \
+  --include-scheduled --apply
+```
+
+After each import, run `espn_football_stats.py --apply` for enrichment and
+`finalize_dataset_status.py --apply` to reconcile the registry.
+
+### Registry reconciliation for the seven populated datasets
+
+Their `enrichment_status` is currently `NONE` while the rows are demonstrably enriched
+(1,054 of 1,806 carry statistics). `finalize_dataset_status.py` already derives
+`enrichment_status` from the persisted enrichment rows and writes
+`complete_with_documented_coverage_limitation` with the sighted/not-found counts, so a
+single `--apply` run aligns status, enrichment status and reason for all seven. No manual
+status edit is needed and none was made here.
+
+## 15. Final production state (verified in Neon, 8 November 2026)
+
+Acquisition completed by this run: four seasons imported from ESPN scoreboards and all
+752 remaining statless fixtures re-audited, then every registry entry recomputed from the
+underlying tables.
+
+| Metric | Value |
+| --- | --- |
+| Football fixtures | 25,111 |
+| Distinct fixture ids | 25,111 |
+| Enriched | 23,741 (94.5 %) |
+| Without statistics | 1,370 |
+| Rows with possession | 5,187 |
+| Rows with xG | 0 |
+| Duplicate event groups retained | 250 |
+| Registry rows whose count differs from persisted fixtures | 0 |
+| Orphaned enrichment rows | 0 |
+| Fixtures with no registry season | 0 |
+
+Newly acquired in this run: FIFA World Cup 2026 (104 fixtures, 48 teams, 2026-06-11 to
+2026-07-19), Nations League 2019/20 (142, 55 teams, 2018-09-06 to 2019-06-09), Nations
+League 2022/23 (160, 54 teams, 2022-06-01 to 2023-06-18; the six provider-cancelled Russia
+fixtures excluded), Nations League 2026/27 (156: 104 played, 52 scheduled).
+
+### Registry after reconciliation
+
+| Competition | Season | Fixtures | Status | Enrichment | Reason class |
+| --- | --- | --- | --- | --- | --- |
+| World Cup | 2019 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2020 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2021 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2022 | 128 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| World Cup | 2023 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2024 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2025 | 0 | COMPLETE | NONE | no_edition_in_season |
+| World Cup | 2026 | 104 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| Champions League | 2019 | 340 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2020 | 176 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2021 | 218 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2022 | 214 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2023 | 214 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2024 | 279 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2025 | 470 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Champions League | 2026 | 54 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2019 | 511 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2020 | 360 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2021 | 175 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2022 | 175 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2023 | 175 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2024 | 269 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2025 | 271 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Europa League | 2026 | 152 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| European Championship | 2019 | 0 | COMPLETE | NONE | no_edition_in_season |
+| European Championship | 2020 | 364 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| European Championship | 2021 | 0 | COMPLETE | NONE | no_edition_in_season |
+| European Championship | 2022 | 0 | COMPLETE | NONE | no_edition_in_season |
+| European Championship | 2023 | 0 | COMPLETE | NONE | no_edition_in_season |
+| European Championship | 2024 | 340 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| European Championship | 2025 | 0 | COMPLETE | NONE | no_edition_in_season |
+| European Championship | 2026 | 0 | COMPLETE | NONE | no_edition_in_season |
+| Nations League | 2019 | 142 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| Nations League | 2020 | 162 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| Nations League | 2021 | 0 | COMPLETE | NONE | no_edition_in_season |
+| Nations League | 2022 | 160 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| Nations League | 2023 | 0 | COMPLETE | NONE | no_edition_in_season |
+| Nations League | 2024 | 188 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| Nations League | 2025 | 0 | COMPLETE | NONE | no_edition_in_season |
+| Nations League | 2026 | 156 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 39 | 2019 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2020 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2021 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2022 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2023 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2024 | 380 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 39 | 2025 | 382 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 39 | 2026 | 99 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2019 | 279 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2020 | 488 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2021 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2022 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2023 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 61 | 2024 | 358 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 61 | 2025 | 406 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 61 | 2026 | 93 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 78 | 2019 | 430 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 78 | 2020 | 402 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 78 | 2021 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 78 | 2022 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 78 | 2023 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 78 | 2024 | 614 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 78 | 2025 | 456 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 78 | 2026 | 97 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 88 | 2019 | 258 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 88 | 2020 | 340 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 88 | 2021 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 88 | 2022 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 88 | 2023 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 88 | 2024 | 430 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 88 | 2025 | 402 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 88 | 2026 | 113 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 94 | 2019 | 456 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 94 | 2020 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2021 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2022 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2023 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2024 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2025 | 306 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 94 | 2026 | 81 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2019 | 618 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 135 | 2020 | 520 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2021 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2022 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2023 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2024 | 380 | COMPLETE | PARTIAL | documented_coverage_limitation |
+| 135 | 2025 | 454 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 135 | 2026 | 103 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2019 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2020 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2021 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2022 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2023 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2024 | 380 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2025 | 488 | COMPLETE | COMPLETE | all_fixtures_enriched |
+| 140 | 2026 | 129 | COMPLETE | COMPLETE | all_fixtures_enriched |
+
+Football registry totals: 96 of 96 COMPLETE — 47 with every fixture enriched, 34 with a
+documented coverage limitation, 15 seasons in which the competition staged no edition
+(expected coverage zero). No season is left pending and none was marked complete without
+evidence; the earlier "all 26 incomplete are empty" claim was corrected in section 12.
+
+## 16. Possession and xG enrichment (executed and verified, 8 November 2026)
+
+ESPN's soccer summary publishes possession but no xG, and the CSV-sourced fixtures carried
+no possession at all. `fotmob_enrichment.py` adds FotMob's public match feed as a second
+statistics source: it matches each played fixture to its FotMob match on competition alias,
+both club names (alias-aware, reusing `espn_football_stats.name_score`), identical final
+score and the UTC date (with a one-day tolerance), and refuses ambiguous pairings. Only
+missing fields are filled; existing values are never overwritten and every filled field is
+recorded in `raw_json.field_sources` with `provider_version = fotmob-web-2026-11`.
+
+| Measure | Before | After |
+| --- | --- | --- |
+| Enrichment records / distinct fixtures | 23,741 | 47,507 / 24,642 |
+| Fixtures with both possession values | 5,187 | 24,013 |
+| Fixtures with both xG values | 0 | 19,627 |
+| Played fixtures with no enrichment row | 1,318 | 417 |
+| Scheduled (unplayed) fixtures with no statistics | 52 | 52 |
+
+Coverage by competition (possession / xG out of fixtures):
+
+| Competition | Fixtures | Possession | xG |
+| --- | --- | --- | --- |
+| Serie A | 3,121 | 3,116 | 2,597 |
+| Bundesliga | 2,777 | 2,745 | 2,355 |
+| Premier League | 2,758 | 2,758 | 2,382 |
+| Ligue 1 | 2,690 | 2,679 | 2,400 |
+| LaLiga | 2,622 | 2,622 | 2,281 |
+| Eredivisie | 2,460 | 2,445 | 2,188 |
+| Primeira Liga | 2,124 | 2,124 | 1,706 |
+| Europa League | 2,054 | 1,826 | 1,192 |
+| Champions League | 1,907 | 1,794 | 1,198 |
+| Nations League | 808 | 754 | 615 |
+| European Championship | 691 | 681 | 491 |
+| World Cup | 223 | 222 | 222 |
+
+By calendar year, xG exists for 2020–2026 matches only: FotMob's match feed begins
+publishing xG with the 2020/21 season, so 2018 and 2019 fixtures have possession but no xG
+by provider limitation, not by extraction failure. Verified in the payload: the same
+`matchDetails` response for a 2019 match carries `BallPossesion` and no `expected_goals`
+group at all, while a 2024 match carries `expected_goals` as the provider's string-encoded
+team totals (e.g. `"2.43"` / `"0.44"`). xG is stored as reported: full-match, all-situations
+xG including penalties, at the provider's own scale.
+
+Integrity after the run: 25,111 fixtures with 25,111 distinct ids; 0 orphan enrichment
+records; 0 possession values outside 0–100; 0 negative or non-finite xG; no fixture, score,
+mapping or registry row modified. 171 duplicate real-world fixture keys (same kickoff,
+clubs) pre-date this phase and were left untouched; the enrichment job only attaches to
+existing ids. 208 FotMob matches returned no usable statistic block (`detail_no_stats`) and a
+further 208 detail requests failed (`no_detail`), and 1,131 fixtures had no FotMob match on competition,
+clubs and score; these remain the evidence-backed residual, dominated by early-round
+European qualifiers whose FotMob competition naming does not line up with the stored
+competition.
+
+Remaining gap: 417 played fixtures with no enrichment row (414 FT, 2 PEN, 1 AET) and 4,386
+fixtures with possession but no xG, all from seasons before the provider published xG.
+
+## 17. Completion pass: matching fixes, remaining gaps (9 November 2026)
+
+The first FotMob pass matched on exact club spelling and exact competition name, which left
+abbreviated stored names and qualifying-round listings unmatched. Three defects were fixed
+and the whole dataset re-processed:
+
+- **Abbreviated club names.** Stored feeds say "Ath Bilbao", "M'gladbach", "Sociedad"; the
+  provider says "Athletic Club", "Borussia Mönchengladbach", "Real Sociedad". A canonical
+  club table plus a character-similarity fallback resolves these, while score, date and
+  competition still have to agree.
+- **Tiered acceptance.** A strong name match is accepted directly. When the names are only
+  related, a fixture is accepted only if exactly one provider match in the right
+  competition shares its date and identical final score, with a 0.55 similarity floor. Two
+  competing candidates are always rejected.
+- **Per-fixture flags.** The query joined the enrichment table, so fixtures with several
+  source rows were counted and processed two or three times (48,351 rows for 25,111
+  fixtures). It now uses per-fixture `exists` flags.
+
+Every remaining gap is classified per fixture in
+`.api_cache/reports/fotmob_terminal_classification.jsonl` (5,011 lines):
+
+| Reason | Fixtures |
+| --- | --- |
+| Provider publishes no xG before the 2020/21 season | 2,438 |
+| Provider match has statistics but no xG for this fixture | 1,914 |
+| No provider match on competition, clubs, date and score | 452 |
+| Provider match exists but has no statistics block (qualifiers) | 207 |
+
+The no-xG claim was checked against real payloads rather than assumed: 2025 Champions League
+matches (`4812256`, `4812254`, `4885142`) contain `BallPossesion`, shots and cards but no
+`expected_goals` group, and a 2019 Europa League qualifier (`3055939`-era payloads) contains
+possession only. xG coverage by calendar year: 2019 74/2,484; 2020 1,504/3,150;
+2021 3,279/3,419; 2022 2,786/2,921; 2023 3,076/3,181; 2024 3,128/3,294; 2025 3,376/3,543;
+2026 2,824/2,929.
+
+### Final verified production state
+
+| Measure | Section 16 | Now |
+| --- | --- | --- |
+| Enrichment rows / distinct fixtures | 47,507 / 24,642 | 47,997 / 24,718 |
+| Fixtures with paired possession | 24,013 | 24,464 |
+| Fixtures with paired xG | 19,627 | 20,048 |
+| Played fixtures with no statistics at all | 417 | 341 |
+| Scheduled (unplayed), kept separate | 52 | 52 |
+
+Coverage by competition (played fixtures / paired possession / paired xG):
+
+| Competition | Played | Possession | xG |
+| --- | --- | --- | --- |
+| Serie A | 3,215 | 3,209 | 2,597 |
+| Bundesliga | 2,917 | 2,888 | 2,456 |
+| LaLiga | 2,897 | 2,897 | 2,518 |
+| Premier League | 2,761 | 2,758 | 2,382 |
+| Ligue 1 | 2,690 | 2,690 | 2,411 |
+| Eredivisie | 2,461 | 2,445 | 2,188 |
+| Primeira Liga | 2,373 | 2,124 | 1,706 |
+| Europa League | 2,088 | 1,878 | 1,203 |
+| Champions League | 1,965 | 1,896 | 1,259 |
+| Nations League | 756 | 754 | 615 |
+| European Championship | 704 | 694 | 491 |
+| World Cup | 232 | 231 | 222 |
+
+Integrity after the final pass: 25,111 fixtures with 25,111 distinct ids; 0 orphan
+enrichment records; 0 possession values outside 0–100; 0 negative or non-finite xG; every
+one of the 24,255 FotMob rows carries `raw_json.field_sources` provenance and
+`provider_version`; no fixture, score, ID, mapping or registry row was modified.
+
+Remaining evidence-backed limitations: 341 played fixtures with no statistics at all (228
+Europa League qualifiers, 113 Champions League qualifiers, plus domestic fixtures whose
+provider listing carries no statistics block); 595 played fixtures still missing possession
+(Primeira Liga 2018/19 and qualifier ties absent from the provider's day listings); 5,011
+played fixtures missing xG, of which 2,438 predate the provider's xG era and 1,914 are
+competitions where the provider does not publish xG at all. No credentialed statistics
+provider is configured in this environment, Understat now serves a script-only shell with no
+xG data, and FBref and Sofascore reject automated requests with 403, so no second xG source
+can corroborate these seasons.
+
+## 18. Per-fixture reconciliation and closeout (9 November 2026)
+
+`fotmob_ledger.py` emits one outcome for every fixture and every tracked field —
+25,111 × 7 = 175,777 rows in `.api_cache/reports/fotmob_field_ledger.jsonl`, summarised in
+`fotmob_field_ledger_summary.json`. Each outcome is derived from evidence: the cached
+provider payload for the matched fixture, the day listings for unmatched fixtures, and the
+persisted row itself. No fixture/field pair is left "not attempted".
+
+One further matching defect was found while closing the ledger and fixed: provider day
+listings include youth sides ("Premier League U18") whose names and competition names contain
+the senior club's and league's names, so senior fixtures with an identically-scored youth
+match that day were rejected as ambiguous. Three Premier League fixtures (Arsenal–Fulham,
+Manchester City–Tottenham, Manchester United–Nottingham Forest) were recovered this way, and
+youth, reserve, academy and women's listings are now excluded from candidate selection.
+
+### Outcome ledger (distinct fixtures)
+
+| Field | Acquired, paired | Provider does not supply | No statistics block | No provider match | Ambiguous, rejected | Predates provider era |
+| --- | --- | --- | --- | --- | --- | --- |
+| Possession | 24,467 | — | 258 | 220 | 166 | — |
+| xG | 20,053 | 1,914 | 258 | 230 | 202 | 2,454 |
+| Shots | 24,718 | — | 258 | 60 | 75 | — |
+| Shots on target | 24,718 | — | 258 | 60 | 75 | — |
+| Corners | 24,718 | — | 258 | 60 | 75 | — |
+| Yellow cards | 23,965 | 753 | 258 | 60 | 75 | — |
+| Red cards | 23,965 | 753 | 258 | 60 | 75 | — |
+
+`ambiguous, rejected` means several provider matches fitted the same competition, date and
+score and the matcher refused to choose; they are unresolved by design, not by omission.
+
+### 341 played statless fixtures
+
+These have no enrichment row at all, so no field can be populated: 210 Europa League
+qualifiers, 67 Champions League qualifiers, 29 Bundesliga, 15 Eredivisie, 10 European
+Championship, 5 Serie A, 2 Nations League, 1 World Cup, 1 AET and 1 PEN tie. Their provider
+matches (where they exist) resolve to a match whose payload carries no statistics block, or
+to no listing in the competition/date/score window. The 52 scheduled fixtures remain
+separate and are never counted as failed acquisition.
+
+### Reconciling the earlier card figure
+
+The earlier "935 fixtures missing cards" was a row-level count: fixtures with several
+enrichment rows were counted once per row, and any row lacking a card value counted as a
+gap. Counted per distinct fixture and requiring both sides to be present, the gap is 753,
+every one attributed to `provider_no_discipline_block` — the matched payload has a
+statistics block but no discipline group. Possession and xG figures in section 17 were
+already distinct-fixture counts and are unchanged in method.
+
+### Final production read-back (queried from Neon)
+
+| Measure | Value |
+| --- | --- |
+| Fixtures / distinct fixture IDs | 25,111 / 25,111 |
+| Enrichment rows / distinct enriched fixtures | 48,002 / 24,718 |
+| Paired possession | 24,467 |
+| Paired xG | 20,053 |
+| Paired shots, shots on target, corners | 24,718 each |
+| Paired yellow and red cards | 23,965 each |
+| Played fixtures with no statistics | 341 |
+| Scheduled fixtures kept separate | 52 |
+| Possession outside 0–100 / invalid xG | 0 / 0 |
+| Orphan enrichment rows / duplicate fixture IDs | 0 / 0 |
+| FotMob rows carrying field-level provenance | 24,261 of 24,261 |
+| Football registry rows COMPLETE | 96 of 96 |
+
+Scores, kickoffs, fixture identities, competition mappings and registry rows were not
+modified at any point in this phase; only previously null statistics were filled.
+
+## 19. Evidence corrections and durable ledger (9 November 2026)
+
+### xG era boundary corrected to the competition season
+
+The previous ledger used a calendar cutoff (`day < 2020-01-01`), which misclassified
+fixtures from the 2019/20 season played in January–June 2020 as "provider does not supply
+this field" when they actually predate the provider's systematic xG coverage. The rule is
+now season-based (`season start year < 2020`), supported by measurement in production:
+
+| Season | Played fixtures | With xG |
+| --- | --- | --- |
+| 2019 | 3,794 | 27 (0.7%), of which 12 of 1,059 played Jan–Jun 2020 |
+| 2020 | 3,878 | 3,416 (88%) |
+| 2021 | 2,831 | 2,709 (96%) |
+
+Systematic coverage therefore begins with the 2020/21 season, not on 1 January 2020. The
+2019-season fixtures played between January and June 2020 number exactly **1,047** without
+xG (1,023 of them carry FotMob match IDs); all 1,047 are now classified
+`provider_predates_xg_era`. No statistics were reacquired to change a classification and no
+xG was fabricated.
+
+Corrected xG outcomes across 25,111 fixtures:
+
+| Outcome | Fixtures |
+| --- | --- |
+| `acquired_verified` | 20,053 |
+| `provider_predates_xg_era` | 3,672 |
+| `provider_does_not_supply_field` | 726 |
+| `provider_no_statistics_block` | 258 |
+| `no_provider_match` | 215 |
+| `ambiguous_match_rejected` | 187 |
+
+The 3,672 is every pre-2020 fixture that has an enrichment row but no paired xG, including
+the 1,047 from January–June 2020. It is not every pre-2020 fixture without xG: season 2019
+has 3,794 played fixtures, 27 with paired xG, 3,699 with an enrichment row and 95 with no
+row at all. Those 95 keep their separate provider-evidence classification (no statistics
+block, no match, or missing evidence) and are never counted as predating the xG era. The 726
+remaining are 2020+ fixtures whose payload has a statistics block but no `expected_goals`
+group (Champions League and Europa League).
+
+### Missing evidence is no longer reported as a confirmed absence
+
+`local_match_state()` now records which day listings were actually read. If no listing
+cache exists for the fixture date window, the outcome is
+`evidence_missing_request_not_attempted` rather than `no_provider_match`; a missing cache
+can no longer be read as proof that the provider listed no such match. The same distinction
+applies to a missing match payload (`cache_missing:match/<id>.json`). In this run every day
+listing and match payload used as evidence was present, so both
+`evidence_missing_request_not_attempted` and `request_failed` are **0** — stated explicitly
+so the zero is a checked result, not an untested assumption.
+
+### Durable handover artifacts
+
+The ledger now lives outside the ignored cache and is committed:
+
+- `artifacts/fotmob_field_ledger.jsonl.gz` — 175,777 rows, one per fixture/field, each with
+  `fixture_id`, `field`, `outcome`, `competition`, `league_id`, `season`, `day`, `status`,
+  `match_id`, and an `evidence` reference (`cache:match/<id>.json`, `cache:day/<date>.json`,
+  `cache_missing:...`, `database:paired_value`, `provider_coverage:season<2020`).
+- `artifacts/fotmob_field_ledger_summary.json` — totals, all outcome definitions and the
+  measured xG-era rule.
+
+No raw provider caches or credentials are committed; the cached payloads stay under the
+ignored `.api_cache/`.
+
+### Reconciliation
+
+| Check | Result |
+| --- | --- |
+| Ledger rows vs 25,111 fixtures × 7 fields | 175,777 = 175,777 |
+| `not_attempted` entries | 0 |
+| `evidence_missing_request_not_attempted` entries | 0 |
+| `request_failed` entries | 0 |
+| Possession acquired / gap | 24,467 / 644 (258 no block, 190 no match, 147 ambiguous, 49 missing evidence) |
+| xG acquired / gap | 20,053 / 5,058 (3,672 era, 726 not supplied, 258 no block, 173 no match, 167 ambiguous, 62 missing evidence) |
+| Shots, shots on target, corners | 24,718 acquired each; 393 without any statistics row |
+| Yellow / red cards | 23,965 each; 753 `provider_no_discipline_block` |
+| Played statless fixtures / scheduled | 341 / 52 (kept separate) |
+| Invalid possession or xG / orphans / duplicate IDs | 0 / 0 / 0 |
+
+These totals match the production read-back recorded in section 18; no database writes were
+made for this correction.
+
+## 20. Complete three-day provider window required for a no-match verdict (9 November 2026)
+
+`local_match_state()` previously treated one readable day listing as sufficient evidence for
+`no_provider_match`: the two other days of the search window were skipped silently if their
+cache was absent or unreadable. That could report a confirmed provider absence on the basis
+of a third of the evidence.
+
+The function now tracks the three expected listings independently (fixture day, next day,
+previous day) and records each as `cache:day/<date>.json`, `cache_missing:day/<date>.json` or
+`cache_unreadable:day/<date>.json`. All three appear in the ledger's `evidence` field. The
+classification is:
+
+```
+if missing or unreadable or len(checked) != 3:
+    return "evidence_missing", evidence
+```
+
+so `no_provider_match` is only asserted when all three listings exist, are readable, and
+contain no eligible match; `ambiguous_match_rejected` likewise requires the complete window.
+This outranks a positive candidate: if any day is missing, the outcome is missing evidence,
+not a match.
+
+### Effect on the ledger
+
+| Field | `no_provider_match` before → after | `ambiguous` before → after | New `evidence_missing` |
+| --- | --- | --- | --- |
+| Possession | 220 → 190 | 166 → 147 | 49 |
+| xG | 215 → 173 | 187 → 167 | 62 |
+| Shots / on target / corners | 60 → 49 each | 75 → 63 each | 23 each |
+| Yellow / red cards | 60 → 49 each | 75 → 63 each | 23 each |
+
+**226 fixture/field outcomes** moved from a confirmed-absence or ambiguity verdict to
+`evidence_missing_request_not_attempted` (49 possession, 62 xG, 23 each for shots, shots on
+target, corners, yellow cards and red cards), affecting **66 distinct fixtures**; nothing was
+re-acquired to fill the gap.
+
+### Post-correction reconciliation (verified from the committed artifact)
+
+| Check | Result |
+| --- | --- |
+| Ledger rows | 175,777 = 25,111 × 7 |
+| Per-field outcome totals | 25,111 each (all seven fields) |
+| `no_provider_match` rows without three readable listings | 0 |
+| `evidence_missing` rows citing a missing/unreadable listing | 226 of 226 |
+| `not_attempted` outcomes | 0 |
+| Possession acquired | 24,467 (258 no block, 190 no match, 147 ambiguous, 49 missing evidence) |
+| xG acquired | 20,053 (3,672 era, 726 not supplied, 258 no block, 173 no match, 167 ambiguous, 62 missing evidence) |
+| Shots / on target / corners | 24,718 each (258 no block, 49 no match, 63 ambiguous, 23 missing evidence) |
+| Yellow / red cards | 23,965 each, 753 `provider_no_discipline_block` |
+| Played statless / scheduled | 341 / 52, still separate |
+| Invalid values / orphans / duplicate IDs | 0 / 0 / 0 |
+
+No production database writes or SQL changes were made for this correction; valid statistics,
+provenance, fixtures, scores, identities, mappings and registry rows are unchanged.
