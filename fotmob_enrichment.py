@@ -26,6 +26,7 @@ possession and xG are both present is skipped. Dry-run by default.
 import argparse
 import collections
 import datetime
+import difflib
 import json
 import os
 import re
@@ -86,17 +87,46 @@ _lock = threading.Lock()
 _stats = collections.Counter()
 
 
+# Canonical club keys for spellings that differ in kind rather than by a letter:
+# stored feeds abbreviate ("Ath Bilbao", "M'gladbach") while FotMob uses the formal
+# name ("Athletic Club", "Borussia Mönchengladbach"). Both sides pass through this
+# table before comparison so one club has one key.
+CANONICAL = {
+    "athbilbao": "athleticbilbao", "athleticclub": "athleticbilbao",
+    "athletic": "athleticbilbao", "athleticbilba": "athleticbilbao",
+    "mgladbach": "monchengladbach", "borussiamonchengladbach": "monchengladbach",
+    "monchengladbach": "monchengladbach", "gladbach": "monchengladbach",
+    "sociedad": "realsociedad", "realsociedad": "realsociedad",
+    "betis": "realbetis", "realbetis": "realbetis",
+    "espanol": "espanyol", "espanyol": "espanyol",
+    "dortmund": "dortmund", "borussiadortmund": "dortmund",
+    "leverkusen": "leverkusen", "bayerleverkusen": "leverkusen",
+    "bayernmunich": "bayernmunich", "bayernmunchen": "bayernmunich",
+    "1fckoln": "koln", "koln": "koln", "cologne": "koln", "fckoln": "koln",
+    "inter": "internazionale", "internazionale": "internazionale",
+    "parissaintgermain": "psg", "psg": "psg", "parissg": "psg",
+    "manunited": "manutd", "manutd": "manutd", "manchesterunited": "manutd",
+    "mancity": "mancity", "manchestercity": "mancity",
+    "tottenham": "tottenham", "tottenhamhotspur": "tottenham", "spurs": "tottenham",
+    "wolves": "wolves", "wolverhamptonwanderers": "wolves",
+    "newcastle": "newcastle", "newcastleunited": "newcastle", "newcastleutd": "newcastle",
+    "nottmforest": "nottmforest", "nottinghamforest": "nottmforest",
+    "sheffieldutd": "sheffieldutd", "sheffieldunited": "sheffieldutd",
+    "westham": "westham", "westhamunited": "westham",
+    "brighton": "brighton", "brightonandhovealbion": "brighton",
+}
+
+
 def norm(name):
     if not name:
         return ""
     text = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode("ascii")
     text = re.sub(r"[^a-z0-9 ]", "", text.lower())
     compact = text.replace(" ", "")
+    if compact in CANONICAL:
+        return CANONICAL[compact]
     if compact in TEAM_ALIASES:
         return TEAM_ALIASES[compact]
-    for full, short in TEAM_ALIASES.items():
-        if compact == full:
-            return short
     return compact
 
 
@@ -218,8 +248,23 @@ def parse_detail(match_id):
 
 
 def same_club(left, right):
-    """Provider spellings differ, so reuse the project's alias-aware comparison."""
-    return espn.name_score(left, right) >= 0.72 or norm(left) == norm(right)
+    """Provider spellings differ, so reuse the project's alias-aware comparison.
+
+    Stored names are often abbreviated ("M'gladbach", "Ath Bilbao"), which the token
+    comparison cannot resolve, so a character-level ratio on the compact spelling is
+    allowed as a second opinion. Score, date and competition must still agree and an
+    ambiguous pairing is rejected, so a loose name only ever narrows the candidates.
+    """
+    if norm(left) == norm(right):
+        return True
+    if espn.name_score(left, right) >= 0.72:
+        return True
+    a, b = norm(left), norm(right)
+    return bool(a and b) and difflib.SequenceMatcher(None, a, b).ratio() >= 0.78
+
+
+def name_ratio(left, right):
+    return difflib.SequenceMatcher(None, norm(left), norm(right)).ratio()
 
 
 def candidate_score(fixture, match):
@@ -246,14 +291,20 @@ def main(argv=None):
     parser.add_argument("--league", type=int, default=None)
     parser.add_argument("--season", type=int, default=None)
     parser.add_argument("--newest-first", action="store_true")
+    parser.add_argument("--only-missing-possession", action="store_true")
     args = parser.parse_args(argv)
 
     conn, _ = storage._connect()
     conn.autocommit = False
     cur = conn.cursor()
 
-    where = ["home_goals is not null", "away_goals is not null"]
+    where = ["f.home_goals is not null", "f.away_goals is not null"]
     params = []
+    if args.only_missing_possession:
+        where.append("""not exists (select 1 from historical_fixture_enrichment x
+                           where x.fixture_id = f.fixture_id
+                             and x.home_possession is not null
+                             and x.away_possession is not null)""")
     if args.league:
         where.append("league_id=%s")
         params.append(args.league)
@@ -265,9 +316,15 @@ def main(argv=None):
         SELECT f.fixture_id, f.league_id, f.season,
                to_char(f.kickoff_at::timestamptz at time zone 'utc','YYYY-MM-DD') AS day,
                f.home_team, f.away_team, f.home_goals, f.away_goals,
-               e.home_possession, e.home_xg
+               exists (select 1 from historical_fixture_enrichment e
+                        where e.fixture_id = f.fixture_id
+                          and e.home_possession is not null
+                          and e.away_possession is not null) AS have_possession,
+               exists (select 1 from historical_fixture_enrichment e
+                        where e.fixture_id = f.fixture_id
+                          and e.home_xg is not null
+                          and e.away_xg is not null) AS have_xg
           FROM historical_fixtures f
-          LEFT JOIN historical_fixture_enrichment e ON e.fixture_id = f.fixture_id
          WHERE {' AND '.join(where)}
          ORDER BY f.kickoff_at {order}
     """, params)
@@ -292,53 +349,83 @@ def main(argv=None):
         indexes = dict(pool.map(day_index, days))
 
     plans = []
+    outcomes = []
     for fixture in fixtures:
         aliases = LEAGUE_ALIASES.get(fixture["league_id"], ())
-        best = None
-        best_score = 3
+        # Older qualification fixtures carry no finished flag but still publish final
+        # scores, so a numeric score pair counts as final.
         day = datetime.date.fromisoformat(fixture["day"])
+        strong, weak = [], []
         for delta in (0, 1, -1):
             probe = (day + datetime.timedelta(days=delta)).isoformat()
             for match in indexes.get(probe, {}).values():
-                if not match["finished"]:
-                    continue
                 if aliases and not any(alias in (match["league"] or "") for alias in aliases):
                     continue
-                score = candidate_score(fixture, match)
-                if score >= 2:
-                    continue  # clubs, score or competition disagree: never a candidate
-                if score < best_score:
-                    best, best_score = match, score
-                elif score == best_score:
-                    best, best_score = None, 2  # ambiguous pairing: refuse
+                try:
+                    if (int(fixture["home_goals"]), int(fixture["away_goals"])) != (
+                            int(match["home_score"]), int(match["away_score"])):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                similarity = min(name_ratio(fixture["home_team"], match["home"]),
+                                 name_ratio(fixture["away_team"], match["away"]))
+                if candidate_score(fixture, match) < 2:
+                    strong.append((match, similarity))
+                else:
+                    weak.append((match, similarity))
+        best = None
+        matched_weak = False
+        if strong:
+            best = max(strong, key=lambda item: item[1])[0]
+            if len({m["id"] for m, _ in strong}) > 1:
+                best = None  # two provider matches fit equally well: refuse
+        elif len(weak) == 1 and weak[0][1] >= 0.55:
+            # Abbreviated stored names ("Ath Bilbao" vs "Athletic Club") fall outside
+            # the token comparison. A single provider match in the right competition on
+            # the right date with the identical score is still evidence, but only when
+            # the names are visibly related and nothing else competes for the fixture.
+            best, matched_weak = weak[0][0], True
         if best is None:
             _stats["no_match"] += 1
+            outcomes.append({"fixture_id": fixture["fixture_id"], "league_id": fixture["league_id"],
+                             "day": fixture["day"], "outcome": "no_match"})
             continue
-        if fixture["have_possession"] is not None and fixture["have_xg"] is not None:
+        if fixture["have_possession"] and fixture["have_xg"]:
             _stats["already_complete"] += 1
             continue
         # FotMob publishes xG only from the 2020/21 season onwards, so a fixture from
         # before that is complete once possession is present; without this it would be
         # re-fetched on every pass.
-        if fixture["have_possession"] is not None and fixture["day"] < "2020-01-01":
+        if fixture["have_possession"] and fixture["day"] < "2020-01-01":
             _stats["pre_xg_era"] += 1
             continue
-        plans.append((fixture, best))
+        plans.append((fixture, best, matched_weak))
 
     def detail_for(item):
-        fixture, match = item
-        return fixture, match, parse_detail(match["id"])
+        fixture, match, weak = item
+        return fixture, match, parse_detail(match["id"]), weak
 
     written = 0
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        for fixture, match, parsed in pool.map(detail_for, plans):
+        for fixture, match, parsed, matched_weak in pool.map(detail_for, plans):
             if not parsed:
                 _stats["no_detail"] += 1
+                outcomes.append({"fixture_id": fixture["fixture_id"],
+                                 "league_id": fixture["league_id"], "day": fixture["day"],
+                                 "fotmob_match_id": match["id"],
+                                 "outcome": "matched_no_statistics_block"})
                 continue
             fields = {k: v for k, v in parsed.items() if v is not None}
             if not fields:
                 _stats["no_values"] += 1
+                outcomes.append({"fixture_id": fixture["fixture_id"],
+                                 "league_id": fixture["league_id"], "day": fixture["day"],
+                                 "fotmob_match_id": match["id"], "outcome": "matched_empty_values"})
                 continue
+            outcomes.append({"fixture_id": fixture["fixture_id"], "league_id": fixture["league_id"],
+                             "day": fixture["day"], "fotmob_match_id": match["id"],
+                             "outcome": "matched_with_statistics",
+                             "weak_name_match": matched_weak})
             if args.apply:
                 cur.execute("""
                     INSERT INTO historical_fixture_enrichment
@@ -411,7 +498,12 @@ def main(argv=None):
 
     report = {"fixtures": len(fixtures), "days": len(days), "matched": len(plans),
               "written": written, "applied": bool(args.apply), **dict(_stats)}
-    os.makedirs(os.path.join(os.path.dirname(CACHE), "reports"), exist_ok=True)
+    reports_dir = os.path.join(os.path.dirname(CACHE), "reports")
+    os.makedirs(reports_dir, exist_ok=True)
+    if outcomes:
+        with open(os.path.join(reports_dir, "fotmob_outcomes.jsonl"), "a", encoding="utf-8") as handle:
+            for row in outcomes:
+                handle.write(json.dumps(row) + "\n")
     with open(os.path.join(os.path.dirname(CACHE), "reports", "fotmob_enrichment.json"), "w",
               encoding="utf-8") as handle:
         json.dump(report, handle, indent=1)

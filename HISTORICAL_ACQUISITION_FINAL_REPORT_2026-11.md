@@ -433,3 +433,80 @@ competition.
 
 Remaining gap: 417 played fixtures with no enrichment row (414 FT, 2 PEN, 1 AET) and 4,386
 fixtures with possession but no xG, all from seasons before the provider published xG.
+
+## 17. Completion pass: matching fixes, remaining gaps (9 November 2026)
+
+The first FotMob pass matched on exact club spelling and exact competition name, which left
+abbreviated stored names and qualifying-round listings unmatched. Three defects were fixed
+and the whole dataset re-processed:
+
+- **Abbreviated club names.** Stored feeds say "Ath Bilbao", "M'gladbach", "Sociedad"; the
+  provider says "Athletic Club", "Borussia Mönchengladbach", "Real Sociedad". A canonical
+  club table plus a character-similarity fallback resolves these, while score, date and
+  competition still have to agree.
+- **Tiered acceptance.** A strong name match is accepted directly. When the names are only
+  related, a fixture is accepted only if exactly one provider match in the right
+  competition shares its date and identical final score, with a 0.55 similarity floor. Two
+  competing candidates are always rejected.
+- **Per-fixture flags.** The query joined the enrichment table, so fixtures with several
+  source rows were counted and processed two or three times (48,351 rows for 25,111
+  fixtures). It now uses per-fixture `exists` flags.
+
+Every remaining gap is classified per fixture in
+`.api_cache/reports/fotmob_terminal_classification.jsonl` (5,011 lines):
+
+| Reason | Fixtures |
+| --- | --- |
+| Provider publishes no xG before the 2020/21 season | 2,438 |
+| Provider match has statistics but no xG for this fixture | 1,914 |
+| No provider match on competition, clubs, date and score | 452 |
+| Provider match exists but has no statistics block (qualifiers) | 207 |
+
+The no-xG claim was checked against real payloads rather than assumed: 2025 Champions League
+matches (`4812256`, `4812254`, `4885142`) contain `BallPossesion`, shots and cards but no
+`expected_goals` group, and a 2019 Europa League qualifier (`3055939`-era payloads) contains
+possession only. xG coverage by calendar year: 2019 74/2,484; 2020 1,504/3,150;
+2021 3,279/3,419; 2022 2,786/2,921; 2023 3,076/3,181; 2024 3,128/3,294; 2025 3,376/3,543;
+2026 2,824/2,929.
+
+### Final verified production state
+
+| Measure | Section 16 | Now |
+| --- | --- | --- |
+| Enrichment rows / distinct fixtures | 47,507 / 24,642 | 47,997 / 24,718 |
+| Fixtures with paired possession | 24,013 | 24,464 |
+| Fixtures with paired xG | 19,627 | 20,048 |
+| Played fixtures with no statistics at all | 417 | 341 |
+| Scheduled (unplayed), kept separate | 52 | 52 |
+
+Coverage by competition (played fixtures / paired possession / paired xG):
+
+| Competition | Played | Possession | xG |
+| --- | --- | --- | --- |
+| Serie A | 3,215 | 3,209 | 2,597 |
+| Bundesliga | 2,917 | 2,888 | 2,456 |
+| LaLiga | 2,897 | 2,897 | 2,518 |
+| Premier League | 2,761 | 2,758 | 2,382 |
+| Ligue 1 | 2,690 | 2,690 | 2,411 |
+| Eredivisie | 2,461 | 2,445 | 2,188 |
+| Primeira Liga | 2,373 | 2,124 | 1,706 |
+| Europa League | 2,088 | 1,878 | 1,203 |
+| Champions League | 1,965 | 1,896 | 1,259 |
+| Nations League | 756 | 754 | 615 |
+| European Championship | 704 | 694 | 491 |
+| World Cup | 232 | 231 | 222 |
+
+Integrity after the final pass: 25,111 fixtures with 25,111 distinct ids; 0 orphan
+enrichment records; 0 possession values outside 0–100; 0 negative or non-finite xG; every
+one of the 24,255 FotMob rows carries `raw_json.field_sources` provenance and
+`provider_version`; no fixture, score, ID, mapping or registry row was modified.
+
+Remaining evidence-backed limitations: 341 played fixtures with no statistics at all (228
+Europa League qualifiers, 113 Champions League qualifiers, plus domestic fixtures whose
+provider listing carries no statistics block); 595 played fixtures still missing possession
+(Primeira Liga 2018/19 and qualifier ties absent from the provider's day listings); 5,011
+played fixtures missing xG, of which 2,438 predate the provider's xG era and 1,914 are
+competitions where the provider does not publish xG at all. No credentialed statistics
+provider is configured in this environment, Understat now serves a script-only shell with no
+xG data, and FBref and Sofascore reject automated requests with 403, so no second xG source
+can corroborate these seasons.
