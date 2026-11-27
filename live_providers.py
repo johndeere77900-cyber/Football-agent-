@@ -126,6 +126,26 @@ def _get_json(url: str) -> Dict[str, Any]:
     return payload
 
 
+def configured_league_name(league_id: Any) -> Optional[str]:
+    """Canonical name for a configured competition.
+
+    The prediction path rejects a fixture whose league identity has no name, so
+    a keyless discovery adapter must supply the configured competition's name
+    instead of a provider label or None.
+    """
+    try:
+        wanted = int(league_id)
+    except (TypeError, ValueError):
+        return None
+    for name, mapped in (getattr(config, "LEAGUE_NAME_TO_ID", {}) or {}).items():
+        try:
+            if int(mapped) == wanted:
+                return str(name).title()
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def season_for(league_id: Any, date_str: Any) -> Optional[int]:
     """Season a fixture belongs to, using the declared competition window."""
     try:
@@ -228,7 +248,11 @@ def _espn_event_to_fixture(event: Dict[str, Any], league_id: int) -> Optional[Di
                 "elapsed": None,
             },
         },
-        "league": {"id": int(league_id), "season": int(season), "name": None},
+        "league": {
+            "id": int(league_id),
+            "season": int(season),
+            "name": configured_league_name(league_id),
+        },
         "teams": {
             "home": {"id": home_side["id"], "name": home_side["name"]},
             "away": {"id": away_side["id"], "name": away_side["name"]},
@@ -359,7 +383,11 @@ def _fotmob_match_to_fixture(match: Dict[str, Any], league_id: int) -> Optional[
                 "elapsed": None,
             },
         },
-        "league": {"id": int(league_id), "season": int(season), "name": None},
+        "league": {
+            "id": int(league_id),
+            "season": int(season),
+            "name": configured_league_name(league_id),
+        },
         "teams": {
             "home": {"id": home_id, "name": home_name},
             "away": {"id": away_id, "name": away_name},

@@ -1307,7 +1307,8 @@ def format_prediction_contract_telegram(prediction, sport="football"):
     home = rec.get("home_team") or prediction.get("home_team", "Home")
     away = rec.get("away_team") or prediction.get("away_team", "Away")
     league = rec.get("league_name") or rec.get("league") or prediction.get("league", "Unknown")
-    date_str = rec.get("data_cutoff_timestamp", "")[:10] or prediction.get("date", "")[:10]
+    # A persisted snapshot may carry a NULL cutoff; never crash while rendering it.
+    date_str = str(rec.get("data_cutoff_timestamp") or prediction.get("date") or "")[:10]
 
     quality_gate = rec.get("quality_gate", "PASS")
     signal_str = "SIGNAL" if quality_gate == "SIGNAL" else "PASS"
