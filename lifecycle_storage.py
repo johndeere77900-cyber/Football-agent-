@@ -476,7 +476,20 @@ def list_lifecycles(
     sport: Optional[str] = None,
     stages: Optional[List[str]] = None,
     limit: int = 200,
+    *,
+    kickoff_on: Optional[str] = None,
+    kickoff_from: Optional[str] = None,
+    kickoff_to: Optional[str] = None,
+    exclude_stages: Optional[List[str]] = None,
+    offset: int = 0,
 ) -> List[Dict[str, Any]]:
+    """List lifecycle rows with selection filters applied in SQL.
+
+    ``kickoff_on`` / ``kickoff_from`` / ``kickoff_to`` compare the UTC calendar
+    date prefix of ``kickoff_at``. Filtering here (rather than loading a global
+    queue and discarding rows in Python) is what prevents stale records from
+    consuming the batch limit.
+    """
     ensure_schema()
     conn, db_type = storage._connect()
     ph = "%s" if db_type == "postgres" else "?"
@@ -489,14 +502,27 @@ def list_lifecycles(
         placeholders = ", ".join(ph for _ in stages)
         clauses.append(f"stage IN ({placeholders})")
         params.extend(stages)
+    if exclude_stages:
+        placeholders = ", ".join(ph for _ in exclude_stages)
+        clauses.append(f"stage NOT IN ({placeholders})")
+        params.extend(exclude_stages)
+    if kickoff_on:
+        clauses.append(f"substr(kickoff_at, 1, 10) = {ph}")
+        params.append(str(kickoff_on)[:10])
+    if kickoff_from:
+        clauses.append(f"substr(kickoff_at, 1, 10) >= {ph}")
+        params.append(str(kickoff_from)[:10])
+    if kickoff_to:
+        clauses.append(f"substr(kickoff_at, 1, 10) <= {ph}")
+        params.append(str(kickoff_to)[:10])
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
         f"SELECT {', '.join(_LIFECYCLE_FIELDS)} FROM live_match_lifecycle "
-        f"{where} ORDER BY kickoff_at ASC NULLS LAST, created_at ASC LIMIT {ph}"
+        f"{where} ORDER BY kickoff_at ASC NULLS LAST, created_at ASC LIMIT {ph} OFFSET {ph}"
     )
     if db_type != "postgres":
         sql = sql.replace(" NULLS LAST", "")
-    params.append(int(limit))
+    params.extend([int(limit), max(0, int(offset))])
     try:
         if db_type == "postgres":
             with conn.cursor() as cur:

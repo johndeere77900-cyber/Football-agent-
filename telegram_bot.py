@@ -734,9 +734,12 @@ def _prediction_diagnostics_text(lifecycle_diag, discovery, prematch):
         f"• Tracked: {discovery.get('tracked', 0)}",
         f"• Unresolved Identity: {discovery.get('unresolved', 0)}",
         f"• Identity Failures: {discovery.get('identity_failures', 0)}",
-        f"• Prematch Considered: {prematch.get('considered', 0)}",
+        f"• Prematch Eligible: {prematch.get('eligible', 0)}",
         f"• Prematch Processed: {prematch.get('processed', 0)}",
         f"• Snapshots Saved: {prematch.get('snapshots_saved', 0)}",
+        f"• Kickoff Passed (excluded): {prematch.get('expired', 0)}",
+        f"• Retry Backoff: {prematch.get('retry_deferred', 0)}",
+        f"• Retry Exhausted: {prematch.get('retry_exhausted', 0)}",
         f"• Persisted For Date: {lifecycle_diag.get('on_date', 0)}",
     ]
     if lifecycle_diag.get("schema_error"):
@@ -756,7 +759,11 @@ def _lifecycle_predictions(sport, date_str, quantity, league_id):
     import live_lifecycle
 
     discovery = live_lifecycle.discover(sport, horizon_days=0, start_date=date_str)
-    prematch = live_lifecycle.prematch(limit=200)
+    # Scope the batch to the requested sport/date/competition so unrelated or
+    # stale lifecycle records cannot consume the requested prediction capacity.
+    prematch = live_lifecycle.prematch(
+        limit=200, sport=sport, date_str=date_str, league_id=league_id
+    )
     lifecycle_diag = live_lifecycle.diagnostics(sport, date_str=date_str, league_id=league_id)
 
     results = []

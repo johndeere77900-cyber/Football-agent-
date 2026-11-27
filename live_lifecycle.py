@@ -135,22 +135,41 @@ def calendar_days(
     return [(base + dt.timedelta(days=offset)).isoformat() for offset in range(0, int(horizon_days) + 1)]
 
 
+PREMATCH_QUEUE_STAGES = ["TRACKED", "PREMATCH_DATA_READY", "PREMATCH_PREDICTION_CREATED"]
+PREMATCH_UNRESOLVED_STAGES = ["DISCOVERED", "IDENTITY_RESOLVED"]
+MAX_PREMATCH_RETRIES = 5
+
+
 def _retry_pending(row: Dict[str, Any]) -> bool:
     """True when the stored retry time has not arrived yet."""
     next_retry = _parse(row.get("next_retry_at"))
     return next_retry is not None and next_retry > dt.datetime.now(dt.timezone.utc)
 
 
-def _fail(row: Dict[str, Any], error: Exception, error_class: str = "provider_error") -> Dict[str, Any]:
+def _retry_exhausted(row: Dict[str, Any]) -> bool:
+    """A bounded-retry failure must stop consuming pre-match capacity."""
+    error_class = str(row.get("error_class") or "")
+    return error_class.endswith("_exhausted") or int(row.get("retry_count") or 0) >= MAX_PREMATCH_RETRIES
+
+
+def _fail(
+    row: Dict[str, Any],
+    error: Exception,
+    error_class: str = "provider_error",
+    max_retries: Optional[int] = None,
+) -> Dict[str, Any]:
     retry = int(row.get("retry_count") or 0) + 1
+    exhausted = max_retries is not None and retry > max_retries
     next_retry = (
-        dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=min(60, 2 ** min(retry, 5)))
-    ).isoformat()
+        None
+        if exhausted
+        else (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=min(60, 2 ** min(retry, 5)))).isoformat()
+    )
     updated = lstore.update_lifecycle(
         row["lifecycle_id"],
         retry_count=retry,
         error_state=str(error)[:500],
-        error_class=error_class,
+        error_class=(f"{error_class}_exhausted" if exhausted else error_class),
         next_retry_at=next_retry,
     )
     return updated or row
@@ -332,11 +351,17 @@ def list_tracked(
     league_id: Any = None,
     limit: int = 500,
 ) -> List[Dict[str, Any]]:
-    """Persisted lifecycle rows that are actually tracked (never a provider query)."""
-    rows = lstore.list_lifecycles(sport=sport, stages=ACTIVE_TRACKED_STAGES, limit=limit)
-    if date_str:
-        day = str(date_str)[:10]
-        rows = [row for row in rows if str(row.get("kickoff_at") or "")[:10] == day]
+    """Persisted lifecycle rows that are actually tracked (never a provider query).
+
+    Date scoping is applied in SQL so tracked rows from another day cannot
+    consume the delivery limit before the requested day is reached.
+    """
+    rows = lstore.list_lifecycles(
+        sport=sport,
+        stages=ACTIVE_TRACKED_STAGES,
+        limit=limit,
+        kickoff_on=str(date_str)[:10] if date_str else None,
+    )
     if league_id is not None:
         rows = [row for row in rows if str(row.get("league_id")) == str(league_id)]
     return rows
@@ -354,13 +379,13 @@ def diagnostics(sport: str, date_str: Optional[str] = None, league_id: Any = Non
         "unresolved": 0,
         "errors": [],
     }
+    day = str(date_str)[:10] if date_str else None
     try:
-        rows = lstore.list_lifecycles(sport=sport, limit=2000)
+        rows = lstore.list_lifecycles(sport=sport, limit=2000, kickoff_on=day)
     except Exception as exc:
         result["schema_error"] = f"{type(exc).__name__}: {exc}"[:300]
         return result
     result["total"] = len(rows)
-    day = str(date_str)[:10] if date_str else None
     scoped = [row for row in rows if day is None or str(row.get("kickoff_at") or "")[:10] == day]
     if league_id is not None:
         scoped = [row for row in scoped if str(row.get("league_id")) == str(league_id)]
@@ -808,16 +833,25 @@ def _prematch_football(row: Dict[str, Any]) -> Dict[str, Any]:
     fixture_id = int(row["provider_fixture_id"])
     provider, reason = _provider_eligible(row, "prematch", "statistics")
     if not provider:
-        return _fail(row, RuntimeError(reason), "provider_not_eligible")
+        return _fail(
+            row, RuntimeError(reason), "provider_not_eligible", max_retries=MAX_PREMATCH_RETRIES
+        )
     fixture = _fetch_result("football", provider, fixture_id, row.get("league_id"), row.get("kickoff_at"))
     if not fixture:
-        return _fail(row, RuntimeError("prematch fixture payload unavailable"))
+        return _fail(
+            row,
+            RuntimeError("prematch fixture payload unavailable"),
+            max_retries=MAX_PREMATCH_RETRIES,
+        )
 
     kickoff = ((fixture.get("fixture") or {}).get("date")) or row.get("kickoff_at")
     kickoff_dt = _parse(kickoff)
     if kickoff_dt is None or kickoff_dt <= dt.datetime.now(dt.timezone.utc):
         return lstore.update_lifecycle(
-            row["lifecycle_id"], error_state="kickoff_passed_before_prematch", error_class="timing"
+            row["lifecycle_id"],
+            error_state="kickoff_passed_before_prematch",
+            error_class="kickoff_passed",
+            next_retry_at=None,
         ) or row
 
     import main as app_main
@@ -828,7 +862,27 @@ def _prematch_football(row: Dict[str, Any]) -> Dict[str, Any]:
     prediction = app_main.predict_fixture(fixture, league_avg, provider_meta={"provider": row.get("provider")})
     if not isinstance(prediction, dict) or prediction.get("insufficient_data"):
         reason = prediction.get("reason") if isinstance(prediction, dict) else "invalid prediction"
-        return _fail(row, RuntimeError(str(reason)), "model_error")
+        return _fail(
+            row, RuntimeError(str(reason)), "model_error", max_retries=MAX_PREMATCH_RETRIES
+        )
+
+    # predict_fixture() nests the exact inputs consumed by
+    # prediction_engine.predict_from_features() inside its prediction_record.
+    # Extract that envelope; the outer feature_snapshot is raw evidence only and
+    # must not be mislabelled as the model input.
+    prediction_record = prediction.get("prediction_record")
+    exact_inputs = (
+        prediction_record.get("model_inputs")
+        if isinstance(prediction_record, dict)
+        else None
+    )
+    if not isinstance(exact_inputs, dict) or not isinstance(exact_inputs.get("features"), dict):
+        return _fail(
+            row,
+            RuntimeError("model_inputs missing from football prediction record"),
+            "model_input_fidelity_error",
+            max_retries=MAX_PREMATCH_RETRIES,
+        )
 
     # Features and the model prediction are proven before the lifecycle claims
     # pre-match data readiness. A restart that already recorded a stage is never
@@ -846,26 +900,25 @@ def _prematch_football(row: Dict[str, Any]) -> Dict[str, Any]:
         detail={
             "provider_fixture_id": str(fixture_id),
             "kickoff_at": kickoff,
-            "data_cutoff_timestamp": prediction.get("data_cutoff_timestamp"),
-            "model_inputs_present": bool(prediction.get("feature_snapshot")),
+            "data_cutoff_timestamp": exact_inputs.get("data_cutoff_timestamp"),
+            "model_inputs_present": True,
             "feature_provenance": (prediction.get("provenance") or {}).get("provider_statistics"),
         },
         event_key=f"prediction|{row['lifecycle_id']}|PRE_MATCH|{kickoff}",
     )
     timestamp = _now()
     key = _snapshot_key("football", fixture_id, "PRE_MATCH", kickoff)
-    # predict_fixture() returns the features it actually used as
-    # ``feature_snapshot`` (plus ``provenance``); it does not build a
-    # ``model_inputs`` envelope. Persist that real payload rather than None so
-    # the immutable snapshot proves which features reached the model.
-    feature_snapshot = prediction.get("feature_snapshot")
+    # The immutable snapshot stores the exact engineered features and Elo inputs
+    # supplied to the model, with raw feature evidence and provenance kept as
+    # separate audit fields so they are never confused with model inputs.
     model_inputs = {
-        "features": feature_snapshot,
+        **exact_inputs,
+        "feature_snapshot": prediction.get("feature_snapshot"),
         "feature_provenance": prediction.get("provenance"),
         "provider": row.get("provider"),
         "provider_fixture_id": str(fixture_id),
-        "data_cutoff_timestamp": prediction.get("data_cutoff_timestamp") or timestamp,
     }
+    engineered_features = dict(exact_inputs["features"])
     row = _persist_cycle_key(row, key)
 
     snapshot_id = storage.save_prediction_snapshot(
@@ -880,9 +933,9 @@ def _prematch_football(row: Dict[str, Any]) -> Dict[str, Any]:
         home_team=prediction.get("home_team"),
         away_team=prediction.get("away_team"),
         prediction_context="PRE_MATCH",
-        data_cutoff_timestamp=prediction.get("data_cutoff_timestamp") or timestamp,
+        data_cutoff_timestamp=exact_inputs.get("data_cutoff_timestamp") or timestamp,
         markets=prediction.get("markets"),
-        features=feature_snapshot,
+        features=engineered_features,
         confidence=prediction.get("confidence"),
         prediction_record=prediction,
         idempotency_key=key,
@@ -910,16 +963,25 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
     game_id = int(row["provider_fixture_id"])
     provider, reason = _provider_eligible(row, "prematch", "statistics")
     if not provider:
-        return _fail(row, RuntimeError(reason), "provider_not_eligible")
+        return _fail(
+            row, RuntimeError(reason), "provider_not_eligible", max_retries=MAX_PREMATCH_RETRIES
+        )
     game = _fetch_result("basketball", provider, game_id, row.get("league_id"), row.get("kickoff_at"))
     if not game:
-        return _fail(row, RuntimeError("prematch game payload unavailable"))
+        return _fail(
+            row,
+            RuntimeError("prematch game payload unavailable"),
+            max_retries=MAX_PREMATCH_RETRIES,
+        )
 
     kickoff = game.get("date") or row.get("kickoff_at")
     kickoff_dt = _parse(kickoff)
     if kickoff_dt is None or kickoff_dt <= dt.datetime.now(dt.timezone.utc):
         return lstore.update_lifecycle(
-            row["lifecycle_id"], error_state="kickoff_passed_before_prematch", error_class="timing"
+            row["lifecycle_id"],
+            error_state="kickoff_passed_before_prematch",
+            error_class="kickoff_passed",
+            next_retry_at=None,
         ) or row
 
     timestamp = _now()
@@ -950,6 +1012,7 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
                     f"away={((away_stats or {}).get('games_played'))}, minimum={min_games}"
                 ),
                 "feature_acquisition_error",
+                max_retries=MAX_PREMATCH_RETRIES,
             )
 
     prediction = basketball_model.predict_game(
@@ -962,7 +1025,18 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
     )
     if not isinstance(prediction, dict) or prediction.get("insufficient_data"):
         reason = prediction.get("reason") if isinstance(prediction, dict) else "invalid prediction"
-        return _fail(row, RuntimeError(str(reason)), "model_error")
+        return _fail(
+            row, RuntimeError(str(reason)), "model_error", max_retries=MAX_PREMATCH_RETRIES
+        )
+
+    exact_inputs = prediction.get("model_inputs")
+    if not isinstance(exact_inputs, dict):
+        return _fail(
+            row,
+            RuntimeError("model_inputs missing from basketball prediction"),
+            "model_input_fidelity_error",
+            max_retries=MAX_PREMATCH_RETRIES,
+        )
 
     if row.get("stage") == "TRACKED":
         row = _advance(row, "PREMATCH_DATA_READY")
@@ -977,8 +1051,8 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
         detail={
             "provider_fixture_id": str(game_id),
             "kickoff_at": kickoff,
-            "data_cutoff_timestamp": prediction.get("data_cutoff_timestamp"),
-            "model_inputs_present": bool(prediction.get("model_inputs")),
+            "data_cutoff_timestamp": exact_inputs.get("data_cutoff_timestamp"),
+            "model_inputs_present": True,
             "sample_sizes": {
                 "home": (home_stats or {}).get("matches") or (home_stats or {}).get("games_played"),
                 "away": (away_stats or {}).get("matches") or (away_stats or {}).get("games_played"),
@@ -1001,18 +1075,14 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
         home_team=prediction.get("home_team"),
         away_team=prediction.get("away_team"),
         prediction_context="PRE_MATCH",
-        data_cutoff_timestamp=prediction.get("data_cutoff_timestamp") or timestamp,
+        data_cutoff_timestamp=exact_inputs.get("data_cutoff_timestamp") or timestamp,
         markets=prediction.get("markets"),
-        features=(
-            prediction.get("model_inputs", {}).get("features")
-            if isinstance(prediction.get("model_inputs"), dict)
-            else None
-        ),
+        features=exact_inputs.get("features") if isinstance(exact_inputs.get("features"), dict) else None,
         confidence=prediction.get("confidence"),
         prediction_record=prediction,
         idempotency_key=key,
         lifecycle_id=row["lifecycle_id"],
-        model_inputs=prediction.get("model_inputs"),
+        model_inputs=exact_inputs,
     )
     row = _advance(row, "PREMATCH_SNAPSHOT_SAVED")
     lstore.record_event(
@@ -1028,19 +1098,117 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
     return {**row, "snapshot_id": snapshot_id}
 
 
-def prematch(limit: Optional[int] = None) -> Dict[str, Any]:
+def _expire_past_prematch(
+    sport: Optional[str],
+    date_str: Optional[str],
+    league_id: Any,
+    now: dt.datetime,
+) -> int:
+    """Mark pre-match candidates whose kickoff has passed, without deleting them.
+
+    The stage and all history are preserved; the row simply stops being a
+    pre-match candidate. This is separate from ``kickoff_passed`` rows the
+    provider may have reported late.
+    """
+    boundary = str(date_str)[:10] if date_str else now.date().isoformat()
     rows = lstore.list_lifecycles(
-        stages=["DISCOVERED", "IDENTITY_RESOLVED", "TRACKED", "PREMATCH_DATA_READY", "PREMATCH_PREDICTION_CREATED"],
-        limit=limit or 500,
+        sport=sport,
+        stages=PREMATCH_QUEUE_STAGES + PREMATCH_UNRESOLVED_STAGES,
+        limit=5000,
+        kickoff_to=boundary,
     )
-    processed = saved = unresolved = skipped = 0
+    expired = 0
     for row in rows:
-        if row.get("stage") == "DISCOVERED" or not row.get("home_team_id") or not row.get("away_team_id"):
-            unresolved += 1
+        if league_id is not None and str(row.get("league_id")) != str(league_id):
+            continue
+        kickoff = _parse(row.get("kickoff_at"))
+        if kickoff is None or kickoff > now:
+            continue
+        expired += 1
+        if row.get("error_class") != "kickoff_passed":
+            lstore.update_lifecycle(
+                row["lifecycle_id"],
+                error_state="kickoff_passed_before_prematch",
+                error_class="kickoff_passed",
+                next_retry_at=None,
+            )
+    return expired
+
+
+def prematch(
+    limit: Optional[int] = None,
+    *,
+    sport: Optional[str] = None,
+    date_str: Optional[str] = None,
+    league_id: Any = None,
+) -> Dict[str, Any]:
+    """Process eligible pre-match work, scoped and without queue starvation.
+
+    Selection rules:
+
+    * only stages that can still produce a PRE_MATCH snapshot are loaded;
+    * the kickoff window is filtered in SQL (``kickoff_on`` for a Telegram
+      request, ``kickoff_from`` for an autonomous cycle);
+    * expired candidates are marked once and excluded by the window;
+    * unresolved identities are reported but never consume the batch;
+    * bounded-exhausted or backoff-pending rows are skipped after selection.
+
+    ``limit`` therefore applies to genuinely eligible work.
+    """
+    now = dt.datetime.now(dt.timezone.utc)
+    budget = int(limit or 500)
+    scope_sport = sport if sport in ("football", "basketball") else None
+
+    expired = _expire_past_prematch(scope_sport, date_str, league_id, now)
+
+    candidate_kwargs: Dict[str, Any] = {
+        "sport": scope_sport,
+        "stages": PREMATCH_QUEUE_STAGES,
+        "limit": max(1000, budget * 4),
+    }
+    if date_str:
+        candidate_kwargs["kickoff_on"] = str(date_str)[:10]
+    else:
+        candidate_kwargs["kickoff_from"] = now.date().isoformat()
+    candidates = lstore.list_lifecycles(**candidate_kwargs)
+
+    unresolved = lstore.list_lifecycles(
+        sport=scope_sport,
+        stages=PREMATCH_UNRESOLVED_STAGES,
+        limit=5000,
+        kickoff_on=str(date_str)[:10] if date_str else None,
+        kickoff_from=None if date_str else now.date().isoformat(),
+    )
+    unresolved_count = sum(
+        1
+        for row in unresolved
+        if league_id is None or str(row.get("league_id")) == str(league_id)
+    )
+
+    eligible: List[Dict[str, Any]] = []
+    retry_deferred = exhausted = wrong_league = 0
+    for row in candidates:
+        if league_id is not None and str(row.get("league_id")) != str(league_id):
+            wrong_league += 1
+            continue
+        if not row.get("home_team_id") or not row.get("away_team_id"):
+            unresolved_count += 1
+            continue
+        kickoff = _parse(row.get("kickoff_at"))
+        if kickoff is None or kickoff <= now:
+            continue
+        if _retry_exhausted(row):
+            exhausted += 1
             continue
         if _retry_pending(row):
-            skipped += 1
+            retry_deferred += 1
             continue
+        eligible.append(row)
+        if len(eligible) >= budget:
+            break
+
+    processed = saved = 0
+    for row in eligible:
         try:
             result = _prematch_football(row) if row["sport"] == "football" else _prematch_basketball(row)
             processed += 1
@@ -1058,16 +1226,24 @@ def prematch(limit: Optional[int] = None) -> Dict[str, Any]:
                     event_key=f"skip|{row.get('lifecycle_id')}|{row.get('stage')}",
                 )
         except LifecycleTransitionError as exc:
-            _fail(row, exc, "transition_error")
+            _fail(row, exc, "transition_error", max_retries=MAX_PREMATCH_RETRIES)
         except Exception as exc:
-            _fail(row, exc)
+            _fail(row, exc, max_retries=MAX_PREMATCH_RETRIES)
+
     return {
         "stage": "prematch",
-        "considered": len(rows),
+        "sport": scope_sport,
+        "date": str(date_str)[:10] if date_str else None,
+        "league_id": league_id,
+        "considered": len(candidates),
+        "eligible": len(eligible),
         "processed": processed,
         "snapshots_saved": saved,
-        "unresolved_skipped": unresolved,
-        "retry_deferred": skipped,
+        "unresolved_skipped": unresolved_count,
+        "expired": expired,
+        "retry_deferred": retry_deferred,
+        "retry_exhausted": exhausted,
+        "wrong_league_skipped": wrong_league,
     }
 
 

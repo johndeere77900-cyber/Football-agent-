@@ -345,3 +345,284 @@ def test_discovery_queries_every_eligible_provider_and_merges(monkeypatch):
     assert len(rows) == 1
     assert rows[0]["provider"] in ("fotmob", "espn_soccer")
     assert rows[0]["canonical_fixture_key"] in ("fotmob:6112357", "espn_soccer:401879999")
+
+
+def test_prematch_selection_scopes_sport_date_and_excludes_expired(monkeypatch):
+    """Stale global records must not consume a scoped, eligible batch."""
+    day = _iso(30)[:10]
+    for index in range(250):
+        _seed(
+            lifecycle_id=f"football:api_football:stale{index}",
+            canonical_fixture_key=f"api_football:stale{index}",
+            provider_fixture_id=str(7000 + index),
+            stage="TRACKED",
+            kickoff_at=_iso(-24 - index),
+        )
+    _seed(
+        lifecycle_id="football:api_football:unresolved",
+        canonical_fixture_key="api_football:unresolved",
+        provider_fixture_id="7100",
+        stage="DISCOVERED",
+        home_team_id=None,
+        away_team_id=None,
+        kickoff_at=f"{day}T18:00:00+00:00",
+    )
+    target = _seed(
+        lifecycle_id="football:api_football:target",
+        canonical_fixture_key="api_football:target",
+        provider_fixture_id="7200",
+        stage="TRACKED",
+        kickoff_at=f"{day}T20:00:00+00:00",
+    )
+    basketball = _seed(
+        lifecycle_id="basketball:espn_nba:target",
+        canonical_fixture_key="espn_nba:5200",
+        sport="basketball",
+        provider="espn_nba",
+        provider_fixture_id="5200",
+        league_id=12,
+        stage="TRACKED",
+        kickoff_at=f"{day}T22:00:00+00:00",
+    )
+    selected = []
+
+    def fake_prematch(row):
+        selected.append(row["lifecycle_id"])
+        return {**row, "stage": "PREMATCH_SNAPSHOT_SAVED"}
+
+    monkeypatch.setattr(live_lifecycle, "_prematch_football", fake_prematch)
+    monkeypatch.setattr(live_lifecycle, "_prematch_basketball", fake_prematch)
+
+    result = live_lifecycle.prematch(limit=1, sport="football", date_str=day)
+    assert selected == ["football:api_football:target"]
+    assert target["lifecycle_id"] in selected
+    assert basketball["lifecycle_id"] not in selected
+    assert result["snapshots_saved"] == 1
+    assert result["expired"] >= 250
+    assert result["unresolved_skipped"] == 1
+    stale = lstore.get_lifecycle("football:api_football:stale0")
+    assert stale["error_class"] == "kickoff_passed"
+    assert stale["stage"] == "TRACKED", "expiry must preserve lifecycle history"
+
+
+def test_prematch_basketball_scope_does_not_touch_football(monkeypatch):
+    day = _iso(30)[:10]
+    _seed(
+        lifecycle_id="football:api_football:other",
+        canonical_fixture_key="api_football:other",
+        provider_fixture_id="7300",
+        kickoff_at=f"{day}T18:00:00+00:00",
+    )
+    _seed(
+        lifecycle_id="basketball:espn_nba:chosen",
+        canonical_fixture_key="espn_nba:5300",
+        sport="basketball",
+        provider="espn_nba",
+        provider_fixture_id="5300",
+        league_id=12,
+        kickoff_at=f"{day}T22:00:00+00:00",
+    )
+    selected = []
+    monkeypatch.setattr(
+        live_lifecycle,
+        "_prematch_basketball",
+        lambda row: selected.append(row["lifecycle_id"]) or {**row, "stage": "PREMATCH_SNAPSHOT_SAVED"},
+    )
+
+    result = live_lifecycle.prematch(limit=5, sport="basketball", date_str=day, league_id=12)
+    assert selected == ["basketball:espn_nba:chosen"]
+    assert result["sport"] == "basketball"
+    assert result["date"] == day
+
+
+def test_prematch_exhausted_retry_stops_consuming_batch(monkeypatch):
+    day = _iso(30)[:10]
+    _seed(
+        lifecycle_id="football:api_football:exhausted",
+        canonical_fixture_key="api_football:exhausted",
+        provider_fixture_id="7400",
+        kickoff_at=f"{day}T18:00:00+00:00",
+    )
+    lstore.update_lifecycle(
+        "football:api_football:exhausted",
+        retry_count=live_lifecycle.MAX_PREMATCH_RETRIES,
+        error_class="model_error",
+    )
+    called = []
+    monkeypatch.setattr(
+        live_lifecycle, "_prematch_football", lambda row: called.append(row["lifecycle_id"])
+    )
+    result = live_lifecycle.prematch(limit=5, sport="football", date_str=day)
+    assert called == []
+    assert result["retry_exhausted"] == 1
+
+
+def test_football_snapshot_stores_exact_model_inputs(monkeypatch):
+    row = _seed(stage="TRACKED")
+    engineered = {
+        "home_attack": 1.72,
+        "away_defence": 1.11,
+        "elo_diff": 31.5,
+        "h2h_home_win_rate": 0.5,
+    }
+    raw_feature_snapshot = {
+        "season_home": {"matches": 12},
+        "season_away": {"matches": 12},
+        "recent_home": {"matches": 5},
+        "h2h": {"matches": 6},
+    }
+    provider_provenance = {"provider": "espn_soccer", "as_of": row["kickoff_at"]}
+    prediction = {
+        "fixture_id": 9001,
+        "home_team": "Arsenal",
+        "away_team": "Chelsea",
+        "markets": {"match_result": {"home_win": 0.51, "draw": 0.26, "away_win": 0.23}},
+        "feature_snapshot": raw_feature_snapshot,
+        "provenance": {"provider_statistics": provider_provenance},
+        "prediction_record": {
+            "model_inputs": {
+                "features": dict(engineered),
+                "elo_probabilities": {"home_win": 0.48, "draw": 0.27, "away_win": 0.25},
+                "elo_weight": 0.2,
+                "prediction_timestamp": "2026-11-27T10:00:00+00:00",
+                "data_cutoff_timestamp": "2026-11-27T10:00:00+00:00",
+                "model_version": "v3.0.0",
+                "feature_version": "v3.0.0",
+            }
+        },
+    }
+    monkeypatch.setattr(live_lifecycle, "_provider_eligible", lambda *a, **k: ("espn_soccer", None))
+    monkeypatch.setattr(
+        live_lifecycle,
+        "_fetch_result",
+        lambda *a, **k: {
+            "fixture": {"id": 9001, "date": row["kickoff_at"], "status": {"short": "NS"}},
+            "league": {"id": 39, "season": 2026},
+            "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 2, "name": "Chelsea"}},
+        },
+    )
+    import main as app_main
+
+    monkeypatch.setattr(app_main, "predict_fixture", lambda *a, **k: prediction)
+    captured = {}
+
+    def fake_save(**kwargs):
+        captured.update(kwargs)
+        return 1
+
+    import storage as storage_module
+
+    monkeypatch.setattr(storage_module, "save_prediction_snapshot", fake_save)
+
+    result = live_lifecycle._prematch_football(row)
+    assert result["stage"] == "PREMATCH_SNAPSHOT_SAVED"
+    assert captured["features"] == engineered
+    assert captured["model_inputs"]["features"] == engineered
+    assert captured["model_inputs"]["elo_weight"] == 0.2
+    assert captured["model_inputs"]["feature_snapshot"] == raw_feature_snapshot
+    assert captured["model_inputs"]["feature_provenance"]["provider_statistics"] == provider_provenance
+    assert captured["model_inputs"]["provider"] == "api_football"
+    assert captured["prediction_context"] == "PRE_MATCH"
+
+
+def test_football_snapshot_refuses_missing_model_inputs(monkeypatch):
+    row = _seed(stage="TRACKED")
+    monkeypatch.setattr(live_lifecycle, "_provider_eligible", lambda *a, **k: ("espn_soccer", None))
+    monkeypatch.setattr(
+        live_lifecycle,
+        "_fetch_result",
+        lambda *a, **k: {
+            "fixture": {"id": 9001, "date": row["kickoff_at"], "status": {"short": "NS"}},
+            "league": {"id": 39, "season": 2026},
+            "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 2, "name": "Chelsea"}},
+        },
+    )
+    import main as app_main
+
+    monkeypatch.setattr(
+        app_main,
+        "predict_fixture",
+        lambda *a, **k: {"fixture_id": 9001, "prediction_record": {}, "feature_snapshot": {}},
+    )
+    saved = []
+    import storage as storage_module
+
+    monkeypatch.setattr(storage_module, "save_prediction_snapshot", lambda **k: saved.append(k) or 1)
+
+    result = live_lifecycle._prematch_football(row)
+    assert result["error_class"] == "model_input_fidelity_error"
+    assert saved == []
+    updated = lstore.get_lifecycle(row["lifecycle_id"])
+    assert updated["stage"] == "TRACKED"
+
+
+def test_telegram_prematch_is_scoped_to_request(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        live_lifecycle,
+        "discover",
+        lambda *a, **k: {"discovered": 0, "tracked": 0, "unresolved": 0, "identity_failures": 0, "errors": []},
+    )
+
+    def fake_prematch(**kwargs):
+        captured.update(kwargs)
+        return {"eligible": 0, "processed": 0, "snapshots_saved": 0}
+
+    monkeypatch.setattr(live_lifecycle, "prematch", fake_prematch)
+    monkeypatch.setattr(live_lifecycle, "diagnostics", lambda *a, **k: {})
+    monkeypatch.setattr(live_lifecycle, "list_tracked", lambda *a, **k: [])
+
+    telegram_bot._lifecycle_predictions("basketball", "2026-11-28", 1, 12)
+    assert captured == {
+        "limit": 200,
+        "sport": "basketball",
+        "date_str": "2026-11-28",
+        "league_id": 12,
+    }
+
+
+def test_autonomous_prematch_is_not_limited_to_one_sport(monkeypatch):
+    day = _iso(30)[:10]
+    _seed(
+        lifecycle_id="football:api_football:auto",
+        canonical_fixture_key="api_football:auto",
+        provider_fixture_id="7500",
+        kickoff_at=f"{day}T18:00:00+00:00",
+    )
+    _seed(
+        lifecycle_id="basketball:espn_nba:auto",
+        canonical_fixture_key="espn_nba:5500",
+        sport="basketball",
+        provider="espn_nba",
+        provider_fixture_id="5500",
+        league_id=12,
+        kickoff_at=f"{day}T20:00:00+00:00",
+    )
+    selected = []
+    monkeypatch.setattr(
+        live_lifecycle,
+        "_prematch_football",
+        lambda row: selected.append(row["sport"]) or {**row, "stage": "PREMATCH_SNAPSHOT_SAVED"},
+    )
+    monkeypatch.setattr(
+        live_lifecycle,
+        "_prematch_basketball",
+        lambda row: selected.append(row["sport"]) or {**row, "stage": "PREMATCH_SNAPSHOT_SAVED"},
+    )
+    result = live_lifecycle.prematch(limit=5)
+    assert set(selected) == {"football", "basketball"}
+    assert result["sport"] is None
+
+
+def test_fail_exhausts_bounded_prematch_retries():
+    row = _seed(
+        lifecycle_id="football:api_football:cap",
+        canonical_fixture_key="api_football:cap",
+        provider_fixture_id="7600",
+    )
+    row = lstore.update_lifecycle(row["lifecycle_id"], retry_count=live_lifecycle.MAX_PREMATCH_RETRIES)
+    result = live_lifecycle._fail(
+        row, RuntimeError("persistent"), "model_error", max_retries=live_lifecycle.MAX_PREMATCH_RETRIES
+    )
+    assert result["error_class"] == "model_error_exhausted"
+    assert result["next_retry_at"] is None
