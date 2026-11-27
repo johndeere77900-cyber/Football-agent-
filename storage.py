@@ -3521,11 +3521,19 @@ def save_prediction(
     odds_comparison=None,
     prediction_context="PRE_MATCH",
     prediction_record=None,
+    features=None,
+    model_inputs=None,
+    idempotency_key=None,
 ):
     """
     Save a football prediction exactly once.
 
-    The first saved prediction is authoritative.
+    The first saved prediction is authoritative: ``fixture_id`` is the
+    idempotency key of this legacy table, so ``idempotency_key`` and the model
+    input payloads are accepted for compatibility with callers that also write
+    an immutable prediction snapshot. The model inputs are not stored here
+    because the predictions table has no column for them; the snapshot written
+    by ``save_prediction_snapshot`` is the durable store for them.
     Returns True if inserted, False if fixture already existed.
     """
     fixture_id = _validate_positive_int(fixture_id, "fixture_id")
@@ -4040,8 +4048,16 @@ def save_basketball_prediction(
     confidence,
     prediction_context="PRE_MATCH",
     prediction_record=None,
+    features=None,
+    model_inputs=None,
+    idempotency_key=None,
 ):
-    """Save a basketball prediction exactly once."""
+    """Save a basketball prediction exactly once.
+
+    As with ``save_prediction``, the game id is this table's idempotency key and
+    the model input payloads belong to the immutable prediction snapshot, so the
+    compatibility arguments are accepted but not persisted here.
+    """
     game_id = _validate_positive_int(game_id, "game_id")
     _validate_text(game_date, "game_date")
     _validate_text(home_team, "home_team")

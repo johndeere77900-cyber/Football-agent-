@@ -243,6 +243,14 @@ def _fetch_result(
             return None
         provider_registry.record_health(provider, ok=bool(payload))
         return payload
+    if sport == "basketball" and provider == "espn_nba":
+        try:
+            payload = live_providers.espn_nba_game(fixture_id, kickoff)
+        except Exception as exc:
+            provider_registry.record_health(provider, ok=False, failure_category=type(exc).__name__)
+            return None
+        provider_registry.record_health(provider, ok=bool(payload))
+        return payload
     return None
 
 
@@ -434,16 +442,33 @@ def _football_fixtures_for_date(date_str: str) -> Dict[str, Any]:
 
 
 def _basketball_games_for_date(date_str: str) -> Dict[str, Any]:
-    import basketball_api
+    """Discover one day, preferring ESPN NBA and falling back to API-Basketball.
 
+    ESPN is consulted first because it is keyless; API-Basketball remains the
+    credentialed fallback and the only provider whose ids it is ever asked
+    about. A row is only created for the provider that issued its game id.
+    """
     errors: List[str] = []
     providers = _providers("basketball", "discovery", "fixtures", BASKETBALL_COMPETITIONS[0])
+
+    if "espn_nba" in providers:
+        try:
+            games = live_providers.espn_nba_games(date_str)
+        except Exception as exc:
+            provider_registry.record_health("espn_nba", ok=False, failure_category=type(exc).__name__)
+            errors.append(f"espn_nba: {type(exc).__name__}: {exc}"[:200])
+        else:
+            provider_registry.record_health("espn_nba", ok=True)
+            accepted = [g for g in games if (g.get("league") or {}).get("id") in BASKETBALL_COMPETITIONS]
+            if accepted:
+                return {"games": accepted, "errors": errors, "providers_used": ["espn_nba"]}
+
     if "api_basketball" not in providers:
-        return {
-            "games": [],
-            "errors": ["api_basketball: not verified for discovery"],
-            "providers_used": [],
-        }
+        errors.append("api_basketball: not verified for discovery")
+        return {"games": [], "errors": errors, "providers_used": []}
+
+    import basketball_api
+
     attempts = (
         lambda: basketball_api.get_games_by_date(date_str, league_id=BASKETBALL_COMPETITIONS[0]),
         lambda: basketball_api.get_games_by_date(date_str),
@@ -496,9 +521,10 @@ def _basketball_identity(game: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     game_id = game.get("id")
     if not game_id or not league.get("id"):
         return None
+    provenance = game.get("provider_provenance") or {}
     return {
         "sport": "basketball",
-        "provider": "api_basketball",
+        "provider": provenance.get("provider") or game.get("source") or "api_basketball",
         "provider_fixture_id": str(game_id),
         "league_id": league.get("id"),
         "season": league.get("season"),
@@ -511,13 +537,17 @@ def _basketball_identity(game: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
-def _canonical_team_id(name: Optional[str], provider: str, provider_id: Any, league_id: Any) -> Optional[str]:
+def _canonical_team_id(
+    name: Optional[str], provider: str, provider_id: Any, league_id: Any, sport: str = "football"
+) -> Optional[str]:
     if not name:
         return None
     try:
         import team_identity
 
-        resolved = team_identity.resolve_canonical_team_id(name, provider, provider_id, league_id=league_id)
+        resolved = team_identity.resolve_canonical_team_id(
+            name, provider, provider_id, league_id=league_id, sport=sport
+        )
     except Exception:
         return None
     return str(resolved) if resolved is not None else None
@@ -525,10 +555,18 @@ def _canonical_team_id(name: Optional[str], provider: str, provider_id: Any, lea
 
 def _persist_identity(identity: Dict[str, Any]) -> Dict[str, Any]:
     home_canonical = _canonical_team_id(
-        identity.get("home_name"), identity["provider"], identity.get("home_provider_id"), identity.get("league_id")
+        identity.get("home_name"),
+        identity["provider"],
+        identity.get("home_provider_id"),
+        identity.get("league_id"),
+        identity.get("sport", "football"),
     )
     away_canonical = _canonical_team_id(
-        identity.get("away_name"), identity["provider"], identity.get("away_provider_id"), identity.get("league_id")
+        identity.get("away_name"),
+        identity["provider"],
+        identity.get("away_provider_id"),
+        identity.get("league_id"),
+        identity.get("sport", "football"),
     )
 
     # Provider-native ids are namespaced: the same numeric id from two providers
@@ -674,7 +712,6 @@ def _prematch_football(row: Dict[str, Any]) -> Dict[str, Any]:
             row["lifecycle_id"], error_state="kickoff_passed_before_prematch", error_class="timing"
         ) or row
 
-    row = _advance(row, "PREMATCH_DATA_READY")
     import main as app_main
 
     league_avg = float(
@@ -685,6 +722,11 @@ def _prematch_football(row: Dict[str, Any]) -> Dict[str, Any]:
         reason = prediction.get("reason") if isinstance(prediction, dict) else "invalid prediction"
         return _fail(row, RuntimeError(str(reason)), "model_error")
 
+    # Features and the model prediction are proven before the lifecycle claims
+    # pre-match data readiness. A restart that already recorded a stage is never
+    # moved backwards, so the snapshot below stays idempotent.
+    if row.get("stage") == "TRACKED":
+        row = _advance(row, "PREMATCH_DATA_READY")
     row = _advance(row, "PREMATCH_PREDICTION_CREATED")
     timestamp = _now()
     key = _snapshot_key("football", fixture_id, "PRE_MATCH", kickoff)
@@ -734,10 +776,40 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
             row["lifecycle_id"], error_state="kickoff_passed_before_prematch", error_class="timing"
         ) or row
 
-    row = _advance(row, "PREMATCH_DATA_READY")
     timestamp = _now()
+    home_stats = away_stats = None
+    if row.get("provider") == "espn_nba":
+        # basketball_model needs season scoring averages. ESPN publishes them
+        # only as a game-by-game team schedule, so they are derived from that
+        # provider's own completed games before kickoff. Nothing is borrowed
+        # from API-Basketball's namespace.
+        home_stats = live_providers.espn_nba_team_scoring(
+            ((game.get("teams") or {}).get("home") or {}).get("id"), row.get("season"), kickoff
+        )
+        away_stats = live_providers.espn_nba_team_scoring(
+            ((game.get("teams") or {}).get("away") or {}).get("id"), row.get("season"), kickoff
+        )
+        min_games = int(getattr(config, "MIN_HISTORICAL_SAMPLE", 5))
+        if (
+            not isinstance(home_stats, dict)
+            or not isinstance(away_stats, dict)
+            or int(home_stats.get("games_played") or 0) < min_games
+            or int(away_stats.get("games_played") or 0) < min_games
+        ):
+            return _fail(
+                row,
+                RuntimeError(
+                    "espn_nba team scoring history is insufficient: "
+                    f"home={((home_stats or {}).get('games_played'))}, "
+                    f"away={((away_stats or {}).get('games_played'))}, minimum={min_games}"
+                ),
+                "feature_acquisition_error",
+            )
+
     prediction = basketball_model.predict_game(
         game,
+        home_stats_override=home_stats,
+        away_stats_override=away_stats,
         prediction_timestamp=timestamp,
         data_cutoff_timestamp=timestamp,
         calibrator=_calibrator("basketball", row.get("league_id"), row.get("season"), timestamp),
@@ -746,6 +818,8 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
         reason = prediction.get("reason") if isinstance(prediction, dict) else "invalid prediction"
         return _fail(row, RuntimeError(str(reason)), "model_error")
 
+    if row.get("stage") == "TRACKED":
+        row = _advance(row, "PREMATCH_DATA_READY")
     row = _advance(row, "PREMATCH_PREDICTION_CREATED")
     key = _snapshot_key("basketball", game_id, "PRE_MATCH", kickoff)
     row = _persist_cycle_key(row, key)

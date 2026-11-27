@@ -222,18 +222,22 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         sport="basketball",
         competitions=BASKETBALL_COMPETITIONS,
         base_url="https://site.api.espn.com/apis/site/v2/sports/basketball/nba",
-        endpoints={"scoreboard": "/scoreboard"},
-        capabilities={
-            # No lifecycle adapter is wired for ESPN NBA: its team ids are strings
-            # and the basketball model requires positive integer team ids from the
-            # API-Basketball namespace, so advertising discovery would create rows
-            # that can never be predicted or verified.
-            "discovery": UNVERIFIED,
-            "prematch": UNVERIFIED,
-            "live": UNVERIFIED,
-            "final_result": UNVERIFIED,
+        endpoints={
+            "scoreboard": "/scoreboard?dates={YYYYMMDD}",
+            "team_schedule": "/teams/{team_id}/schedule?season={season}",
         },
-        fields=["fixtures", "status", "score"],
+        capabilities={
+            # live_providers.espn_nba_games/espn_nba_game map the scoreboard into
+            # the API-Basketball game shape, and espn_nba_team_scoring derives the
+            # season scoring averages basketball_model requires from the team
+            # schedule. In-play polling is still not implemented, so live stays
+            # unverified and is never routed.
+            "discovery": VERIFIED,
+            "prematch": VERIFIED,
+            "live": UNVERIFIED,
+            "final_result": VERIFIED,
+        },
+        fields=["fixtures", "status", "score", "statistics"],
         auth_env=None,
         rate_limit="politeness limited; cached",
         id_namespace="espn",
@@ -241,8 +245,9 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         provenance="espn_nba",
         freshness_minutes=30,
         limitations=[
-            "Existing integration is the historical basketball acquisition route.",
-            "Lifecycle discovery, live and final-result use are unverified and never routed.",
+            "Game ids and team ids are ESPN-native and are never reused as API-Basketball ids.",
+            "Season scoring averages are derived from completed team-schedule games before kickoff.",
+            "In-play clock and score polling is not implemented, so live capability stays unverified.",
         ],
     ),
     # -------------------------------------------------- historical-only sources

@@ -254,8 +254,12 @@ def test_registry_only_advertises_wired_capabilities():
     assert provider_registry.supports("fotmob", "final_result", "score", 39)
     assert not provider_registry.supports("fotmob", "live", "score", 39)
 
-    # No adapter is wired for ESPN NBA, so it must not be routed.
-    assert not provider_registry.supports("espn_nba", "discovery", "fixtures", 12)
+    # ESPN NBA is wired for discovery, pre-match data and final results; in-play
+    # polling is still unimplemented, so live must never be routed.
+    assert provider_registry.supports("espn_nba", "discovery", "fixtures", 12)
+    assert provider_registry.supports("espn_nba", "prematch", "statistics", 12)
+    assert provider_registry.supports("espn_nba", "final_result", "score", 12)
+    assert not provider_registry.supports("espn_nba", "live", "score", 12)
     assert not provider_registry.supports("football_data_csv", "final_result", "score", 39)
 
 
