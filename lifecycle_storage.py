@@ -82,6 +82,7 @@ def ensure_schema() -> None:
                 "live_match_observations": set(),
                 "prediction_grading_ledger": set(),
                 "model_calibration_versions": set(),
+                "lifecycle_events": set(),
             }
             missing = []
             with conn.cursor() as cur:
@@ -172,6 +173,25 @@ def ensure_schema() -> None:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS lifecycle_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_key TEXT NOT NULL UNIQUE,
+                    event_type TEXT NOT NULL,
+                    sport TEXT,
+                    lifecycle_id TEXT,
+                    provider TEXT,
+                    correlation_id TEXT,
+                    stage TEXT,
+                    outcome TEXT,
+                    detail_json TEXT,
+                    error_id TEXT,
+                    occurred_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS model_calibration_versions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     sport TEXT NOT NULL,
@@ -218,6 +238,12 @@ def ensure_schema() -> None:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_grading_snapshot ON prediction_grading_ledger (snapshot_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_lifecycle ON lifecycle_events (lifecycle_id, occurred_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_type ON lifecycle_events (sport, event_type, occurred_at)"
             )
             conn.commit()
         _SCHEMA_READY_FOR.add(schema_key)
@@ -894,3 +920,205 @@ def get_graded_samples(sport, before=None, limit=5000):
             }
         )
     return samples
+
+
+# ---------------------------------------------------------------------------
+# Structured lifecycle events (observability)
+# ---------------------------------------------------------------------------
+
+EVENT_TYPES = (
+    "fixture_discovered",
+    "provider_queried",
+    "provider_failed",
+    "provider_no_matching_fixture",
+    "provider_observation_merged",
+    "provider_conflict_detected",
+    "fixture_identity_resolved",
+    "identity_unresolved",
+    "feature_acquired",
+    "feature_rejected",
+    "prediction_skipped",
+    "prediction_generated",
+    "prediction_persisted",
+    "snapshot_persisted",
+    "live_monitoring_started",
+    "live_observation_received",
+    "live_monitoring_paused",
+    "result_retrieved",
+    "result_conflict_detected",
+    "result_verified",
+    "prediction_graded",
+    "learning_evaluation_completed",
+    "learning_update_accepted",
+    "learning_update_rejected",
+    "lifecycle_stage_resumed",
+)
+
+
+def record_event(
+    event_type: str,
+    *,
+    sport: Optional[str] = None,
+    lifecycle_id: Optional[str] = None,
+    provider: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    stage: Optional[str] = None,
+    outcome: Optional[str] = None,
+    detail: Optional[Dict[str, Any]] = None,
+    error_id: Optional[str] = None,
+    occurred_at: Optional[str] = None,
+    event_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Append one structured lifecycle event idempotently.
+
+    ``correlation_id`` defaults to the lifecycle id so a fixture can be
+    followed from discovery to learning. Repeating the same logical event with
+    the same ``event_key`` does not duplicate it.
+    """
+    ensure_schema()
+    stamp = occurred_at or _now()
+    correlation = correlation_id or lifecycle_id
+    key = event_key or "|".join(
+        str(part or "")
+        for part in (event_type, lifecycle_id, provider, stage, outcome, stamp)
+    )
+    detail_json = _json(detail or {})
+    conn, db_type = storage._connect()
+    values = (
+        key,
+        event_type,
+        sport,
+        lifecycle_id,
+        provider,
+        correlation,
+        stage,
+        outcome,
+        detail_json,
+        error_id,
+        stamp,
+        stamp,
+    )
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO lifecycle_events (
+                        event_key, event_type, sport, lifecycle_id, provider,
+                        correlation_id, stage, outcome, detail_json, error_id,
+                        occurred_at, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (event_key) DO NOTHING
+                    """,
+                    values,
+                )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO lifecycle_events (
+                    event_key, event_type, sport, lifecycle_id, provider,
+                    correlation_id, stage, outcome, detail_json, error_id,
+                    occurred_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    return {
+        "event_key": key,
+        "event_type": event_type,
+        "lifecycle_id": lifecycle_id,
+        "correlation_id": correlation,
+        "provider": provider,
+        "stage": stage,
+        "outcome": outcome,
+        "occurred_at": stamp,
+    }
+
+
+def get_events(
+    *,
+    lifecycle_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    sport: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Read structured events, newest first."""
+    ensure_schema()
+    conn, db_type = storage._connect()
+    ph = "%s" if db_type == "postgres" else "?"
+    clauses: List[str] = []
+    params: List[Any] = []
+    if lifecycle_id:
+        clauses.append(f"lifecycle_id = {ph}")
+        params.append(lifecycle_id)
+    if correlation_id:
+        clauses.append(f"correlation_id = {ph}")
+        params.append(correlation_id)
+    if event_type:
+        clauses.append(f"event_type = {ph}")
+        params.append(event_type)
+    if sport:
+        clauses.append(f"sport = {ph}")
+        params.append(sport)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = (
+        "SELECT event_key, event_type, sport, lifecycle_id, provider, correlation_id, "
+        "stage, outcome, detail_json, error_id, occurred_at FROM lifecycle_events"
+        + where
+        + " ORDER BY occurred_at DESC"
+    )
+    params.append(max(1, int(limit)))
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql + " LIMIT %s", tuple(params))
+                rows = cur.fetchall()
+        else:
+            rows = conn.execute(sql + " LIMIT ?", tuple(params)).fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "event_key": row[0],
+            "event_type": row[1],
+            "sport": row[2],
+            "lifecycle_id": row[3],
+            "provider": row[4],
+            "correlation_id": row[5],
+            "stage": row[6],
+            "outcome": row[7],
+            "detail": _loads(row[8]),
+            "error_id": row[9],
+            "occurred_at": row[10],
+        }
+        for row in rows
+    ]
+
+
+def event_metrics(sport: Optional[str] = None, since: Optional[str] = None) -> Dict[str, Any]:
+    """Counters derived from structured events for diagnostics."""
+    events = get_events(sport=sport, limit=10000)
+    if since:
+        events = [e for e in events if str(e.get("occurred_at") or "") >= since]
+    counts: Dict[str, int] = {}
+    by_provider: Dict[str, Dict[str, int]] = {}
+    for event in events:
+        name = event["event_type"]
+        counts[name] = counts.get(name, 0) + 1
+        provider = event.get("provider")
+        if provider:
+            bucket = by_provider.setdefault(provider, {})
+            key = event.get("outcome") or name
+            bucket[key] = bucket.get(key, 0) + 1
+    return {
+        "sport": sport,
+        "since": since,
+        "event_counts": counts,
+        "provider_outcomes": by_provider,
+        "total": len(events),
+    }

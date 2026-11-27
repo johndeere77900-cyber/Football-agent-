@@ -16,7 +16,10 @@ averaged; callers record every observation with its provenance.
 from __future__ import annotations
 
 import datetime as _dt
+import os
 from typing import Any, Dict, Iterable, List, Optional
+
+import config as _config
 
 FOOTBALL_COMPETITIONS = [39, 140, 135, 78, 61, 2, 3, 5, 1, 4, 88, 94]
 BASKETBALL_COMPETITIONS = [12]
@@ -395,6 +398,11 @@ def supports(
         return False
     if entry["capabilities"].get(context) != VERIFIED:
         return False
+    # A credentialed provider is only routable when its secret is present: an
+    # adapter existing is not proof that the provider is operational.
+    auth_env = entry.get("auth_env")
+    if auth_env and not (os.environ.get(auth_env) or getattr(_config, auth_env, None)):
+        return False
     if field is not None and field not in entry["fields"]:
         return False
     if league_id is not None and int(league_id) not in entry["competitions"]:
@@ -413,12 +421,15 @@ def record_health(
     ok: bool,
     failure_category: Optional[str] = None,
     observed_at: Optional[str] = None,
+    latency_ms: Optional[float] = None,
 ) -> None:
     """Record a health observation for a provider in memory for this process."""
     entry = get_provider(provider_name)
     if entry is None:
         return
     stamp = observed_at or _dt.datetime.now(_dt.timezone.utc).isoformat()
+    if latency_ms is not None:
+        entry["last_latency_ms"] = round(float(latency_ms), 1)
     if ok:
         entry["health"] = "healthy"
         entry["last_success_at"] = stamp

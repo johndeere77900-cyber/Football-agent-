@@ -116,3 +116,39 @@ CREATE TABLE IF NOT EXISTS model_calibration_versions (
 
 CREATE INDEX IF NOT EXISTS idx_calibration_active
     ON model_calibration_versions (sport, competition_scope, status, promoted_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Part 3 observability and provider health (additive, nullable-only)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS lifecycle_events (
+    id              BIGSERIAL PRIMARY KEY,
+    event_key       TEXT NOT NULL UNIQUE,
+    event_type      TEXT NOT NULL,
+    sport           TEXT,
+    lifecycle_id    TEXT,
+    provider        TEXT,
+    correlation_id  TEXT,
+    stage           TEXT,
+    outcome         TEXT,
+    detail_json     JSONB,
+    error_id        TEXT,
+    occurred_at     TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_lifecycle ON lifecycle_events (lifecycle_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_type ON lifecycle_events (sport, event_type, occurred_at);
+
+CREATE TABLE IF NOT EXISTS provider_health (
+    provider                TEXT PRIMARY KEY,
+    state                   TEXT NOT NULL,
+    consecutive_failures    INTEGER NOT NULL DEFAULT 0,
+    consecutive_successes   INTEGER NOT NULL DEFAULT 0,
+    last_success_at         TEXT,
+    last_failure_at         TEXT,
+    last_failure_category   TEXT,
+    last_error              TEXT,
+    isolation_until         TEXT,
+    updated_at              TEXT NOT NULL
+);

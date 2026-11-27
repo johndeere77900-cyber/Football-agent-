@@ -202,29 +202,50 @@ def test_game_details_historical_requires_both_teams(monkeypatch):
 # 5. Historical Queue Safety: Default Single Season vs Explicit Seasons
 # ---------------------------------------------------------------------------
 
-def test_historical_queue_default_is_retired(monkeypatch):
-    """The acquisition queue must reject its retired default-seasons run without acquiring anything."""
-    called = []
-    monkeypatch.setattr(historical_sync, "sync_historical_fixtures", lambda *a, **k: called.append("fb"))
-    monkeypatch.setattr(historical_sync, "sync_historical_basketball_games", lambda *a, **k: called.append("bb"))
+def test_historical_queue_default_is_target_seasons(monkeypatch):
+    """Prove run_historical_queue() defaults to config.TARGET_SEASONS when no seasons/season passed."""
+    processed_seasons = []
 
-    with pytest.raises(historical_sync.HistoricalAcquisitionRetired):
-        historical_sync.run_historical_queue()
+    def mock_sync_fb(league_id, season, **kwargs):
+        processed_seasons.append(season)
+        return {"league_id": league_id, "season": season, "status": "COMPLETE", "api_requests_consumed": 0, "quota_budget_stopped": False}
 
-    assert called == [], "retired acquisition must not reach any provider sync"
+    def mock_sync_bb(league_id, season, **kwargs):
+        processed_seasons.append(season)
+        return {"sport": "basketball", "league_id": league_id, "season": season, "status": "COMPLETE", "api_requests_consumed": 0, "quota_budget_stopped": False}
+
+    monkeypatch.setattr(historical_sync, "sync_historical_fixtures", mock_sync_fb)
+    monkeypatch.setattr(historical_sync, "sync_historical_basketball_games", mock_sync_bb)
+
+    summary = historical_sync.run_historical_queue()
+
+    assert summary["target_seasons"] == config.TARGET_SEASONS
+    assert set(processed_seasons) == set(config.TARGET_SEASONS)
 
 
-def test_historical_queue_explicit_seasons_are_retired(monkeypatch):
-    """Explicit season/season-list runs must reject exactly like the default run."""
-    called = []
-    monkeypatch.setattr(historical_sync, "sync_historical_fixtures", lambda *a, **k: called.append("fb"))
-    monkeypatch.setattr(historical_sync, "sync_historical_basketball_games", lambda *a, **k: called.append("bb"))
+def test_historical_queue_explicit_single_and_multi_seasons(monkeypatch):
+    """Prove explicit season=2023 and explicit seasons=[2020, 2021] process exact requested seasons."""
+    processed_seasons = []
 
-    for kwargs in ({"season": 2023}, {"seasons": [2020, 2021]}):
-        with pytest.raises(historical_sync.HistoricalAcquisitionRetired):
-            historical_sync.run_historical_queue(**kwargs)
+    def mock_sync_fb(league_id, season, **kwargs):
+        processed_seasons.append(season)
+        return {"league_id": league_id, "season": season, "status": "COMPLETE", "api_requests_consumed": 0, "quota_budget_stopped": False}
 
-    assert called == [], "retired acquisition must not reach any provider sync"
+    def mock_sync_bb(league_id, season, **kwargs):
+        processed_seasons.append(season)
+        return {"sport": "basketball", "league_id": league_id, "season": season, "status": "COMPLETE", "api_requests_consumed": 0, "quota_budget_stopped": False}
+
+    monkeypatch.setattr(historical_sync, "sync_historical_fixtures", mock_sync_fb)
+    monkeypatch.setattr(historical_sync, "sync_historical_basketball_games", mock_sync_bb)
+
+    s1 = historical_sync.run_historical_queue(season=2023)
+    assert s1["target_seasons"] == [2023]
+
+    processed_seasons.clear()
+
+    s2 = historical_sync.run_historical_queue(seasons=[2020, 2021])
+    assert s2["target_seasons"] == [2020, 2021]
+    assert set(processed_seasons) == {2020, 2021}
 
 
 # ---------------------------------------------------------------------------
@@ -335,8 +356,11 @@ def test_workflow_schedule_safety_no_autonomous_predictions():
     if os.path.exists(historical_path):
         with open(historical_path, "r", encoding="utf-8") as handle:
             historical = handle.read()
-        assert "--historical-sync" not in historical
-        assert "--historical-queue" not in historical
+        # Historical acquisition is restored but must stay manual-only: it may
+        # never define an autonomous schedule (checked above) and must remain
+        # explicitly dispatchable.
+        assert "workflow_dispatch:" in historical
+        assert "--historical-sync" in historical or "--historical-queue" in historical
 
 
 def test_telegram_control_center_extended_operations():

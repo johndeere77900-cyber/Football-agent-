@@ -3092,6 +3092,18 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--provider-health",
+        action="store_true",
+        help="Print persisted provider health and registry capability states.",
+    )
+
+    parser.add_argument(
+        "--lifecycle-events",
+        action="store_true",
+        help="Print structured lifecycle event metrics.",
+    )
+
+    parser.add_argument(
         "--report-nba-phase-recovery",
         action="store_true",
         help="Compare persisted NBA identities with fresh ESPN identities (read-only).",
@@ -3345,14 +3357,114 @@ def main():
                 return 1
             return 0
 
-        if args.historical_queue or args.historical_sync:
+        if getattr(args, "provider_health", False):
+            import json as _json
+
+            import provider_health
+            import provider_registry
+
             print(
-                "ERROR: historical acquisition is retired. New completed matches may only "
-                "be added through the verified live-match lifecycle "
-                "(--autonomous). Historical reads, validation and reports remain available.",
-                file=sys.stderr,
+                _json.dumps(
+                    {
+                        "health": provider_health.snapshot(),
+                        "registry": provider_registry.capabilities_snapshot(args.sport),
+                    },
+                    indent=2,
+                    default=str,
+                )
             )
-            return 2
+            return 0
+
+        if getattr(args, "lifecycle_events", False):
+            import json as _json
+
+            import lifecycle_storage
+
+            storage.init_db()
+            print(_json.dumps(lifecycle_storage.event_metrics(sport=args.sport), indent=2, default=str))
+            return 0
+
+        if args.historical_queue:
+            storage.init_db()
+
+            summary = historical_sync.run_historical_queue(
+                seasons=getattr(args, "seasons", None),
+                season=args.season,
+                with_enrichment=args.with_enrichment,
+                refresh=args.refresh,
+            )
+
+            if isinstance(summary, dict) and summary.get("interrupted"):
+                print(
+                    f"Historical queue was interrupted ({summary.get('interrupt_signal')}); "
+                    "committed records and checkpoints were preserved.",
+                    file=sys.stderr,
+                )
+                return 130
+
+            reports = summary.get("reports", []) if isinstance(summary, dict) else []
+            incomplete_count = sum(
+                1 for r in reports
+                if isinstance(r, dict) and r.get("status") != "COMPLETE"
+            )
+            if incomplete_count > 0:
+                print(
+                    f"Historical queue finished with {incomplete_count} incomplete dataset(s) out of {len(reports)}.",
+                    file=sys.stderr,
+                )
+                return 1
+
+            return 0
+
+        if args.historical_sync:
+            sport = args.sport or "football"
+            league_id = args.league or (config.ALLOWED_BASKETBALL_LEAGUE_IDS[0] if sport == "basketball" else config.ALLOWED_LEAGUE_IDS[0])
+            storage.init_db()
+
+            seasons_list = getattr(args, "seasons", None)
+            if seasons_list and isinstance(seasons_list, (list, tuple)):
+                reports = []
+                for ssn in seasons_list:
+                    if sport == "basketball":
+                        rep = historical_sync.sync_historical_basketball_games(
+                            league_id=league_id, season=ssn, refresh=args.refresh
+                        )
+                    else:
+                        rep = historical_sync.sync_historical_fixtures(
+                            league_id=league_id, season=ssn, with_enrichment=args.with_enrichment, refresh=args.refresh
+                        )
+                    reports.append(rep)
+
+                incomplete_count = sum(
+                    1 for r in reports if not isinstance(r, dict) or r.get("status") != "COMPLETE"
+                )
+                if incomplete_count > 0:
+                    print(
+                        f"Historical sync ended with {incomplete_count} incomplete dataset(s) out of {len(reports)}. Exiting with code 1.",
+                        file=sys.stderr,
+                    )
+                    return 1
+                return 0
+
+            season = args.season or (datetime.now(timezone.utc).year - 1)
+            if sport == "basketball":
+                report = historical_sync.sync_historical_basketball_games(
+                    league_id=league_id,
+                    season=season,
+                    refresh=args.refresh,
+                )
+            else:
+                report = historical_sync.sync_historical_fixtures(
+                    league_id=league_id,
+                    season=season,
+                    with_enrichment=args.with_enrichment,
+                    refresh=args.refresh,
+                )
+
+            if not isinstance(report, dict) or report.get("status") != "COMPLETE":
+                print(f"Historical sync ended with status '{report.get('status', 'FAILED')}' (non-COMPLETE). Exiting with code 1.", file=sys.stderr)
+                return 1
+            return 0
 
         if args.dataset_status:
             sport = args.sport or "football"

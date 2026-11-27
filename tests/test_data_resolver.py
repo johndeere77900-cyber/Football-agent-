@@ -189,14 +189,27 @@ import soccerdata_provider
 def test_C_football_data_org_partial_response_incomplete(mock_api_fb, mock_fd):
     import historical_sync
 
-    with pytest.raises(historical_sync.HistoricalAcquisitionRetired):
-        historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    mock_api_fb.side_effect = api_football.APIFootballQuotaExhaustedError("Quota exhausted")
+    mock_fd.return_value = {
+        "matches": [
+            {
+                "id": 1001,
+                "utcDate": "2024-08-17T14:00:00Z",
+                "status": "FINISHED",
+                "competition": {"name": "Premier League", "code": "PL"},
+                "season": {"startDate": "2024-08-01"},
+                "homeTeam": {"id": 10, "name": "Arsenal FC", "shortName": "Arsenal"},
+                "awayTeam": {"id": 20, "name": "Chelsea FC", "shortName": "Chelsea"},
+                "score": {"fullTime": {"home": 2, "away": 1}},
+            }
+        ],
+        "metadata": {"count": 1, "played": 1, "is_partial": True},
+    }
 
-    # Retired acquisition rejects before touching any provider.
-    assert mock_api_fb.call_count == 0
-    assert mock_fd.call_count == 0
+    report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
-
+    assert report["status"] == "INCOMPLETE"
+    assert report["acquisition_complete"] is False
 
 
 def test_premier_league_2023_24_structural_coverage_passes(tmp_path, monkeypatch):
@@ -355,14 +368,26 @@ def test_sofascore_fallback_error_reporting_captured(mock_api_fb, mock_fd, mock_
 def test_E_soccerdata_no_completeness_metadata_incomplete(mock_api_fb, mock_fd, mock_sd):
     import historical_sync
 
-    with pytest.raises(historical_sync.HistoricalAcquisitionRetired):
-        historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+    mock_fd.side_effect = football_data_api.FootballDataAPIError("Secondary error")
+    mock_sd.return_value = (
+        "SOURCE_AVAILABLE",
+        [
+            {
+                "fixture": {"id": 900101, "date": "2024-08-17T14:00:00Z", "status": {"short": "FT"}},
+                "league": {"id": 39, "season": 2024, "name": "Premier League"},
+                "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 2, "name": "Chelsea"}},
+                "goals": {"home": 1, "away": 0},
+                "provider_provenance": {"provider": "soccerdata", "provider_type": "tertiary"},
+            }
+        ],
+        {"status": "SOURCE_AVAILABLE", "count": 1},  # No is_complete metadata
+    )
 
-    # Retired acquisition rejects before touching any provider.
-    assert mock_api_fb.call_count == 0
-    assert mock_fd.call_count == 0
+    report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
-
+    assert report["status"] == "INCOMPLETE"
+    assert report["acquisition_complete"] is False
 
 
 # Test F — SoccerData with explicit trustworthy completeness metadata -> COMPLETE
@@ -374,18 +399,31 @@ def test_E_soccerdata_no_completeness_metadata_incomplete(mock_api_fb, mock_fd, 
 def test_F_soccerdata_with_complete_metadata_complete(mock_api_fb, mock_fd, mock_sd, mock_fd_teams, mock_csv):
     import historical_sync
 
-    with pytest.raises(historical_sync.HistoricalAcquisitionRetired):
-        historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    mock_api_fb.side_effect = api_football.APIFootballError("Primary error")
+    mock_fd.side_effect = football_data_api.FootballDataAPIError("Secondary error")
+    mock_fd_teams.return_value = {"teams": [{"id": tid, "name": f"Team {tid}"} for tid in range(1, 21)]}
+    teams = list(range(1, 21))
+    pairings = [(h, a) for h in teams for a in teams if h != a]
+    sd_fixtures = [
+        {
+            "fixture": {"id": 900000 + i, "date": "2024-08-17T14:00:00Z", "status": {"short": "FT"}},
+            "league": {"id": 39, "season": 2024, "name": "Premier League"},
+            "teams": {"home": {"id": h_id, "name": f"Team {h_id}"}, "away": {"id": a_id, "name": f"Team {a_id}"}},
+            "goals": {"home": 1, "away": 0},
+            "provider_provenance": {"provider": "soccerdata", "provider_type": "tertiary"},
+        }
+        for i, (h_id, a_id) in enumerate(pairings)
+    ]
+    mock_sd.return_value = (
+        "SOURCE_AVAILABLE",
+        sd_fixtures,
+        {"status": "SOURCE_AVAILABLE", "count": 380, "is_complete": True},
+    )
 
-    # Retired acquisition rejects before touching any provider.
-    assert mock_api_fb.call_count == 0
-    assert mock_fd.call_count == 0
+    report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
-    # Read-only verification of already-persisted datasets stays available.
-    summary = historical_sync.verify_persisted_historical_datasets(league_id=39, seasons=[2024])
-    assert isinstance(summary, dict)
-
-
+    assert report["status"] == "COMPLETE"
+    assert report["acquisition_complete"] is True
 
 
 # Test G — API quota exhaustion -> INCOMPLETE and NO retry
@@ -498,15 +536,30 @@ def test_provider_execution_order_primary_before_secondary():
 def test_J_arbitrary_counts_alone_cannot_cause_complete(mock_api_fb, mock_fd, arbitrary_count):
     import historical_sync
 
-    assert arbitrary_count >= 1
-    with pytest.raises(historical_sync.HistoricalAcquisitionRetired):
-        historical_sync.sync_historical_fixtures(league_id=39, season=2024)
+    mock_api_fb.side_effect = api_football.APIFootballQuotaExhaustedError("Quota exhausted")
+    matches = [
+        {
+            "id": 3000 + i,
+            "utcDate": "2024-08-17T14:00:00Z",
+            "status": "FINISHED",
+            "competition": {"name": "Premier League", "code": "PL"},
+            "season": {"startDate": "2024-08-01"},
+            "homeTeam": {"id": (i % 20) + 1, "name": f"Team {(i % 20) + 1}"},
+            "awayTeam": {"id": ((i + 1) % 20) + 1, "name": f"Team {((i + 1) % 20) + 1}"},
+            "score": {"fullTime": {"home": 1, "away": 0}},
+        }
+        for i in range(arbitrary_count)
+    ]
+    # Response WITH NO TRUSTWORTHY COMPLETENESS METADATA (missing date range or count mismatch)
+    mock_fd.return_value = {
+        "matches": matches,
+        "metadata": {"count": None, "played": None},  # No complete metadata!
+    }
 
-    # No count, however large, can be mistaken for a completed acquisition.
-    assert mock_api_fb.call_count == 0
-    assert mock_fd.call_count == 0
+    report = historical_sync.sync_historical_fixtures(league_id=39, season=2024)
 
-
+    assert report["status"] == "INCOMPLETE"
+    assert report["acquisition_complete"] is False
 
 
 def test_direct_csv_roster_verification_scenarios(tmp_path, monkeypatch):

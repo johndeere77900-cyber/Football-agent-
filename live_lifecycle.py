@@ -399,93 +399,134 @@ def _accept_football(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return accepted
 
 
+def _record_discovery_events(sport: str, date_str: str, outcome: Dict[str, Any]) -> None:
+    """Persist every provider attempt, merge, conflict and unresolved identity."""
+    for attempt in outcome.get("attempts", []):
+        provider = attempt.get("provider")
+        if attempt.get("outcome") == "not_eligible" or not provider:
+            continue
+        key = f"discover|{sport}|{date_str}|{provider}"
+        if attempt.get("outcome") == "failure":
+            lstore.record_event(
+                "provider_failed",
+                sport=sport,
+                provider=provider,
+                outcome=attempt.get("failure_category"),
+                detail=attempt,
+                event_key=key + "|failed",
+            )
+            continue
+        lstore.record_event(
+            "provider_queried",
+            sport=sport,
+            provider=provider,
+            outcome=attempt.get("outcome"),
+            detail=attempt,
+            event_key=key,
+        )
+        if attempt.get("outcome") == "empty":
+            lstore.record_event(
+                "provider_no_matching_fixture",
+                sport=sport,
+                provider=provider,
+                detail={"date": date_str, "empty_is_not_proof": True},
+                event_key=key + "|empty",
+            )
+    for fixture in outcome.get("fixtures", []):
+        fixture_id = (fixture.get("fixture") or {}).get("id") or fixture.get("id")
+        if fixture.get("match_status") == "merged":
+            lstore.record_event(
+                "provider_observation_merged",
+                sport=sport,
+                provider=(fixture.get("provider_provenance") or {}).get("provider"),
+                outcome="merged",
+                detail={
+                    "fixture_id": str(fixture_id),
+                    "date": date_str,
+                    "providers": fixture.get("merged_providers"),
+                    "provider_fixture_ids": fixture.get("provider_fixture_ids"),
+                    "field_provenance": fixture.get("field_provenance"),
+                },
+                event_key=f"merge|{sport}|{date_str}|{fixture_id}",
+            )
+        for conflict in fixture.get("conflicts", []):
+            lstore.record_event(
+                "provider_conflict_detected",
+                sport=sport,
+                provider=(fixture.get("provider_provenance") or {}).get("provider"),
+                outcome=conflict.get("field"),
+                detail={"fixture_id": str(fixture_id), "date": date_str, **conflict},
+                event_key=f"conflict|{sport}|{fixture_id}|{conflict.get('field')}",
+            )
+    for record in outcome.get("unmatched", []):
+        native = (record.get("fixture") or {}).get("id") or record.get("id")
+        lstore.record_event(
+            "identity_unresolved",
+            sport=sport,
+            provider=(record.get("provider_provenance") or {}).get("provider"),
+            outcome=record.get("identity_unresolved_reason"),
+            detail={"fixture_id": str(native), "date": date_str, "candidates": record.get("identity_candidates")},
+            event_key=f"unresolved|{sport}|{date_str}|{native}",
+        )
+
+
 def _football_fixtures_for_date(date_str: str) -> Dict[str, Any]:
-    """Discover one day, preferring API-Football and falling back to keyless feeds.
+    """Discover one day from every eligible provider and merge at fixture level.
 
-    Fallbacks are only consulted when the primary feed returns nothing for the
-    day, so one real fixture is not tracked twice under two providers.
+    No provider is skipped because another one returned fixtures: a provider
+    returning some fixtures must not prevent another eligible provider from
+    being queried. Unambiguous matches are merged with field-level provenance;
+    ambiguous or conflicting records stay separate with an explicit reason.
     """
-    errors: List[str] = []
-    available = _providers("football", "discovery", "fixtures", None)
+    import fixture_merger
 
-    if "api_football" in available:
-        try:
-            from data_resolver import DataResolver
-
-            fixtures = _items(DataResolver().get_fixtures_for_date(date_str))
-        except Exception as exc:
-            provider_registry.record_health("api_football", ok=False, failure_category=type(exc).__name__)
-            errors.append(f"api_football: {type(exc).__name__}: {exc}"[:200])
-        else:
-            provider_registry.record_health("api_football", ok=True)
-            accepted = _accept_football(fixtures)
-            if accepted:
-                return {"fixtures": accepted, "providers_used": ["api_football"], "errors": errors}
-
-    for provider, loader in (
-        ("fotmob", live_providers.fotmob_fixtures),
-        ("espn_soccer", live_providers.espn_soccer_fixtures),
-    ):
-        if provider not in available:
-            continue
-        try:
-            accepted = _accept_football(loader(date_str))
-        except Exception as exc:
-            provider_registry.record_health(provider, ok=False, failure_category=type(exc).__name__)
-            errors.append(f"{provider}: {type(exc).__name__}: {exc}"[:200])
-            continue
-        provider_registry.record_health(provider, ok=True)
-        if accepted:
-            return {"fixtures": accepted, "providers_used": [provider], "errors": errors}
-
-    return {"fixtures": [], "providers_used": [], "errors": errors}
+    outcome = fixture_merger.discover("football", date_str, FOOTBALL_COMPETITIONS)
+    _record_discovery_events("football", date_str, outcome)
+    accepted = _accept_football(outcome["fixtures"])
+    return {
+        "fixtures": accepted,
+        "providers_used": [
+            attempt["provider"]
+            for attempt in outcome["attempts"]
+            if int(attempt.get("count") or 0) > 0
+        ],
+        "errors": outcome["errors"],
+        "attempts": outcome["attempts"],
+        "merged": outcome["merged_count"],
+        "unmatched": outcome["unmatched_count"],
+        "conflicts": outcome["conflicts"],
+    }
 
 
 def _basketball_games_for_date(date_str: str) -> Dict[str, Any]:
-    """Discover one day, preferring ESPN NBA and falling back to API-Basketball.
+    """Discover one day from every eligible basketball provider.
 
-    ESPN is consulted first because it is keyless; API-Basketball remains the
-    credentialed fallback and the only provider whose ids it is ever asked
-    about. A row is only created for the provider that issued its game id.
+    ESPN NBA is keyless and normally the primary source. API-Basketball is a
+    separate credentialed provider: its games are queried independently and
+    its ids are never translated into ESPN ids (or the reverse).
     """
-    errors: List[str] = []
-    providers = _providers("basketball", "discovery", "fixtures", BASKETBALL_COMPETITIONS[0])
+    import fixture_merger
 
-    if "espn_nba" in providers:
-        try:
-            games = live_providers.espn_nba_games(date_str)
-        except Exception as exc:
-            provider_registry.record_health("espn_nba", ok=False, failure_category=type(exc).__name__)
-            errors.append(f"espn_nba: {type(exc).__name__}: {exc}"[:200])
-        else:
-            provider_registry.record_health("espn_nba", ok=True)
-            accepted = [g for g in games if (g.get("league") or {}).get("id") in BASKETBALL_COMPETITIONS]
-            if accepted:
-                return {"games": accepted, "errors": errors, "providers_used": ["espn_nba"]}
-
-    if "api_basketball" not in providers:
-        errors.append("api_basketball: not verified for discovery")
-        return {"games": [], "errors": errors, "providers_used": []}
-
-    import basketball_api
-
-    attempts = (
-        lambda: basketball_api.get_games_by_date(date_str, league_id=BASKETBALL_COMPETITIONS[0]),
-        lambda: basketball_api.get_games_by_date(date_str),
-    )
-    for attempt in attempts:
-        try:
-            games = _items(attempt())
-        except TypeError:
-            continue
-        except Exception as exc:
-            provider_registry.record_health("api_basketball", ok=False, failure_category=type(exc).__name__)
-            errors.append(f"api_basketball: {type(exc).__name__}: {exc}"[:200])
-            return {"games": [], "errors": errors, "providers_used": []}
-        provider_registry.record_health("api_basketball", ok=True)
-        accepted = [g for g in games if (g.get("league") or {}).get("id") in BASKETBALL_COMPETITIONS]
-        return {"games": accepted, "errors": errors, "providers_used": ["api_basketball"]}
-    return {"games": [], "errors": errors, "providers_used": []}
+    outcome = fixture_merger.discover("basketball", date_str, BASKETBALL_COMPETITIONS)
+    _record_discovery_events("basketball", date_str, outcome)
+    accepted = [
+        game
+        for game in outcome["fixtures"]
+        if (game.get("league") or {}).get("id") in BASKETBALL_COMPETITIONS
+    ]
+    return {
+        "games": accepted,
+        "errors": outcome["errors"],
+        "providers_used": [
+            attempt["provider"]
+            for attempt in outcome["attempts"]
+            if int(attempt.get("count") or 0) > 0
+        ],
+        "attempts": outcome["attempts"],
+        "merged": outcome["merged_count"],
+        "unmatched": outcome["unmatched_count"],
+        "conflicts": outcome["conflicts"],
+    }
 
 
 def _football_identity(fixture: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -616,6 +657,37 @@ def _persist_identity(identity: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+def _fixture_native_key(payload: Dict[str, Any], sport: str) -> Optional[str]:
+    if sport == "football":
+        value = (payload.get("fixture") or {}).get("id")
+    else:
+        value = payload.get("id")
+    return str(value) if value not in (None, "") else None
+
+
+def _record_identity_event(row: Dict[str, Any], sport: str, identity: Dict[str, Any]) -> None:
+    """Record the identity outcome for a lifecycle row exactly once per stage."""
+    resolved = bool(row.get("home_team_id") and row.get("away_team_id"))
+    lstore.record_event(
+        "fixture_identity_resolved" if resolved else "identity_unresolved",
+        sport=sport,
+        lifecycle_id=row.get("lifecycle_id"),
+        provider=identity.get("provider"),
+        stage=row.get("stage"),
+        outcome="resolved" if resolved else "canonical_team_identity_missing",
+        detail={
+            "provider_fixture_id": identity.get("provider_fixture_id"),
+            "league_id": identity.get("league_id"),
+            "season": identity.get("season"),
+            "kickoff_at": identity.get("kickoff_at"),
+            "home_team_id": row.get("home_team_id"),
+            "away_team_id": row.get("away_team_id"),
+            "provider_fixture_ids": (identity.get("provider_fixture_ids") or {}),
+        },
+        event_key=f"identity|{row.get('lifecycle_id')}|{row.get('stage')}",
+    )
+
+
 def discover(
     sport: Optional[str] = None,
     horizon_days: int = DISCOVERY_HORIZON_DAYS,
@@ -624,6 +696,10 @@ def discover(
     sports = [sport] if sport in ("football", "basketball") else ["football", "basketball"]
     rows: List[Dict[str, Any]] = []
     identity_failures = 0
+    merged_fixtures = 0
+    unmatched_fixtures = 0
+    provider_conflicts = 0
+    provider_attempts: List[Dict[str, Any]] = []
     errors: List[str] = []
     provider_counts: Dict[str, int] = {}
 
@@ -631,25 +707,53 @@ def discover(
         if "football" in sports:
             football = _football_fixtures_for_date(day)
             errors.extend(football["errors"])
+            for attempt in football.get("attempts") or []:
+                provider_attempts.append({**attempt, "sport": "football", "date": day})
+            merged_fixtures += int(football.get("merged") or 0)
+            unmatched_fixtures += int(football.get("unmatched") or 0)
+            provider_conflicts += len(football.get("conflicts") or [])
             for provider in football["providers_used"]:
                 provider_counts[provider] = provider_counts.get(provider, 0) + 1
             for fixture in football["fixtures"]:
                 identity = _football_identity(fixture)
                 if identity is None:
                     identity_failures += 1
+                    lstore.record_event(
+                        "identity_unresolved",
+                        sport="football",
+                        outcome="missing_fixture_or_league_identity",
+                        detail={"date": day},
+                        event_key=f"identity-unresolved|football|{day}|{_fixture_native_key(fixture, 'football')}",
+                    )
                     continue
-                rows.append(_persist_identity(identity))
+                row = _persist_identity(identity)
+                _record_identity_event(row, "football", identity)
+                rows.append(row)
         if "basketball" in sports:
             basketball = _basketball_games_for_date(day)
             errors.extend(basketball["errors"])
+            for attempt in basketball.get("attempts") or []:
+                provider_attempts.append({**attempt, "sport": "basketball", "date": day})
+            merged_fixtures += int(basketball.get("merged") or 0)
+            unmatched_fixtures += int(basketball.get("unmatched") or 0)
+            provider_conflicts += len(basketball.get("conflicts") or [])
             for provider in basketball["providers_used"]:
                 provider_counts[provider] = provider_counts.get(provider, 0) + 1
             for game in basketball["games"]:
                 identity = _basketball_identity(game)
                 if identity is None:
                     identity_failures += 1
+                    lstore.record_event(
+                        "identity_unresolved",
+                        sport="basketball",
+                        outcome="missing_game_or_league_identity",
+                        detail={"date": day},
+                        event_key=f"identity-unresolved|basketball|{day}|{_fixture_native_key(game, 'basketball')}",
+                    )
                     continue
-                rows.append(_persist_identity(identity))
+                row = _persist_identity(identity)
+                _record_identity_event(row, "basketball", identity)
+                rows.append(row)
 
     unique = {row["lifecycle_id"]: row for row in rows if row}
     return {
@@ -661,6 +765,10 @@ def discover(
         "tracked": sum(1 for row in unique.values() if row.get("stage") == "TRACKED"),
         "unresolved": sum(1 for row in unique.values() if row.get("stage") == "DISCOVERED"),
         "identity_failures": identity_failures,
+        "merged_fixtures": merged_fixtures,
+        "unmatched_fixtures": unmatched_fixtures,
+        "provider_conflicts": provider_conflicts,
+        "provider_attempts": provider_attempts,
         "provider_counts": provider_counts,
         "errors": errors[:10],
     }
@@ -728,8 +836,36 @@ def _prematch_football(row: Dict[str, Any]) -> Dict[str, Any]:
     if row.get("stage") == "TRACKED":
         row = _advance(row, "PREMATCH_DATA_READY")
     row = _advance(row, "PREMATCH_PREDICTION_CREATED")
+    lstore.record_event(
+        "prediction_generated",
+        sport="football",
+        lifecycle_id=row["lifecycle_id"],
+        provider=provider,
+        stage=row.get("stage"),
+        outcome="PRE_MATCH",
+        detail={
+            "provider_fixture_id": str(fixture_id),
+            "kickoff_at": kickoff,
+            "data_cutoff_timestamp": prediction.get("data_cutoff_timestamp"),
+            "model_inputs_present": bool(prediction.get("feature_snapshot")),
+            "feature_provenance": (prediction.get("provenance") or {}).get("provider_statistics"),
+        },
+        event_key=f"prediction|{row['lifecycle_id']}|PRE_MATCH|{kickoff}",
+    )
     timestamp = _now()
     key = _snapshot_key("football", fixture_id, "PRE_MATCH", kickoff)
+    # predict_fixture() returns the features it actually used as
+    # ``feature_snapshot`` (plus ``provenance``); it does not build a
+    # ``model_inputs`` envelope. Persist that real payload rather than None so
+    # the immutable snapshot proves which features reached the model.
+    feature_snapshot = prediction.get("feature_snapshot")
+    model_inputs = {
+        "features": feature_snapshot,
+        "feature_provenance": prediction.get("provenance"),
+        "provider": row.get("provider"),
+        "provider_fixture_id": str(fixture_id),
+        "data_cutoff_timestamp": prediction.get("data_cutoff_timestamp") or timestamp,
+    }
     row = _persist_cycle_key(row, key)
 
     snapshot_id = storage.save_prediction_snapshot(
@@ -746,14 +882,24 @@ def _prematch_football(row: Dict[str, Any]) -> Dict[str, Any]:
         prediction_context="PRE_MATCH",
         data_cutoff_timestamp=prediction.get("data_cutoff_timestamp") or timestamp,
         markets=prediction.get("markets"),
-        features=prediction.get("model_inputs", {}).get("features") if isinstance(prediction.get("model_inputs"), dict) else None,
+        features=feature_snapshot,
         confidence=prediction.get("confidence"),
         prediction_record=prediction,
         idempotency_key=key,
         lifecycle_id=row["lifecycle_id"],
-        model_inputs=prediction.get("model_inputs"),
+        model_inputs=model_inputs,
     )
     row = _advance(row, "PREMATCH_SNAPSHOT_SAVED")
+    lstore.record_event(
+        "snapshot_persisted",
+        sport="football",
+        lifecycle_id=row["lifecycle_id"],
+        provider=provider,
+        stage=row.get("stage"),
+        outcome="PRE_MATCH",
+        detail={"snapshot_id": snapshot_id, "idempotency_key": key},
+        event_key=f"snapshot|{row['lifecycle_id']}|PRE_MATCH|{kickoff}",
+    )
     return {**row, "snapshot_id": snapshot_id}
 
 
@@ -821,6 +967,25 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
     if row.get("stage") == "TRACKED":
         row = _advance(row, "PREMATCH_DATA_READY")
     row = _advance(row, "PREMATCH_PREDICTION_CREATED")
+    lstore.record_event(
+        "prediction_generated",
+        sport="basketball",
+        lifecycle_id=row["lifecycle_id"],
+        provider=provider,
+        stage=row.get("stage"),
+        outcome="PRE_MATCH",
+        detail={
+            "provider_fixture_id": str(game_id),
+            "kickoff_at": kickoff,
+            "data_cutoff_timestamp": prediction.get("data_cutoff_timestamp"),
+            "model_inputs_present": bool(prediction.get("model_inputs")),
+            "sample_sizes": {
+                "home": (home_stats or {}).get("matches") or (home_stats or {}).get("games_played"),
+                "away": (away_stats or {}).get("matches") or (away_stats or {}).get("games_played"),
+            },
+        },
+        event_key=f"prediction|{row['lifecycle_id']}|PRE_MATCH|{kickoff}",
+    )
     key = _snapshot_key("basketball", game_id, "PRE_MATCH", kickoff)
     row = _persist_cycle_key(row, key)
 
@@ -850,6 +1015,16 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
         model_inputs=prediction.get("model_inputs"),
     )
     row = _advance(row, "PREMATCH_SNAPSHOT_SAVED")
+    lstore.record_event(
+        "snapshot_persisted",
+        sport="basketball",
+        lifecycle_id=row["lifecycle_id"],
+        provider=provider,
+        stage=row.get("stage"),
+        outcome="PRE_MATCH",
+        detail={"snapshot_id": snapshot_id, "idempotency_key": key},
+        event_key=f"snapshot|{row['lifecycle_id']}|PRE_MATCH|{kickoff}",
+    )
     return {**row, "snapshot_id": snapshot_id}
 
 
@@ -871,6 +1046,17 @@ def prematch(limit: Optional[int] = None) -> Dict[str, Any]:
             processed += 1
             if (result or {}).get("stage") == "PREMATCH_SNAPSHOT_SAVED":
                 saved += 1
+            else:
+                lstore.record_event(
+                    "prediction_skipped",
+                    sport=row.get("sport"),
+                    lifecycle_id=row.get("lifecycle_id"),
+                    provider=row.get("provider"),
+                    stage=(result or {}).get("stage") or row.get("stage"),
+                    outcome=str((result or {}).get("error_state") or "prediction_not_created"),
+                    detail={"error_class": (result or {}).get("error_class")},
+                    event_key=f"skip|{row.get('lifecycle_id')}|{row.get('stage')}",
+                )
         except LifecycleTransitionError as exc:
             _fail(row, exc, "transition_error")
         except Exception as exc:
@@ -1011,8 +1197,27 @@ def monitor(limit: Optional[int] = None) -> Dict[str, Any]:
                 observation_key=f"{row['lifecycle_id']}|live|{stamp[:16]}",
             )
             observed += 1
+            lstore.record_event(
+                "live_observation_received",
+                sport=sport,
+                lifecycle_id=row["lifecycle_id"],
+                provider=row.get("provider") or live_provider,
+                stage=row.get("stage"),
+                outcome=status,
+                detail={"fields": sorted(fields.keys()), "observation_timestamp": stamp, "retrieved_at": payload.get("retrieved_at")},
+                event_key=f"live|{row['lifecycle_id']}|{stamp[:16]}",
+            )
             if row.get("stage") == "PREMATCH_SNAPSHOT_SAVED":
                 row = _advance(row, "LIVE", provider_status=status)
+                lstore.record_event(
+                    "live_monitoring_started",
+                    sport=sport,
+                    lifecycle_id=row["lifecycle_id"],
+                    provider=row.get("provider") or live_provider,
+                    stage="LIVE",
+                    outcome=status,
+                    event_key=f"live-start|{row['lifecycle_id']}",
+                )
             row = _advance(row, "INPLAY_OBSERVATION_RECORDED", provider_status=status)
             try:
                 if _inplay_snapshot(row, payload) is not None:
@@ -1027,6 +1232,15 @@ def monitor(limit: Optional[int] = None) -> Dict[str, Any]:
         if kickoff_dt and now - kickoff_dt > dt.timedelta(hours=3):
             try:
                 _advance(row, "FINAL_RESULT_PENDING")
+                lstore.record_event(
+                    "live_monitoring_paused",
+                    sport=sport,
+                    lifecycle_id=row["lifecycle_id"],
+                    provider=row.get("provider"),
+                    stage="FINAL_RESULT_PENDING",
+                    outcome="awaiting_final_result",
+                    event_key=f"live-pause|{row['lifecycle_id']}",
+                )
             except LifecycleTransitionError:
                 pass
 
@@ -1193,8 +1407,19 @@ def _settle_basketball(market: str, selection: str, graded: Dict[str, Any], line
     return None
 
 
-def _grade_row(row: Dict[str, Any], payload: Dict[str, Any]) -> int:
-    """Grade every eligible snapshot once from the verified result payload."""
+def _grade_row(
+    row: Dict[str, Any],
+    payload: Dict[str, Any],
+    *,
+    key_suffix: str = "",
+    provenance_extra: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Grade every eligible snapshot once from the verified result payload.
+
+    ``key_suffix`` is used only by a controlled replay: it creates a new,
+    clearly-labelled grading row while leaving the original ledger entry and
+    every prediction snapshot untouched.
+    """
     import storage
 
     graded = (
@@ -1217,6 +1442,8 @@ def _grade_row(row: Dict[str, Any], payload: Dict[str, Any]) -> int:
             if selection is None:
                 continue
             key = f"{snapshot['id']}:{market}:{GRADING_RULES_VERSION}"
+            if key_suffix:
+                key = f"{key}:{key_suffix}"
             if lstore.get_grading(key) is not None:
                 continue
             won = (
@@ -1247,6 +1474,7 @@ def _grade_row(row: Dict[str, Any], payload: Dict[str, Any]) -> int:
                     "result_provenance": {
                         "provider": row.get("provider"),
                         "status": get_status_short(payload, sport=row["sport"]),
+                        **(provenance_extra or {}),
                     },
                     "grading_key": key,
                 }
@@ -1292,6 +1520,16 @@ def verify_results(limit: Optional[int] = None) -> Dict[str, Any]:
                     _fail(row, RuntimeError("final result provider unavailable"))
                     retrying += 1
                     continue
+                lstore.record_event(
+                    "result_retrieved",
+                    sport=row["sport"],
+                    lifecycle_id=row["lifecycle_id"],
+                    provider=provider,
+                    stage=row.get("stage"),
+                    outcome=get_status_short(payload, sport=row["sport"]),
+                    detail={"provider_fixture_id": str(row.get("provider_fixture_id"))},
+                    event_key=f"result-retrieved|{row['lifecycle_id']}|{str(payload.get('retrieved_at') or _now())[:16]}",
+                )
                 ok, evidence = (
                     _verify_football(row, payload)
                     if row["sport"] == "football"
@@ -1304,10 +1542,30 @@ def verify_results(limit: Optional[int] = None) -> Dict[str, Any]:
                         error_state=evidence.get("reason"),
                         error_class="result_not_verified",
                     )
+                    lstore.record_event(
+                        "result_conflict_detected",
+                        sport=row["sport"],
+                        lifecycle_id=row["lifecycle_id"],
+                        provider=provider,
+                        stage=row.get("stage"),
+                        outcome=str(evidence.get("reason")),
+                        detail=evidence,
+                        event_key=f"result-unverified|{row['lifecycle_id']}|{evidence.get('status')}|{evidence.get('reason')}",
+                    )
                     retrying += 1
                     continue
                 row = _record_verification(row, payload, evidence)
                 verified += 1
+                lstore.record_event(
+                    "result_verified",
+                    sport=row["sport"],
+                    lifecycle_id=row["lifecycle_id"],
+                    provider=provider,
+                    stage=row.get("stage"),
+                    outcome=evidence.get("status"),
+                    detail=evidence,
+                    event_key=f"result-verified|{row['lifecycle_id']}|{evidence.get('status')}|{evidence.get('home_score')}-{evidence.get('away_score')}",
+                )
 
             observation = lstore.get_latest_final_observation(row["lifecycle_id"])
             if not observation or not isinstance(observation.get("payload"), dict):
@@ -1322,6 +1580,15 @@ def verify_results(limit: Optional[int] = None) -> Dict[str, Any]:
                 _grade_row(row, payload)
                 row = _advance(row, "PREDICTION_GRADED")
                 graded_rows += 1
+                lstore.record_event(
+                    "prediction_graded",
+                    sport=row["sport"],
+                    lifecycle_id=row["lifecycle_id"],
+                    provider=observation.get("provider"),
+                    stage="PREDICTION_GRADED",
+                    outcome="graded",
+                    event_key=f"graded|{row['lifecycle_id']}",
+                )
 
             save = storage.save_verified_live_result(
                 lifecycle_id=row["lifecycle_id"],
@@ -1383,14 +1650,45 @@ def learn(limit: Optional[int] = None) -> Dict[str, Any]:
         try:
             if row.get("stage") == "HISTORICAL_RECORD_UPDATED":
                 row = _advance(row, "MODEL_EVALUATED")
+            lstore.record_event(
+                "learning_evaluation_completed",
+                sport=row.get("sport"),
+                lifecycle_id=row["lifecycle_id"],
+                stage=row.get("stage"),
+                outcome=status or "unknown",
+                detail={
+                    "sample_size": outcome.get("sample_size"),
+                    "metrics": outcome.get("metrics"),
+                    "calibration_version": outcome.get("calibration_version"),
+                },
+                event_key=f"learning-eval|{row['lifecycle_id']}|{outcome.get('calibration_version') or status}",
+            )
             if status in ("promoted", "candidate_kept"):
                 _advance(row, "LEARNING_UPDATE_COMPLETED", error_state=None)
                 completed += 1
+                lstore.record_event(
+                    "learning_update_accepted",
+                    sport=row.get("sport"),
+                    lifecycle_id=row["lifecycle_id"],
+                    stage="LEARNING_UPDATE_COMPLETED",
+                    outcome=status,
+                    detail={"calibration_version": outcome.get("calibration_version")},
+                    event_key=f"learning-accepted|{row['lifecycle_id']}|{outcome.get('calibration_version') or status}",
+                )
             else:
                 lstore.update_lifecycle(
                     row["lifecycle_id"],
                     error_state=str(outcome.get("reason") or status or "learning_not_completed")[:200],
                     error_class="learning_not_completed",
+                )
+                lstore.record_event(
+                    "learning_update_rejected",
+                    sport=row.get("sport"),
+                    lifecycle_id=row["lifecycle_id"],
+                    stage=row.get("stage"),
+                    outcome=str(status or "learning_not_completed"),
+                    detail={"reason": outcome.get("reason")},
+                    event_key=f"learning-rejected|{row['lifecycle_id']}|{status}",
                 )
         except LifecycleTransitionError as exc:
             _fail(row, exc, "transition_error")

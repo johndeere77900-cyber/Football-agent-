@@ -90,6 +90,8 @@ def _canonical_resolver(monkeypatch):
 
 
 def test_finished_without_live_window_verifies_grades_persists_and_recovers(monkeypatch):
+    # A credentialed provider is only routable when its secret is present.
+    monkeypatch.setenv("API_FOOTBALL_KEY", "test-key")
     row = _seed(stage="PREMATCH_SNAPSHOT_SAVED", kickoff_at=_iso(-4))
     _save_snapshot(row)
     payload = _finished_payload()
@@ -214,7 +216,9 @@ def test_prediction_failure_reports_lifecycle_diagnostics(monkeypatch):
         canonical_fixture_key="api_football:9003",
         provider_fixture_id="9003",
         stage="TRACKED",
-        kickoff_at=_iso(4),
+        # Diagnostics scope by the fixture's UTC calendar date; a fixed +4h
+        # offset crosses midnight late in the day and made this test flaky.
+        kickoff_at=_iso(0),
     )
     lstore.update_lifecycle(
         "football:api_football:9003",
@@ -308,7 +312,7 @@ def test_provider_native_ids_are_namespaced(monkeypatch):
     assert second["canonical_fixture_key"] == "fotmob:777"
 
 
-def test_discovery_falls_back_only_when_primary_is_empty(monkeypatch):
+def test_discovery_queries_every_eligible_provider_and_merges(monkeypatch):
     fallback = {
         "fixture": {"id": 6112357, "date": _iso(5), "status": {"short": "NS"}},
         "league": {"id": 39, "season": 2026, "name": "Premier League"},
@@ -317,15 +321,27 @@ def test_discovery_falls_back_only_when_primary_is_empty(monkeypatch):
         "provider_provenance": {"provider": "fotmob", "provider_fixture_id": "6112357"},
     }
     monkeypatch.setattr(live_providers, "fotmob_fixtures", lambda date_str: [fallback])
-    monkeypatch.setattr(live_providers, "espn_soccer_fixtures", lambda date_str: [])
+    espn = {
+        "fixture": {"id": 401879999, "date": fallback["fixture"]["date"], "status": {"short": "NS"}},
+        "league": fallback["league"],
+        "teams": {"home": {"id": 357, "name": "Arsenal"}, "away": {"id": 388, "name": "Chelsea"}},
+        "goals": {"home": 0, "away": 0},
+        "provider_provenance": {"provider": "espn_soccer", "provider_fixture_id": "401879999"},
+    }
+    monkeypatch.setattr(live_providers, "espn_soccer_fixtures", lambda date_str: [espn])
     _canonical_resolver(monkeypatch)
 
     from data_resolver import DataResolver
 
     monkeypatch.setattr(DataResolver, "get_fixtures_for_date", lambda self, date_str, league_id=None: ([], {}))
     result = live_lifecycle.discover("football", horizon_days=0)
-    assert result["provider_counts"] == {"fotmob": 1}
+    # Both keyless providers were queried and their observations merged into a
+    # single canonical fixture; neither provider was skipped.
+    attempted = {a["provider"] for a in result["provider_attempts"]}
+    assert {"espn_soccer", "fotmob"} <= attempted
+    assert result["provider_counts"] == {"fotmob": 1, "espn_soccer": 1}
+    assert result["merged_fixtures"] == 1
     rows = lstore.list_lifecycles(sport="football")
     assert len(rows) == 1
-    assert rows[0]["provider"] == "fotmob"
-    assert rows[0]["canonical_fixture_key"] == "fotmob:6112357"
+    assert rows[0]["provider"] in ("fotmob", "espn_soccer")
+    assert rows[0]["canonical_fixture_key"] in ("fotmob:6112357", "espn_soccer:401879999")

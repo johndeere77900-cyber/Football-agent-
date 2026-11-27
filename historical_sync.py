@@ -541,20 +541,16 @@ def _football_statistical_field_coverage(fixtures, enrichments, fixture_ids):
 
 
 class HistoricalAcquisitionRetired(RuntimeError):
-    """Raised when an agent-initiated historical acquisition is attempted."""
+    """Deprecated compatibility error type.
 
-    MESSAGE = (
-        "Historical acquisition is retired. New completed matches may only be added "
-        "through the verified live-match lifecycle. Historical reads, validation, "
-        "reconciliation reports and dataset verification remain available."
-    )
+    Historical acquisition is no longer retired: it is an authorized, manual,
+    additive operation. This type is retained so external importers do not break.
+    """
+
+    MESSAGE = "Historical acquisition is retired."
 
     def __init__(self, operation: str = "historical acquisition") -> None:
         super().__init__(f"{self.MESSAGE} (operation: {operation})")
-
-
-def _retired(operation: str):
-    raise HistoricalAcquisitionRetired(operation)
 
 
 def sync_historical_fixtures(
@@ -568,9 +564,9 @@ def sync_historical_fixtures(
     Acquire historical fixtures (and optional enrichment) for a league/season
     and save them into persistent storage.
 
-    Retired: agent-initiated acquisition may not create historical records.
+    Manual, additive and idempotent: existing records are preserved and a
+    COMPLETE dataset is read first rather than re-fetched.
     """
-    _retired("sync_historical_fixtures")
     import time
     t_sync_start = time.perf_counter()
     total_db_write_duration = 0.0
@@ -2046,7 +2042,6 @@ def sync_historical_basketball_games(
     refresh: bool = False,
     historical_budget: int = None,
 ) -> dict:
-    _retired("sync_historical_basketball_games")
     """
     Acquire historical basketball games for a league/season and save them into persistent storage.
     """
@@ -3943,7 +3938,6 @@ def run_historical_queue(
     with_enrichment: bool = False,
     refresh: bool = False,
 ) -> dict:
-    _retired("run_historical_queue")
     """
     Run historical data acquisition queue sequentially across target 5 seasons
     and configured leagues. Checks coverage before acquiring missing data.
