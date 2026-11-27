@@ -124,36 +124,52 @@ def test_basketball_date_query_credit_efficiency_and_params(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_next_n_spans_multiple_dates_and_horizon_reporting(monkeypatch):
-    """Prove 'next N' collects fixtures across dates and reports horizon status when exhausted."""
-    today = datetime.datetime.now(datetime.timezone.utc).date()
+    """'next N' aggregates persisted lifecycle rows across dates and reports the horizon."""
+    import live_lifecycle
+
+    today = datetime.datetime.now(datetime.timezone.utc)
     d1 = (today + datetime.timedelta(days=1)).isoformat()
     d2 = (today + datetime.timedelta(days=2)).isoformat()
 
-    f_d1 = [{"fixture": {"id": 1, "date": f"{d1}T15:00:00+00:00", "status": {"short": "NS"}}, "league": {"id": 39, "name": "Premier League"}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Chelsea"}}}]
-    f_d2 = [{"fixture": {"id": 2, "date": f"{d2}T17:00:00+00:00", "status": {"short": "NS"}}, "league": {"id": 39, "name": "Premier League"}, "teams": {"home": {"name": "Liverpool"}, "away": {"name": "Everton"}}}]
+    rows = [
+        {
+            "lifecycle_id": "football:api_football:1",
+            "sport": "football",
+            "provider": "api_football",
+            "provider_fixture_id": "1",
+            "league_id": 39,
+            "season": 2026,
+            "home_team_id": "arsenal",
+            "away_team_id": "chelsea",
+            "kickoff_at": d1,
+            "stage": "TRACKED",
+            "provider_status": "NS",
+        },
+        {
+            "lifecycle_id": "football:api_football:2",
+            "sport": "football",
+            "provider": "api_football",
+            "provider_fixture_id": "2",
+            "league_id": 39,
+            "season": 2026,
+            "home_team_id": "liverpool",
+            "away_team_id": "everton",
+            "kickoff_at": d2,
+            "stage": "TRACKED",
+            "provider_status": "NS",
+        },
+    ]
+    monkeypatch.setattr(live_lifecycle, "list_tracked", lambda *a, **k: rows)
+    monkeypatch.setattr(telegram_bot, "_lifecycle_snapshot", lambda row: None)
 
-    def mock_get_by_date(date_str, league_id=None):
-        if date_str == d1:
-            return f_d1
-        if date_str == d2:
-            return f_d2
-        return []
-
-    monkeypatch.setattr(api_football, "get_fixtures_by_date", mock_get_by_date)
-
-    # Ask for 20 fixtures when only 2 exist in 14-day horizon
+    # Ask for 20 fixtures when only 2 are tracked in the 14-day horizon
     params = telegram_bot.parse_operation_parameters("fixtures", "Give me the next 20 Premier League fixtures")
     res = telegram_bot.handle_fixtures_op(params)
 
     assert "Next 20 Football Fixtures" in res
     assert "Arsenal vs Chelsea" in res
     assert "Liverpool vs Everton" in res
-    assert "14-day safety horizon" in res  # Reports horizon boundary!
-
-
-# ---------------------------------------------------------------------------
-# 4. Game Details Lookup Order (Upcoming > Historical; Both teams required)
-# ---------------------------------------------------------------------------
+    assert "14-day safety horizon" in res
 
 def test_game_details_historical_requires_both_teams(monkeypatch):
     """Prove historical fallback details lookup requires BOTH teams when two teams are specified."""
@@ -217,11 +233,8 @@ def test_historical_queue_explicit_seasons_are_retired(monkeypatch):
 
 def test_prediction_failure_stage_classification(monkeypatch):
     """
-    Prove:
-    1. season_team_stats failure is classified as season_team_stats.
-    2. recent_form failure is classified as recent_form.
-    3. Generic exception is classified as exception.
-    4. Zero predictions response includes structured diagnostics without exposing secrets.
+    Prove the manual research helper still classifies every failure stage, and
+    that provider error text containing credentials is redacted when rendered.
     """
     today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
@@ -243,22 +256,21 @@ def test_prediction_failure_stage_classification(monkeypatch):
 
     monkeypatch.setattr(telegram_bot.agent, "predict_fixture", mock_predict)
 
-    params = telegram_bot.parse_operation_parameters("predict", "predict Premier League today")
-    res = telegram_bot.handle_predict_op(params)
+    results = telegram_bot.research_football(today_str, quantity=5)
+    diag = telegram_bot.research_football.last_diagnostics
 
-    assert "No football predictions could be produced" in res
-    assert "Diagnostic Breakdown:" in res
-    assert "Season Team Stats: 1" in res
-    assert "Recent Form: 1" in res
-    assert "Exception: 1" in res
-    # Secrets MUST be redacted
-    assert "secret_12345" not in res
-    assert "REDACTED" in res or "Generic network exception" in res
+    assert results == []
+    assert diag["fixtures_found"] == 3
+    assert diag["prediction_attempts"] == 3
+    assert diag["failure_counts_by_stage"]["season_team_stats"] == 1
+    assert diag["failure_counts_by_stage"]["recent_form"] == 1
+    assert diag["failure_counts_by_stage"]["exception"] == 1
 
-
-# ---------------------------------------------------------------------------
-# 7. Basketball Season Helper
-# ---------------------------------------------------------------------------
+    # Provider error text is retained for diagnosis but redacted when rendered.
+    raw = str(diag["per_fixture_reasons"])
+    assert "secret_12345" in raw
+    assert "secret_12345" not in telegram_bot._redact(raw)
+    assert "REDACTED" in telegram_bot._redact(raw)
 
 def test_basketball_season_for_date():
     """Verify API-Basketball 4-digit season year calculation."""
@@ -455,22 +467,37 @@ def test_unknown_telegram_operation_does_not_trigger_predictions():
         assert mock_predict_op.call_count == 0  # ZERO prediction calls!
 
 
-def test_telegram_no_data_resolver_bypass(monkeypatch):
+def test_telegram_fixture_list_reads_lifecycle_records(monkeypatch):
     """
-    Prove Telegram DataResolver Integration:
-    get_tracked_fixtures_for_date exclusively uses DataResolver.get_fixtures_for_date
-    and DOES NOT fall back to direct api_football calls.
+    Prove the Telegram listing reads persisted lifecycle records and never
+    performs or relabels a provider query as "tracked".
     """
-    mock_get_fixtures = MagicMock()
+    import api_football
+    import live_lifecycle
 
-    with patch("data_resolver.DataResolver.get_fixtures_for_date", return_value=([], {"resolver_status": "NO_DATA"})) as mock_resolver_get, \
-         patch("api_football.get_fixtures_by_date", mock_get_fixtures):
+    row = {
+        "lifecycle_id": "football:api_football:123",
+        "sport": "football",
+        "provider": "api_football",
+        "provider_fixture_id": "123",
+        "league_id": 39,
+        "season": 2026,
+        "home_team_id": "arsenal",
+        "away_team_id": "chelsea",
+        "kickoff_at": "2026-04-01T15:00:00+00:00",
+        "stage": "TRACKED",
+        "provider_status": "NS",
+    }
+    monkeypatch.setattr(live_lifecycle, "list_tracked", lambda *a, **k: [row])
+    monkeypatch.setattr(telegram_bot, "_lifecycle_snapshot", lambda row: None)
+    provider = MagicMock()
+    monkeypatch.setattr(api_football, "get_fixtures_by_date", provider)
 
-        fixtures = telegram_bot.get_tracked_fixtures_for_date("2026-04-01")
-        assert fixtures == []
-        assert mock_resolver_get.call_count == 1
-        assert mock_get_fixtures.call_count == 0  # ZERO direct bypass calls!
-
+    fixtures = telegram_bot.get_tracked_fixtures_for_date("2026-04-01")
+    assert [fixture["fixture"]["id"] for fixture in fixtures] == [123]
+    assert fixtures[0]["lifecycle"]["stage"] == "TRACKED"
+    assert fixtures[0]["teams"]["home"]["name"] == "Arsenal"
+    assert provider.call_count == 0
 
 def test_h2h_temporal_safety_rejects_future_matches():
     """

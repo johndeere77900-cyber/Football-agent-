@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS live_match_lifecycle (
     error_class           TEXT,
     created_at            TEXT NOT NULL,
     updated_at            TEXT NOT NULL,
+    prediction_cycle_key  TEXT,
     UNIQUE (sport, canonical_fixture_key)
 );
 

@@ -143,7 +143,9 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
             "discovery": VERIFIED,
             "prematch": VERIFIED,
             "live": UNVERIFIED,
-            "final_result": UNVERIFIED,
+            # live_providers.espn_soccer_fixture() reads status and score from the
+            # scoreboard, which is the same event namespace as discovery.
+            "final_result": VERIFIED,
         },
         fields=["fixtures", "status", "score", "statistics"],
         auth_env=None,
@@ -155,7 +157,8 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         limitations=[
             "Existing parser extracts possession, shots, shots on target, corners and cards.",
             "xG is not established by the existing parser.",
-            "Scoreboard presence is not final-result evidence until verified.",
+            "Final results are verified from the scoreboard status and score only; in-play",
+            "clock/event polling is not implemented, so live capability stays unverified.",
         ],
     ),
     "fotmob": _entry(
@@ -171,9 +174,11 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
             "discovery": VERIFIED,
             "prematch": VERIFIED,
             "live": UNVERIFIED,
-            "final_result": UNVERIFIED,
+            # live_providers.fotmob_fixture() reads status and score from the same
+            # day listing that supplies discovery.
+            "final_result": VERIFIED,
         },
-        fields=["fixtures", "statistics"],
+        fields=["fixtures", "status", "score", "statistics"],
         auth_env=None,
         rate_limit="politeness limited; cached provider listing per day",
         id_namespace="fotmob",
@@ -183,6 +188,7 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         limitations=[
             "Supplies possession, xG, shots, shots on target, corners and cards when present.",
             "Not every match or season supplies xG; absence is recorded, never inferred.",
+            "Final results are verified from the day listing status and score only.",
         ],
     ),
     # --------------------------------------------------------------- basketball
@@ -218,7 +224,11 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         base_url="https://site.api.espn.com/apis/site/v2/sports/basketball/nba",
         endpoints={"scoreboard": "/scoreboard"},
         capabilities={
-            "discovery": VERIFIED,
+            # No lifecycle adapter is wired for ESPN NBA: its team ids are strings
+            # and the basketball model requires positive integer team ids from the
+            # API-Basketball namespace, so advertising discovery would create rows
+            # that can never be predicted or verified.
+            "discovery": UNVERIFIED,
             "prematch": UNVERIFIED,
             "live": UNVERIFIED,
             "final_result": UNVERIFIED,
@@ -232,7 +242,7 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         freshness_minutes=30,
         limitations=[
             "Existing integration is the historical basketball acquisition route.",
-            "Live and final-result use is unverified and therefore not routed.",
+            "Lifecycle discovery, live and final-result use are unverified and never routed.",
         ],
     ),
     # -------------------------------------------------- historical-only sources

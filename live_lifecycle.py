@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import config
 import lifecycle_storage as lstore
+import live_providers
 import market_grading
 import provider_registry
 from historical_match_policy import (
@@ -122,8 +123,15 @@ def _items(result: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def calendar_days(horizon_days: int = DISCOVERY_HORIZON_DAYS, today: Optional[dt.date] = None) -> List[str]:
-    base = today or dt.datetime.now(dt.timezone.utc).date()
+def calendar_days(
+    horizon_days: int = DISCOVERY_HORIZON_DAYS,
+    today: Optional[dt.date] = None,
+    start_date: Optional[str] = None,
+) -> List[str]:
+    if start_date:
+        base = dt.date.fromisoformat(str(start_date)[:10])
+    else:
+        base = today or dt.datetime.now(dt.timezone.utc).date()
     return [(base + dt.timedelta(days=offset)).isoformat() for offset in range(0, int(horizon_days) + 1)]
 
 
@@ -208,9 +216,34 @@ _ADAPTERS = {
 }
 
 
-def _fetch_result(sport: str, provider: str, fixture_id: int) -> Optional[Dict[str, Any]]:
+def _fetch_result(
+    sport: str,
+    provider: str,
+    fixture_id: int,
+    league_id: Any = None,
+    kickoff: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """Fetch one fixture using only the provider that issued its id."""
     adapter = _ADAPTERS.get((sport, provider))
-    return adapter(fixture_id) if adapter else None
+    if adapter is not None:
+        return adapter(fixture_id)
+    if sport == "football" and provider == "espn_soccer":
+        try:
+            payload = live_providers.espn_soccer_fixture(league_id, fixture_id, kickoff)
+        except Exception as exc:
+            provider_registry.record_health(provider, ok=False, failure_category=type(exc).__name__)
+            return None
+        provider_registry.record_health(provider, ok=bool(payload))
+        return payload
+    if sport == "football" and provider == "fotmob":
+        try:
+            payload = live_providers.fotmob_fixture(fixture_id, kickoff)
+        except Exception as exc:
+            provider_registry.record_health(provider, ok=False, failure_category=type(exc).__name__)
+            return None
+        provider_registry.record_health(provider, ok=bool(payload))
+        return payload
+    return None
 
 
 def _live_index(sport: str, provider: str) -> Dict[str, Dict[str, Any]]:
@@ -252,23 +285,99 @@ def _providers(sport: str, context: str, field: str, league_id: Any) -> List[str
     return [entry["provider"] for entry in provider_registry.route_field(sport, field, context, league)]
 
 
+DEFAULT_PROVIDER = {"football": "api_football", "basketball": "api_basketball"}
+
+# Stages at which a fixture is meaningfully tracked for listing purposes.
+ACTIVE_TRACKED_STAGES = [
+    "TRACKED",
+    "PREMATCH_DATA_READY",
+    "PREMATCH_PREDICTION_CREATED",
+    "PREMATCH_SNAPSHOT_SAVED",
+    "LIVE",
+    "INPLAY_OBSERVATION_RECORDED",
+    "FINAL_RESULT_PENDING",
+]
+
+
+def _row_provider(row: Dict[str, Any]) -> str:
+    provider = row.get("provider") or DEFAULT_PROVIDER.get(str(row.get("sport")), "")
+    return str(provider).strip().lower()
+
+
+def _provider_eligible(row: Dict[str, Any], context: str, field: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return the row's own provider only when the registry verifies it here.
+
+    A provider-native fixture id is only meaningful inside the namespace that
+    issued it, so another provider is never substituted for this row.
+    """
+    provider = _row_provider(row)
+    if not provider:
+        return None, "provider_missing"
+    if not provider_registry.supports(provider, context, field=field, league_id=row.get("league_id")):
+        return None, f"provider_{provider}_not_verified_for_{context}"
+    return provider, None
+
+
+def list_tracked(
+    sport: str,
+    date_str: Optional[str] = None,
+    league_id: Any = None,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """Persisted lifecycle rows that are actually tracked (never a provider query)."""
+    rows = lstore.list_lifecycles(sport=sport, stages=ACTIVE_TRACKED_STAGES, limit=limit)
+    if date_str:
+        day = str(date_str)[:10]
+        rows = [row for row in rows if str(row.get("kickoff_at") or "")[:10] == day]
+    if league_id is not None:
+        rows = [row for row in rows if str(row.get("league_id")) == str(league_id)]
+    return rows
+
+
+def diagnostics(sport: str, date_str: Optional[str] = None, league_id: Any = None) -> Dict[str, Any]:
+    """Counts and recorded reasons behind an empty fixture list or prediction run."""
+    result: Dict[str, Any] = {
+        "sport": sport,
+        "date": date_str,
+        "schema_error": None,
+        "total": 0,
+        "on_date": 0,
+        "tracked": 0,
+        "unresolved": 0,
+        "errors": [],
+    }
+    try:
+        rows = lstore.list_lifecycles(sport=sport, limit=2000)
+    except Exception as exc:
+        result["schema_error"] = f"{type(exc).__name__}: {exc}"[:300]
+        return result
+    result["total"] = len(rows)
+    day = str(date_str)[:10] if date_str else None
+    scoped = [row for row in rows if day is None or str(row.get("kickoff_at") or "")[:10] == day]
+    if league_id is not None:
+        scoped = [row for row in scoped if str(row.get("league_id")) == str(league_id)]
+    result["on_date"] = len(scoped)
+    result["tracked"] = sum(1 for row in scoped if row.get("stage") in ACTIVE_TRACKED_STAGES)
+    result["unresolved"] = sum(1 for row in scoped if row.get("stage") in ("DISCOVERED", "IDENTITY_RESOLVED"))
+    result["errors"] = [
+        {
+            "lifecycle_id": row.get("lifecycle_id"),
+            "stage": row.get("stage"),
+            "error": row.get("error_state"),
+            "error_class": row.get("error_class"),
+        }
+        for row in scoped
+        if row.get("error_state")
+    ][:10]
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
 
-def _football_fixtures_for_date(date_str: str) -> List[Dict[str, Any]]:
-    if not _providers("football", "discovery", "fixtures", None):
-        return []
-    try:
-        from data_resolver import DataResolver
-
-        resolver = DataResolver()
-        fixtures = _items(resolver.get_fixtures_for_date(date_str))
-    except Exception as exc:
-        provider_registry.record_health("api_football", ok=False, failure_category=type(exc).__name__)
-        return []
-
-    accepted = []
+def _accept_football(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    accepted: List[Dict[str, Any]] = []
     for fixture in fixtures:
         league = fixture.get("league") or {}
         if league.get("id") not in FOOTBALL_COMPETITIONS:
@@ -282,12 +391,59 @@ def _football_fixtures_for_date(date_str: str) -> List[Dict[str, Any]]:
     return accepted
 
 
-def _basketball_games_for_date(date_str: str) -> List[Dict[str, Any]]:
+def _football_fixtures_for_date(date_str: str) -> Dict[str, Any]:
+    """Discover one day, preferring API-Football and falling back to keyless feeds.
+
+    Fallbacks are only consulted when the primary feed returns nothing for the
+    day, so one real fixture is not tracked twice under two providers.
+    """
+    errors: List[str] = []
+    available = _providers("football", "discovery", "fixtures", None)
+
+    if "api_football" in available:
+        try:
+            from data_resolver import DataResolver
+
+            fixtures = _items(DataResolver().get_fixtures_for_date(date_str))
+        except Exception as exc:
+            provider_registry.record_health("api_football", ok=False, failure_category=type(exc).__name__)
+            errors.append(f"api_football: {type(exc).__name__}: {exc}"[:200])
+        else:
+            provider_registry.record_health("api_football", ok=True)
+            accepted = _accept_football(fixtures)
+            if accepted:
+                return {"fixtures": accepted, "providers_used": ["api_football"], "errors": errors}
+
+    for provider, loader in (
+        ("fotmob", live_providers.fotmob_fixtures),
+        ("espn_soccer", live_providers.espn_soccer_fixtures),
+    ):
+        if provider not in available:
+            continue
+        try:
+            accepted = _accept_football(loader(date_str))
+        except Exception as exc:
+            provider_registry.record_health(provider, ok=False, failure_category=type(exc).__name__)
+            errors.append(f"{provider}: {type(exc).__name__}: {exc}"[:200])
+            continue
+        provider_registry.record_health(provider, ok=True)
+        if accepted:
+            return {"fixtures": accepted, "providers_used": [provider], "errors": errors}
+
+    return {"fixtures": [], "providers_used": [], "errors": errors}
+
+
+def _basketball_games_for_date(date_str: str) -> Dict[str, Any]:
     import basketball_api
 
+    errors: List[str] = []
     providers = _providers("basketball", "discovery", "fixtures", BASKETBALL_COMPETITIONS[0])
     if "api_basketball" not in providers:
-        return []
+        return {
+            "games": [],
+            "errors": ["api_basketball: not verified for discovery"],
+            "providers_used": [],
+        }
     attempts = (
         lambda: basketball_api.get_games_by_date(date_str, league_id=BASKETBALL_COMPETITIONS[0]),
         lambda: basketball_api.get_games_by_date(date_str),
@@ -299,10 +455,12 @@ def _basketball_games_for_date(date_str: str) -> List[Dict[str, Any]]:
             continue
         except Exception as exc:
             provider_registry.record_health("api_basketball", ok=False, failure_category=type(exc).__name__)
-            return []
+            errors.append(f"api_basketball: {type(exc).__name__}: {exc}"[:200])
+            return {"games": [], "errors": errors, "providers_used": []}
         provider_registry.record_health("api_basketball", ok=True)
-        return [g for g in games if (g.get("league") or {}).get("id") in BASKETBALL_COMPETITIONS]
-    return []
+        accepted = [g for g in games if (g.get("league") or {}).get("id") in BASKETBALL_COMPETITIONS]
+        return {"games": accepted, "errors": errors, "providers_used": ["api_basketball"]}
+    return {"games": [], "errors": errors, "providers_used": []}
 
 
 def _football_identity(fixture: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -373,7 +531,13 @@ def _persist_identity(identity: Dict[str, Any]) -> Dict[str, Any]:
         identity.get("away_name"), identity["provider"], identity.get("away_provider_id"), identity.get("league_id")
     )
 
-    existing = lstore.get_lifecycle_by_fixture(identity["sport"], identity["provider_fixture_id"])
+    # Provider-native ids are namespaced: the same numeric id from two providers
+    # is not the same fixture. Legacy rows keyed by the bare id stay addressable
+    # for the providers that created them.
+    scoped_key = f"{identity['provider']}:{identity['provider_fixture_id']}"
+    existing = lstore.get_lifecycle_by_fixture(identity["sport"], scoped_key)
+    if existing is None and identity["provider"] in ("api_football", "api_basketball"):
+        existing = lstore.get_lifecycle_by_fixture(identity["sport"], str(identity["provider_fixture_id"]))
     if existing is not None:
         updates: Dict[str, Any] = {}
         # Never overwrite an already verified canonical identity.
@@ -393,9 +557,9 @@ def _persist_identity(identity: Dict[str, Any]) -> Dict[str, Any]:
         return existing
 
     record = {
-        "lifecycle_id": f"{identity['sport']}:{identity['provider_fixture_id']}",
+        "lifecycle_id": f"{identity['sport']}:{scoped_key}",
         "sport": identity["sport"],
-        "canonical_fixture_key": identity["provider_fixture_id"],
+        "canonical_fixture_key": scoped_key,
         "provider": identity["provider"],
         "provider_fixture_id": identity["provider_fixture_id"],
         "league_id": identity.get("league_id"),
@@ -414,21 +578,35 @@ def _persist_identity(identity: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
-def discover(sport: Optional[str] = None, horizon_days: int = DISCOVERY_HORIZON_DAYS) -> Dict[str, Any]:
+def discover(
+    sport: Optional[str] = None,
+    horizon_days: int = DISCOVERY_HORIZON_DAYS,
+    start_date: Optional[str] = None,
+) -> Dict[str, Any]:
     sports = [sport] if sport in ("football", "basketball") else ["football", "basketball"]
     rows: List[Dict[str, Any]] = []
     identity_failures = 0
+    errors: List[str] = []
+    provider_counts: Dict[str, int] = {}
 
-    for day in calendar_days(horizon_days):
+    for day in calendar_days(horizon_days, start_date=start_date):
         if "football" in sports:
-            for fixture in _football_fixtures_for_date(day):
+            football = _football_fixtures_for_date(day)
+            errors.extend(football["errors"])
+            for provider in football["providers_used"]:
+                provider_counts[provider] = provider_counts.get(provider, 0) + 1
+            for fixture in football["fixtures"]:
                 identity = _football_identity(fixture)
                 if identity is None:
                     identity_failures += 1
                     continue
                 rows.append(_persist_identity(identity))
         if "basketball" in sports:
-            for game in _basketball_games_for_date(day):
+            basketball = _basketball_games_for_date(day)
+            errors.extend(basketball["errors"])
+            for provider in basketball["providers_used"]:
+                provider_counts[provider] = provider_counts.get(provider, 0) + 1
+            for game in basketball["games"]:
                 identity = _basketball_identity(game)
                 if identity is None:
                     identity_failures += 1
@@ -439,11 +617,14 @@ def discover(sport: Optional[str] = None, horizon_days: int = DISCOVERY_HORIZON_
     return {
         "stage": "discover",
         "horizon_days": horizon_days,
+        "start_date": start_date,
         "competitions": {"football": FOOTBALL_COMPETITIONS, "basketball": BASKETBALL_COMPETITIONS},
         "discovered": len(unique),
         "tracked": sum(1 for row in unique.values() if row.get("stage") == "TRACKED"),
         "unresolved": sum(1 for row in unique.values() if row.get("stage") == "DISCOVERED"),
         "identity_failures": identity_failures,
+        "provider_counts": provider_counts,
+        "errors": errors[:10],
     }
 
 
@@ -479,7 +660,10 @@ def _prematch_football(row: Dict[str, Any]) -> Dict[str, Any]:
     import storage
 
     fixture_id = int(row["provider_fixture_id"])
-    fixture = _fetch_result("football", row.get("provider") or "api_football", fixture_id)
+    provider, reason = _provider_eligible(row, "prematch", "statistics")
+    if not provider:
+        return _fail(row, RuntimeError(reason), "provider_not_eligible")
+    fixture = _fetch_result("football", provider, fixture_id, row.get("league_id"), row.get("kickoff_at"))
     if not fixture:
         return _fail(row, RuntimeError("prematch fixture payload unavailable"))
 
@@ -536,7 +720,10 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
     import storage
 
     game_id = int(row["provider_fixture_id"])
-    game = _fetch_result("basketball", row.get("provider") or "api_basketball", game_id)
+    provider, reason = _provider_eligible(row, "prematch", "statistics")
+    if not provider:
+        return _fail(row, RuntimeError(reason), "provider_not_eligible")
+    game = _fetch_result("basketball", provider, game_id, row.get("league_id"), row.get("kickoff_at"))
     if not game:
         return _fail(row, RuntimeError("prematch game payload unavailable"))
 
@@ -577,7 +764,11 @@ def _prematch_basketball(row: Dict[str, Any]) -> Dict[str, Any]:
         prediction_context="PRE_MATCH",
         data_cutoff_timestamp=prediction.get("data_cutoff_timestamp") or timestamp,
         markets=prediction.get("markets"),
-        features=prediction.get("model_inputs"),
+        features=(
+            prediction.get("model_inputs", {}).get("features")
+            if isinstance(prediction.get("model_inputs"), dict)
+            else None
+        ),
         confidence=prediction.get("confidence"),
         prediction_record=prediction,
         idempotency_key=key,
@@ -721,12 +912,10 @@ def monitor(limit: Optional[int] = None) -> Dict[str, Any]:
         if _retry_pending(row):
             continue
         sport = row["sport"]
-        providers = _providers(sport, "live", "score", row.get("league_id"))
-        payload = None
-        for provider in providers:
-            payload = _live_index(sport, provider).get(str(row["provider_fixture_id"]))
-            if payload is not None:
-                break
+        # Live observations come from the provider that owns this fixture id;
+        # ids are not portable between providers.
+        live_provider, _reason = _provider_eligible(row, "live", "score")
+        payload = _live_index(sport, live_provider).get(str(row["provider_fixture_id"])) if live_provider else None
 
         if payload is not None:
             status = get_status_short(payload, sport=sport)
@@ -736,7 +925,7 @@ def monitor(limit: Optional[int] = None) -> Dict[str, Any]:
             stamp = _now()
             lstore.record_observation(
                 lifecycle_id=row["lifecycle_id"],
-                provider=row.get("provider") or providers[0],
+                provider=row.get("provider") or live_provider,
                 context="live",
                 observation_timestamp=stamp,
                 provider_status=status,
@@ -1011,11 +1200,20 @@ def verify_results(limit: Optional[int] = None) -> Dict[str, Any]:
             continue
         try:
             if row.get("stage") == "FINAL_RESULT_PENDING":
-                payload = None
-                for provider in _providers(row["sport"], "final_result", "score", row.get("league_id")):
-                    payload = _fetch_result(row["sport"], provider, int(row["provider_fixture_id"]))
-                    if payload:
-                        break
+                provider, reason = _provider_eligible(row, "final_result", "score")
+                if not provider:
+                    lstore.update_lifecycle(
+                        row["lifecycle_id"], error_state=reason, error_class="provider_not_eligible"
+                    )
+                    retrying += 1
+                    continue
+                payload = _fetch_result(
+                    row["sport"],
+                    provider,
+                    int(row["provider_fixture_id"]),
+                    row.get("league_id"),
+                    row.get("kickoff_at"),
+                )
                 if not payload:
                     _fail(row, RuntimeError("final result provider unavailable"))
                     retrying += 1

@@ -4,6 +4,13 @@
 -- Neon. ChatGPT reviews and executes any authorised production migration.
 --
 -- All statements are idempotent so a reviewed run can be replayed safely.
+--
+-- lifecycle_storage.ensure_schema() validates exactly these columns before the
+-- application will run against PostgreSQL:
+--   prediction_snapshots     -> idempotency_key, lifecycle_id, model_inputs_json
+--   live_match_lifecycle     -> prediction_cycle_key
+--   live_match_observations, prediction_grading_ledger, model_calibration_versions
+-- Every one of them is declared below.
 
 -- 1. Durable match lifecycle ------------------------------------------------
 CREATE TABLE IF NOT EXISTS live_match_lifecycle (
@@ -27,8 +34,12 @@ CREATE TABLE IF NOT EXISTS live_match_lifecycle (
     error_class           TEXT,
     created_at            TEXT NOT NULL,
     updated_at            TEXT NOT NULL,
+    prediction_cycle_key  TEXT,
     CONSTRAINT uq_lifecycle_sport_fixture UNIQUE (sport, canonical_fixture_key)
 );
+
+-- Existing installations predate the cycle key, so add it idempotently.
+ALTER TABLE live_match_lifecycle ADD COLUMN IF NOT EXISTS prediction_cycle_key TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_lifecycle_stage ON live_match_lifecycle (sport, stage);
 CREATE INDEX IF NOT EXISTS idx_lifecycle_kickoff ON live_match_lifecycle (kickoff_at);

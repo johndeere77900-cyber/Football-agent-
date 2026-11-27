@@ -25,7 +25,9 @@ from typing import Any, Dict, List, Optional
 import config
 import storage
 
-SCHEMA_READY = False
+# Readiness is cached per database, not per process: a test or an operator can
+# point config.DB_PATH at a different SQLite file without inheriting a stale flag.
+_SCHEMA_READY_FOR = set()
 
 
 class Phase2SchemaMissing(RuntimeError):
@@ -61,10 +63,14 @@ def _dialect() -> str:
 
 def ensure_schema() -> None:
     """Create the lifecycle tables/columns if they are absent (local SQLite path)."""
-    global SCHEMA_READY
-    if SCHEMA_READY:
-        return
     conn, db_type = storage._connect()
+    if db_type == "postgres":
+        schema_key = (db_type, str(getattr(config, "NEON_DATABASE_URL", "")))
+    else:
+        schema_key = (db_type, str(getattr(config, "DB_PATH", "")))
+    if schema_key in _SCHEMA_READY_FOR:
+        conn.close()
+        return
     try:
         if db_type == "postgres":
             # Production schema is owned by ChatGPT. The application validates
@@ -97,7 +103,7 @@ def ensure_schema() -> None:
                     + "). Apply the reviewed migration migrations/phase2_lifecycle_postgres.sql "
                     "before running the lifecycle; the application never creates PostgreSQL schema."
                 )
-            SCHEMA_READY = True
+            _SCHEMA_READY_FOR.add(schema_key)
             return
         else:
             conn.execute(
@@ -184,19 +190,26 @@ def ensure_schema() -> None:
                 )
                 """
             )
-            for column, ctype in (
-                ("idempotency_key", "TEXT"),
-                ("lifecycle_id", "TEXT"),
-                ("model_inputs_json", "TEXT"),
-            ):
-                storage._ensure_column_sqlite(conn, "prediction_snapshots", column, ctype)
+            # storage.init_db() owns prediction_snapshots; skip those columns
+            # when the lifecycle is used before that table exists.
+            snapshots_present = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'prediction_snapshots'"
+            ).fetchone()
+            if snapshots_present:
+                for column, ctype in (
+                    ("idempotency_key", "TEXT"),
+                    ("lifecycle_id", "TEXT"),
+                    ("model_inputs_json", "TEXT"),
+                ):
+                    storage._ensure_column_sqlite(conn, "prediction_snapshots", column, ctype)
             storage._ensure_column_sqlite(conn, "live_match_lifecycle", "prediction_cycle_key", "TEXT")
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_pred_snapshots_idem ON prediction_snapshots (idempotency_key) WHERE idempotency_key IS NOT NULL"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_lifecycle ON prediction_snapshots (lifecycle_id)"
-            )
+            if snapshots_present:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_pred_snapshots_idem ON prediction_snapshots (idempotency_key) WHERE idempotency_key IS NOT NULL"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_lifecycle ON prediction_snapshots (lifecycle_id)"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_lifecycle_stage ON live_match_lifecycle (sport, stage)"
             )
@@ -207,7 +220,7 @@ def ensure_schema() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_grading_snapshot ON prediction_grading_ledger (snapshot_id)"
             )
             conn.commit()
-        SCHEMA_READY = True
+        _SCHEMA_READY_FOR.add(schema_key)
     finally:
         conn.close()
 
