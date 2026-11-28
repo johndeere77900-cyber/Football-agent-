@@ -626,3 +626,150 @@ def test_fail_exhausts_bounded_prematch_retries():
     )
     assert result["error_class"] == "model_error_exhausted"
     assert result["next_retry_at"] is None
+
+
+def test_prematch_pages_through_more_than_one_queue_page(monkeypatch):
+    """Ineligible rows inside the window must not cap the eligible batch.
+
+    The pre-fix selector read at most one 1000-row page of candidates, so a
+    backlog of identity-unresolved rows sorted ahead of the valid fixtures
+    silently hid them. Selection now pages until the batch is full or the
+    window is exhausted.
+    """
+    day = _iso(30 * 24)[:10]
+    for index in range(1100):
+        _seed(
+            lifecycle_id=f"football:api_football:noident{index}",
+            canonical_fixture_key=f"api_football:noident{index}",
+            provider_fixture_id=str(8000 + index),
+            home_team_id=None,
+            away_team_id=None,
+            kickoff_at=f"{day}T06:00:00+00:00",
+        )
+    targets = []
+    for index, hour in enumerate((18, 20)):
+        targets.append(
+            _seed(
+                lifecycle_id=f"football:api_football:valid{index}",
+                canonical_fixture_key=f"api_football:valid{index}",
+                provider_fixture_id=str(9000 + index),
+                kickoff_at=f"{day}T{hour:02d}:00:00+00:00",
+            )["lifecycle_id"]
+        )
+    selected = []
+    monkeypatch.setattr(
+        live_lifecycle,
+        "_prematch_football",
+        lambda row: selected.append(row["lifecycle_id"]) or {**row, "stage": "PREMATCH_SNAPSHOT_SAVED"},
+    )
+
+    result = live_lifecycle.prematch(limit=5, sport="football", date_str=day)
+    assert selected == targets
+    assert result["eligible"] == 2
+    assert result["snapshots_saved"] == 2
+    assert result["scanned_pages"] > 5
+    assert result["considered"] >= 1100
+
+
+def test_kickoff_date_filters_use_utc_calendar_date(monkeypatch):
+    """Kickoff filters select the UTC calendar date of the instant."""
+    day = dt.datetime.now(dt.timezone.utc).date() + dt.timedelta(days=30)
+    prev = day - dt.timedelta(days=1)
+    nxt = day + dt.timedelta(days=1)
+
+    def seed(name, kickoff):
+        return _seed(
+            lifecycle_id=f"football:api_football:{name}",
+            canonical_fixture_key=f"api_football:{name}",
+            provider_fixture_id=name,
+            kickoff_at=kickoff,
+        )["lifecycle_id"]
+
+    before_midnight = seed("before", f"{prev}T23:59:59+00:00")
+    midnight = seed("midnight", f"{day}T00:00:00+00:00")
+    late = seed("late", f"{day}T23:59:59+00:00")
+    # Local calendar date is ``day`` but the instant belongs to the previous
+    # UTC day: 01:00+03:00 == 22:00Z the day before.
+    local_ahead = seed("ahead", f"{day}T01:00:00+03:00")
+    # Local calendar date is ``day`` but the instant belongs to the next UTC
+    # day: 23:00-03:00 == 02:00Z the day after.
+    local_behind = seed("behind", f"{day}T23:00:00-03:00")
+
+    stored = lstore.get_lifecycle(local_ahead)
+    assert stored["kickoff_at"] == f"{prev}T22:00:00+00:00", "kickoff must be stored in UTC"
+    assert lstore.get_lifecycle(local_behind)["kickoff_at"] == f"{nxt}T02:00:00+00:00"
+    assert [r["lifecycle_id"] for r in lstore.list_lifecycles(kickoff_on=prev.isoformat())] == [
+        local_ahead,
+        before_midnight,
+    ]
+    assert [r["lifecycle_id"] for r in lstore.list_lifecycles(kickoff_on=day.isoformat())] == [
+        midnight,
+        late,
+    ]
+    assert [r["lifecycle_id"] for r in lstore.list_lifecycles(kickoff_on=nxt.isoformat())] == [
+        local_behind
+    ]
+
+    monkeypatch.setattr(
+        live_lifecycle,
+        "_prematch_football",
+        lambda row: {**row, "stage": "PREMATCH_SNAPSHOT_SAVED"},
+    )
+    for date, expected in (
+        (day.isoformat(), [midnight, late]),
+        (prev.isoformat(), [local_ahead, before_midnight]),
+        (nxt.isoformat(), [local_behind]),
+    ):
+        selected = []
+        monkeypatch.setattr(
+            live_lifecycle,
+            "_prematch_football",
+            lambda row: selected.append(row["lifecycle_id"]) or {**row, "stage": "PREMATCH_SNAPSHOT_SAVED"},
+        )
+        live_lifecycle.prematch(limit=10, sport="football", date_str=date)
+        assert selected == expected, f"UTC date scoping failed for {date}"
+
+
+def test_past_kickoff_with_foreign_offset_is_expired_not_selected(monkeypatch):
+    """A passed kickoff stops consuming capacity regardless of stored offset."""
+    past = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)
+    local = past.astimezone(dt.timezone(dt.timedelta(hours=-11))).isoformat()
+    row = _seed(
+        lifecycle_id="football:api_football:passed",
+        canonical_fixture_key="api_football:passed",
+        provider_fixture_id="9100",
+        kickoff_at=local,
+    )
+    assert row["kickoff_at"] == past.isoformat()
+    selected = []
+    monkeypatch.setattr(
+        live_lifecycle,
+        "_prematch_football",
+        lambda item: selected.append(item["lifecycle_id"]) or item,
+    )
+    result = live_lifecycle.prematch(limit=5, sport="football", date_str=past.date().isoformat())
+    assert selected == []
+    assert result["expired"] == 1
+    stored = lstore.get_lifecycle("football:api_football:passed")
+    assert stored["error_class"] == "kickoff_passed"
+    assert stored["stage"] == "TRACKED"
+
+
+def test_telegram_scope_passes_utc_date_to_prematch(monkeypatch):
+    """The requested Telegram date is a UTC calendar date end to end."""
+    day = (dt.datetime.now(dt.timezone.utc).date() + dt.timedelta(days=3)).isoformat()
+    assert telegram_bot.resolve_date(day)[0] == day
+    captured = {}
+    monkeypatch.setattr(live_lifecycle, "discover", lambda *a, **k: {"discovered": 0})
+    monkeypatch.setattr(
+        live_lifecycle,
+        "prematch",
+        lambda **kwargs: captured.update(kwargs) or {"eligible": 0, "processed": 0, "snapshots_saved": 0},
+    )
+    monkeypatch.setattr(live_lifecycle, "diagnostics", lambda *a, **k: {})
+    monkeypatch.setattr(live_lifecycle, "list_tracked", lambda *a, **k: [])
+
+    telegram_bot._lifecycle_predictions("football", day, 1, None)
+    assert captured["date_str"] == day
+    assert captured["sport"] == "football"
+    assert captured["league_id"] is None

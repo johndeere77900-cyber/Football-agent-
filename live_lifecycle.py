@@ -138,6 +138,14 @@ def calendar_days(
 PREMATCH_QUEUE_STAGES = ["TRACKED", "PREMATCH_DATA_READY", "PREMATCH_PREDICTION_CREATED"]
 PREMATCH_UNRESOLVED_STAGES = ["DISCOVERED", "IDENTITY_RESOLVED"]
 MAX_PREMATCH_RETRIES = 5
+# Rows are read in stable pages so selection and expiry never depend on one
+# page being large enough to contain every eligible record.
+PREMATCH_PAGE_SIZE = 200
+# Expiry marks rows in the window that can still be selected (a Telegram date or
+# the autonomous queue from today onward). A month of lookback keeps the sweep
+# bounded while still marking rescheduled/late kickoffs; anything older can
+# never be selected as an upcoming fixture anyway.
+PREMATCH_EXPIRY_LOOKBACK_DAYS = 30
 
 
 def _retry_pending(row: Dict[str, Any]) -> bool:
@@ -1108,30 +1116,42 @@ def _expire_past_prematch(
 
     The stage and all history are preserved; the row simply stops being a
     pre-match candidate. This is separate from ``kickoff_passed`` rows the
-    provider may have reported late.
+    provider may have reported late. Rows are swept in stable pages so a large
+    backlog of expired fixtures is marked completely instead of being truncated
+    at one page.
     """
     boundary = str(date_str)[:10] if date_str else now.date().isoformat()
-    rows = lstore.list_lifecycles(
-        sport=sport,
-        stages=PREMATCH_QUEUE_STAGES + PREMATCH_UNRESOLVED_STAGES,
-        limit=5000,
-        kickoff_to=boundary,
-    )
+    lookback = (now - dt.timedelta(days=PREMATCH_EXPIRY_LOOKBACK_DAYS)).date().isoformat()
     expired = 0
-    for row in rows:
-        if league_id is not None and str(row.get("league_id")) != str(league_id):
-            continue
-        kickoff = _parse(row.get("kickoff_at"))
-        if kickoff is None or kickoff > now:
-            continue
-        expired += 1
-        if row.get("error_class") != "kickoff_passed":
-            lstore.update_lifecycle(
-                row["lifecycle_id"],
-                error_state="kickoff_passed_before_prematch",
-                error_class="kickoff_passed",
-                next_retry_at=None,
-            )
+    offset = 0
+    while True:
+        rows = lstore.list_lifecycles(
+            sport=sport,
+            stages=PREMATCH_QUEUE_STAGES + PREMATCH_UNRESOLVED_STAGES,
+            limit=PREMATCH_PAGE_SIZE,
+            offset=offset,
+            kickoff_from=min(boundary, lookback),
+            kickoff_to=boundary,
+        )
+        if not rows:
+            break
+        for row in rows:
+            if league_id is not None and str(row.get("league_id")) != str(league_id):
+                continue
+            kickoff = _parse(row.get("kickoff_at"))
+            if kickoff is None or kickoff > now:
+                continue
+            expired += 1
+            if row.get("error_class") != "kickoff_passed":
+                lstore.update_lifecycle(
+                    row["lifecycle_id"],
+                    error_state="kickoff_passed_before_prematch",
+                    error_class="kickoff_passed",
+                    next_retry_at=None,
+                )
+        if len(rows) < PREMATCH_PAGE_SIZE:
+            break
+        offset += PREMATCH_PAGE_SIZE
     return expired
 
 
@@ -1148,12 +1168,17 @@ def prematch(
 
     * only stages that can still produce a PRE_MATCH snapshot are loaded;
     * the kickoff window is filtered in SQL (``kickoff_on`` for a Telegram
-      request, ``kickoff_from`` for an autonomous cycle);
+      request, ``kickoff_from`` for an autonomous cycle) using the UTC calendar
+      date of the kickoff instant;
     * expired candidates are marked once and excluded by the window;
     * unresolved identities are reported but never consume the batch;
-    * bounded-exhausted or backoff-pending rows are skipped after selection.
+    * bounded-exhausted or backoff-pending rows are skipped after selection;
+    * candidate rows are read in stable pages until ``limit`` eligible fixtures
+      are found or the window is exhausted, so any number of ineligible rows
+      ahead of a valid fixture cannot hide it.
 
-    ``limit`` therefore applies to genuinely eligible work.
+    ``limit`` therefore applies to genuinely eligible work, and one fixture that
+    fails during processing cannot prevent the rest of the batch from running.
     """
     now = dt.datetime.now(dt.timezone.utc)
     budget = int(limit or 500)
@@ -1164,7 +1189,6 @@ def prematch(
     candidate_kwargs: Dict[str, Any] = {
         "sport": scope_sport,
         "stages": PREMATCH_QUEUE_STAGES,
-        "limit": max(1000, budget * 4),
     }
     if date_str:
         candidate_kwargs["kickoff_on"] = str(date_str)[:10]
@@ -1185,27 +1209,44 @@ def prematch(
         if league_id is None or str(row.get("league_id")) == str(league_id)
     )
 
+    page_size = max(PREMATCH_PAGE_SIZE, min(1000, budget))
     eligible: List[Dict[str, Any]] = []
-    retry_deferred = exhausted = wrong_league = 0
-    for row in candidates:
-        if league_id is not None and str(row.get("league_id")) != str(league_id):
-            wrong_league += 1
-            continue
-        if not row.get("home_team_id") or not row.get("away_team_id"):
-            unresolved_count += 1
-            continue
-        kickoff = _parse(row.get("kickoff_at"))
-        if kickoff is None or kickoff <= now:
-            continue
-        if _retry_exhausted(row):
-            exhausted += 1
-            continue
-        if _retry_pending(row):
-            retry_deferred += 1
-            continue
-        eligible.append(row)
-        if len(eligible) >= budget:
+    retry_deferred = exhausted = wrong_league = scanned = pages = 0
+    offset = 0
+    while len(eligible) < budget:
+        candidates = lstore.list_lifecycles(
+            limit=page_size, offset=offset, **candidate_kwargs
+        )
+        if not candidates:
             break
+        pages += 1
+        scanned += len(candidates)
+        batch_full = False
+        for row in candidates:
+            if league_id is not None and str(row.get("league_id")) != str(league_id):
+                wrong_league += 1
+                continue
+            if not row.get("home_team_id") or not row.get("away_team_id"):
+                unresolved_count += 1
+                continue
+            kickoff = _parse(row.get("kickoff_at"))
+            if kickoff is None or kickoff <= now:
+                continue
+            if _retry_exhausted(row):
+                exhausted += 1
+                continue
+            if _retry_pending(row):
+                retry_deferred += 1
+                continue
+            eligible.append(row)
+            if len(eligible) >= budget:
+                batch_full = True
+                break
+        # Continue only while this page was full and the batch is still short:
+        # a short page means the SQL window itself is exhausted.
+        if batch_full or len(candidates) < page_size:
+            break
+        offset += page_size
 
     processed = saved = 0
     for row in eligible:
@@ -1235,7 +1276,8 @@ def prematch(
         "sport": scope_sport,
         "date": str(date_str)[:10] if date_str else None,
         "league_id": league_id,
-        "considered": len(candidates),
+        "considered": scanned,
+        "scanned_pages": pages,
         "eligible": len(eligible),
         "processed": processed,
         "snapshots_saved": saved,

@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 import config
 import storage
+import time_utils
 
 # Readiness is cached per database, not per process: a test or an operator can
 # point config.DB_PATH at a different SQLite file without inheriting a stale flag.
@@ -36,6 +37,21 @@ class Phase2SchemaMissing(RuntimeError):
 
 def _now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+
+def _normalize_kickoff(value: Any) -> Any:
+    """Store a kickoff instant in UTC.
+
+    Providers may hand back an ISO-8601 string carrying a local offset
+    (``2026-11-28T01:30:00+02:00``). Keeping that offset in storage makes any
+    string-prefix date comparison read a local calendar date, so the instant is
+    converted to UTC once at write time. Values that cannot be parsed as a
+    timezone-aware timestamp are preserved verbatim rather than invented.
+    """
+    if value is None or value == "":
+        return value
+    parsed = time_utils.parse_utc_datetime(value)
+    return parsed.isoformat() if parsed is not None else value
 
 
 def _json(value: Any) -> Optional[str]:
@@ -307,7 +323,7 @@ def upsert_lifecycle(record: Dict[str, Any]) -> Dict[str, Any]:
             record.get("season"),
             str(record["home_team_id"]) if record.get("home_team_id") is not None else None,
             str(record["away_team_id"]) if record.get("away_team_id") is not None else None,
-            record.get("kickoff_at"),
+            _normalize_kickoff(record.get("kickoff_at")),
             record.get("stage") or "DISCOVERED",
             record.get("provider_status"),
             now,
@@ -424,6 +440,8 @@ def update_lifecycle(lifecycle_id: str, expected_stage: Optional[str] = None, **
         "prediction_cycle_key",
     }
     fields = {k: v for k, v in updates.items() if k in allowed}
+    if "kickoff_at" in fields:
+        fields["kickoff_at"] = _normalize_kickoff(fields["kickoff_at"])
     fields["updated_at"] = _now()
     if "last_processed_at" not in fields and "stage" in fields:
         fields["last_processed_at"] = fields["updated_at"]
@@ -485,10 +503,17 @@ def list_lifecycles(
 ) -> List[Dict[str, Any]]:
     """List lifecycle rows with selection filters applied in SQL.
 
-    ``kickoff_on`` / ``kickoff_from`` / ``kickoff_to`` compare the UTC calendar
-    date prefix of ``kickoff_at``. Filtering here (rather than loading a global
-    queue and discarding rows in Python) is what prevents stale records from
-    consuming the batch limit.
+    Timezone convention: ``kickoff_at`` is an absolute instant and every date
+    filter here is a **UTC calendar date**. ``kickoff_on`` / ``kickoff_from`` /
+    ``kickoff_to`` therefore compare the UTC date of the parsed instant, not the
+    first ten characters of the stored string: a fixture stored as
+    ``2026-11-28T01:30:00+02:00`` is kickoff ``2026-11-27`` in UTC and must be
+    selected for ``kickoff_on='2026-11-27'``. Filtering here (rather than loading
+    a global queue and discarding rows in Python) is what prevents stale records
+    from consuming the batch limit.
+
+    Ordering is ``kickoff_at`` then ``created_at`` then ``lifecycle_id`` so
+    offset pagination is stable and cannot skip or repeat a row.
     """
     ensure_schema()
     conn, db_type = storage._connect()
@@ -506,19 +531,32 @@ def list_lifecycles(
         placeholders = ", ".join(ph for _ in exclude_stages)
         clauses.append(f"stage NOT IN ({placeholders})")
         params.extend(exclude_stages)
-    if kickoff_on:
-        clauses.append(f"substr(kickoff_at, 1, 10) = {ph}")
-        params.append(str(kickoff_on)[:10])
-    if kickoff_from:
-        clauses.append(f"substr(kickoff_at, 1, 10) >= {ph}")
-        params.append(str(kickoff_from)[:10])
-    if kickoff_to:
-        clauses.append(f"substr(kickoff_at, 1, 10) <= {ph}")
-        params.append(str(kickoff_to)[:10])
+    if kickoff_on or kickoff_from or kickoff_to:
+        # Derive the UTC calendar date from the parsed instant so a stored
+        # provider offset cannot shift a fixture onto the wrong day. SQLite's
+        # date() and an explicit timestamptz cast both convert to UTC; values
+        # that are not timestamps evaluate to NULL and are never matched.
+        if db_type == "postgres":
+            utc_date = (
+                r"CASE WHEN kickoff_at ~ '^\d{4}-\d{2}-\d{2}' "
+                "THEN (kickoff_at::timestamptz AT TIME ZONE 'UTC')::date END"
+            )
+        else:
+            utc_date = "date(kickoff_at)"
+        if kickoff_on:
+            clauses.append(f"{utc_date} = {ph}")
+            params.append(str(kickoff_on)[:10])
+        if kickoff_from:
+            clauses.append(f"{utc_date} >= {ph}")
+            params.append(str(kickoff_from)[:10])
+        if kickoff_to:
+            clauses.append(f"{utc_date} <= {ph}")
+            params.append(str(kickoff_to)[:10])
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
         f"SELECT {', '.join(_LIFECYCLE_FIELDS)} FROM live_match_lifecycle "
-        f"{where} ORDER BY kickoff_at ASC NULLS LAST, created_at ASC LIMIT {ph} OFFSET {ph}"
+        f"{where} ORDER BY kickoff_at ASC NULLS LAST, created_at ASC, lifecycle_id ASC "
+        f"LIMIT {ph} OFFSET {ph}"
     )
     if db_type != "postgres":
         sql = sql.replace(" NULLS LAST", "")
