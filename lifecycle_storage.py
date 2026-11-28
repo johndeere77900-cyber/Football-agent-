@@ -40,18 +40,29 @@ def _now() -> str:
 
 
 def _normalize_kickoff(value: Any) -> Any:
-    """Store a kickoff instant in UTC.
+    """Store a kickoff instant in UTC, rejecting ambiguous values.
 
     Providers may hand back an ISO-8601 string carrying a local offset
     (``2026-11-28T01:30:00+02:00``). Keeping that offset in storage makes any
     string-prefix date comparison read a local calendar date, so the instant is
-    converted to UTC once at write time. Values that cannot be parsed as a
-    timezone-aware timestamp are preserved verbatim rather than invented.
+    converted to UTC once at write time.
+
+    A value without an explicit offset (or one that is not an ISO-8601 instant)
+    is ambiguous and is rejected with an actionable error instead of being
+    guessed as UTC, as the host clock, or as the prediction timezone. This is
+    the one input boundary for lifecycle kickoffs, matching the strict policy of
+    :func:`time_utils.parse_utc_datetime` and the SQL date filter.
     """
     if value is None or value == "":
         return value
     parsed = time_utils.parse_utc_datetime(value)
-    return parsed.isoformat() if parsed is not None else value
+    if parsed is None:
+        raise ValueError(
+            "kickoff_at must be an ISO-8601 instant with an explicit UTC offset "
+            f"(for example '2026-11-28T00:30:00+00:00'); got {value!r}. "
+            "A naive timestamp is ambiguous and is never guessed."
+        )
+    return parsed.isoformat()
 
 
 def _json(value: Any) -> Optional[str]:
@@ -515,8 +526,11 @@ def list_lifecycles(
 
     The comparison is made against the parsed instant, never against the first
     ten characters of the stored string, so a provider offset cannot move a
-    fixture onto the wrong local day. Rows whose ``kickoff_at`` cannot be parsed
-    evaluate to NULL and are never matched.
+    fixture onto the wrong local day. Only a ``kickoff_at`` that states an
+    explicit offset takes part in the comparison: a legacy naive value would be
+    read as UTC by SQLite but in the session timezone by PostgreSQL, so it
+    evaluates to NULL and is never matched by either backend. Malformed values
+    behave the same way.
 
     Filtering here (rather than loading a global queue and discarding rows in
     Python) is what prevents stale records from consuming the batch limit.
@@ -549,13 +563,24 @@ def list_lifecycles(
         # be used while legacy rows may carry a non-UTC offset; the interval is
         # still computed once, before the query.
         if db_type == "postgres":
+            # The regex requires an explicit offset before the cast, otherwise
+            # a naive legacy value would be read in the session timezone and
+            # the same row would land on different local days per session.
             instant = (
-                r"CASE WHEN kickoff_at ~ '^\d{4}-\d{2}-\d{2}' "
+                r"CASE WHEN kickoff_at ~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}"
+                r"(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}(:?\d{2})?)$' "
                 "THEN kickoff_at::timestamptz END"
             )
             bound = f"{ph}::timestamptz"
         else:
-            instant = "julianday(kickoff_at)"
+            # julianday() silently reads a naive string as UTC, which is the
+            # guess the policy rejects; require the offset in the text itself so
+            # SQLite and PostgreSQL select exactly the same rows.
+            instant = (
+                "CASE WHEN kickoff_at GLOB '*[T ][0-9][0-9]:[0-9][0-9]*[+-][0-9][0-9]*' "
+                "OR kickoff_at GLOB '*[T ][0-9][0-9]:[0-9][0-9]*Z' "
+                "THEN julianday(kickoff_at) END"
+            )
             bound = f"julianday({ph})"
         # A malformed date raises ValueError from local_date_interval_iso()
         # rather than quietly selecting the whole table.

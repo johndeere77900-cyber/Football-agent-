@@ -491,12 +491,10 @@ def format_fixture_time(fixture):
     raw = fixture.get("fixture", {}).get("date")
     if not raw:
         return "time unavailable"
-    try:
-        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
+    parsed = _parse_kickoff(raw)
+    if parsed is None:
+        # Naive or malformed value: say so rather than displaying a guessed time.
         return "time unavailable"
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
     # Displayed in the reader's timezone; the stored kickoff instant is
     # untouched. ``%Z`` names the zone (WAT for Africa/Lagos) so the displayed
     # time is never mistaken for UTC.
@@ -521,15 +519,16 @@ def fixture_matches_team(fixture, team_query):
 
 
 def _parse_kickoff(value):
+    """Parse a kickoff instant with the application-wide timestamp policy.
+
+    Delegates to :func:`time_utils.parse_utc_datetime` so Telegram cannot read a
+    naive value differently from storage, SQLite or PostgreSQL. A naive kickoff
+    is ambiguous and returns ``None`` here; display falls back to the stored text
+    instead of inventing a timezone.
+    """
     if not value:
         return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
+    return time_utils.parse_utc_datetime(value)
 
 
 def format_fixture_date(value):

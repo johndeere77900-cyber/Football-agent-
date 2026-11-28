@@ -106,21 +106,36 @@ def test_provider_offsets_are_normalized_and_keep_their_local_day():
     ]
 
 
-def test_naive_timestamps_follow_the_documented_utc_interpretation():
-    # The repository's documented rule: a naive timestamp is rejected by the
-    # strict parser and read as UTC by the Telegram kickoff formatter.
-    assert time_utils.parse_utc_datetime("2026-11-28T00:30:00") is None
-    assert telegram_bot._parse_kickoff("2026-11-28T00:30:00") == dt.datetime(
-        2026, 11, 28, 0, 30, tzinfo=dt.timezone.utc
-    )
-    assert telegram_bot.format_fixture_date("2026-11-28T00:30:00") == "2026-11-28"
-    assert telegram_bot.format_fixture_time({"fixture": {"date": "2026-11-28T00:30:00"}}) == "01:30 WAT"
+def test_naive_timestamps_are_rejected_by_every_boundary():
+    """A naive kickoff is ambiguous: one policy rejects it everywhere.
+
+    The repository stores kickoff instants with an explicit offset
+    (``storage.validate_historical_fixture`` reports
+    ``timezone_naive_kickoff_timestamp``). Nothing may guess UTC, the host clock
+    or the prediction timezone for a naive value.
+    """
+    naive = "2026-11-28T00:30:00"
+    assert time_utils.parse_utc_datetime(naive) is None
+    assert telegram_bot._parse_kickoff(naive) is None
+    assert telegram_bot.format_fixture_time({"fixture": {"date": naive}}) == "time unavailable"
+    # The stored text still names its own date; only the time is withheld.
+    assert telegram_bot.format_fixture_date(naive) == "2026-11-28"
+    with pytest.raises(ValueError, match="explicit UTC offset"):
+        _seed("naive", naive)
+    assert lstore.get_lifecycle("football:api_football:naive") is None
+
+
+def test_explicit_offsets_still_display_and_store():
+    seeded = _seed("offset_display", "2026-11-28T00:30:00+00:00")
+    assert telegram_bot.format_fixture_time({"fixture": {"date": seeded["kickoff_at"]}}) == "01:30 WAT"
+    assert telegram_bot.format_fixture_date(seeded["kickoff_at"]) == "2026-11-28"
 
 
 def test_malformed_timestamps_are_never_selected():
-    broken = _seed("broken", "not-a-timestamp")
+    """A malformed stored value is rejected on write and never selected."""
+    with pytest.raises(ValueError, match="explicit UTC offset"):
+        _seed("broken", "not-a-timestamp")
     valid = _seed("valid", "2026-11-28T12:00:00+00:00")
-    assert broken["kickoff_at"] == "not-a-timestamp"  # preserved, never invented
     assert time_utils.parse_utc_datetime("not-a-timestamp") is None
     assert time_utils.local_calendar_date("not-a-timestamp") is None
     assert time_utils.in_local_day("not-a-timestamp", "2026-11-28") is False
@@ -128,6 +143,37 @@ def test_malformed_timestamps_are_never_selected():
     assert [row["lifecycle_id"] for row in selected] == [valid["lifecycle_id"]]
     with pytest.raises(ValueError):
         lstore.list_lifecycles(kickoff_on="28-11-2026")
+
+
+def test_legacy_naive_row_is_never_selected_by_the_sql_filter():
+    """A row written before the policy is not rewritten, but never matched.
+
+    SQLite's julianday() would read the text as UTC while PostgreSQL reads it in
+    the session timezone; the filter therefore only compares values that state
+    their offset, on both backends.
+    """
+    import sqlite3
+
+    legacy = _seed("legacy_naive", "2026-11-28T00:30:00+00:00")
+    with_offset = _seed("legacy_offset", "2026-11-28T01:30:00+02:00")
+    conn = sqlite3.connect(config.DB_PATH)
+    try:
+        conn.execute(
+            "UPDATE live_match_lifecycle SET kickoff_at = ? WHERE lifecycle_id = ?",
+            ("2026-11-28T00:30:00", legacy["lifecycle_id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    for local_date in ("2026-11-27", "2026-11-28", "2026-11-29"):
+        selected = [row["lifecycle_id"] for row in lstore.list_lifecycles(kickoff_on=local_date)]
+        assert legacy["lifecycle_id"] not in selected
+        assert time_utils.in_local_day("2026-11-28T00:30:00", local_date) is False
+    # The guard is narrow: an equivalent instant that states its offset is kept.
+    assert [row["lifecycle_id"] for row in lstore.list_lifecycles(kickoff_on="2026-11-28")] == [
+        with_offset["lifecycle_id"]
+    ]
 
 
 # ---------------------------------------------------------------------------

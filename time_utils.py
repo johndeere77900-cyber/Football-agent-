@@ -38,6 +38,13 @@ def parse_utc_datetime(ts_val: Any) -> Optional[datetime]:
     - Rejects timezone-naive timestamps (dt.tzinfo is None or utcoffset is None).
     - Rejects malformed strings that fail ISO parsing.
     - Converts valid datetimes to UTC.
+
+    This is the single parsing boundary for kickoff instants, and its policy is
+    that a naive timestamp is ambiguous: it is rejected instead of being guessed
+    as UTC, as the machine's local time, or as the prediction timezone. The same
+    rule is enforced when a lifecycle kickoff is written and in the SQL date
+    filter on both backends, so storage, SQLite, PostgreSQL and Telegram can
+    never disagree about what a naive value means.
     """
     if ts_val is None or isinstance(ts_val, bool):
         return None
