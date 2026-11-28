@@ -540,6 +540,19 @@ def _football_statistical_field_coverage(fixtures, enrichments, fixture_ids):
     }
 
 
+class HistoricalAcquisitionRetired(RuntimeError):
+    """Deprecated compatibility error type.
+
+    Historical acquisition is no longer retired: it is an authorized, manual,
+    additive operation. This type is retained so external importers do not break.
+    """
+
+    MESSAGE = "Historical acquisition is retired."
+
+    def __init__(self, operation: str = "historical acquisition") -> None:
+        super().__init__(f"{self.MESSAGE} (operation: {operation})")
+
+
 def sync_historical_fixtures(
     league_id: int,
     season: int,
@@ -550,6 +563,9 @@ def sync_historical_fixtures(
     """
     Acquire historical fixtures (and optional enrichment) for a league/season
     and save them into persistent storage.
+
+    Manual, additive and idempotent: existing records are preserved and a
+    COMPLETE dataset is read first rather than re-fetched.
     """
     import time
     t_sync_start = time.perf_counter()

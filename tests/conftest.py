@@ -1,4 +1,5 @@
 import os
+import socket
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -31,11 +32,12 @@ _LEGACY_RESOLVER_MODULES = {
 }
 
 # These modules do not test the SoccerData adapters directly, so their fallback
-# legs can be stubbed too. test_direct_csv_and_resiliency and test_data_resolver
-# assert on those legs themselves and keep their own patches.
+# legs can be stubbed too. test_soccerdata_provider drives the real adapter, and
+# test_direct_csv_and_resiliency asserts on its own patches, so both are left
+# out. Every test that asserts on a SoccerData or CSV leg patches it explicitly,
+# which takes precedence over the stub below.
 _SOCCERDATA_STUB_MODULES = _LEGACY_RESOLVER_MODULES - {
     "test_direct_csv_and_resiliency",
-    "test_data_resolver",
     "test_soccerdata_provider",
 }
 
@@ -49,6 +51,12 @@ _CSV_STUB_MODULES = {
     "test_resume_queue_and_cli",
     "test_rolling_backtest_window",
 }
+
+# The SoccerData adapters run their scrape in a fresh subprocess, which the
+# in-process socket guard cannot reach. Stubbing the adapter entry points is what
+# keeps a deterministic test deterministic; before this, a sync test that only
+# patched API-Football and Football-Data fell through to a live MatchHistory
+# scrape and held a CI worker until the job timed out.
 
 
 @pytest.fixture(autouse=True)
@@ -70,6 +78,52 @@ def stub_unmocked_historical_stages(monkeypatch, request):
 
     if module in _CSV_STUB_MODULES:
         monkeypatch.setattr("data_resolver._fetch_direct_csv_league_fixtures", lambda *a, **k: [])
+
+
+@pytest.fixture(autouse=True)
+def block_unmocked_external_network(monkeypatch):
+    """Make a real outbound connection fail fast instead of hanging the suite.
+
+    The pull-request suite is deterministic: every provider boundary is mocked or
+    stubbed. Before this guard, one test that reached a live SoccerData scrape
+    blocked a worker until the CI job hit its 30-minute limit. Loopback and unix
+    sockets stay usable for the disposable PostgreSQL server; a test that truly
+    needs a live provider must opt out explicitly with
+    ``@pytest.mark.live_provider`` and run in the separate integration workflow.
+    """
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def _is_local(address):
+        # AF_UNIX addresses are paths, not routable endpoints.
+        if isinstance(address, (str, bytes)):
+            return True
+        try:
+            host = str(address[0])
+        except (IndexError, TypeError):
+            return True
+        return (
+            host in {"", "localhost", "::1", "0.0.0.0"}
+            or host.startswith("127.")
+            or host.startswith("::ffff:127.")
+        )
+
+    def guarded_connect(self, address):
+        if not _is_local(address):
+            raise OSError(
+                f"external network access is blocked in the deterministic test suite: {address!r}"
+            )
+        return real_connect(self, address)
+
+    def guarded_connect_ex(self, address):
+        if not _is_local(address):
+            raise OSError(
+                f"external network access is blocked in the deterministic test suite: {address!r}"
+            )
+        return real_connect_ex(self, address)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
 
 
 @pytest.fixture(autouse=True)

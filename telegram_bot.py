@@ -393,9 +393,19 @@ def detect_sport(text):
 
 
 def resolve_date(text):
-    """Resolve explicit dates and natural-language dates in UTC."""
+    """Resolve explicit dates and natural-language dates as local calendar dates.
+
+    "today", "tomorrow" and weekday names are read as calendar dates in
+    ``config.PREDICTION_TIMEZONE`` (default ``Africa/Lagos``), which is the
+    timezone the person writing to the bot lives in. The returned ``YYYY-MM-DD``
+    is a *local* date; the lifecycle layer converts it into a half-open UTC
+    instant interval before querying, so a fixture stored in UTC is still
+    selected on the day it is actually played locally.
+
+    An explicit ``YYYY-MM-DD`` in the message is returned unchanged.
+    """
     normalized = normalize_text(text)
-    today = datetime.now(timezone.utc).date()
+    today = time_utils.local_today()
 
     iso_match = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", normalized)
     if iso_match:
@@ -481,11 +491,18 @@ def format_fixture_time(fixture):
     raw = fixture.get("fixture", {}).get("date")
     if not raw:
         return "time unavailable"
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        return parsed.astimezone(timezone.utc).strftime("%H:%M UTC")
-    except (TypeError, ValueError):
+    parsed = _parse_kickoff(raw)
+    if parsed is None:
+        # Naive or malformed value: say so rather than displaying a guessed time.
         return "time unavailable"
+    # Displayed in the reader's timezone; the stored kickoff instant is
+    # untouched. ``%Z`` names the zone (WAT for Africa/Lagos) so the displayed
+    # time is never mistaken for UTC.
+    try:
+        local = parsed.astimezone(time_utils.prediction_timezone())
+    except ValueError:
+        local = parsed.astimezone(timezone.utc)
+    return local.strftime("%H:%M %Z")
 
 
 def fixture_teams(fixture):
@@ -501,109 +518,321 @@ def fixture_matches_team(fixture, team_query):
     return query in normalize_text(home) or query in normalize_text(away)
 
 
-def get_tracked_fixtures_for_date(date_str, league_id=None):
-    """
-    Return tracked football fixtures for date using DataResolver (Primary API-Football -> Secondary Fallback).
-    Exclusively uses DataResolver; does NOT bypass DataResolver with direct API-Football calls.
-    """
-    from data_resolver import DataResolver
-    resolver = DataResolver()
-    fixtures, _ = resolver.get_fixtures_for_date(date_str, league_id=league_id)
+def _parse_kickoff(value):
+    """Parse a kickoff instant with the application-wide timestamp policy.
 
-    if not isinstance(fixtures, list):
+    Delegates to :func:`time_utils.parse_utc_datetime` so Telegram cannot read a
+    naive value differently from storage, SQLite or PostgreSQL. A naive kickoff
+    is ambiguous and returns ``None`` here; display falls back to the stored text
+    instead of inventing a timezone.
+    """
+    if not value:
+        return None
+    return time_utils.parse_utc_datetime(value)
+
+
+def format_fixture_date(value):
+    """Local calendar date of a kickoff instant, for display in Telegram.
+
+    The instant itself is never modified; only the date a reader sees follows
+    ``config.PREDICTION_TIMEZONE``. A value that cannot be parsed falls back to
+    its stored leading date so the message never claims a date the data does not
+    support.
+    """
+    parsed = _parse_kickoff(value)
+    if parsed is None:
+        return str(value or "")[:10]
+    try:
+        return parsed.astimezone(time_utils.prediction_timezone()).date().isoformat()
+    except ValueError:
+        return parsed.astimezone(timezone.utc).date().isoformat()
+
+
+def _league_name(league_id):
+    for name, mapped in getattr(config, "LEAGUE_NAME_TO_ID", {}).items():
+        if str(mapped) == str(league_id):
+            return name.title()
+    return f"League {league_id}" if league_id is not None else "Unknown league"
+
+
+def _display_team(canonical_id):
+    text = str(canonical_id or "").strip()
+    if not text:
+        return "Unknown"
+    return text.replace("_", " ").replace("-", " ").title()
+
+
+def _lifecycle_snapshot(row):
+    """Latest pre-match snapshot persisted for a lifecycle row, if any."""
+    try:
+        fixture_id = int(row.get("provider_fixture_id"))
+    except (TypeError, ValueError):
+        return None
+    try:
+        snapshots = storage.get_prediction_snapshots(
+            fixture_id=fixture_id, sport=row.get("sport"), limit=50
+        )
+    except Exception:
+        return None
+    for snapshot in snapshots:
+        if snapshot.get("prediction_context") == "PRE_MATCH":
+            return snapshot
+    return None
+
+
+def _lifecycle_team_names(row):
+    snapshot = _lifecycle_snapshot(row)
+    if snapshot:
+        return (
+            snapshot.get("home_team") or _display_team(row.get("home_team_id")),
+            snapshot.get("away_team") or _display_team(row.get("away_team_id")),
+        )
+    return _display_team(row.get("home_team_id")), _display_team(row.get("away_team_id"))
+
+
+def _fixture_from_lifecycle(row):
+    home_name, away_name = _lifecycle_team_names(row)
+    raw_id = row.get("provider_fixture_id")
+    try:
+        fixture_id = int(raw_id)
+    except (TypeError, ValueError):
+        fixture_id = raw_id
+    return {
+        "fixture": {
+            "id": fixture_id,
+            "date": row.get("kickoff_at"),
+            "status": {"short": row.get("provider_status") or "NS"},
+        },
+        "league": {
+            "id": row.get("league_id"),
+            "season": row.get("season"),
+            "name": _league_name(row.get("league_id")),
+        },
+        "teams": {
+            "home": {"id": row.get("home_team_id"), "name": home_name},
+            "away": {"id": row.get("away_team_id"), "name": away_name},
+        },
+        "lifecycle": {
+            "lifecycle_id": row.get("lifecycle_id"),
+            "stage": row.get("stage"),
+            "provider": row.get("provider"),
+        },
+        "provider_provenance": {"provider": row.get("provider")},
+    }
+
+
+def _game_from_lifecycle(row):
+    fixture = _fixture_from_lifecycle(row)
+    kickoff = str(row.get("kickoff_at") or "")
+    try:
+        game_id = int(row.get("provider_fixture_id"))
+    except (TypeError, ValueError):
+        game_id = row.get("provider_fixture_id")
+    return {
+        "id": game_id,
+        "date": kickoff,
+        "time": kickoff[11:16] + " UTC" if len(kickoff) >= 16 else "time TBA",
+        "league": fixture["league"],
+        "teams": fixture["teams"],
+        "status": fixture["fixture"]["status"],
+        "lifecycle": fixture["lifecycle"],
+        "provider_provenance": fixture["provider_provenance"],
+    }
+
+
+def get_tracked_fixtures_for_date(date_str, league_id=None):
+    """Football fixtures the live lifecycle has actually persisted as tracked.
+
+    Reads lifecycle records only: a provider query is never run here and its
+    results are never relabelled as tracked.
+    """
+    import live_lifecycle
+
+    try:
+        rows = live_lifecycle.list_tracked("football", date_str=date_str, league_id=league_id)
+    except Exception as exc:
+        print(f"Tracked football fixture read error for {date_str}: {exc}", flush=True)
         return []
-    target_leagues = {league_id} if league_id else set(config.ALLOWED_LEAGUE_IDS)
-    return [
-        fixture for fixture in fixtures
-        if isinstance(fixture, dict) and fixture.get("league", {}).get("id") in target_leagues
-    ]
+    return [_fixture_from_lifecycle(row) for row in rows]
 
 
 def get_tracked_basketball_games_for_date(date_str, league_id=None):
-    """
-    Return tracked basketball games for date.
-    Fetches one date response and filters for allowed basketball leagues locally.
-    """
+    """Basketball games the live lifecycle has actually persisted as tracked."""
+    import live_lifecycle
+
     try:
-        games = basketball_api.get_games_by_date(date_str) or []
+        rows = live_lifecycle.list_tracked("basketball", date_str=date_str, league_id=league_id)
     except Exception as exc:
-        print(f"Basketball games fetch error for date {date_str}: {exc}")
+        print(f"Tracked basketball game read error for {date_str}: {exc}", flush=True)
         return []
-
-    if not isinstance(games, list):
-        return []
-
-    target_leagues = {league_id} if league_id else set(config.ALLOWED_BASKETBALL_LEAGUE_IDS)
-    return [
-        g for g in games
-        if isinstance(g, dict) and g.get("league", {}).get("id") in target_leagues
-    ]
+    return [_game_from_lifecycle(row) for row in rows]
 
 
 def get_upcoming_fixtures(league_id=None, quantity=10, max_days_ahead=14):
-    """
-    Collect upcoming football fixtures across multiple forward calendar dates starting from today.
-    Returns tuple: (fixtures_list, horizon_exhausted_bool)
-    """
-    today_dt = datetime.now(timezone.utc).date()
+    """Upcoming tracked football fixtures from persisted lifecycle records."""
+    import live_lifecycle
+
+    now = datetime.now(timezone.utc)
+    horizon = now + timedelta(days=max_days_ahead)
+    try:
+        rows = live_lifecycle.list_tracked("football", league_id=league_id, limit=1000)
+    except Exception as exc:
+        print(f"Upcoming football fixture read error: {exc}", flush=True)
+        return [], True
+
     collected = []
-    seen_ids = set()
-
-    for day_offset in range(max_days_ahead):
-        if len(collected) >= quantity:
-            break
-        d_str = (today_dt + timedelta(days=day_offset)).isoformat()
-        fixtures = get_tracked_fixtures_for_date(d_str, league_id=league_id)
-        if isinstance(fixtures, list):
-            for f in fixtures:
-                if not isinstance(f, dict):
-                    continue
-                fid = f.get("fixture", {}).get("id")
-                if fid and fid in seen_ids:
-                    continue
-                status_short = f.get("fixture", {}).get("status", {}).get("short", "")
-                if status_short in {"FT", "AET", "PEN", "CANC", "ABD"}:
-                    continue
-                if fid:
-                    seen_ids.add(fid)
-                collected.append(f)
-
-    collected.sort(key=lambda item: item.get("fixture", {}).get("date", ""))
-    horizon_exhausted = len(collected) < quantity
-    return collected[:quantity], horizon_exhausted
+    for row in rows:
+        kickoff = _parse_kickoff(row.get("kickoff_at"))
+        if kickoff is None or kickoff < now or kickoff > horizon:
+            continue
+        collected.append((kickoff, _fixture_from_lifecycle(row)))
+    collected.sort(key=lambda pair: pair[0])
+    fixtures = [item for _, item in collected[:quantity]]
+    return fixtures, len(collected) < quantity
 
 
 def get_upcoming_basketball_games(league_id=None, quantity=10, max_days_ahead=14):
-    """
-    Collect upcoming basketball games across multiple forward calendar dates starting from today.
-    Returns tuple: (games_list, horizon_exhausted_bool)
-    """
-    today_dt = datetime.now(timezone.utc).date()
+    """Upcoming tracked basketball games from persisted lifecycle records."""
+    import live_lifecycle
+
+    now = datetime.now(timezone.utc)
+    horizon = now + timedelta(days=max_days_ahead)
+    try:
+        rows = live_lifecycle.list_tracked("basketball", league_id=league_id, limit=1000)
+    except Exception as exc:
+        print(f"Upcoming basketball game read error: {exc}", flush=True)
+        return [], True
+
     collected = []
-    seen_ids = set()
+    for row in rows:
+        kickoff = _parse_kickoff(row.get("kickoff_at"))
+        if kickoff is None or kickoff < now or kickoff > horizon:
+            continue
+        collected.append((kickoff, _game_from_lifecycle(row)))
+    collected.sort(key=lambda pair: pair[0])
+    games = [item for _, item in collected[:quantity]]
+    return games, len(collected) < quantity
 
-    for day_offset in range(max_days_ahead):
-        if len(collected) >= quantity:
+
+def _redact(text):
+    return re.sub(
+        r"(key|token|secret|auth|password)=[\w-]+", r"\1=REDACTED", str(text), flags=re.IGNORECASE
+    )
+
+
+def _fixture_diagnostics_text(sport, date_str, league_id=None):
+    """Explain why a fixture list is empty instead of claiming nothing exists."""
+    import live_lifecycle
+    import provider_registry
+
+    diag = live_lifecycle.diagnostics(sport, date_str=date_str, league_id=league_id)
+    lines = [
+        "🔍 *Lifecycle diagnostics:*",
+        f"• Persisted {sport} fixtures (all dates): {diag.get('total', 0)}",
+        f"• Persisted on {date_str}: {diag.get('on_date', 0)}",
+        f"• Tracked on date: {diag.get('tracked', 0)}",
+        f"• Unresolved identity: {diag.get('unresolved', 0)}",
+    ]
+    if diag.get("schema_error"):
+        lines.append(f"• Lifecycle storage error: {_redact(diag['schema_error'])}")
+    for error in (diag.get("errors") or [])[:3]:
+        lines.append(
+            f"• {error.get('lifecycle_id')} at {error.get('stage')}: "
+            f"{_redact(str(error.get('error')))}"
+        )
+    health = [
+        f"{entry['provider']}={entry['health']}"
+        + (f" ({entry['last_failure_category']})" if entry.get("last_failure_category") else "")
+        for entry in provider_registry.list_providers(sport)
+        if entry.get("health") in ("healthy", "failing")
+    ]
+    if health:
+        lines.append("• Provider health: " + ", ".join(health))
+    missing = sorted(
+        {
+            entry["auth_env"]
+            for entry in provider_registry.list_providers(sport)
+            if entry.get("auth_env")
+            and not (os.environ.get(entry["auth_env"]) or getattr(config, entry["auth_env"], None))
+        }
+    )
+    if missing:
+        lines.append("• Missing credentials: " + ", ".join(missing))
+    lines.append("• Discovery must persist a fixture before it can be tracked.")
+    return "\n".join(lines)
+
+
+def _prediction_diagnostics_text(lifecycle_diag, discovery, prematch):
+    lines = [
+        "🔍 *Diagnostic Breakdown:*",
+        f"• Fixtures Discovered: {discovery.get('discovered', 0)}",
+        f"• Tracked: {discovery.get('tracked', 0)}",
+        f"• Unresolved Identity: {discovery.get('unresolved', 0)}",
+        f"• Identity Failures: {discovery.get('identity_failures', 0)}",
+        f"• Prematch Eligible: {prematch.get('eligible', 0)}",
+        f"• Prematch Processed: {prematch.get('processed', 0)}",
+        f"• Snapshots Saved: {prematch.get('snapshots_saved', 0)}",
+        f"• Kickoff Passed (excluded): {prematch.get('expired', 0)}",
+        f"• Retry Backoff: {prematch.get('retry_deferred', 0)}",
+        f"• Retry Exhausted: {prematch.get('retry_exhausted', 0)}",
+        f"• Persisted For Date: {lifecycle_diag.get('on_date', 0)}",
+    ]
+    if lifecycle_diag.get("schema_error"):
+        lines.append(f"• Lifecycle storage error: {_redact(lifecycle_diag['schema_error'])}")
+    for error in (discovery.get("errors") or [])[:3]:
+        lines.append(f"• Discovery error: {_redact(error)}")
+    for error in (lifecycle_diag.get("errors") or [])[:5]:
+        lines.append(
+            f"• {error.get('lifecycle_id')} at {error.get('stage')}: "
+            f"{_redact(str(error.get('error')))} ({error.get('error_class')})"
+        )
+    return "\n".join(lines)
+
+
+def _lifecycle_predictions(sport, date_str, quantity, league_id):
+    """Discover, persist and predict through the live lifecycle for one date."""
+    import live_lifecycle
+
+    discovery = live_lifecycle.discover(sport, horizon_days=0, start_date=date_str)
+    # Scope the batch to the requested sport/date/competition so unrelated or
+    # stale lifecycle records cannot consume the requested prediction capacity.
+    prematch = live_lifecycle.prematch(
+        limit=200, sport=sport, date_str=date_str, league_id=league_id
+    )
+    lifecycle_diag = live_lifecycle.diagnostics(sport, date_str=date_str, league_id=league_id)
+
+    results = []
+    for row in live_lifecycle.list_tracked(sport, date_str=date_str, league_id=league_id, limit=200):
+        snapshot = _lifecycle_snapshot(row)
+        if not snapshot:
+            continue
+        home_name, away_name = _lifecycle_team_names(row)
+        prediction = {
+            "fixture_id": snapshot.get("fixture_id"),
+            "home_team": home_name,
+            "away_team": away_name,
+            "league": _league_name(row.get("league_id")),
+            "league_name": _league_name(row.get("league_id")),
+            "date": snapshot.get("kickoff_at"),
+            "data_cutoff_timestamp": snapshot.get("data_cutoff_timestamp"),
+            "markets": snapshot.get("markets") or {},
+            "confidence": snapshot.get("confidence") or {},
+            "quality_gate": snapshot.get("quality_gate") or "PASS",
+            "reason_codes": snapshot.get("reason_codes") or [],
+            "model_version": snapshot.get("model_version"),
+            "feature_version": snapshot.get("feature_version"),
+            "calibration_version": snapshot.get("calibration_version"),
+            "uncertainty": {"state": snapshot.get("uncertainty_state") or "NORMAL"},
+            "edge": snapshot.get("edge"),
+            "ev": snapshot.get("ev"),
+            "odds_comparison": snapshot.get("odds_comparison") or {},
+            "insufficient_data": False,
+        }
+        results.append({"lifecycle": row, "fixture": _fixture_from_lifecycle(row), "prediction": prediction})
+        if len(results) >= quantity:
             break
-        d_str = (today_dt + timedelta(days=day_offset)).isoformat()
-        games = get_tracked_basketball_games_for_date(d_str, league_id=league_id)
-        if isinstance(games, list):
-            for g in games:
-                if not isinstance(g, dict):
-                    continue
-                gid = g.get("id")
-                if gid and gid in seen_ids:
-                    continue
-                status_short = g.get("status", {}).get("short", "")
-                if status_short in {"FT", "AOT", "CANC", "ABD"}:
-                    continue
-                if gid:
-                    seen_ids.add(gid)
-                collected.append(g)
 
-    collected.sort(key=lambda item: str(item.get("date", "")) + str(item.get("time", "")))
-    horizon_exhausted = len(collected) < quantity
-    return collected[:quantity], horizon_exhausted
+    return results, {"discovery": discovery, "prematch": prematch, "lifecycle": lifecycle_diag}
 
 
 def handle_count_question(text):
@@ -653,7 +882,7 @@ def handle_schedule_question(text):
     for f in found[:5]:
         home, away = fixture_teams(f)
         league = f.get("league", {}).get("name", "Unknown league")
-        f_date = f.get("fixture", {}).get("date", "")[:10] or "date unavailable"
+        f_date = format_fixture_date(f.get("fixture", {}).get("date", "")) or "date unavailable"
         lines.append(f"• {home} vs {away} — {f_date}, {format_fixture_time(f)} ({league})")
 
     return "\n".join(lines)
@@ -1120,7 +1349,8 @@ def format_prediction_contract_telegram(prediction, sport="football"):
     home = rec.get("home_team") or prediction.get("home_team", "Home")
     away = rec.get("away_team") or prediction.get("away_team", "Away")
     league = rec.get("league_name") or rec.get("league") or prediction.get("league", "Unknown")
-    date_str = rec.get("data_cutoff_timestamp", "")[:10] or prediction.get("date", "")[:10]
+    # A persisted snapshot may carry a NULL cutoff; never crash while rendering it.
+    date_str = str(rec.get("data_cutoff_timestamp") or prediction.get("date") or "")[:10]
 
     quality_gate = rec.get("quality_gate", "PASS")
     signal_str = "SIGNAL" if quality_gate == "SIGNAL" else "PASS"
@@ -1259,49 +1489,39 @@ def get_suggested_action_buttons(operation):
 # ============================================================================
 
 def handle_predict_op(params):
-    """Execute prediction operation for football or basketball."""
-    sport = params.get("sport", "football")
-    date_str = params.get("date")
+    """Generate predictions through the same lifecycle pipeline the schedulers use."""
+    sport = "basketball" if params.get("sport") == "basketball" else "football"
+    date_str = params.get("date") or time_utils.local_today().isoformat()
     date_label = params.get("date_label", "today")
-    quantity = params.get("quantity", 1)
+    try:
+        quantity = max(1, int(params.get("quantity") or 1))
+    except (TypeError, ValueError):
+        quantity = 1
     league_id = params.get("league_id")
 
-    if sport == "football":
-        results = research_football(date_str, quantity=quantity, league_id=league_id)
-    else:
-        results = research_basketball(date_str, quantity=quantity, league_id=league_id)
+    try:
+        results, diagnostics = _lifecycle_predictions(sport, date_str, quantity, league_id)
+    except Exception as exc:
+        return (
+            f"📊 No {sport} predictions could be produced for {date_label} ({date_str}).\n\n"
+            f"🔍 *Diagnostic Breakdown:*\n"
+            f"• Lifecycle error: {_redact(f'{type(exc).__name__}: {exc}')}"
+        )
 
     if not results:
-        base_msg = f"📊 No {sport} predictions could be produced for {date_label} ({date_str})."
-        diag = getattr(research_football, "last_diagnostics", {}) if sport == "football" else {}
-        if isinstance(diag, dict) and diag.get("fixtures_found", 0) > 0:
-            stage_counts = [f"{st.replace('_', ' ').title()}: {cnt}" for st, cnt in diag.get("failure_counts_by_stage", {}).items() if cnt > 0]
-            stage_str = ", ".join(stage_counts) if stage_counts else "None"
-
-            reasons_lines = []
-            for fid, reas in list(diag.get("per_fixture_reasons", {}).items())[:5]:
-                clean_reas = re.sub(r"(key|token|secret|auth|password)=[\w-]+", r"\1=REDACTED", str(reas), flags=re.IGNORECASE)
-                reasons_lines.append(f"• Fixture `{fid}`: {clean_reas}")
-
-            reasons_block = ("\n" + "\n".join(reasons_lines)) if reasons_lines else ""
-
-            return (
-                f"{base_msg}\n\n"
-                f"🔍 *Diagnostic Breakdown:*\n"
-                f"• Fixtures Found: {diag.get('fixtures_found', 0)}\n"
-                f"• Prediction Attempts: {diag.get('prediction_attempts', 0)}\n"
-                f"• Predictions Produced: {diag.get('predictions_produced', 0)}\n"
-                f"• Skipped: {diag.get('skipped_count', 0)}\n"
-                f"• Failure Stages: {stage_str}"
-                f"{reasons_block}"
+        return (
+            f"📊 No {sport} predictions could be produced for {date_label} ({date_str}).\n\n"
+            + _prediction_diagnostics_text(
+                diagnostics.get("lifecycle") or {},
+                diagnostics.get("discovery") or {},
+                diagnostics.get("prematch") or {},
             )
-        return base_msg
+        )
 
-    outputs = []
-    for item in results:
-        pred_text = format_prediction_contract_telegram(item.get("prediction", {}), sport=sport)
-        outputs.append(pred_text)
-
+    outputs = [
+        format_prediction_contract_telegram(item.get("prediction", {}), sport=sport)
+        for item in results
+    ]
     return "\n\n---\n\n".join(outputs)
 
 
@@ -1327,7 +1547,10 @@ def handle_fixtures_op(params):
         if not games:
             title_lg = f" {league_name.upper()}" if league_name else " NBA"
             horizon_msg = " within 14-day horizon" if is_next else ""
-            return f"🏀 No tracked basketball games found for{title_lg}{horizon_msg}."
+            return (
+                f"🏀 No tracked basketball games found for{title_lg}{horizon_msg}.\n\n"
+                + _fixture_diagnostics_text("basketball", date_str, league_id)
+            )
 
         title_lg = f" ({league_name.upper()})" if league_name else ""
         lines = [f"🏀 *{header_label}{title_lg}:*"]
@@ -1336,7 +1559,7 @@ def handle_fixtures_op(params):
             h_name = teams.get("home", {}).get("name", "Home")
             a_name = teams.get("away", {}).get("name", "Away")
             lg_str = g.get("league", {}).get("name", "NBA")
-            g_date = str(g.get("date", ""))[:10]
+            g_date = format_fixture_date(g.get("date", ""))
             time_str = g.get("time", "") or "time TBA"
             date_info = f"{g_date}, {time_str}" if g_date else time_str
             lines.append(f"• {h_name} vs {a_name} — {date_info} ({lg_str})")
@@ -1358,7 +1581,10 @@ def handle_fixtures_op(params):
         if not fixtures:
             title_lg = f" {league_name.title()}" if league_name else " tracked"
             horizon_msg = " within 14-day horizon" if is_next else ""
-            return f"📅 No{title_lg} football fixtures found{horizon_msg}."
+            return (
+                f"📅 No{title_lg} football fixtures found{horizon_msg}.\n\n"
+                + _fixture_diagnostics_text("football", date_str, league_id)
+            )
 
         title_lg = f" ({league_name.title()})" if league_name else ""
         lines = [f"📅 *{header_label}{title_lg}:*"]
@@ -1367,7 +1593,7 @@ def handle_fixtures_op(params):
             h_name = teams.get("home", {}).get("name", "Home")
             a_name = teams.get("away", {}).get("name", "Away")
             league = f.get("league", {}).get("name", "Unknown")
-            f_date = str(f.get("fixture", {}).get("date", ""))[:10]
+            f_date = format_fixture_date(f.get("fixture", {}).get("date", ""))
             time_str = format_fixture_time(f)
             lines.append(f"• {h_name} vs {a_name} — {f_date}, {time_str} ({league})")
 
@@ -1914,7 +2140,7 @@ def handle_details_op(params):
     league_name = found_item.get("league", {}).get("name", "Unknown League")
 
     if item_sport == "basketball":
-        game_date = found_item.get("date", "")[:10]
+        game_date = format_fixture_date(found_item.get("date", ""))
         status = found_item.get("status", {}).get("long", "Scheduled")
         scores = found_item.get("scores", {})
         h_pts = scores.get("home", {}).get("total") if isinstance(scores.get("home"), dict) else None
@@ -1931,7 +2157,7 @@ def handle_details_op(params):
             f"• *Game ID:* `{found_item.get('id', 'N/A')}`"
         )
     else:
-        kickoff = found_item.get("fixture", {}).get("date", "")[:10]
+        kickoff = format_fixture_date(found_item.get("fixture", {}).get("date", ""))
         venue = found_item.get("fixture", {}).get("venue", {}).get("name", "N/A")
         status = found_item.get("fixture", {}).get("status", {}).get("long", "Scheduled")
         goals = found_item.get("goals", {})

@@ -7,7 +7,8 @@ on:
         description: 'Run full historical queue (all football leagues + basketball 12)'
         required: false
         type: boolean
-        default: true
+        # Manual, opt-in only: a bare dispatch acquires the single dataset below.
+        default: false
 
       sport:
         description: 'Sport (for single dataset sync)'

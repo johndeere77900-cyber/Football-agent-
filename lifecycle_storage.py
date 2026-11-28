@@ -1,0 +1,1234 @@
+"""
+Durable storage for the autonomous live-match lifecycle.
+
+Implements the Phase 2 persistent state described in
+``migrations/phase2_lifecycle_postgres.sql`` and
+``migrations/phase2_lifecycle_sqlite.sql`` using the existing storage
+conventions (a single ``_connect()`` abstraction that resolves to PostgreSQL
+when Neon is configured and SQLite otherwise).
+
+Every write is idempotent: lifecycle records are unique per canonical fixture,
+observations and grading records carry stable idempotency keys, and repeated
+calls return the existing row instead of inserting duplicates.
+
+No migration is applied here for production: the DDL in this module is the
+SQLite/local execution path and mirrors the proposal files. Neon schema
+changes remain owned by ChatGPT.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import json
+from typing import Any, Dict, List, Optional
+
+import config
+import storage
+import time_utils
+
+# Readiness is cached per database, not per process: a test or an operator can
+# point config.DB_PATH at a different SQLite file without inheriting a stale flag.
+_SCHEMA_READY_FOR = set()
+
+
+class Phase2SchemaMissing(RuntimeError):
+    """Raised when production PostgreSQL lacks the reviewed Phase 2 schema."""
+
+
+def _now() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+
+def _normalize_kickoff(value: Any) -> Any:
+    """Store a kickoff instant in UTC, rejecting ambiguous values.
+
+    Providers may hand back an ISO-8601 string carrying a local offset
+    (``2026-11-28T01:30:00+02:00``). Keeping that offset in storage makes any
+    string-prefix date comparison read a local calendar date, so the instant is
+    converted to UTC once at write time.
+
+    A value without an explicit offset (or one that is not an ISO-8601 instant)
+    is ambiguous and is rejected with an actionable error instead of being
+    guessed as UTC, as the host clock, or as the prediction timezone. This is
+    the one input boundary for lifecycle kickoffs, matching the strict policy of
+    :func:`time_utils.parse_utc_datetime` and the SQL date filter.
+    """
+    if value is None or value == "":
+        return value
+    parsed = time_utils.parse_utc_datetime(value)
+    if parsed is None:
+        raise ValueError(
+            "kickoff_at must be an ISO-8601 instant with an explicit UTC offset "
+            f"(for example '2026-11-28T00:30:00+00:00'); got {value!r}. "
+            "A naive timestamp is ambiguous and is never guessed."
+        )
+    return parsed.isoformat()
+
+
+def _json(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _loads(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _dialect() -> str:
+    conn, db_type = storage._connect()
+    conn.close()
+    return db_type
+
+
+def ensure_schema() -> None:
+    """Create the lifecycle tables/columns if they are absent (local SQLite path)."""
+    conn, db_type = storage._connect()
+    if db_type == "postgres":
+        schema_key = (db_type, str(getattr(config, "NEON_DATABASE_URL", "")))
+    else:
+        schema_key = (db_type, str(getattr(config, "DB_PATH", "")))
+    if schema_key in _SCHEMA_READY_FOR:
+        conn.close()
+        return
+    try:
+        if db_type == "postgres":
+            # Production schema is owned by ChatGPT. The application validates
+            # that the reviewed migration has been applied and never executes
+            # PostgreSQL DDL, so startup cannot silently change the database.
+            required = {
+                "prediction_snapshots": {"idempotency_key", "lifecycle_id", "model_inputs_json"},
+                "live_match_lifecycle": {"prediction_cycle_key"},
+                "live_match_observations": set(),
+                "prediction_grading_ledger": set(),
+                "model_calibration_versions": set(),
+                "lifecycle_events": set(),
+            }
+            missing = []
+            with conn.cursor() as cur:
+                for table, columns in required.items():
+                    cur.execute("SELECT to_regclass(%s)", (f"public.{table}",))
+                    if cur.fetchone()[0] is None:
+                        missing.append(table)
+                        continue
+                    cur.execute(
+                        "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+                        (table,),
+                    )
+                    present = {row[0] for row in cur.fetchall()}
+                    missing.extend(f"{table}.{column}" for column in sorted(columns - present))
+            if missing:
+                raise Phase2SchemaMissing(
+                    "Phase 2 PostgreSQL schema is missing or out of date ("
+                    + ", ".join(missing)
+                    + "). Apply the reviewed migration migrations/phase2_lifecycle_postgres.sql "
+                    "before running the lifecycle; the application never creates PostgreSQL schema."
+                )
+            _SCHEMA_READY_FOR.add(schema_key)
+            return
+        else:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS live_match_lifecycle (
+                    lifecycle_id TEXT PRIMARY KEY,
+                    sport TEXT NOT NULL,
+                    canonical_fixture_key TEXT NOT NULL,
+                    provider TEXT,
+                    provider_fixture_id TEXT,
+                    league_id INTEGER,
+                    season INTEGER,
+                    home_team_id TEXT,
+                    away_team_id TEXT,
+                    kickoff_at TEXT,
+                    stage TEXT NOT NULL,
+                    provider_status TEXT,
+                    first_discovered_at TEXT NOT NULL,
+                    last_processed_at TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at TEXT,
+                    error_state TEXT,
+                    error_class TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE (sport, canonical_fixture_key)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS live_match_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    lifecycle_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    provider_fixture_id TEXT,
+                    observation_timestamp TEXT NOT NULL,
+                    lifecycle_context TEXT NOT NULL,
+                    provider_status TEXT,
+                    observed_fields_json TEXT,
+                    payload_json TEXT,
+                    parser_version TEXT,
+                    provenance_json TEXT,
+                    observation_key TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS prediction_grading_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER,
+                    lifecycle_id TEXT,
+                    sport TEXT NOT NULL,
+                    market TEXT NOT NULL,
+                    predicted_output_json TEXT,
+                    actual_outcome_json TEXT,
+                    settlement_status TEXT NOT NULL,
+                    settlement_rules_version TEXT,
+                    result_provenance_json TEXT,
+                    graded_at TEXT NOT NULL,
+                    grading_key TEXT NOT NULL UNIQUE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lifecycle_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_key TEXT NOT NULL UNIQUE,
+                    event_type TEXT NOT NULL,
+                    sport TEXT,
+                    lifecycle_id TEXT,
+                    provider TEXT,
+                    correlation_id TEXT,
+                    stage TEXT,
+                    outcome TEXT,
+                    detail_json TEXT,
+                    error_id TEXT,
+                    occurred_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS model_calibration_versions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sport TEXT NOT NULL,
+                    competition_scope TEXT NOT NULL,
+                    model_version TEXT,
+                    calibration_version TEXT NOT NULL,
+                    training_cutoff TEXT,
+                    training_sample_count INTEGER,
+                    evaluation_metrics_json TEXT,
+                    status TEXT NOT NULL,
+                    promoted_at TEXT,
+                    rollback_reference TEXT,
+                    dataset_identity TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (sport, competition_scope, calibration_version)
+                )
+                """
+            )
+            # storage.init_db() owns prediction_snapshots; skip those columns
+            # when the lifecycle is used before that table exists.
+            snapshots_present = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'prediction_snapshots'"
+            ).fetchone()
+            if snapshots_present:
+                for column, ctype in (
+                    ("idempotency_key", "TEXT"),
+                    ("lifecycle_id", "TEXT"),
+                    ("model_inputs_json", "TEXT"),
+                ):
+                    storage._ensure_column_sqlite(conn, "prediction_snapshots", column, ctype)
+            storage._ensure_column_sqlite(conn, "live_match_lifecycle", "prediction_cycle_key", "TEXT")
+            if snapshots_present:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_pred_snapshots_idem ON prediction_snapshots (idempotency_key) WHERE idempotency_key IS NOT NULL"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pred_snapshots_lifecycle ON prediction_snapshots (lifecycle_id)"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_lifecycle_stage ON live_match_lifecycle (sport, stage)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_observations_lifecycle ON live_match_observations (lifecycle_id, observation_timestamp)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_grading_snapshot ON prediction_grading_ledger (snapshot_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_lifecycle ON lifecycle_events (lifecycle_id, occurred_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_type ON lifecycle_events (sport, event_type, occurred_at)"
+            )
+            conn.commit()
+        _SCHEMA_READY_FOR.add(schema_key)
+    finally:
+        conn.close()
+
+
+_LIFECYCLE_FIELDS = (
+    "lifecycle_id",
+    "sport",
+    "canonical_fixture_key",
+    "provider",
+    "provider_fixture_id",
+    "league_id",
+    "season",
+    "home_team_id",
+    "away_team_id",
+    "kickoff_at",
+    "stage",
+    "provider_status",
+    "first_discovered_at",
+    "last_processed_at",
+    "retry_count",
+    "next_retry_at",
+    "error_state",
+    "error_class",
+    "created_at",
+    "updated_at",
+    "prediction_cycle_key",
+)
+
+
+def _lifecycle_row(row) -> Dict[str, Any]:
+    return dict(zip(_LIFECYCLE_FIELDS, row))
+
+
+def upsert_lifecycle(record: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Insert a lifecycle record idempotently and return the stored row.
+
+    The canonical fixture key is unique per sport, so rediscovery refreshes
+    identifiers but never creates a duplicate tracked match.
+    """
+    ensure_schema()
+    sport = str(record.get("sport") or "football").lower()
+    fixture_key = str(record.get("canonical_fixture_key") or "").strip()
+    if not fixture_key:
+        raise ValueError("canonical_fixture_key is required")
+    lifecycle_id = str(record.get("lifecycle_id") or f"{sport}:{fixture_key}")
+    now = _now()
+
+    conn, db_type = storage._connect()
+    try:
+        values = (
+            lifecycle_id,
+            sport,
+            fixture_key,
+            record.get("provider"),
+            str(record.get("provider_fixture_id")) if record.get("provider_fixture_id") is not None else None,
+            record.get("league_id"),
+            record.get("season"),
+            str(record["home_team_id"]) if record.get("home_team_id") is not None else None,
+            str(record["away_team_id"]) if record.get("away_team_id") is not None else None,
+            _normalize_kickoff(record.get("kickoff_at")),
+            record.get("stage") or "DISCOVERED",
+            record.get("provider_status"),
+            now,
+            None,
+            0,
+            None,
+            None,
+            None,
+            now,
+            now,
+            record.get("prediction_cycle_key"),
+        )
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO live_match_lifecycle (
+                        lifecycle_id, sport, canonical_fixture_key, provider,
+                        provider_fixture_id, league_id, season, home_team_id,
+                        away_team_id, kickoff_at, stage, provider_status,
+                        first_discovered_at, last_processed_at, retry_count,
+                        next_retry_at, error_state, error_class, created_at, updated_at, prediction_cycle_key
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (sport, canonical_fixture_key) DO NOTHING
+                    """,
+                    values,
+                )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO live_match_lifecycle (
+                    lifecycle_id, sport, canonical_fixture_key, provider,
+                    provider_fixture_id, league_id, season, home_team_id,
+                    away_team_id, kickoff_at, stage, provider_status,
+                    first_discovered_at, last_processed_at, retry_count,
+                    next_retry_at, error_state, error_class, created_at, updated_at, prediction_cycle_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+    stored = get_lifecycle_by_fixture(sport, fixture_key)
+    if stored is None:
+        raise RuntimeError("lifecycle record could not be persisted")
+    return stored
+
+
+def get_lifecycle(lifecycle_id: str) -> Optional[Dict[str, Any]]:
+    ensure_schema()
+    conn, db_type = storage._connect()
+    try:
+        placeholder = "%s" if db_type == "postgres" else "?"
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {', '.join(_LIFECYCLE_FIELDS)} FROM live_match_lifecycle WHERE lifecycle_id = {placeholder}",
+                    (lifecycle_id,),
+                )
+                row = cur.fetchone()
+        else:
+            row = conn.execute(
+                f"SELECT {', '.join(_LIFECYCLE_FIELDS)} FROM live_match_lifecycle WHERE lifecycle_id = {placeholder}",
+                (lifecycle_id,),
+            ).fetchone()
+        return _lifecycle_row(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_lifecycle_by_fixture(sport: str, canonical_fixture_key: str) -> Optional[Dict[str, Any]]:
+    ensure_schema()
+    conn, db_type = storage._connect()
+    try:
+        ph = "%s" if db_type == "postgres" else "?"
+        sql = (
+            f"SELECT {', '.join(_LIFECYCLE_FIELDS)} FROM live_match_lifecycle "
+            f"WHERE sport = {ph} AND canonical_fixture_key = {ph}"
+        )
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, (str(sport).lower(), str(canonical_fixture_key)))
+                row = cur.fetchone()
+        else:
+            row = conn.execute(sql, (str(sport).lower(), str(canonical_fixture_key))).fetchone()
+        return _lifecycle_row(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_lifecycle(lifecycle_id: str, expected_stage: Optional[str] = None, **updates) -> Optional[Dict[str, Any]]:
+    """
+    Update a lifecycle record.
+
+    ``expected_stage`` makes the write conditional so two workers cannot both
+    apply the same transition. Returns None when the condition no longer holds.
+    """
+    ensure_schema()
+    allowed = {
+        "stage",
+        "provider_status",
+        "last_processed_at",
+        "retry_count",
+        "next_retry_at",
+        "error_state",
+        "error_class",
+        "kickoff_at",
+        "provider_fixture_id",
+        "home_team_id",
+        "away_team_id",
+        "prediction_cycle_key",
+    }
+    fields = {k: v for k, v in updates.items() if k in allowed}
+    if "kickoff_at" in fields:
+        fields["kickoff_at"] = _normalize_kickoff(fields["kickoff_at"])
+    fields["updated_at"] = _now()
+    if "last_processed_at" not in fields and "stage" in fields:
+        fields["last_processed_at"] = fields["updated_at"]
+
+    conn, db_type = storage._connect()
+    try:
+        ph = "%s" if db_type == "postgres" else "?"
+        assignments = ", ".join(f"{name} = {ph}" for name in fields)
+        conditions = f"lifecycle_id = {ph}"
+        params = list(fields.values()) + [lifecycle_id]
+        if expected_stage is not None:
+            conditions += f" AND stage = {ph}"
+            params.append(expected_stage)
+        sql = f"UPDATE live_match_lifecycle SET {assignments} WHERE {conditions}"
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                changed = cur.rowcount
+            conn.commit()
+        else:
+            changed = conn.execute(sql, params).rowcount
+            conn.commit()
+        if expected_stage is not None and changed == 0:
+            return None
+    finally:
+        conn.close()
+    return get_lifecycle(lifecycle_id)
+
+
+def transition_lifecycle(lifecycle_id: str, to_stage: str, from_stages=None, **fields):
+    """Move a lifecycle to ``to_stage`` only from an allowed current stage."""
+    row = get_lifecycle(lifecycle_id)
+    if row is None:
+        return None
+    if from_stages and row.get("stage") not in from_stages:
+        return None
+    fields["stage"] = to_stage
+    return update_lifecycle(lifecycle_id, expected_stage=row.get("stage"), **fields)
+
+
+def get_latest_final_observation(lifecycle_id: str) -> Optional[Dict[str, Any]]:
+    """Most recent durable verified-result observation for a lifecycle."""
+    for observation in get_observations(lifecycle_id, limit=20):
+        if observation.get("lifecycle_context") == "final_result" and isinstance(observation.get("payload"), dict):
+            return observation
+    return None
+
+
+def list_lifecycles(
+    sport: Optional[str] = None,
+    stages: Optional[List[str]] = None,
+    limit: int = 200,
+    *,
+    kickoff_on: Optional[str] = None,
+    kickoff_from: Optional[str] = None,
+    kickoff_to: Optional[str] = None,
+    exclude_stages: Optional[List[str]] = None,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """List lifecycle rows with selection filters applied in SQL.
+
+    Timezone convention: ``kickoff_at`` is an absolute instant stored in UTC.
+    ``kickoff_on`` / ``kickoff_from`` / ``kickoff_to`` are **user-facing local
+    calendar dates** in ``config.PREDICTION_TIMEZONE`` (default
+    ``Africa/Lagos``). Each one is converted to a half-open UTC instant interval
+    before the query runs:
+
+    * ``kickoff_on``    -> ``kickoff_at >= local midnight`` and ``< next local midnight``
+    * ``kickoff_from``  -> ``kickoff_at >= local midnight of that date``
+    * ``kickoff_to``    -> ``kickoff_at <  local midnight after that date``
+
+    The comparison is made against the parsed instant, never against the first
+    ten characters of the stored string, so a provider offset cannot move a
+    fixture onto the wrong local day. Only a ``kickoff_at`` that states an
+    explicit offset takes part in the comparison: a legacy naive value would be
+    read as UTC by SQLite but in the session timezone by PostgreSQL, so it
+    evaluates to NULL and is never matched by either backend. Malformed values
+    behave the same way.
+
+    Filtering here (rather than loading a global queue and discarding rows in
+    Python) is what prevents stale records from consuming the batch limit.
+
+    Ordering is ``kickoff_at`` then ``created_at`` then ``lifecycle_id`` so
+    offset pagination is stable and cannot skip or repeat a row.
+    """
+    ensure_schema()
+    conn, db_type = storage._connect()
+    ph = "%s" if db_type == "postgres" else "?"
+    clauses = []
+    params: List[Any] = []
+    if sport:
+        clauses.append(f"sport = {ph}")
+        params.append(str(sport).lower())
+    if stages:
+        placeholders = ", ".join(ph for _ in stages)
+        clauses.append(f"stage IN ({placeholders})")
+        params.extend(stages)
+    if exclude_stages:
+        placeholders = ", ".join(ph for _ in exclude_stages)
+        clauses.append(f"stage NOT IN ({placeholders})")
+        params.extend(exclude_stages)
+    if kickoff_on or kickoff_from or kickoff_to:
+        # Compare the parsed instant against a UTC interval computed from the
+        # requested local calendar date. SQLite's julianday() understands
+        # offsets and 'Z' and returns NULL for malformed text; PostgreSQL casts
+        # through timestamptz behind an ISO-shape guard for the same reason.
+        # ``kickoff_at`` is TEXT in both schemas, so a plain index range cannot
+        # be used while legacy rows may carry a non-UTC offset; the interval is
+        # still computed once, before the query.
+        if db_type == "postgres":
+            # The regex requires an explicit offset before the cast, otherwise
+            # a naive legacy value would be read in the session timezone and
+            # the same row would land on different local days per session.
+            instant = (
+                r"CASE WHEN kickoff_at ~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}"
+                r"(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}(:?\d{2})?)$' "
+                "THEN kickoff_at::timestamptz END"
+            )
+            bound = f"{ph}::timestamptz"
+        else:
+            # julianday() silently reads a naive string as UTC, which is the
+            # guess the policy rejects; require the offset in the text itself so
+            # SQLite and PostgreSQL select exactly the same rows.
+            instant = (
+                "CASE WHEN kickoff_at GLOB '*[T ][0-9][0-9]:[0-9][0-9]*[+-][0-9][0-9]*' "
+                "OR kickoff_at GLOB '*[T ][0-9][0-9]:[0-9][0-9]*Z' "
+                "THEN julianday(kickoff_at) END"
+            )
+            bound = f"julianday({ph})"
+        # A malformed date raises ValueError from local_date_interval_iso()
+        # rather than quietly selecting the whole table.
+        if kickoff_on:
+            start, end = time_utils.local_date_interval_iso(kickoff_on)
+            clauses.append(f"{instant} >= {bound}")
+            params.append(start)
+            clauses.append(f"{instant} < {bound}")
+            params.append(end)
+        if kickoff_from:
+            start, _ = time_utils.local_date_interval_iso(kickoff_from)
+            clauses.append(f"{instant} >= {bound}")
+            params.append(start)
+        if kickoff_to:
+            _, end = time_utils.local_date_interval_iso(kickoff_to)
+            clauses.append(f"{instant} < {bound}")
+            params.append(end)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        f"SELECT {', '.join(_LIFECYCLE_FIELDS)} FROM live_match_lifecycle "
+        f"{where} ORDER BY kickoff_at ASC NULLS LAST, created_at ASC, lifecycle_id ASC "
+        f"LIMIT {ph} OFFSET {ph}"
+    )
+    if db_type != "postgres":
+        sql = sql.replace(" NULLS LAST", "")
+    params.extend([int(limit), max(0, int(offset))])
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+        else:
+            rows = conn.execute(sql, params).fetchall()
+        return [_lifecycle_row(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def record_observation(
+    lifecycle_id: str,
+    provider: str,
+    context: str,
+    observation_timestamp: str,
+    provider_status: Optional[str] = None,
+    observed_fields: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    parser_version: Optional[str] = None,
+    provenance: Optional[Dict[str, Any]] = None,
+    provider_fixture_id: Optional[str] = None,
+    observation_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Append a time-stamped observation. Repeats of the same key are ignored."""
+    ensure_schema()
+    key = observation_key or f"{lifecycle_id}|{provider}|{context}|{observation_timestamp}"
+    now = _now()
+    fields_json = _json(observed_fields or {})
+    payload_json = _json(payload)
+    provenance_json = _json(provenance or {"provider": provider})
+
+    conn, db_type = storage._connect()
+    try:
+        values = (
+            lifecycle_id,
+            provider,
+            str(provider_fixture_id) if provider_fixture_id is not None else None,
+            observation_timestamp,
+            context,
+            provider_status,
+            fields_json,
+            payload_json,
+            parser_version,
+            provenance_json,
+            key,
+            now,
+        )
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO live_match_observations (
+                        lifecycle_id, provider, provider_fixture_id, observation_timestamp,
+                        lifecycle_context, provider_status, observed_fields_json, payload_json,
+                        parser_version, provenance_json, observation_key, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (observation_key) DO NOTHING
+                    """,
+                    values,
+                )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO live_match_observations (
+                    lifecycle_id, provider, provider_fixture_id, observation_timestamp,
+                    lifecycle_context, provider_status, observed_fields_json, payload_json,
+                    parser_version, provenance_json, observation_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    return {
+        "lifecycle_id": lifecycle_id,
+        "provider": provider,
+        "observation_timestamp": observation_timestamp,
+        "provider_status": provider_status,
+        "observed_fields": observed_fields or {},
+        "observation_key": key,
+    }
+
+
+def get_observations(lifecycle_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    ensure_schema()
+    conn, db_type = storage._connect()
+    ph = "%s" if db_type == "postgres" else "?"
+    sql = (
+        "SELECT provider, provider_fixture_id, observation_timestamp, lifecycle_context, "
+        "provider_status, observed_fields_json, payload_json, parser_version, provenance_json, "
+        "observation_key, created_at FROM live_match_observations "
+        f"WHERE lifecycle_id = {ph} ORDER BY observation_timestamp DESC, id DESC LIMIT {ph}"
+    )
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, (lifecycle_id, int(limit)))
+                rows = cur.fetchall()
+        else:
+            rows = conn.execute(sql, (lifecycle_id, int(limit))).fetchall()
+        return [
+            {
+                "provider": r[0],
+                "provider_fixture_id": r[1],
+                "observation_timestamp": r[2],
+                "lifecycle_context": r[3],
+                "provider_status": r[4],
+                "observed_fields": _loads(r[5]),
+                "payload": _loads(r[6]),
+                "parser_version": r[7],
+                "provenance": _loads(r[8]),
+                "observation_key": r[9],
+                "created_at": r[10],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def save_grading(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Append-only grading record; a repeated grading key returns the stored row."""
+    ensure_schema()
+    key = str(record.get("grading_key") or "").strip()
+    if not key:
+        raise ValueError("grading_key is required")
+    existing = get_grading(key)
+    if existing is not None:
+        return existing
+
+    now = _now()
+    values = (
+        record.get("snapshot_id"),
+        record.get("lifecycle_id"),
+        str(record.get("sport") or "football").lower(),
+        record.get("market"),
+        _json(record.get("predicted_output")),
+        _json(record.get("actual_outcome")),
+        record.get("settlement_status") or "PENDING",
+        record.get("settlement_rules_version"),
+        _json(record.get("result_provenance")),
+        now,
+        key,
+    )
+
+    conn, db_type = storage._connect()
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO prediction_grading_ledger (
+                        snapshot_id, lifecycle_id, sport, market, predicted_output_json,
+                        actual_outcome_json, settlement_status, settlement_rules_version,
+                        result_provenance_json, graded_at, grading_key
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (grading_key) DO NOTHING
+                    """,
+                    values,
+                )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO prediction_grading_ledger (
+                    snapshot_id, lifecycle_id, sport, market, predicted_output_json,
+                    actual_outcome_json, settlement_status, settlement_rules_version,
+                    result_provenance_json, graded_at, grading_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    return get_grading(key) or {"grading_key": key}
+
+
+def get_grading(grading_key: str) -> Optional[Dict[str, Any]]:
+    ensure_schema()
+    conn, db_type = storage._connect()
+    ph = "%s" if db_type == "postgres" else "?"
+    sql = (
+        "SELECT snapshot_id, lifecycle_id, sport, market, predicted_output_json, "
+        "actual_outcome_json, settlement_status, settlement_rules_version, "
+        "result_provenance_json, graded_at, grading_key "
+        f"FROM prediction_grading_ledger WHERE grading_key = {ph}"
+    )
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, (grading_key,))
+                row = cur.fetchone()
+        else:
+            row = conn.execute(sql, (grading_key,)).fetchone()
+        if not row:
+            return None
+        return {
+            "snapshot_id": row[0],
+            "lifecycle_id": row[1],
+            "sport": row[2],
+            "market": row[3],
+            "predicted_output": _loads(row[4]),
+            "actual_outcome": _loads(row[5]),
+            "settlement_status": row[6],
+            "settlement_rules_version": row[7],
+            "result_provenance": _loads(row[8]),
+            "graded_at": row[9],
+            "grading_key": row[10],
+        }
+    finally:
+        conn.close()
+
+
+def save_calibration_version(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist a candidate/active/rejected calibration version idempotently."""
+    ensure_schema()
+    sport = str(record.get("sport") or "football").lower()
+    scope = str(record.get("competition_scope") or "all")
+    version = str(record.get("calibration_version") or "").strip()
+    if not version:
+        raise ValueError("calibration_version is required")
+    now = _now()
+    values = (
+        sport,
+        scope,
+        record.get("model_version"),
+        version,
+        record.get("training_cutoff"),
+        record.get("training_sample_count"),
+        _json(record.get("evaluation_metrics")),
+        record.get("status") or "candidate",
+        record.get("promoted_at"),
+        record.get("rollback_reference"),
+        record.get("dataset_identity"),
+        now,
+    )
+    conn, db_type = storage._connect()
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO model_calibration_versions (
+                        sport, competition_scope, model_version, calibration_version,
+                        training_cutoff, training_sample_count, evaluation_metrics_json,
+                        status, promoted_at, rollback_reference, dataset_identity, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (sport, competition_scope, calibration_version) DO UPDATE
+                    SET status = EXCLUDED.status,
+                        evaluation_metrics_json = EXCLUDED.evaluation_metrics_json,
+                        promoted_at = EXCLUDED.promoted_at,
+                        rollback_reference = EXCLUDED.rollback_reference
+                    """,
+                    values,
+                )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                INSERT INTO model_calibration_versions (
+                    sport, competition_scope, model_version, calibration_version,
+                    training_cutoff, training_sample_count, evaluation_metrics_json,
+                    status, promoted_at, rollback_reference, dataset_identity, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (sport, competition_scope, calibration_version) DO UPDATE
+                SET status = excluded.status,
+                    evaluation_metrics_json = excluded.evaluation_metrics_json,
+                    promoted_at = excluded.promoted_at,
+                    rollback_reference = excluded.rollback_reference
+                """,
+                values,
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    return get_calibration_version(sport, scope, version) or {"calibration_version": version}
+
+
+def get_calibration_version(sport: str, scope: str, version: str) -> Optional[Dict[str, Any]]:
+    ensure_schema()
+    conn, db_type = storage._connect()
+    ph = "%s" if db_type == "postgres" else "?"
+    sql = (
+        "SELECT sport, competition_scope, model_version, calibration_version, training_cutoff, "
+        "training_sample_count, evaluation_metrics_json, status, promoted_at, rollback_reference, "
+        "dataset_identity, created_at FROM model_calibration_versions "
+        f"WHERE sport = {ph} AND competition_scope = {ph} AND calibration_version = {ph}"
+    )
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, (sport, scope, version))
+                row = cur.fetchone()
+        else:
+            row = conn.execute(sql, (sport, scope, version)).fetchone()
+        if not row:
+            return None
+        return {
+            "sport": row[0],
+            "competition_scope": row[1],
+            "model_version": row[2],
+            "calibration_version": row[3],
+            "training_cutoff": row[4],
+            "training_sample_count": row[5],
+            "evaluation_metrics": _loads(row[6]),
+            "status": row[7],
+            "promoted_at": row[8],
+            "rollback_reference": row[9],
+            "dataset_identity": row[10],
+            "created_at": row[11],
+        }
+    finally:
+        conn.close()
+
+
+def get_active_calibration(sport: str, scope: str) -> Optional[Dict[str, Any]]:
+    ensure_schema()
+    conn, db_type = storage._connect()
+    ph = "%s" if db_type == "postgres" else "?"
+    sql = (
+        "SELECT sport, competition_scope, model_version, calibration_version, training_cutoff, "
+        "training_sample_count, evaluation_metrics_json, status, promoted_at, rollback_reference, "
+        "dataset_identity, created_at FROM model_calibration_versions "
+        f"WHERE sport = {ph} AND competition_scope = {ph} AND status = 'active' "
+        "ORDER BY promoted_at DESC LIMIT 1"
+    )
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, (sport, scope))
+                row = cur.fetchone()
+        else:
+            row = conn.execute(sql, (sport, scope)).fetchone()
+        if not row:
+            return None
+        return {
+            "sport": row[0],
+            "competition_scope": row[1],
+            "model_version": row[2],
+            "calibration_version": row[3],
+            "training_cutoff": row[4],
+            "training_sample_count": row[5],
+            "evaluation_metrics": _loads(row[6]),
+            "status": row[7],
+            "promoted_at": row[8],
+            "rollback_reference": row[9],
+            "dataset_identity": row[10],
+            "created_at": row[11],
+        }
+    finally:
+        conn.close()
+def get_graded_samples(sport, before=None, limit=5000):
+    """
+    Verified, graded snapshots in chronological order.
+
+    Only ledger rows settled as WON/LOST are returned, so learning never trains
+    on unverified or conflicting results.
+    """
+    ensure_schema()
+    conn, db_type = storage._connect()
+    ph = "%s" if db_type == "postgres" else "?"
+    primary_market = "match_result" if str(sport).lower() == "football" else "moneyline"
+    clauses = [
+        "s.sport = " + ph,
+        "g.settlement_status IN ('WON', 'LOST')",
+        "g.market = " + ph,
+    ]
+    params = [str(sport).lower(), primary_market]
+    if before:
+        clauses.append("s.prediction_timestamp < " + ph)
+        params.append(before)
+    sql = (
+        "SELECT s.id, s.prediction_timestamp, s.markets_json, g.actual_outcome_json "
+        "FROM prediction_snapshots s JOIN prediction_grading_ledger g ON g.snapshot_id = s.id "
+        f"WHERE {' AND '.join(clauses)} "
+        f"ORDER BY s.prediction_timestamp ASC, s.id ASC LIMIT {ph}"
+    )
+    params.append(int(limit))
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+        else:
+            rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    samples = []
+    seen_snapshots = set()
+    for row in rows:
+        if row[0] in seen_snapshots:
+            continue
+        seen_snapshots.add(row[0])
+        markets = _loads(row[2]) or {}
+        actual = _loads(row[3]) or {}
+        result = None
+        if str(sport).lower() == "football":
+            reg = actual.get("regulation_goals")
+            if isinstance(reg, (list, tuple)) and len(reg) == 2 and None not in reg:
+                home, away = int(reg[0]), int(reg[1])
+                result = "home_win" if home > away else ("away_win" if away > home else "draw")
+        else:
+            pts = actual.get("match_goals")
+            if isinstance(pts, (list, tuple)) and len(pts) == 2 and None not in pts:
+                home, away = int(pts[0]), int(pts[1])
+                result = "home_win" if home > away else "away_win"
+        if result is None:
+            continue
+        samples.append(
+            {
+                "snapshot_id": row[0],
+                "timestamp": row[1],
+                "raw_probabilities": markets,
+                "actual": result,
+            }
+        )
+    return samples
+
+
+# ---------------------------------------------------------------------------
+# Structured lifecycle events (observability)
+# ---------------------------------------------------------------------------
+
+EVENT_TYPES = (
+    "fixture_discovered",
+    "provider_queried",
+    "provider_failed",
+    "provider_no_matching_fixture",
+    "provider_observation_merged",
+    "provider_conflict_detected",
+    "fixture_identity_resolved",
+    "identity_unresolved",
+    "feature_acquired",
+    "feature_rejected",
+    "prediction_skipped",
+    "prediction_generated",
+    "prediction_persisted",
+    "snapshot_persisted",
+    "live_monitoring_started",
+    "live_observation_received",
+    "live_monitoring_paused",
+    "result_retrieved",
+    "result_conflict_detected",
+    "result_verified",
+    "prediction_graded",
+    "learning_evaluation_completed",
+    "learning_update_accepted",
+    "learning_update_rejected",
+    "lifecycle_stage_resumed",
+)
+
+
+def record_event(
+    event_type: str,
+    *,
+    sport: Optional[str] = None,
+    lifecycle_id: Optional[str] = None,
+    provider: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    stage: Optional[str] = None,
+    outcome: Optional[str] = None,
+    detail: Optional[Dict[str, Any]] = None,
+    error_id: Optional[str] = None,
+    occurred_at: Optional[str] = None,
+    event_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Append one structured lifecycle event idempotently.
+
+    ``correlation_id`` defaults to the lifecycle id so a fixture can be
+    followed from discovery to learning. Repeating the same logical event with
+    the same ``event_key`` does not duplicate it.
+    """
+    ensure_schema()
+    stamp = occurred_at or _now()
+    correlation = correlation_id or lifecycle_id
+    key = event_key or "|".join(
+        str(part or "")
+        for part in (event_type, lifecycle_id, provider, stage, outcome, stamp)
+    )
+    detail_json = _json(detail or {})
+    conn, db_type = storage._connect()
+    values = (
+        key,
+        event_type,
+        sport,
+        lifecycle_id,
+        provider,
+        correlation,
+        stage,
+        outcome,
+        detail_json,
+        error_id,
+        stamp,
+        stamp,
+    )
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO lifecycle_events (
+                        event_key, event_type, sport, lifecycle_id, provider,
+                        correlation_id, stage, outcome, detail_json, error_id,
+                        occurred_at, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (event_key) DO NOTHING
+                    """,
+                    values,
+                )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO lifecycle_events (
+                    event_key, event_type, sport, lifecycle_id, provider,
+                    correlation_id, stage, outcome, detail_json, error_id,
+                    occurred_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    return {
+        "event_key": key,
+        "event_type": event_type,
+        "lifecycle_id": lifecycle_id,
+        "correlation_id": correlation,
+        "provider": provider,
+        "stage": stage,
+        "outcome": outcome,
+        "occurred_at": stamp,
+    }
+
+
+def get_events(
+    *,
+    lifecycle_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    sport: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Read structured events, newest first."""
+    ensure_schema()
+    conn, db_type = storage._connect()
+    ph = "%s" if db_type == "postgres" else "?"
+    clauses: List[str] = []
+    params: List[Any] = []
+    if lifecycle_id:
+        clauses.append(f"lifecycle_id = {ph}")
+        params.append(lifecycle_id)
+    if correlation_id:
+        clauses.append(f"correlation_id = {ph}")
+        params.append(correlation_id)
+    if event_type:
+        clauses.append(f"event_type = {ph}")
+        params.append(event_type)
+    if sport:
+        clauses.append(f"sport = {ph}")
+        params.append(sport)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = (
+        "SELECT event_key, event_type, sport, lifecycle_id, provider, correlation_id, "
+        "stage, outcome, detail_json, error_id, occurred_at FROM lifecycle_events"
+        + where
+        + " ORDER BY occurred_at DESC"
+    )
+    params.append(max(1, int(limit)))
+    try:
+        if db_type == "postgres":
+            with conn.cursor() as cur:
+                cur.execute(sql + " LIMIT %s", tuple(params))
+                rows = cur.fetchall()
+        else:
+            rows = conn.execute(sql + " LIMIT ?", tuple(params)).fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "event_key": row[0],
+            "event_type": row[1],
+            "sport": row[2],
+            "lifecycle_id": row[3],
+            "provider": row[4],
+            "correlation_id": row[5],
+            "stage": row[6],
+            "outcome": row[7],
+            "detail": _loads(row[8]),
+            "error_id": row[9],
+            "occurred_at": row[10],
+        }
+        for row in rows
+    ]
+
+
+def event_metrics(sport: Optional[str] = None, since: Optional[str] = None) -> Dict[str, Any]:
+    """Counters derived from structured events for diagnostics."""
+    events = get_events(sport=sport, limit=10000)
+    if since:
+        events = [e for e in events if str(e.get("occurred_at") or "") >= since]
+    counts: Dict[str, int] = {}
+    by_provider: Dict[str, Dict[str, int]] = {}
+    for event in events:
+        name = event["event_type"]
+        counts[name] = counts.get(name, 0) + 1
+        provider = event.get("provider")
+        if provider:
+            bucket = by_provider.setdefault(provider, {})
+            key = event.get("outcome") or name
+            bucket[key] = bucket.get(key, 0) + 1
+    return {
+        "sport": sport,
+        "since": since,
+        "event_counts": counts,
+        "provider_outcomes": by_provider,
+        "total": len(events),
+    }

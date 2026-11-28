@@ -304,9 +304,25 @@ def test_scenario_3_incomplete_db_history_with_provider_gap_fill():
             return mock_recent_matches_b
         return []
 
+    # The resolver's last-resort numerical gap fill is a SoccerData scrape. This
+    # test verifies the API-Football gap-fill path and persistence, not a live
+    # scrape, so the scrape boundary returns "unavailable" instead of reaching
+    # the network (an unmocked call hung the CI job indefinitely).
     with patch("api_football.get_team_statistics", side_effect=[mock_home_stats, mock_away_stats]), \
          patch("api_football.get_recent_form", side_effect=mock_get_recent_form), \
-         patch("api_football.get_head_to_head", return_value=[]):
+         patch("api_football.get_head_to_head", return_value=[]), \
+         patch(
+             "soccerdata_provider.get_team_historical_matches",
+             return_value=("SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE"}),
+         ), \
+         patch(
+             "soccerdata_provider.get_match_history_games",
+             return_value=("SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE"}),
+         ), \
+         patch(
+             "soccerdata_provider.get_sofascore_historical_games",
+             return_value=("SOURCE_NOT_AVAILABLE", [], {"status": "SOURCE_NOT_AVAILABLE"}),
+         ):
 
         pred = main.predict_fixture(target_fixture, league_avg_goals=2.5)
 

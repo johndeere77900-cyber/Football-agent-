@@ -562,23 +562,28 @@ def _recent_feature(
     season=None,
     fixture_date=None,
     team_name=None,
+    matches=None,
 ):
     """
     Build recent-form features as per-match averages using DataResolver.
     Strictly filters out matches occurring on or after fixture_date or with missing/invalid kickoff dates.
+
+    ``matches`` lets a caller supply history it already retrieved from the
+    fixture's own provider namespace instead of querying the resolver.
     """
-    try:
-        from data_resolver import DataResolver
-        resolver = DataResolver()
-        matches = resolver.get_team_recent_matches(
-            team_id,
-            last=last,
-            league_id=league_id,
-            season=season,
-            team_name=team_name,
-        )
-    except Exception:
-        matches = None
+    if matches is None:
+        try:
+            from data_resolver import DataResolver
+            resolver = DataResolver()
+            matches = resolver.get_team_recent_matches(
+                team_id,
+                last=last,
+                league_id=league_id,
+                season=season,
+                team_name=team_name,
+            )
+        except Exception:
+            matches = None
 
     if not matches:
         matches = []
@@ -676,11 +681,7 @@ def _recent_feature(
 
     match_count = len(goals_for)
 
-    if matches and league_id is not None and season is not None:
-        try:
-            storage.save_historical_fixtures(matches, league_id, season, cutoff=fixture_date, require_completed=True)
-        except Exception:
-            pass
+    # Historical acquisition retired: recent-form lookups never persist provider fixtures.
 
     return {
         "matches": match_count,
@@ -700,20 +701,25 @@ def _h2h_feature(
     fixture_date=None,
     home_team_name=None,
     away_team_name=None,
+    matches=None,
 ):
     """
     Build H2H features as per-meeting averages with strict temporal safety using DataResolver.
-    """
-    from data_resolver import DataResolver
-    resolver = DataResolver()
 
-    matches = resolver.get_head_to_head(
-        home_id,
-        away_id,
-        last=last,
-        home_team_name=home_team_name,
-        away_team_name=away_team_name,
-    )
+    ``matches`` lets a caller supply history it already retrieved from the
+    fixture's own provider namespace instead of querying the resolver.
+    """
+    if matches is None:
+        from data_resolver import DataResolver
+        resolver = DataResolver()
+
+        matches = resolver.get_head_to_head(
+            home_id,
+            away_id,
+            last=last,
+            home_team_name=home_team_name,
+            away_team_name=away_team_name,
+        )
 
     goals_for = []
     goals_against = []
@@ -813,6 +819,151 @@ def _h2h_feature(
             sum(goals_against) / meeting_count
         ),
         "h2h_scope": "GENERAL H2H",
+    }
+
+
+def _competition_season_bounds(league_id, season):
+    """Configured start/end datetimes of a competition season, or (None, None)."""
+    try:
+        window = (
+            getattr(config, "COMPETITION_SEASON_WINDOWS", {}) or {}
+        ).get(("football", int(league_id))) or {}
+        start = window.get("start") or (0, 8, 1)
+        end = window.get("end") or (1, 6, 15)
+        start_date = datetime(int(season) + int(start[0]), int(start[1]), int(start[2]), tzinfo=timezone.utc)
+        end_date = datetime(int(season) + int(end[0]), int(end[1]), int(end[2]), tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None, None
+    return start_date, end_date
+
+
+def _provider_team_history(provider_name, league_id, season, team_id, fixture_date):
+    """Completed same-season matches for one team, from its own provider.
+
+    Only the provider that issued the fixture is asked, and only matches inside
+    the configured competition season and strictly before kickoff are kept, so
+    a pre-match feature never sees a future or previous-season result.
+    """
+    import live_providers
+
+    if provider_name == "espn_soccer":
+        raw = live_providers.espn_soccer_team_matches(league_id, team_id, season)
+    elif provider_name == "fotmob":
+        raw = live_providers.fotmob_team_matches(team_id)
+    else:
+        return []
+
+    start, end = _competition_season_bounds(league_id, season)
+    history = []
+    for match in raw or []:
+        date = ((match.get("fixture") or {}).get("date"))
+        parsed = time_utils.parse_utc_datetime(date) if isinstance(date, str) else None
+        if parsed is None:
+            continue
+        if fixture_date is not None and not time_utils.is_strictly_before(date, fixture_date):
+            continue
+        if start is not None and parsed < start:
+            continue
+        if end is not None and parsed > end:
+            continue
+        history.append(match)
+    history.sort(key=lambda item: str((item.get("fixture") or {}).get("date")))
+    return history
+
+
+def _provider_prematch_features(provider_name, league, home_team, away_team, fixture_date):
+    """Pre-match features for a keyless provider, from that provider's history.
+
+    Returns either the three feature groups the prediction engine consumes or
+    an explicit reason for why the provider could not supply them. Statistics
+    are only ever derived from matches the provider itself published for the
+    same provider-native team id.
+    """
+    import live_providers
+    from data_resolver import validate_team_stats_sufficiency
+
+    league_id = league.get("id")
+    season = league.get("season")
+    home_history = _provider_team_history(provider_name, league_id, season, home_team["id"], fixture_date)
+    away_history = _provider_team_history(provider_name, league_id, season, away_team["id"], fixture_date)
+
+    home_stats = live_providers.team_stats_from_matches(home_history, home_team["id"], provider_name)
+    away_stats = live_providers.team_stats_from_matches(away_history, away_team["id"], provider_name)
+
+    min_matches = getattr(config, "MIN_HISTORICAL_SAMPLE", 5)
+    if not validate_team_stats_sufficiency(home_stats, min_matches) or not validate_team_stats_sufficiency(
+        away_stats, min_matches
+    ):
+        return {
+            "reason": (
+                f"{provider_name} season team statistics are incomplete "
+                f"(min {min_matches} matches required; "
+                f"home={((home_stats or {}).get('fixtures') or {}).get('played', {}).get('total')}, "
+                f"away={((away_stats or {}).get('fixtures') or {}).get('played', {}).get('total')})."
+            ),
+            "failure_stage": "season_team_stats",
+            "provenance": {"provider": provider_name, "home_matches": len(home_history), "away_matches": len(away_history)},
+        }
+
+    home_feature = _current_team_feature(home_stats, f"{provider_name}_season_home")
+    away_feature = _current_team_feature(away_stats, f"{provider_name}_season_away")
+    if home_feature is None or away_feature is None:
+        return {
+            "reason": f"{provider_name} season goal averages are incomplete.",
+            "failure_stage": "season_team_stats",
+            "provenance": {"provider": provider_name},
+        }
+
+    recent_window = int(getattr(config, "RECENT_FORM_MATCHES", 8))
+    recent_home = _recent_feature(
+        home_team["id"],
+        recent_window,
+        fixture_date=fixture_date,
+        team_name=home_team["name"],
+        matches=home_history[-recent_window:],
+    )
+    recent_away = _recent_feature(
+        away_team["id"],
+        recent_window,
+        fixture_date=fixture_date,
+        team_name=away_team["name"],
+        matches=away_history[-recent_window:],
+    )
+    if recent_home is None or recent_away is None:
+        return {
+            "reason": f"{provider_name} recent team form is incomplete.",
+            "failure_stage": "recent_form",
+            "provenance": {"provider": provider_name},
+        }
+
+    combined = {}
+    for match in home_history + away_history:
+        fixture_key = ((match.get("fixture") or {}).get("id"))
+        if fixture_key is not None:
+            combined[str(fixture_key)] = match
+    h2h = _h2h_feature(
+        home_team["id"],
+        away_team["id"],
+        getattr(config, "HEAD_TO_HEAD_MATCHES", 6),
+        fixture_date=fixture_date,
+        home_team_name=home_team["name"],
+        away_team_name=away_team["name"],
+        matches=list(combined.values()),
+    )
+
+    return {
+        "home_feature": home_feature,
+        "away_feature": away_feature,
+        "recent_home": recent_home,
+        "recent_away": recent_away,
+        "h2h": h2h,
+        "provenance": {
+            "provider": provider_name,
+            "statistics_source": (home_stats or {}).get("provider_provenance"),
+            "home_matches_used": home_feature.get("matches"),
+            "away_matches_used": away_feature.get("matches"),
+            "h2h_meetings": (h2h or {}).get("meetings") if isinstance(h2h, dict) else 0,
+        },
     }
 
 
@@ -1126,6 +1277,21 @@ def _insufficient_prediction(
     }
 
 
+def _load_active_calibrator(sport, league_id=None, season=None, cutoff_timestamp=None):
+    """Load the promoted calibrator, or None when no version is active."""
+    try:
+        import calibration
+
+        return calibration.load_active_calibrator(
+            sport=sport,
+            league_id=league_id,
+            season=season,
+            cutoff_timestamp=cutoff_timestamp,
+        )
+    except Exception:
+        return None
+
+
 def predict_fixture(
     fixture,
     league_avg_goals,
@@ -1212,13 +1378,8 @@ def predict_fixture(
 
     cutoff = fixture_data.get("date")
 
-    # PERMANENT ACCUMULATION: Always store newly discovered fixture payload in permanent database (require_completed=True)
-    try:
-        storage.save_historical_fixtures([fixture], league["id"], league["season"], source=provider_name, require_completed=True)
-        if fixture.get("statistics"):
-            storage.save_historical_enrichment([fixture], source=provider_name)
-    except Exception as exc:
-        print(f"Warning: Raw fixture persistence error: {exc}")
+    # Historical acquisition retired: predictions only read history. New completed
+    # matches are persisted exclusively by the verified live-match lifecycle.
 
     # DATABASE FIRST: Retrieve team-centric history directly from stored database using canonical IDs
     home_db_matches = storage.get_team_historical_fixtures(c_home_id, cutoff=cutoff, limit=30)
@@ -1237,6 +1398,7 @@ def predict_fixture(
     recent_snapshot = None
     h2h_snapshot = None
     data_source = "internal_db"
+    provider_feature_provenance = None
 
     min_matches = getattr(config, "MIN_HISTORICAL_SAMPLE", 5)
     if db_fixtures:
@@ -1283,80 +1445,107 @@ def predict_fixture(
     else:
         # Fall back to external provider API when DB history is insufficient
         data_source = provider_name
-        from data_resolver import DataResolver
-        resolver = DataResolver()
-        home_stats = resolver.get_team_statistics(
-            home_team["id"],
-            league["id"],
-            league["season"],
-            team_name=home_team["name"],
-        )
 
-        away_stats = resolver.get_team_statistics(
-            away_team["id"],
-            league["id"],
-            league["season"],
-            team_name=away_team["name"],
-        )
-
-        home_feature = _current_team_feature(
-            home_stats,
-            "season_home",
-        )
-
-        away_feature = _current_team_feature(
-            away_stats,
-            "season_away",
-        )
-
-        if (
-            home_feature is None
-            or away_feature is None
-        ):
-            return _insufficient_prediction(
-                fixture,
-                is_live,
-                "Season team statistics are incomplete.",
-                failure_stage="season_team_stats",
+        # Keyless providers publish their own team history. Their team ids are
+        # namespaced to the provider that issued the fixture, so the resolver
+        # (which queries API-Football) must never be asked about them.
+        if provider_name in ("espn_soccer", "fotmob"):
+            bundle = _provider_prematch_features(
+                provider_name,
+                league,
+                home_team,
+                away_team,
+                fixture_data.get("date"),
+            )
+            if bundle.get("reason"):
+                return _insufficient_prediction(
+                    fixture,
+                    is_live,
+                    bundle["reason"],
+                    failure_stage=bundle.get("failure_stage", "season_team_stats"),
+                    provider_meta=provider_meta,
+                )
+            home_feature = bundle["home_feature"]
+            away_feature = bundle["away_feature"]
+            recent_home = bundle["recent_home"]
+            recent_away = bundle["recent_away"]
+            h2h = bundle["h2h"]
+            provider_feature_provenance = bundle.get("provenance")
+        else:
+            from data_resolver import DataResolver
+            resolver = DataResolver()
+            home_stats = resolver.get_team_statistics(
+                home_team["id"],
+                league["id"],
+                league["season"],
+                team_name=home_team["name"],
             )
 
-        recent_home = _recent_feature(
-            home_team["id"],
-            config.RECENT_FORM_MATCHES,
-            league_id=league["id"],
-            season=league["season"],
-            fixture_date=fixture_data.get("date"),
-            team_name=home_team["name"],
-        )
-
-        recent_away = _recent_feature(
-            away_team["id"],
-            config.RECENT_FORM_MATCHES,
-            league_id=league["id"],
-            season=league["season"],
-            fixture_date=fixture_data.get("date"),
-            team_name=away_team["name"],
-        )
-
-        if (
-            recent_home is None
-            or recent_away is None
-        ):
-            return _insufficient_prediction(
-                fixture,
-                is_live,
-                "Recent team form data is incomplete.",
-                failure_stage="recent_form",
+            away_stats = resolver.get_team_statistics(
+                away_team["id"],
+                league["id"],
+                league["season"],
+                team_name=away_team["name"],
             )
 
-        h2h = _h2h_feature(
-            home_team["id"],
-            away_team["id"],
-            config.HEAD_TO_HEAD_MATCHES,
-            fixture_date=fixture_data.get("date"),
-            home_team_name=home_team["name"],
-            away_team_name=away_team["name"],
-        )
+            home_feature = _current_team_feature(
+                home_stats,
+                "season_home",
+            )
+
+            away_feature = _current_team_feature(
+                away_stats,
+                "season_away",
+            )
+
+            if (
+                home_feature is None
+                or away_feature is None
+            ):
+                return _insufficient_prediction(
+                    fixture,
+                    is_live,
+                    "Season team statistics are incomplete.",
+                    failure_stage="season_team_stats",
+                )
+
+            recent_home = _recent_feature(
+                home_team["id"],
+                config.RECENT_FORM_MATCHES,
+                league_id=league["id"],
+                season=league["season"],
+                fixture_date=fixture_data.get("date"),
+                team_name=home_team["name"],
+            )
+
+            recent_away = _recent_feature(
+                away_team["id"],
+                config.RECENT_FORM_MATCHES,
+                league_id=league["id"],
+                season=league["season"],
+                fixture_date=fixture_data.get("date"),
+                team_name=away_team["name"],
+            )
+
+            if (
+                recent_home is None
+                or recent_away is None
+            ):
+                return _insufficient_prediction(
+                    fixture,
+                    is_live,
+                    "Recent team form data is incomplete.",
+                    failure_stage="recent_form",
+                )
+
+            h2h = _h2h_feature(
+                home_team["id"],
+                away_team["id"],
+                config.HEAD_TO_HEAD_MATCHES,
+                fixture_date=fixture_data.get("date"),
+                home_team_name=home_team["name"],
+                away_team_name=away_team["name"],
+            )
 
     elo_snap = historical_elo.fixture_elo_snapshot(
         db_fixtures,
@@ -1397,6 +1586,7 @@ def predict_fixture(
             features,
             elo_probabilities=elo_probabilities,
             elo_weight=config.ELO_BLEND_WEIGHT,
+            calibrator=_load_active_calibrator("football", league["id"], league["season"], now_utc),
             prediction_timestamp=now_utc,
             data_cutoff_timestamp=now_utc,
             fixture_id=fixture_data["id"],
@@ -1410,6 +1600,18 @@ def predict_fixture(
             "prediction_engine returned an invalid result."
         )
 
+    # Immutable snapshot payload: the exact features and Elo inputs supplied to
+    # the model, never a later reconstruction of database state.
+    prediction["model_inputs"] = {
+        "features": dict(features),
+        "elo_probabilities": dict(elo_probabilities) if elo_probabilities is not None else None,
+        "elo_weight": config.ELO_BLEND_WEIGHT,
+        "prediction_timestamp": now_utc,
+        "data_cutoff_timestamp": now_utc,
+        "model_version": getattr(config, "MODEL_VERSION", None),
+        "feature_version": getattr(config, "FEATURE_VERSION", None),
+    }
+
     prov_meta = provider_meta or {}
     provenance_info = {
         "provider": data_source,
@@ -1419,6 +1621,8 @@ def predict_fixture(
         "retrieved_at": now_utc,
         "as_of": now_utc,
     }
+    if provider_feature_provenance:
+        provenance_info["provider_statistics"] = provider_feature_provenance
     prediction["provenance"] = provenance_info
 
     if is_live:
@@ -1983,6 +2187,16 @@ def run_daily(
                 ),
                 prediction_context=prediction_context,
                 prediction_record=rec,
+                features=(
+                    rec.get("model_inputs", {}).get("features")
+                    if isinstance(rec.get("model_inputs"), dict)
+                    else rec.get("features")
+                ),
+                model_inputs=rec.get("model_inputs"),
+                idempotency_key=(
+                    f"football:{prediction['fixture_id']}:{prediction_context}:"
+                    f"{prediction['date']}:{time_utils.format_utc_iso(datetime.now(timezone.utc))[:16]}"
+                ),
             )
 
             storage.save_prediction_snapshot(
@@ -2500,6 +2714,12 @@ def run_daily_basketball(
                     game,
                     prediction_timestamp=now_utc,
                     data_cutoff_timestamp=now_utc,
+                    calibrator=_load_active_calibrator(
+                        "basketball",
+                        league_id,
+                        game.get("league", {}).get("season") if isinstance(game.get("league"), dict) else None,
+                        now_utc,
+                    ),
                 )
             )
 
@@ -2524,6 +2744,12 @@ def run_daily_basketball(
                 confidence=prediction["confidence"],
                 prediction_context=prediction_context,
                 prediction_record=prediction,
+                features=prediction.get("model_inputs"),
+                model_inputs=prediction.get("model_inputs"),
+                idempotency_key=(
+                    f"basketball:{prediction['game_id']}:{prediction_context}:"
+                    f"{prediction.get('date') or now_utc[:10]}"
+                ),
             )
 
             storage.save_prediction_snapshot(
@@ -2866,6 +3092,18 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--provider-health",
+        action="store_true",
+        help="Print persisted provider health and registry capability states.",
+    )
+
+    parser.add_argument(
+        "--lifecycle-events",
+        action="store_true",
+        help="Print structured lifecycle event metrics.",
+    )
+
+    parser.add_argument(
         "--report-nba-phase-recovery",
         action="store_true",
         help="Compare persisted NBA identities with fresh ESPN identities (read-only).",
@@ -2944,12 +3182,56 @@ def build_parser():
         help="Dump raw API response.",
     )
 
+    parser.add_argument(
+        "--autonomous",
+        choices=["cycle", "discover", "prematch", "live", "verify-results", "grade", "learn"],
+        help="Run an autonomous live-match lifecycle stage and exit.",
+    )
+
+    parser.add_argument(
+        "--horizon-days",
+        type=int,
+        default=14,
+        help="Rolling discovery horizon in days (default 14).",
+    )
+
     return parser
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
+
+    if getattr(args, "autonomous", None):
+        import json as _json
+        import live_lifecycle
+
+        storage.init_db()
+        stage = args.autonomous
+        horizon = int(getattr(args, "horizon_days", 14) or 14)
+        if stage == "discover":
+            result = live_lifecycle.discover(horizon_days=horizon)
+        elif stage == "prematch":
+            result = live_lifecycle.prematch()
+        elif stage == "live":
+            result = live_lifecycle.monitor()
+        elif stage == "verify-results":
+            result = live_lifecycle.verify_results()
+        elif stage == "grade":
+            result = live_lifecycle.grade()
+        elif stage == "learn":
+            result = live_lifecycle.learn()
+        else:
+            result = {
+                "discover": live_lifecycle.discover(horizon_days=horizon),
+                "prematch": live_lifecycle.prematch(),
+                "live": live_lifecycle.monitor(),
+                "verify-results": live_lifecycle.verify_results(),
+                "grade": live_lifecycle.grade(),
+                "learn": live_lifecycle.learn(),
+            }
+        print(_json.dumps(result, indent=2, default=str))
+        return 0
 
     try:
         # Validate numeric CLI arguments before dispatch.
@@ -3073,6 +3355,33 @@ def main():
             if not summary.get("success"):
                 print("Verification failed for one or more requested historical datasets.", file=sys.stderr)
                 return 1
+            return 0
+
+        if getattr(args, "provider_health", False):
+            import json as _json
+
+            import provider_health
+            import provider_registry
+
+            print(
+                _json.dumps(
+                    {
+                        "health": provider_health.snapshot(),
+                        "registry": provider_registry.capabilities_snapshot(args.sport),
+                    },
+                    indent=2,
+                    default=str,
+                )
+            )
+            return 0
+
+        if getattr(args, "lifecycle_events", False):
+            import json as _json
+
+            import lifecycle_storage
+
+            storage.init_db()
+            print(_json.dumps(lifecycle_storage.event_metrics(sport=args.sport), indent=2, default=str))
             return 0
 
         if args.historical_queue:
