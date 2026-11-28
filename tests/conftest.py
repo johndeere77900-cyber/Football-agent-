@@ -32,11 +32,12 @@ _LEGACY_RESOLVER_MODULES = {
 }
 
 # These modules do not test the SoccerData adapters directly, so their fallback
-# legs can be stubbed too. test_direct_csv_and_resiliency and test_data_resolver
-# assert on those legs themselves and keep their own patches.
+# legs can be stubbed too. test_soccerdata_provider drives the real adapter, and
+# test_direct_csv_and_resiliency asserts on its own patches, so both are left
+# out. Every test that asserts on a SoccerData or CSV leg patches it explicitly,
+# which takes precedence over the stub below.
 _SOCCERDATA_STUB_MODULES = _LEGACY_RESOLVER_MODULES - {
     "test_direct_csv_and_resiliency",
-    "test_data_resolver",
     "test_soccerdata_provider",
 }
 
@@ -50,6 +51,12 @@ _CSV_STUB_MODULES = {
     "test_resume_queue_and_cli",
     "test_rolling_backtest_window",
 }
+
+# The SoccerData adapters run their scrape in a fresh subprocess, which the
+# in-process socket guard cannot reach. Stubbing the adapter entry points is what
+# keeps a deterministic test deterministic; before this, a sync test that only
+# patched API-Football and Football-Data fell through to a live MatchHistory
+# scrape and held a CI worker until the job timed out.
 
 
 @pytest.fixture(autouse=True)
