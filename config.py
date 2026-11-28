@@ -107,6 +107,14 @@ CONFIDENCE_MODERATE_GAP = 0.08
 # --- Evaluation Thresholds ----------------------------------------------------
 MIN_EVALUATION_SAMPLE_THRESHOLD = 30
 
+# --- Timezone ---------------------------------------------------------------
+# Calendar dates a Telegram user speaks ("today", "tomorrow", "2026-11-28") are
+# *local* calendar dates in this IANA timezone. Kickoff instants themselves are
+# absolute and stay in UTC everywhere else: storage, snapshots and every
+# database comparison. A selected local date is converted to a half-open UTC
+# interval before it reaches SQL (see time_utils.local_date_bounds_utc).
+PREDICTION_TIMEZONE = os.environ.get("PREDICTION_TIMEZONE", "Africa/Lagos")
+
 # --- Storage ------------------------------------------------------------
 DB_PATH = os.environ.get("FOOTBALL_AGENT_DB", "predictions.db")
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")

@@ -34,6 +34,7 @@ import lifecycle_storage as lstore
 import live_providers
 import market_grading
 import provider_registry
+import time_utils
 from historical_match_policy import (
     BASKETBALL_FINISHED_STATUSES,
     FOOTBALL_FINISHED_STATUSES,
@@ -128,10 +129,16 @@ def calendar_days(
     today: Optional[dt.date] = None,
     start_date: Optional[str] = None,
 ) -> List[str]:
+    """Calendar dates to walk, counted from today in the prediction timezone.
+
+    The horizon itself is unchanged: ``horizon_days`` further local dates. Only
+    the starting date follows the configured user-facing timezone, so a cycle
+    running just after 23:00 UTC still starts on the correct local day.
+    """
     if start_date:
         base = dt.date.fromisoformat(str(start_date)[:10])
     else:
-        base = today or dt.datetime.now(dt.timezone.utc).date()
+        base = today or time_utils.local_today()
     return [(base + dt.timedelta(days=offset)).isoformat() for offset in range(0, int(horizon_days) + 1)]
 
 
@@ -394,7 +401,10 @@ def diagnostics(sport: str, date_str: Optional[str] = None, league_id: Any = Non
         result["schema_error"] = f"{type(exc).__name__}: {exc}"[:300]
         return result
     result["total"] = len(rows)
-    scoped = [row for row in rows if day is None or str(row.get("kickoff_at") or "")[:10] == day]
+    # Re-check membership in the same half-open local-day UTC interval the SQL
+    # filter used, instead of comparing the stored string's first ten
+    # characters (which is a UTC date, not the requested local date).
+    scoped = [row for row in rows if day is None or time_utils.in_local_day(row.get("kickoff_at"), day)]
     if league_id is not None:
         scoped = [row for row in scoped if str(row.get("league_id")) == str(league_id)]
     result["on_date"] = len(scoped)
@@ -1120,8 +1130,9 @@ def _expire_past_prematch(
     backlog of expired fixtures is marked completely instead of being truncated
     at one page.
     """
-    boundary = str(date_str)[:10] if date_str else now.date().isoformat()
-    lookback = (now - dt.timedelta(days=PREMATCH_EXPIRY_LOOKBACK_DAYS)).date().isoformat()
+    today = time_utils.local_today(now)
+    boundary = str(date_str)[:10] if date_str else today.isoformat()
+    lookback = (today - dt.timedelta(days=PREMATCH_EXPIRY_LOOKBACK_DAYS)).isoformat()
     expired = 0
     offset = 0
     while True:
@@ -1168,8 +1179,9 @@ def prematch(
 
     * only stages that can still produce a PRE_MATCH snapshot are loaded;
     * the kickoff window is filtered in SQL (``kickoff_on`` for a Telegram
-      request, ``kickoff_from`` for an autonomous cycle) using the UTC calendar
-      date of the kickoff instant;
+      request, ``kickoff_from`` for an autonomous cycle) as a UTC instant
+      interval derived from the requested local calendar date in
+      ``config.PREDICTION_TIMEZONE``;
     * expired candidates are marked once and excluded by the window;
     * unresolved identities are reported but never consume the batch;
     * bounded-exhausted or backoff-pending rows are skipped after selection;
@@ -1190,10 +1202,11 @@ def prematch(
         "sport": scope_sport,
         "stages": PREMATCH_QUEUE_STAGES,
     }
+    today = time_utils.local_today(now)
     if date_str:
         candidate_kwargs["kickoff_on"] = str(date_str)[:10]
     else:
-        candidate_kwargs["kickoff_from"] = now.date().isoformat()
+        candidate_kwargs["kickoff_from"] = today.isoformat()
     candidates = lstore.list_lifecycles(**candidate_kwargs)
 
     unresolved = lstore.list_lifecycles(
@@ -1201,7 +1214,7 @@ def prematch(
         stages=PREMATCH_UNRESOLVED_STAGES,
         limit=5000,
         kickoff_on=str(date_str)[:10] if date_str else None,
-        kickoff_from=None if date_str else now.date().isoformat(),
+        kickoff_from=None if date_str else today.isoformat(),
     )
     unresolved_count = sum(
         1

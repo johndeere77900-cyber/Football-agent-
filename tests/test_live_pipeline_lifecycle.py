@@ -9,6 +9,7 @@ import provider_registry
 import storage
 import telegram_bot
 import team_identity
+import time_utils
 
 
 def _iso(hours: float) -> str:
@@ -671,8 +672,8 @@ def test_prematch_pages_through_more_than_one_queue_page(monkeypatch):
     assert result["considered"] >= 1100
 
 
-def test_kickoff_date_filters_use_utc_calendar_date(monkeypatch):
-    """Kickoff filters select the UTC calendar date of the instant."""
+def test_kickoff_date_filters_use_prediction_timezone_calendar_date(monkeypatch):
+    """Kickoff filters select the *local* calendar date of the instant."""
     day = dt.datetime.now(dt.timezone.utc).date() + dt.timedelta(days=30)
     prev = day - dt.timedelta(days=1)
     nxt = day + dt.timedelta(days=1)
@@ -698,16 +699,18 @@ def test_kickoff_date_filters_use_utc_calendar_date(monkeypatch):
     stored = lstore.get_lifecycle(local_ahead)
     assert stored["kickoff_at"] == f"{prev}T22:00:00+00:00", "kickoff must be stored in UTC"
     assert lstore.get_lifecycle(local_behind)["kickoff_at"] == f"{nxt}T02:00:00+00:00"
+    # Selection follows the local calendar date in config.PREDICTION_TIMEZONE
+    # (Africa/Lagos = UTC+1), not the UTC date of the instant.
     assert [r["lifecycle_id"] for r in lstore.list_lifecycles(kickoff_on=prev.isoformat())] == [
         local_ahead,
-        before_midnight,
     ]
     assert [r["lifecycle_id"] for r in lstore.list_lifecycles(kickoff_on=day.isoformat())] == [
+        before_midnight,
         midnight,
-        late,
     ]
     assert [r["lifecycle_id"] for r in lstore.list_lifecycles(kickoff_on=nxt.isoformat())] == [
-        local_behind
+        late,
+        local_behind,
     ]
 
     monkeypatch.setattr(
@@ -716,9 +719,9 @@ def test_kickoff_date_filters_use_utc_calendar_date(monkeypatch):
         lambda row: {**row, "stage": "PREMATCH_SNAPSHOT_SAVED"},
     )
     for date, expected in (
-        (day.isoformat(), [midnight, late]),
-        (prev.isoformat(), [local_ahead, before_midnight]),
-        (nxt.isoformat(), [local_behind]),
+        (day.isoformat(), [before_midnight, midnight]),
+        (prev.isoformat(), [local_ahead]),
+        (nxt.isoformat(), [late, local_behind]),
     ):
         selected = []
         monkeypatch.setattr(
@@ -727,7 +730,7 @@ def test_kickoff_date_filters_use_utc_calendar_date(monkeypatch):
             lambda row: selected.append(row["lifecycle_id"]) or {**row, "stage": "PREMATCH_SNAPSHOT_SAVED"},
         )
         live_lifecycle.prematch(limit=10, sport="football", date_str=date)
-        assert selected == expected, f"UTC date scoping failed for {date}"
+        assert selected == expected, f"local date scoping failed for {date}"
 
 
 def test_past_kickoff_with_foreign_offset_is_expired_not_selected(monkeypatch):
@@ -747,7 +750,10 @@ def test_past_kickoff_with_foreign_offset_is_expired_not_selected(monkeypatch):
         "_prematch_football",
         lambda item: selected.append(item["lifecycle_id"]) or item,
     )
-    result = live_lifecycle.prematch(limit=5, sport="football", date_str=past.date().isoformat())
+    # The expiry sweep is bounded by the requested local calendar date, which
+    # is the date the fixture is actually played on in the configured zone.
+    local_day = time_utils.local_calendar_date(row["kickoff_at"]).isoformat()
+    result = live_lifecycle.prematch(limit=5, sport="football", date_str=local_day)
     assert selected == []
     assert result["expired"] == 1
     stored = lstore.get_lifecycle("football:api_football:passed")
@@ -755,8 +761,8 @@ def test_past_kickoff_with_foreign_offset_is_expired_not_selected(monkeypatch):
     assert stored["stage"] == "TRACKED"
 
 
-def test_telegram_scope_passes_utc_date_to_prematch(monkeypatch):
-    """The requested Telegram date is a UTC calendar date end to end."""
+def test_telegram_scope_passes_local_date_to_prematch(monkeypatch):
+    """The requested Telegram date is the local calendar date end to end."""
     day = (dt.datetime.now(dt.timezone.utc).date() + dt.timedelta(days=3)).isoformat()
     assert telegram_bot.resolve_date(day)[0] == day
     captured = {}

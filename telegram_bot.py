@@ -393,9 +393,19 @@ def detect_sport(text):
 
 
 def resolve_date(text):
-    """Resolve explicit dates and natural-language dates in UTC."""
+    """Resolve explicit dates and natural-language dates as local calendar dates.
+
+    "today", "tomorrow" and weekday names are read as calendar dates in
+    ``config.PREDICTION_TIMEZONE`` (default ``Africa/Lagos``), which is the
+    timezone the person writing to the bot lives in. The returned ``YYYY-MM-DD``
+    is a *local* date; the lifecycle layer converts it into a half-open UTC
+    instant interval before querying, so a fixture stored in UTC is still
+    selected on the day it is actually played locally.
+
+    An explicit ``YYYY-MM-DD`` in the message is returned unchanged.
+    """
     normalized = normalize_text(text)
-    today = datetime.now(timezone.utc).date()
+    today = time_utils.local_today()
 
     iso_match = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", normalized)
     if iso_match:
@@ -482,10 +492,19 @@ def format_fixture_time(fixture):
     if not raw:
         return "time unavailable"
     try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        return parsed.astimezone(timezone.utc).strftime("%H:%M UTC")
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return "time unavailable"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    # Displayed in the reader's timezone; the stored kickoff instant is
+    # untouched. ``%Z`` names the zone (WAT for Africa/Lagos) so the displayed
+    # time is never mistaken for UTC.
+    try:
+        local = parsed.astimezone(time_utils.prediction_timezone())
+    except ValueError:
+        local = parsed.astimezone(timezone.utc)
+    return local.strftime("%H:%M %Z")
 
 
 def fixture_teams(fixture):
@@ -511,6 +530,23 @@ def _parse_kickoff(value):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def format_fixture_date(value):
+    """Local calendar date of a kickoff instant, for display in Telegram.
+
+    The instant itself is never modified; only the date a reader sees follows
+    ``config.PREDICTION_TIMEZONE``. A value that cannot be parsed falls back to
+    its stored leading date so the message never claims a date the data does not
+    support.
+    """
+    parsed = _parse_kickoff(value)
+    if parsed is None:
+        return str(value or "")[:10]
+    try:
+        return parsed.astimezone(time_utils.prediction_timezone()).date().isoformat()
+    except ValueError:
+        return parsed.astimezone(timezone.utc).date().isoformat()
 
 
 def _league_name(league_id):
@@ -847,7 +883,7 @@ def handle_schedule_question(text):
     for f in found[:5]:
         home, away = fixture_teams(f)
         league = f.get("league", {}).get("name", "Unknown league")
-        f_date = f.get("fixture", {}).get("date", "")[:10] or "date unavailable"
+        f_date = format_fixture_date(f.get("fixture", {}).get("date", "")) or "date unavailable"
         lines.append(f"• {home} vs {away} — {f_date}, {format_fixture_time(f)} ({league})")
 
     return "\n".join(lines)
@@ -1456,7 +1492,7 @@ def get_suggested_action_buttons(operation):
 def handle_predict_op(params):
     """Generate predictions through the same lifecycle pipeline the schedulers use."""
     sport = "basketball" if params.get("sport") == "basketball" else "football"
-    date_str = params.get("date") or datetime.now(timezone.utc).date().isoformat()
+    date_str = params.get("date") or time_utils.local_today().isoformat()
     date_label = params.get("date_label", "today")
     try:
         quantity = max(1, int(params.get("quantity") or 1))
@@ -1524,7 +1560,7 @@ def handle_fixtures_op(params):
             h_name = teams.get("home", {}).get("name", "Home")
             a_name = teams.get("away", {}).get("name", "Away")
             lg_str = g.get("league", {}).get("name", "NBA")
-            g_date = str(g.get("date", ""))[:10]
+            g_date = format_fixture_date(g.get("date", ""))
             time_str = g.get("time", "") or "time TBA"
             date_info = f"{g_date}, {time_str}" if g_date else time_str
             lines.append(f"• {h_name} vs {a_name} — {date_info} ({lg_str})")
@@ -1558,7 +1594,7 @@ def handle_fixtures_op(params):
             h_name = teams.get("home", {}).get("name", "Home")
             a_name = teams.get("away", {}).get("name", "Away")
             league = f.get("league", {}).get("name", "Unknown")
-            f_date = str(f.get("fixture", {}).get("date", ""))[:10]
+            f_date = format_fixture_date(f.get("fixture", {}).get("date", ""))
             time_str = format_fixture_time(f)
             lines.append(f"• {h_name} vs {a_name} — {f_date}, {time_str} ({league})")
 
@@ -2105,7 +2141,7 @@ def handle_details_op(params):
     league_name = found_item.get("league", {}).get("name", "Unknown League")
 
     if item_sport == "basketball":
-        game_date = found_item.get("date", "")[:10]
+        game_date = format_fixture_date(found_item.get("date", ""))
         status = found_item.get("status", {}).get("long", "Scheduled")
         scores = found_item.get("scores", {})
         h_pts = scores.get("home", {}).get("total") if isinstance(scores.get("home"), dict) else None
@@ -2122,7 +2158,7 @@ def handle_details_op(params):
             f"• *Game ID:* `{found_item.get('id', 'N/A')}`"
         )
     else:
-        kickoff = found_item.get("fixture", {}).get("date", "")[:10]
+        kickoff = format_fixture_date(found_item.get("fixture", {}).get("date", ""))
         venue = found_item.get("fixture", {}).get("venue", {}).get("name", "N/A")
         status = found_item.get("fixture", {}).get("status", {}).get("long", "Scheduled")
         goals = found_item.get("goals", {})

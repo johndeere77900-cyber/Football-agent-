@@ -503,14 +503,23 @@ def list_lifecycles(
 ) -> List[Dict[str, Any]]:
     """List lifecycle rows with selection filters applied in SQL.
 
-    Timezone convention: ``kickoff_at`` is an absolute instant and every date
-    filter here is a **UTC calendar date**. ``kickoff_on`` / ``kickoff_from`` /
-    ``kickoff_to`` therefore compare the UTC date of the parsed instant, not the
-    first ten characters of the stored string: a fixture stored as
-    ``2026-11-28T01:30:00+02:00`` is kickoff ``2026-11-27`` in UTC and must be
-    selected for ``kickoff_on='2026-11-27'``. Filtering here (rather than loading
-    a global queue and discarding rows in Python) is what prevents stale records
-    from consuming the batch limit.
+    Timezone convention: ``kickoff_at`` is an absolute instant stored in UTC.
+    ``kickoff_on`` / ``kickoff_from`` / ``kickoff_to`` are **user-facing local
+    calendar dates** in ``config.PREDICTION_TIMEZONE`` (default
+    ``Africa/Lagos``). Each one is converted to a half-open UTC instant interval
+    before the query runs:
+
+    * ``kickoff_on``    -> ``kickoff_at >= local midnight`` and ``< next local midnight``
+    * ``kickoff_from``  -> ``kickoff_at >= local midnight of that date``
+    * ``kickoff_to``    -> ``kickoff_at <  local midnight after that date``
+
+    The comparison is made against the parsed instant, never against the first
+    ten characters of the stored string, so a provider offset cannot move a
+    fixture onto the wrong local day. Rows whose ``kickoff_at`` cannot be parsed
+    evaluate to NULL and are never matched.
+
+    Filtering here (rather than loading a global queue and discarding rows in
+    Python) is what prevents stale records from consuming the batch limit.
 
     Ordering is ``kickoff_at`` then ``created_at`` then ``lifecycle_id`` so
     offset pagination is stable and cannot skip or repeat a row.
@@ -532,26 +541,38 @@ def list_lifecycles(
         clauses.append(f"stage NOT IN ({placeholders})")
         params.extend(exclude_stages)
     if kickoff_on or kickoff_from or kickoff_to:
-        # Derive the UTC calendar date from the parsed instant so a stored
-        # provider offset cannot shift a fixture onto the wrong day. SQLite's
-        # date() and an explicit timestamptz cast both convert to UTC; values
-        # that are not timestamps evaluate to NULL and are never matched.
+        # Compare the parsed instant against a UTC interval computed from the
+        # requested local calendar date. SQLite's julianday() understands
+        # offsets and 'Z' and returns NULL for malformed text; PostgreSQL casts
+        # through timestamptz behind an ISO-shape guard for the same reason.
+        # ``kickoff_at`` is TEXT in both schemas, so a plain index range cannot
+        # be used while legacy rows may carry a non-UTC offset; the interval is
+        # still computed once, before the query.
         if db_type == "postgres":
-            utc_date = (
+            instant = (
                 r"CASE WHEN kickoff_at ~ '^\d{4}-\d{2}-\d{2}' "
-                "THEN (kickoff_at::timestamptz AT TIME ZONE 'UTC')::date END"
+                "THEN kickoff_at::timestamptz END"
             )
+            bound = f"{ph}::timestamptz"
         else:
-            utc_date = "date(kickoff_at)"
+            instant = "julianday(kickoff_at)"
+            bound = f"julianday({ph})"
+        # A malformed date raises ValueError from local_date_interval_iso()
+        # rather than quietly selecting the whole table.
         if kickoff_on:
-            clauses.append(f"{utc_date} = {ph}")
-            params.append(str(kickoff_on)[:10])
+            start, end = time_utils.local_date_interval_iso(kickoff_on)
+            clauses.append(f"{instant} >= {bound}")
+            params.append(start)
+            clauses.append(f"{instant} < {bound}")
+            params.append(end)
         if kickoff_from:
-            clauses.append(f"{utc_date} >= {ph}")
-            params.append(str(kickoff_from)[:10])
+            start, _ = time_utils.local_date_interval_iso(kickoff_from)
+            clauses.append(f"{instant} >= {bound}")
+            params.append(start)
         if kickoff_to:
-            clauses.append(f"{utc_date} <= {ph}")
-            params.append(str(kickoff_to)[:10])
+            _, end = time_utils.local_date_interval_iso(kickoff_to)
+            clauses.append(f"{instant} < {bound}")
+            params.append(end)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
         f"SELECT {', '.join(_LIFECYCLE_FIELDS)} FROM live_match_lifecycle "
